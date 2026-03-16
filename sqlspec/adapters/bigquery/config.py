@@ -5,14 +5,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection
+from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
-from sqlspec.adapters.bigquery.driver import (
-    BigQueryCursor,
-    BigQueryDriver,
-    BigQueryExceptionHandler,
-    BigQuerySessionContext,
-)
+from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -22,6 +17,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from google.api_core.client_info import ClientInfo
     from google.api_core.client_options import ClientOptions
@@ -116,7 +112,7 @@ class BigQueryConnectionContext:
         return self._connection
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         return None
 
@@ -164,6 +160,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supports_native_parquet_export: ClassVar[bool] = True
     requires_staging_for_load: ClassVar[bool] = True
     staging_protocols: "ClassVar[tuple[str, ...]]" = ("gs://",)
+    _connection_context_class: "ClassVar[type[BigQueryConnectionContext]]" = BigQueryConnectionContext
+    _session_factory_class: "ClassVar[type[_BigQuerySessionConnectionHandler]]" = _BigQuerySessionConnectionHandler
+    _session_context_class: "ClassVar[type[BigQuerySessionContext]]" = BigQuerySessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

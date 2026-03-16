@@ -1,13 +1,13 @@
 """AIOSQLite driver implementation for async SQLite operations."""
 
 import asyncio
-import contextlib
 import random
 import sqlite3
 from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
 
+from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import (
     build_insert_statement,
     collect_rows,
@@ -21,7 +21,7 @@ from sqlspec.adapters.aiosqlite.core import (
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -30,11 +30,13 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from typing_extensions import Self
-
-from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
-
-__all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "AiosqliteSessionContext")
+__all__ = (
+    "AiosqliteCursor",
+    "AiosqliteDriver",
+    "AiosqliteExceptionHandler",
+    "AiosqliteRawCursor",
+    "AiosqliteSessionContext",
+)
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
@@ -46,28 +48,7 @@ SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
 
 
-class AiosqliteCursor:
-    """Async context manager for AIOSQLite cursors."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "AiosqliteConnection") -> None:
-        self.connection = connection
-        self.cursor: aiosqlite.Cursor | None = None
-
-    async def __aenter__(self) -> "aiosqlite.Cursor":
-        self.cursor = await self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> None:
-        if exc_type is not None:
-            return
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                await self.cursor.close()
-
-
-class AiosqliteExceptionHandler:
+class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiosqlite database exceptions.
 
     Maps SQLite extended result codes to specific SQLSpec exceptions
@@ -78,17 +59,10 @@ class AiosqliteExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_val is None:
-            return False
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        _ = exc_type
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
@@ -119,7 +93,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -143,7 +117,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    async def dispatch_execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -153,7 +127,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def dispatch_execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)

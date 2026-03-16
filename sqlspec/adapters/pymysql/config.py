@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlSessionContext
+from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.pymysql.driver import PyMysqlCursor, PyMysqlDriver, PyMysqlExceptionHandler
+from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandler
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints
@@ -14,6 +14,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -86,7 +87,7 @@ class PyMysqlConnectionContext:
         return cast("PyMysqlConnection", self._ctx.__enter__())
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
@@ -122,6 +123,10 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[PyMysqlConnectionContext]]" = PyMysqlConnectionContext
+    _session_factory_class: "ClassVar[type[_PyMysqlSessionConnectionHandler]]" = _PyMysqlSessionConnectionHandler
+    _session_context_class: "ClassVar[type[PyMysqlSessionContext]]" = PyMysqlSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -181,22 +186,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
     def create_connection(self) -> PyMysqlConnection:
         pool = self.provide_pool()
         return pool.acquire()
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PyMysqlConnectionContext":
-        return PyMysqlConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "PyMysqlSessionContext":
-        handler = _PyMysqlSessionConnectionHandler(self)
-
-        return PyMysqlSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()

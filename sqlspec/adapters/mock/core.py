@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter
+from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
@@ -260,6 +260,7 @@ def build_profile() -> "DriverParameterProfile":
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
+            **build_uuid_coercions(),
         },
         default_dialect="sqlite",
     )

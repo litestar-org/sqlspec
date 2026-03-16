@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from google.cloud.spanner_v1.database import SnapshotCheckout
     from google.cloud.spanner_v1.snapshot import Snapshot
@@ -20,6 +21,21 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     SpannerConnection = Any
+
+
+class SpannerSyncCursor:
+    """Context manager that yields the active Spanner connection."""
+
+    __slots__ = ("connection",)
+
+    def __init__(self, connection: "SpannerConnection") -> None:
+        self.connection = connection
+
+    def __enter__(self) -> "SpannerConnection":
+        return self.connection
+
+    def __exit__(self, *_: Any) -> None:
+        return None
 
 
 class SpannerSessionContext:
@@ -75,7 +91,7 @@ class SpannerSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection, exc_type, exc_val, exc_tb)
@@ -83,4 +99,4 @@ class SpannerSessionContext:
         return None
 
 
-__all__ = ("SpannerConnection", "SpannerSessionContext")
+__all__ = ("SpannerConnection", "SpannerSessionContext", "SpannerSyncCursor")

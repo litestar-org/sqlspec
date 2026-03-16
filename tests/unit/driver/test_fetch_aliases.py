@@ -351,7 +351,6 @@ def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_delegates_to_select() -> None:
     """Test that async fetch() delegates to async select() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -368,7 +367,6 @@ async def test_async_fetch_delegates_to_select() -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_one_delegates_to_select_one() -> None:
     """Test that async fetch_one() delegates to async select_one() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -385,7 +383,6 @@ async def test_async_fetch_one_delegates_to_select_one() -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
     """Test that async fetch_one_or_none() delegates to async select_one_or_none() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -402,7 +399,6 @@ async def test_async_fetch_one_or_none_delegates_to_select_one_or_none() -> None
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_value_delegates_to_select_value() -> None:
     """Test that async fetch_value() delegates to async select_value() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -417,7 +413,6 @@ async def test_async_fetch_value_delegates_to_select_value() -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
     """Test that async fetch_value_or_none() delegates to async select_value_or_none() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -434,7 +429,6 @@ async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> 
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
     """Test that async fetch_to_arrow() delegates to async select_to_arrow() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -463,7 +457,6 @@ async def test_async_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_with_total_delegates_to_select_with_total() -> None:
     """Test that async fetch_with_total() delegates to async select_with_total() with identical arguments."""
     mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
@@ -506,7 +499,6 @@ def test_sync_fetch_with_schema_type_argument() -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_fetch_one_with_schema_type_argument() -> None:
     """Test that async fetch_one() correctly passes schema_type to select_one()."""
 

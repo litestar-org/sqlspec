@@ -2,9 +2,15 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
+import pytest
+
 from sqlspec.adapters.asyncpg.config import register_json_codecs, register_pgvector_support
+from sqlspec.adapters.asyncpg.core import create_mapped_exception
+from sqlspec.exceptions import PermissionDeniedError, UniqueViolationError
 
 
+@pytest.mark.anyio
 async def test_register_json_codecs_success() -> None:
     """Test successful JSON codec registration."""
     connection = AsyncMock()
@@ -24,6 +30,7 @@ async def test_register_json_codecs_success() -> None:
     assert jsonb_call.kwargs == {"encoder": encoder, "decoder": decoder, "schema": "pg_catalog"}
 
 
+@pytest.mark.anyio
 async def test_register_json_codecs_handles_exception() -> None:
     """Test that JSON codec registration handles exceptions gracefully."""
     connection = AsyncMock()
@@ -37,6 +44,7 @@ async def test_register_json_codecs_handles_exception() -> None:
 
 
 @patch("sqlspec.adapters.asyncpg.config.PGVECTOR_INSTALLED", False)
+@pytest.mark.anyio
 async def test_register_pgvector_support_not_installed() -> None:
     """Test pgvector registration when library not installed."""
     connection = AsyncMock()
@@ -47,6 +55,7 @@ async def test_register_pgvector_support_not_installed() -> None:
 
 
 @patch("sqlspec.adapters.asyncpg.config.PGVECTOR_INSTALLED", True)
+@pytest.mark.anyio
 async def test_register_pgvector_support_success() -> None:
     """Test successful pgvector registration."""
     connection = AsyncMock()
@@ -57,6 +66,7 @@ async def test_register_pgvector_support_success() -> None:
 
 
 @patch("sqlspec.adapters.asyncpg.config.PGVECTOR_INSTALLED", True)
+@pytest.mark.anyio
 async def test_register_pgvector_support_handles_exception() -> None:
     """Test that pgvector registration handles exceptions gracefully."""
     connection = AsyncMock()
@@ -64,3 +74,21 @@ async def test_register_pgvector_support_handles_exception() -> None:
     with patch("pgvector.asyncpg.register_vector", new_callable=AsyncMock) as mock_register:
         mock_register.side_effect = Exception("Registration error")
         await register_pgvector_support(connection)
+
+
+def test_create_mapped_exception_uses_exact_exception_dispatch() -> None:
+    error = asyncpg.exceptions.UniqueViolationError("duplicate key")
+
+    result = create_mapped_exception(error)
+
+    assert isinstance(result, UniqueViolationError)
+    assert result.__cause__ is error
+
+
+def test_create_mapped_exception_uses_registered_permission_dispatch() -> None:
+    error = asyncpg.exceptions.InvalidPasswordError("bad password")
+
+    result = create_mapped_exception(error)
+
+    assert isinstance(result, PermissionDeniedError)
+    assert result.__cause__ is error

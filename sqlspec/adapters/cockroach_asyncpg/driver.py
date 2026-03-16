@@ -5,7 +5,6 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
-from typing_extensions import Self
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
@@ -17,6 +16,7 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
 )
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
+from sqlspec.driver import BaseAsyncExceptionHandler
 from sqlspec.exceptions import SerializationConflictError, TransactionRetryError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
@@ -33,20 +33,13 @@ __all__ = ("CockroachAsyncpgDriver", "CockroachAsyncpgExceptionHandler", "Cockro
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg")
 
 
-class CockroachAsyncpgExceptionHandler:
+class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for CockroachDB AsyncPG exceptions."""
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_val is None:
-            return False
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        _ = exc_type
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
                 self.pending_exception = SerializationConflictError(str(exc_val))
@@ -120,17 +113,17 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
     ) -> "ExecutionResult":
         return await super().dispatch_execute_script(cursor, statement)
 
-    async def dispatch_execute(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         if not self._enable_retry:
             return await self._dispatch_execute_impl(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
-    async def dispatch_execute_many(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         if not self._enable_retry:
             return await super().dispatch_execute_many(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
-    async def dispatch_execute_script(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         if not self._enable_retry:
             return await super().dispatch_execute_script(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)

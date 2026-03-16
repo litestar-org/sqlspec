@@ -144,6 +144,7 @@ class _StorageBridgeMetrics:
 
 _METRICS = _StorageBridgeMetrics()
 _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
+_EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
 
 
 def get_storage_bridge_metrics() -> "dict[str, int]":
@@ -307,7 +308,7 @@ def _resolve_storage_backend(
     registry: StorageRegistry, destination: StorageDestination, backend_options: "dict[str, Any] | None"
 ) -> "tuple[ObjectStoreProtocol, str]":
     destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-    options = backend_options or {}
+    options = _EMPTY_STORAGE_OPTIONS if backend_options is None else backend_options
     alias_resolution = _resolve_alias_destination(registry, destination_str, options)
     if alias_resolution is not None:
         return alias_resolution
@@ -344,12 +345,9 @@ class SyncStoragePipeline:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
         payload = _encode_row_payload(serialized, format_choice)
+        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
         return self._write_bytes(
-            payload,
-            destination,
-            rows=len(serialized),
-            format_label=format_choice,
-            storage_options=storage_options or {},
+            payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
 
     def write_arrow(
@@ -364,16 +362,13 @@ class SyncStoragePipeline:
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
-        format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
+        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        format_write_options = resolved_options.get("write_options") if format_choice == "csv" else None
         payload = _encode_arrow_payload(
             table, format_choice, compression=compression, write_options=format_write_options
         )
         return self._write_bytes(
-            payload,
-            destination,
-            rows=int(table.num_rows),
-            format_label=format_choice,
-            storage_options=storage_options or {},
+            payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
 
     def read_arrow(
@@ -485,12 +480,9 @@ class AsyncStoragePipeline:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
         payload = await async_(_encode_row_payload)(serialized, format_choice)
+        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
         return await self._write_bytes_async(
-            payload,
-            destination,
-            rows=len(serialized),
-            format_label=format_choice,
-            storage_options=storage_options or {},
+            payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
 
     async def write_arrow(
@@ -503,16 +495,13 @@ class AsyncStoragePipeline:
         compression: str | None = None,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
-        format_write_options = (storage_options or {}).get("write_options") if format_choice == "csv" else None
+        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        format_write_options = resolved_options.get("write_options") if format_choice == "csv" else None
         payload = await async_(_encode_arrow_payload)(
             table, format_choice, compression=compression, write_options=format_write_options
         )
         return await self._write_bytes_async(
-            payload,
-            destination,
-            rows=int(table.num_rows),
-            format_label=format_choice,
-            storage_options=storage_options or {},
+            payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:

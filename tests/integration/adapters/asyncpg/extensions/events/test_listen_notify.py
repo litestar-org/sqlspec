@@ -30,7 +30,6 @@ async def _wait_for_message(received: "list[Any]") -> None:
 
 
 @pytest.mark.postgres
-@pytest.mark.asyncio
 async def test_asyncpg_listen_notify_publish_and_ack(postgres_service: "Any") -> None:
     """AsyncPG adapter publishes and acknowledges LISTEN/NOTIFY events."""
 
@@ -55,7 +54,6 @@ async def test_asyncpg_listen_notify_publish_and_ack(postgres_service: "Any") ->
 
 
 @pytest.mark.postgres
-@pytest.mark.asyncio
 async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -> None:
     """AsyncPG adapter delivers NOTIFY payloads via EventChannel listener."""
 
@@ -96,7 +94,6 @@ async def test_asyncpg_listen_notify_message_delivery(postgres_service: "Any") -
 
 
 @pytest.mark.postgres
-@pytest.mark.asyncio
 async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp_path: Any) -> None:
     """Hybrid backend stores event durably then notifies listeners."""
 
@@ -145,7 +142,6 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
 
 
 @pytest.mark.postgres
-@pytest.mark.asyncio
 async def test_asyncpg_listen_notify_metadata(postgres_service: "Any") -> None:
     """AsyncPG adapter preserves metadata in LISTEN/NOTIFY events."""
 

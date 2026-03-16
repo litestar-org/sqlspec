@@ -4,16 +4,18 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
-from oracledb import AsyncConnection, Connection
+from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from oracledb import DB_TYPE_VECTOR  # pyright: ignore[reportUnknownVariableType]
-    from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.builder import QueryBuilder
@@ -23,10 +25,11 @@ if TYPE_CHECKING:
     OracleAsyncConnection: TypeAlias = AsyncConnection
     OracleSyncConnectionPool: TypeAlias = ConnectionPool
     OracleAsyncConnectionPool: TypeAlias = AsyncConnectionPool
+    OracleSyncRawCursor: TypeAlias = Cursor
+    OracleAsyncRawCursor: TypeAlias = AsyncCursor
     OracleVectorType: TypeAlias = int
-else:
-    from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
+if not TYPE_CHECKING:
     try:
         from oracledb import DB_TYPE_VECTOR
 
@@ -39,6 +42,50 @@ else:
     OracleAsyncConnection = AsyncConnection
     OracleSyncConnectionPool = ConnectionPool
     OracleAsyncConnectionPool = AsyncConnectionPool
+    OracleSyncRawCursor = Cursor
+    OracleAsyncRawCursor = AsyncCursor
+
+
+class OracleSyncCursor:
+    """Sync context manager for Oracle cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: OracleSyncConnection) -> None:
+        self.connection = connection
+        self.cursor: OracleSyncRawCursor | None = None
+
+    def __enter__(self) -> "OracleSyncRawCursor":
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: object) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
+
+
+class OracleAsyncCursor:
+    """Async context manager for Oracle cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: OracleAsyncConnection) -> None:
+        self.connection = connection
+        self.cursor: OracleAsyncRawCursor | None = None
+
+    async def __aenter__(self) -> "OracleAsyncRawCursor":
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                # Oracle async cursors have a synchronous close method
+                # but we need to ensure proper cleanup in the event loop context
+                self.cursor.close()
 
 
 class OraclePipelineDriver(Protocol):
@@ -106,7 +153,7 @@ class OracleSyncSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -161,7 +208,7 @@ class OracleAsyncSessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)
@@ -173,10 +220,14 @@ __all__ = (
     "DB_TYPE_VECTOR",
     "OracleAsyncConnection",
     "OracleAsyncConnectionPool",
+    "OracleAsyncCursor",
+    "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
     "OraclePipelineDriver",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",
+    "OracleSyncCursor",
+    "OracleSyncRawCursor",
     "OracleSyncSessionContext",
     "OracleVectorType",
 )

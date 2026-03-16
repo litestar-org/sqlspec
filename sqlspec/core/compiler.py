@@ -775,9 +775,6 @@ class SQLProcessor:
             parameter_profile: Parameter metadata.
             final_params: Execution parameters.
             is_many: Whether this is for execute_many.
-
-        Raises:
-            Exception: Re-raises validation errors from parameter alignment.
         """
         try:
             validate_parameter_alignment(parameter_profile, final_params, is_many=is_many)

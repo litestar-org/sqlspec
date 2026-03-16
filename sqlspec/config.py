@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, Ty
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
+from sqlspec.core.config_runtime import (
+    build_default_statement_config,
+    close_async_pool,
+    close_sync_pool,
+    create_async_pool,
+    create_sync_pool,
+    seed_runtime_driver_features,
+)
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
@@ -21,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.core import StatementConfig
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
@@ -1198,16 +1206,9 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
-        if statement_config is None:
-            default_parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-            )
-            self.statement_config = StatementConfig(dialect="sqlite", parameter_config=default_parameter_config)
-        else:
-            self.statement_config = statement_config
-        self.driver_features = driver_features or {}
         self._storage_capabilities = None
-        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self.statement_config = statement_config or build_default_statement_config("sqlite")
+        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1369,14 +1370,9 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
-        if statement_config is None:
-            default_parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-            )
-            self.statement_config = StatementConfig(dialect="sqlite", parameter_config=default_parameter_config)
-        else:
-            self.statement_config = statement_config
-        self.driver_features = driver_features or {}
+        self.statement_config = statement_config or build_default_statement_config("sqlite")
+        self._storage_capabilities = None
+        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
 
@@ -1516,6 +1512,10 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
+    _connection_context_class: "ClassVar[type[Any]]"
+    _session_factory_class: "ClassVar[type[Any]]"
+    _session_context_class: "ClassVar[type[Any]]"
+    _default_statement_config: "ClassVar[StatementConfig]"
 
     def __init__(
         self,
@@ -1539,16 +1539,9 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
-        if statement_config is None:
-            default_parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-            )
-            self.statement_config = StatementConfig(dialect="postgres", parameter_config=default_parameter_config)
-        else:
-            self.statement_config = statement_config
-        self.driver_features = driver_features or {}
+        self.statement_config = statement_config or build_default_statement_config("postgres")
         self._storage_capabilities = None
-        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
         self._pool_lock = threading.Lock()
@@ -1559,23 +1552,24 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             The created pool.
         """
-        if self.connection_instance is not None:
-            return self.connection_instance
+        existing_pool = self.connection_instance
+        if existing_pool is not None:
+            return existing_pool
 
-        with self._pool_lock:
-            if self.connection_instance is not None:
-                return self.connection_instance
-
-            self.connection_instance = self._create_pool()
-            self.get_observability_runtime().emit_pool_create(self.connection_instance)
-            return self.connection_instance
+        created_pool = create_sync_pool(
+            None,
+            self._pool_lock,
+            lambda: self.connection_instance,
+            self._create_pool,
+            self.get_observability_runtime().emit_pool_create,
+        )
+        self.connection_instance = created_pool
+        return cast("PoolT", created_pool)
 
     def close_pool(self) -> None:
         """Close the connection pool."""
         pool = self.connection_instance
-        self._close_pool()
-        if pool is not None:
-            self.get_observability_runtime().emit_pool_destroy(pool)
+        close_sync_pool(pool, self._close_pool, self.get_observability_runtime().emit_pool_destroy)
         self.connection_instance = None
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -1588,13 +1582,23 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide a database connection context manager."""
-        raise NotImplementedError
+        return cast("AbstractContextManager[ConnectionT]", self._connection_context_class(self))
 
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
-        raise NotImplementedError
+        handler = self._session_factory_class(self)
+        return cast(
+            "AbstractContextManager[DriverT]",
+            self._session_context_class(
+                acquire_connection=handler.acquire_connection,
+                release_connection=handler.release_connection,
+                statement_config=statement_config or self.statement_config or self._default_statement_config,
+                driver_features=self.driver_features,
+                prepare_driver=self._prepare_driver,
+            ),
+        )
 
     @abstractmethod
     def _create_pool(self) -> PoolT:
@@ -1719,6 +1723,10 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
+    _connection_context_class: "ClassVar[type[Any]]"
+    _session_factory_class: "ClassVar[type[Any]]"
+    _session_context_class: "ClassVar[type[Any]]"
+    _default_statement_config: "ClassVar[StatementConfig]"
 
     def __init__(
         self,
@@ -1742,18 +1750,9 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
-        if statement_config is None:
-            self.statement_config = StatementConfig(
-                parameter_config=ParameterStyleConfig(
-                    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-                ),
-                dialect="postgres",
-            )
-        else:
-            self.statement_config = statement_config
-        self.driver_features = driver_features or {}
+        self.statement_config = statement_config or build_default_statement_config("postgres")
         self._storage_capabilities = None
-        self.driver_features.setdefault("storage_capabilities", self.storage_capabilities())
+        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
         self._pool_lock = asyncio.Lock()
@@ -1764,23 +1763,24 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             The created pool.
         """
-        if self.connection_instance is not None:
-            return self.connection_instance
+        existing_pool = self.connection_instance
+        if existing_pool is not None:
+            return existing_pool
 
-        async with self._pool_lock:
-            if self.connection_instance is not None:
-                return self.connection_instance
-
-            self.connection_instance = await self._create_pool()
-            self.get_observability_runtime().emit_pool_create(self.connection_instance)
-            return self.connection_instance
+        created_pool = await create_async_pool(
+            None,
+            self._pool_lock,
+            lambda: self.connection_instance,
+            self._create_pool,
+            self.get_observability_runtime().emit_pool_create,
+        )
+        self.connection_instance = created_pool
+        return cast("PoolT", created_pool)
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
         pool = self.connection_instance
-        await self._close_pool()
-        if pool is not None:
-            self.get_observability_runtime().emit_pool_destroy(pool)
+        await close_async_pool(pool, self._close_pool, self.get_observability_runtime().emit_pool_destroy)
         self.connection_instance = None
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -1793,13 +1793,23 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a database connection context manager."""
-        raise NotImplementedError
+        return cast("AbstractAsyncContextManager[ConnectionT]", self._connection_context_class(self))
 
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
-        raise NotImplementedError
+        handler = self._session_factory_class(self)
+        return cast(
+            "AbstractAsyncContextManager[DriverT]",
+            self._session_context_class(
+                acquire_connection=handler.acquire_connection,
+                release_connection=handler.release_connection,
+                statement_config=statement_config or self.statement_config or self._default_statement_config,
+                driver_features=self.driver_features,
+                prepare_driver=self._prepare_driver,
+            ),
+        )
 
     @abstractmethod
     async def _create_pool(self) -> PoolT:

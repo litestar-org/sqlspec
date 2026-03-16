@@ -2,22 +2,23 @@
 
 from typing import TYPE_CHECKING, Any
 
+from asyncpg import Pool
 from asyncpg.pool import PoolConnectionProxy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
-    from asyncpg import Connection, Pool, Record
+    from asyncpg import Connection, Record
 
     from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
     from sqlspec.core import StatementConfig
 
     CockroachAsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
     CockroachAsyncpgPool: TypeAlias = Pool[Record]
-else:
-    from asyncpg import Pool
 
+if not TYPE_CHECKING:
     CockroachAsyncpgConnection = PoolConnectionProxy
     CockroachAsyncpgPool = Pool
 
@@ -61,7 +62,7 @@ class CockroachAsyncpgSessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)

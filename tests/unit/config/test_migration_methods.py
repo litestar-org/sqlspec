@@ -19,8 +19,6 @@ Tests cover all 4 base config classes:
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
@@ -194,7 +192,6 @@ def test_sqlite_config_fix_migrations_calls_commands(tmp_path: Path) -> None:
         mock_fix.assert_called_once_with(True, False, True)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_migrate_up_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.migrate_up() delegates to AsyncMigrationCommands.upgrade()."""
     migration_dir = tmp_path / "migrations"
@@ -210,7 +207,6 @@ async def test_asyncpg_config_migrate_up_calls_commands(tmp_path: Path) -> None:
         mock_upgrade.assert_called_once_with("0002", False, True, False, use_logger=False, echo=None, summary_only=None)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_migrate_down_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.migrate_down() delegates to AsyncMigrationCommands.downgrade()."""
     migration_dir = tmp_path / "migrations"
@@ -226,7 +222,6 @@ async def test_asyncpg_config_migrate_down_calls_commands(tmp_path: Path) -> Non
         mock_downgrade.assert_called_once_with("base", dry_run=False, use_logger=False, echo=None, summary_only=None)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_get_current_migration_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.get_current_migration() delegates to AsyncMigrationCommands.current()."""
     migration_dir = tmp_path / "migrations"
@@ -243,7 +238,6 @@ async def test_asyncpg_config_get_current_migration_calls_commands(tmp_path: Pat
         assert result == "0002"
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_create_migration_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.create_migration() delegates to AsyncMigrationCommands.revision()."""
     migration_dir = tmp_path / "migrations"
@@ -259,7 +253,6 @@ async def test_asyncpg_config_create_migration_calls_commands(tmp_path: Path) ->
         mock_revision.assert_called_once_with("add users table", "sql")
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_init_migrations_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.init_migrations() delegates to AsyncMigrationCommands.init()."""
     migration_dir = tmp_path / "migrations"
@@ -275,7 +268,6 @@ async def test_asyncpg_config_init_migrations_calls_commands(tmp_path: Path) -> 
         mock_init.assert_called_once_with(str(migration_dir), True)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_stamp_migration_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.stamp_migration() delegates to AsyncMigrationCommands.stamp()."""
     migration_dir = tmp_path / "migrations"
@@ -291,7 +283,6 @@ async def test_asyncpg_config_stamp_migration_calls_commands(tmp_path: Path) -> 
         mock_stamp.assert_called_once_with("0003")
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_fix_migrations_calls_commands(tmp_path: Path) -> None:
     """Test that AsyncpgConfig.fix_migrations() delegates to AsyncMigrationCommands.fix()."""
     migration_dir = tmp_path / "migrations"
@@ -336,7 +327,6 @@ def test_duckdb_pooled_config_get_current_migration_calls_commands(tmp_path: Pat
         assert result is None
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_async_config_migrate_up_calls_commands(tmp_path: Path) -> None:
     """Test that AiosqliteConfig.migrate_up() delegates to AsyncMigrationCommands.upgrade()."""
     migration_dir = tmp_path / "migrations"
@@ -367,7 +357,6 @@ def test_migrate_up_default_parameters_sync(tmp_path: Path) -> None:
         mock_upgrade.assert_called_once_with("head", False, True, False, use_logger=False, echo=None, summary_only=None)
 
 
-@pytest.mark.asyncio
 async def test_migrate_up_default_parameters_async(tmp_path: Path) -> None:
     """Test that migrate_up() uses correct default parameter values for async configs."""
     migration_dir = tmp_path / "migrations"
@@ -398,7 +387,6 @@ def test_migrate_down_default_parameters_sync(tmp_path: Path) -> None:
         mock_downgrade.assert_called_once_with("-1", dry_run=False, use_logger=False, echo=None, summary_only=None)
 
 
-@pytest.mark.asyncio
 async def test_migrate_down_default_parameters_async(tmp_path: Path) -> None:
     """Test that migrate_down() uses correct default parameter values for async configs."""
     migration_dir = tmp_path / "migrations"
@@ -429,7 +417,6 @@ def test_create_migration_default_file_type_sync(tmp_path: Path) -> None:
         mock_revision.assert_called_once_with("test migration", "sql")
 
 
-@pytest.mark.asyncio
 async def test_create_migration_default_file_type_async(tmp_path: Path) -> None:
     """Test that create_migration() defaults to 'sql' file type for async configs."""
     migration_dir = tmp_path / "migrations"
@@ -460,7 +447,6 @@ def test_init_migrations_default_package_sync(tmp_path: Path) -> None:
         mock_init.assert_called_once_with(str(migration_dir), True)
 
 
-@pytest.mark.asyncio
 async def test_init_migrations_default_package_async(tmp_path: Path) -> None:
     """Test that init_migrations() defaults to package=True for async configs."""
     migration_dir = tmp_path / "migrations"
@@ -491,7 +477,6 @@ def test_fix_migrations_default_parameters_sync(tmp_path: Path) -> None:
         mock_fix.assert_called_once_with(False, True, False)
 
 
-@pytest.mark.asyncio
 async def test_fix_migrations_default_parameters_async(tmp_path: Path) -> None:
     """Test that fix_migrations() uses correct default parameter values for async configs."""
     migration_dir = tmp_path / "migrations"

@@ -1,6 +1,7 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for fast-path query cache behavior."""
 
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal, cast
 
@@ -167,6 +168,46 @@ def test_prepare_driver_parameters_many_coerces_rows_when_needed() -> None:
     assert tuple(prepared[1]) == ("b",)
 
 
+def test_prepare_driver_parameters_many_coerces_subclass_rows_when_needed() -> None:
+    class MyInt(int):
+        pass
+
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={int: lambda value: value + 1},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    parameters = [(MyInt(2),), ("b",)]
+
+    prepared = driver.prepare_driver_parameters(parameters, config, is_many=True)
+
+    assert isinstance(prepared, list)
+    assert prepared is not parameters
+    assert tuple(prepared[0]) == (3,)
+    assert tuple(prepared[1]) == ("b",)
+
+
+def test_prepare_driver_parameters_many_coerces_virtual_abc_rows_when_needed() -> None:
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={Sequence: lambda value: tuple(value)},
+        )
+    )
+    driver = _FakeDriver(object(), config)
+    fallback_items = ((Sequence, lambda value: tuple(value)),)
+
+    prepared = driver._apply_coercion_with_fallback(  # pyright: ignore[reportPrivateUsage]
+        [1, 2], config.parameter_config.type_coercion_map, fallback_items
+    )
+
+    assert prepared == (1, 2)
+
+
 def test_sync_stmt_cache_execute_direct_uses_dispatch_path(mock_sync_driver, monkeypatch) -> None:
     class _CursorManager:
         def __enter__(self) -> object:
@@ -251,7 +292,7 @@ def test_execute_populates_fast_path_cache_on_normal_path(mock_sync_driver) -> N
     assert result.operation_type == "SELECT"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, monkeypatch) -> None:
     sentinel = object()
     called: dict[str, object] = {}
@@ -269,7 +310,7 @@ async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, mon
     assert called["args"] == ("SELECT ?", (1,))
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_execute_skips_fast_path_with_statement_config_override(mock_async_driver, monkeypatch) -> None:
     called = False
 
@@ -288,7 +329,7 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(mock
     assert result.operation_type == "SELECT"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async_driver) -> None:
     mock_async_driver._stmt_cache_enabled = True
 

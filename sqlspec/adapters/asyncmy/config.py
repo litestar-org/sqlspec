@@ -9,15 +9,16 @@ from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
+from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor, AsyncmySessionContext
 from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, AsyncmyExceptionHandler, AsyncmySessionContext
+from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
@@ -137,7 +138,7 @@ class AsyncmyConnectionContext:
         return connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
@@ -155,6 +156,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[AsyncmyConnectionContext]]" = AsyncmyConnectionContext
+    _session_factory_class: "ClassVar[type[_AsyncmySessionFactory]]" = _AsyncmySessionFactory
+    _session_context_class: "ClassVar[type[AsyncmySessionContext]]" = AsyncmySessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -257,40 +262,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         connection = cast("AsyncmyConnection", await pool.acquire())
         await self._ensure_connection_initialized(connection)
         return connection
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncmyConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An Asyncmy connection context manager.
-        """
-        return AsyncmyConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "AsyncmySessionContext":
-        """Provide an async driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            An Asyncmy driver session context manager.
-        """
-        factory = _AsyncmySessionFactory(self)
-        return AsyncmySessionContext(
-            acquire_connection=factory.acquire_connection,
-            release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":
         """Provide async pool instance.

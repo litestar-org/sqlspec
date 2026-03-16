@@ -12,6 +12,7 @@ _DuckDBConnection = DuckDBPyConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
@@ -21,6 +22,28 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     DuckDBConnection = _DuckDBConnection
+
+
+class DuckDBCursor:
+    """Context manager for DuckDB connection-as-cursor.
+
+    DuckDB connections implement the cursor interface and preserve
+    variable state. Using connection directly avoids cursor overhead
+    and fixes SET VARIABLE persistence.
+
+    See: https://github.com/litestar-org/sqlspec/issues/341
+    """
+
+    __slots__ = ("connection",)
+
+    def __init__(self, connection: "DuckDBConnection") -> None:
+        self.connection = connection
+
+    def __enter__(self) -> "DuckDBConnection":
+        return self.connection
+
+    def __exit__(self, *_: Any) -> None:
+        pass  # Connection lifecycle managed by pool/session
 
 
 class DuckDBSessionContext:
@@ -70,7 +93,7 @@ class DuckDBSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -78,4 +101,4 @@ class DuckDBSessionContext:
         return None
 
 
-__all__ = ("DuckDBConnection", "DuckDBSessionContext")
+__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")

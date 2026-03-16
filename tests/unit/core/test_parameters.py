@@ -10,10 +10,12 @@ Tests the 2-Phase Parameter Conversion System:
 
 import json
 import math
+from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from importlib import import_module
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import sqlglot
@@ -36,8 +38,16 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
+
+# Detect whether the core parameters module is mypyc-compiled.
+# When compiled, `patch.object` on C-extension classes is a no-op,
+# so tests that assert mock call counts must be skipped.
+from sqlspec.core.parameters import _processor as _processor_module
+from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
+
+_VALIDATOR_COMPILED = (_validator_module.__file__ or "").endswith((".so", ".pyd"))
 
 _ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
     "sqlspec.adapters.adbc.driver",
@@ -1163,6 +1173,61 @@ def test_process_execute_many_coerces_only_rows_that_require_conversion(processo
     assert tuple(result.parameters[1]) == ("v2",)
 
 
+def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterProcessor") -> None:
+    """Subclass values should still hit coercion fallback when no exact entry exists."""
+
+    class MyInt(int):
+        pass
+
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={int: lambda value: value + 1},
+    )
+    sql = "SELECT * FROM metrics WHERE value = ?"
+
+    result = processor.process(sql, [MyInt(4)], config, wrap_types=False)
+
+    assert isinstance(result.parameters, list)
+    assert result.parameters == [5]
+
+
+def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:
+    """ABC-registered coercions should still resolve for builtin sequence payloads."""
+    type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}  # type: ignore[dict-item]
+    fallback_items = _processor_module._type_coercion_fallbacks(type_map)  # pyright: ignore[reportPrivateUsage]
+
+    assert _processor_module._resolve_type_coercion(  # pyright: ignore[reportPrivateUsage]
+        [1, 2, 3], type_map, fallback_items
+    ) == (1, 2, 3)
+
+
+def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(
+    processor: "ParameterProcessor",
+) -> None:
+    """execute_many rebinding should avoid allocating when every row is already positional."""
+    parameters = [(1, 2), (3, 4)]
+
+    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)  # pyright: ignore[reportPrivateUsage]
+
+    assert remapped is parameters
+
+
+def test_map_named_to_positional_only_allocates_when_execute_many_row_needs_mapping(
+    processor: "ParameterProcessor",
+) -> None:
+    """execute_many rebinding should allocate only after the first mapping row."""
+    parameters: list[object] = [(1, 2), {"a": 3, "b": 4}]
+
+    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)  # pyright: ignore[reportPrivateUsage]
+
+    assert isinstance(remapped, list)
+    assert remapped is not parameters
+    assert remapped[0] is parameters[0]
+    assert remapped[1] == (3, 4)
+
+
 def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     """Test that list parameters are properly handled."""
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"
@@ -1560,6 +1625,22 @@ def test_duplicate_parameters_qmark_to_numeric(converter: ParameterConverter) ->
     assert "$2" in converted_sql
 
 
+def test_distinct_positional_pyformat_parameters_to_numeric(converter: ParameterConverter) -> None:
+    """Repeated ``%s`` placeholders should remain distinct when normalized."""
+    sql = "SELECT * FROM table WHERE col1 = %s AND col2 = %s"
+
+    converted_sql, _ = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC)
+    converted_info = converter.convert_parameter_info_style(
+        converter.validator.extract_parameters(sql), ParameterStyle.NUMERIC
+    )
+
+    assert converted_sql == "SELECT * FROM table WHERE col1 = $1 AND col2 = $2"
+    assert [(param.name, param.position, param.placeholder_text) for param in converted_info] == [
+        ("1", 33, "$1"),
+        ("2", 47, "$2"),
+    ]
+
+
 def test_vector_similarity_search_example(converter: ParameterConverter) -> None:
     """Test the exact example from the bug report."""
     sql = """SELECT
@@ -1727,6 +1808,34 @@ def test_positional_parameter_output_type_narrowing(converter: ParameterConverte
     result_dict = converter._preserve_original_format(param_values, {"a": 1})  # pyright: ignore
     assert isinstance(result_dict, tuple)
     assert result_dict == (1, 2, 3)
+
+
+def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
+    converter: ParameterConverter, monkeypatch: Any
+) -> None:
+    """Position-ordered parameter metadata should not pay an extra sorted() pass."""
+    sql = "SELECT :a, :b, :c"
+    param_info = converter.validator.extract_parameters(sql)
+
+    def fail_sorted(*_args: Any, **_kwargs: Any) -> object:
+        raise AssertionError("sorted() should not run for already ordered parameter metadata")
+
+    monkeypatch.setattr("builtins.sorted", fail_sorted)
+
+    converted_sql = converter._convert_placeholders_to_style(sql, param_info, ParameterStyle.NUMERIC)  # pyright: ignore
+
+    assert converted_sql == "SELECT $1, $2, $3"
+
+
+def test_convert_placeholders_to_style_sorts_unsafely_ordered_params_as_fallback(converter: ParameterConverter) -> None:
+    """Manually unordered parameter metadata should still be normalized correctly."""
+    sql = "SELECT :a, :b, :c"
+    param_info = converter.validator.extract_parameters(sql)
+    unordered = [param_info[2], param_info[0], param_info[1]]
+
+    converted_sql = converter._convert_placeholders_to_style(sql, unordered, ParameterStyle.NUMERIC)  # pyright: ignore
+
+    assert converted_sql == "SELECT $1, $2, $3"
 
 
 def test_named_parameter_output_type_narrowing(converter: ParameterConverter) -> None:
@@ -2038,6 +2147,47 @@ class TestConfigDrivenParseNormalization:
         # Should have NUMERIC placeholders
         assert "$" in normalized_sql
 
+    @pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
+    def test_process_reuses_extracted_metadata_for_parse_normalization(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """process() should normalize SQL without re-extracting placeholders."""
+        sql = "SELECT * FROM t WHERE id = %(name)s"
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC,
+            default_execution_parameter_style=ParameterStyle.NAMED_PYFORMAT,
+            supported_parameter_styles={ParameterStyle.NUMERIC},
+            supported_execution_parameter_styles={ParameterStyle.NAMED_PYFORMAT},
+        )
+
+        with patch.object(ParameterValidator, "extract_parameters", wraps=validator.extract_parameters) as mock_extract:
+            result = processor.process(sql, {"name": 1}, config)
+
+        assert mock_extract.call_count == 1
+        assert result.sql == sql
+        assert result.sqlglot_sql == "SELECT * FROM t WHERE id = $1"
+
+    @pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
+    def test_process_reuses_extracted_metadata_for_execution_conversion(
+        self, processor: ParameterProcessor, validator: ParameterValidator
+    ) -> None:
+        """process() should derive the final profile without re-parsing converted SQL."""
+        sql = "SELECT * FROM t WHERE id = :id AND name = :name"
+        config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NAMED_COLON,
+            default_execution_parameter_style=ParameterStyle.NUMERIC,
+            supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        )
+
+        with patch.object(ParameterValidator, "extract_parameters", wraps=validator.extract_parameters) as mock_extract:
+            result = processor.process(sql, {"id": 1, "name": "a"}, config)
+
+        assert mock_extract.call_count == 1
+        assert result.sql == "SELECT * FROM t WHERE id = $1 AND name = $2"
+        assert result.parameter_profile.styles == (ParameterStyle.NUMERIC.value,)
+        assert result.parameter_profile.named_parameters == ("1", "2")
+
 
 class TestDriverProfileValidation:
     """Validate all driver profiles have correct supported_styles."""
@@ -2206,6 +2356,21 @@ class TestPsycopgSpecificBehavior:
         # sqlglot_sql should NOT contain pyformat (normalized for parsing)
         assert result.sqlglot_sql is not None
         assert "%(name)s" not in result.sqlglot_sql
+
+    def test_psycopg_positional_pyformat_preserves_distinct_positions(
+        self, processor: ParameterProcessor, psycopg_config: ParameterStyleConfig | None
+    ) -> None:
+        """Psycopg: repeated ``%s`` placeholders should normalize to distinct numeric positions."""
+        if psycopg_config is None:
+            pytest.skip("psycopg adapter not available")
+
+        sql = "SELECT * FROM t WHERE name = ? AND value > ?"
+        params = ["test", 100]
+
+        result = processor.process(sql, params, psycopg_config, dialect="postgres")
+
+        assert result.sql == "SELECT * FROM t WHERE name = %s AND value > %s"
+        assert result.sqlglot_sql == "SELECT * FROM t WHERE name = $1 AND value > $2"
 
 
 class TestMySQLAdaptersBehavior:

@@ -9,7 +9,7 @@ from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig, MysqlConnectorAsyncDriver
 from sqlspec.utils.serializers import from_json, to_json
 
-pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.asyncio]
+pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector]
 
 
 @pytest.fixture

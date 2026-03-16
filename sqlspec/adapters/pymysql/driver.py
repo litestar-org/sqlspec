@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import pymysql
 from pymysql.constants import FIELD_TYPE
 
+from sqlspec.adapters.pymysql._typing import PyMysqlCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import (
     build_insert_statement,
     collect_rows,
@@ -23,7 +24,7 @@ from sqlspec.adapters.pymysql.core import (
 )
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
@@ -37,10 +38,6 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from typing_extensions import Self
-
-from sqlspec.adapters.pymysql._typing import PyMysqlSessionContext
-
 __all__ = ("PyMysqlCursor", "PyMysqlDriver", "PyMysqlExceptionHandler", "PyMysqlSessionContext")
 
 logger = get_logger("sqlspec.adapters.pymysql")
@@ -49,36 +46,12 @@ json_type_value = FIELD_TYPE.JSON if supports_json_type(FIELD_TYPE) else None
 PYMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
-class PyMysqlCursor:
-    """Context manager for PyMySQL cursor operations."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "PyMysqlConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
-
-
-class PyMysqlExceptionHandler:
+class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling PyMySQL exceptions."""
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, pymysql.MySQLError):

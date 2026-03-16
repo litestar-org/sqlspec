@@ -73,7 +73,6 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
     assert snapshot.get("SqliteConfig.events.ack") == pytest.approx(1.0)
 
 
-@pytest.mark.asyncio
 async def test_event_channel_async_iteration(tmp_path) -> None:
     """Async adapters can publish and drain events via the iterator helper."""
 
@@ -148,7 +147,6 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
     assert row["status"] == "acked"
 
 
-@pytest.mark.asyncio
 async def test_event_channel_portal_bridge_sync_api(tmp_path) -> None:
     """Async adapters publish and consume events via the event_channel helper."""
 

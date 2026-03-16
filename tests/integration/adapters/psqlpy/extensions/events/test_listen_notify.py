@@ -17,7 +17,6 @@ def _dsn(service: "Any") -> str:
     return f"postgres://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
 
 
-@pytest.mark.asyncio
 async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
     """Native LISTEN/NOTIFY path delivers payloads."""
 
@@ -56,7 +55,6 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
             await config.close_pool()
 
 
-@pytest.mark.asyncio
 async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) -> None:
     """Hybrid backend persists then signals via NOTIFY."""
 

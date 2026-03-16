@@ -4,7 +4,8 @@ import sqlite3
 
 import pytest
 
-from sqlspec.adapters.mock.driver import MockAsyncCursor, MockAsyncExceptionHandler, MockCursor, MockExceptionHandler
+from sqlspec.adapters.mock._typing import MockAsyncCursor, MockCursor
+from sqlspec.adapters.mock.driver import MockAsyncExceptionHandler, MockExceptionHandler
 from sqlspec.exceptions import UniqueViolationError
 
 

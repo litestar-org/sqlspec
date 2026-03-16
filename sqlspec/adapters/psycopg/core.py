@@ -5,6 +5,7 @@ from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from psycopg import sql as psycopg_sql
+from typing_extensions import LiteralString
 
 from sqlspec.core import (
     SQL,
@@ -12,6 +13,11 @@ from sqlspec.core import (
     ParameterStyle,
     StatementConfig,
     build_statement_config_from_profile,
+)
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
 )
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import (
@@ -31,7 +37,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
+from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
 # Module-level lazy import for psycopg errors (mypyc optimization)
@@ -52,6 +58,7 @@ __all__ = (
     "build_async_pipeline_execution_result",
     "build_copy_from_command",
     "build_pipeline_execution_result",
+    "build_postgres_extension_probe_names",
     "build_profile",
     "build_statement_config",
     "build_truncate_command",
@@ -63,7 +70,9 @@ __all__ = (
     "execute_with_optional_parameters_async",
     "pipeline_supported",
     "resolve_many_rowcount",
+    "resolve_postgres_extension_state",
     "resolve_rowcount",
+    "resolve_runtime_statement_config",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -79,7 +88,7 @@ class PreparedStackOperation(NamedTuple):
     operation_index: int
     operation: "StackOperation"
     statement: "SQL"
-    sql: str
+    sql: "LiteralString | psycopg_sql.SQL"
     parameters: "tuple[Any, ...] | dict[str, Any] | None"
 
 
@@ -130,7 +139,12 @@ def _identity(value: Any) -> Any:
 def _build_psycopg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for psycopg."""
 
-    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
+    return {
+        datetime.datetime: _identity,
+        datetime.date: _identity,
+        datetime.time: _identity,
+        **build_uuid_coercions(native=True),
+    }
 
 
 def _build_psycopg_parameter_config(

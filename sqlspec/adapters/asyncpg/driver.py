@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
 
+from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
     PREPARED_STATEMENT_CACHE_SIZE,
     NormalizedStackOperation,
@@ -28,7 +29,12 @@ from sqlspec.core import (
     is_copy_operation,
     register_driver_profile,
 )
-from sqlspec.driver import AsyncDriverAdapterBase, StackExecutionObserver, describe_stack_statement
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    StackExecutionObserver,
+    describe_stack_statement,
+)
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
@@ -41,30 +47,13 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from typing_extensions import Self
-
-from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
 
 logger = get_logger("sqlspec.adapters.asyncpg")
 
 
-class AsyncpgCursor:
-    """Context manager for AsyncPG cursor management."""
-
-    __slots__ = ("connection",)
-
-    def __init__(self, connection: "AsyncpgConnection") -> None:
-        self.connection = connection
-
-    async def __aenter__(self) -> "AsyncpgConnection":
-        return self.connection
-
-    async def __aexit__(self, *_: Any) -> None: ...
-
-
-class AsyncpgExceptionHandler:
+class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling AsyncPG database exceptions.
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
@@ -75,17 +64,10 @@ class AsyncpgExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_val is None:
-            return False
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        _ = exc_type
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
@@ -442,12 +424,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "AsyncpgConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncpg rows for the direct execution path."""
         data, column_names = collect_rows(fetched)
         return data, column_names, len(data)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "AsyncpgConnection") -> int:
         """Resolve rowcount from asyncpg status for the direct execution path."""
         return parse_status(cursor)
 

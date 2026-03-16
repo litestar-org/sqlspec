@@ -50,13 +50,11 @@ class StorageRegistry:
         backend = registry.get("s3://bucket", backend="fsspec")
     """
 
-    __slots__ = ("_alias_configs", "_aliases", "_cache", "_instances")
+    __slots__ = ("_alias_configs", "_instances")
 
     def __init__(self) -> None:
         self._alias_configs: dict[str, tuple[type[ObjectStoreProtocol], str, dict[str, Any]]] = {}
-        self._aliases: dict[str, dict[str, Any]] = {}
         self._instances: dict[str | tuple[str, tuple[tuple[str, Any], ...]], ObjectStoreProtocol] = {}
-        self._cache: dict[str, tuple[str, type[ObjectStoreProtocol]]] = {}
 
     def _make_hashable(self, obj: Any) -> Any:
         """Convert nested dict/list structures to hashable tuples."""
@@ -86,10 +84,6 @@ class StorageRegistry:
         if base_path:
             backend_config["base_path"] = base_path
         self._alias_configs[alias] = (backend_cls, uri, backend_config)
-
-        test_config = dict(backend_config)
-        test_config["uri"] = uri
-        self._aliases[alias] = test_config
         log_with_context(
             logger,
             logging.DEBUG,
@@ -278,14 +272,22 @@ class StorageRegistry:
     def clear_cache(self, uri_or_alias: str | None = None) -> None:
         """Clear resolved backend cache."""
         if uri_or_alias:
-            self._instances.pop(uri_or_alias, None)
-        else:
-            self._instances.clear()
+            keys_to_remove: list[str | tuple[str, tuple[tuple[str, Any], ...]]] = []
+            for key in list(self._instances):
+                if isinstance(key, str):
+                    if key == uri_or_alias:
+                        keys_to_remove.append(key)
+                    continue
+                if key and key[0] == uri_or_alias:
+                    keys_to_remove.append(key)
+            for key in keys_to_remove:
+                self._instances.pop(key, None)
+            return
+        self._instances.clear()
 
     def clear(self) -> None:
         """Clear all aliases and instances."""
         self._alias_configs.clear()
-        self._aliases.clear()
         self._instances.clear()
 
     def clear_instances(self) -> None:
@@ -295,7 +297,6 @@ class StorageRegistry:
     def clear_aliases(self) -> None:
         """Clear only aliases, keeping cached instances."""
         self._alias_configs.clear()
-        self._aliases.clear()
 
 
 storage_registry = StorageRegistry()

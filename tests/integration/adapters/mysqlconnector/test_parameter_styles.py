@@ -293,7 +293,6 @@ class TestSyncEdgeCases:
 class TestAsyncQmarkConversion:
     """Test QMARK (?) to POSITIONAL_PYFORMAT (%s) conversion for async driver."""
 
-    @pytest.mark.asyncio
     async def test_qmark_single_parameter(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -306,7 +305,6 @@ class TestAsyncQmarkConversion:
         assert len(result.data) == 1
         assert result.get_data()[0]["name"] == "test1"
 
-    @pytest.mark.asyncio
     async def test_qmark_multiple_parameters(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -324,7 +322,6 @@ class TestAsyncQmarkConversion:
 class TestAsyncNamedColonConversion:
     """Test NAMED_COLON (:name) to POSITIONAL_PYFORMAT (%s) conversion for async driver."""
 
-    @pytest.mark.asyncio
     async def test_named_colon_single_parameter(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -337,7 +334,6 @@ class TestAsyncNamedColonConversion:
         assert len(result.data) == 1
         assert result.get_data()[0]["name"] == "test1"
 
-    @pytest.mark.asyncio
     async def test_named_colon_multiple_parameters(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -355,7 +351,6 @@ class TestAsyncNamedColonConversion:
 class TestAsyncNamedPyformatConversion:
     """Test NAMED_PYFORMAT (%(name)s) to POSITIONAL_PYFORMAT (%s) conversion for async driver."""
 
-    @pytest.mark.asyncio
     async def test_named_pyformat_parameters(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -373,7 +368,6 @@ class TestAsyncNamedPyformatConversion:
 class TestAsyncPositionalPyformatNative:
     """Test POSITIONAL_PYFORMAT (%s) works natively for async driver."""
 
-    @pytest.mark.asyncio
     async def test_pyformat_parameters(self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver) -> None:
         """Test %s placeholders work directly."""
         result = await mysqlconnector_async_parameter_session.execute(
@@ -388,7 +382,6 @@ class TestAsyncPositionalPyformatNative:
 class TestAsyncSQLObject:
     """Test parameter conversion with SQL objects for async driver."""
 
-    @pytest.mark.asyncio
     async def test_sql_object_with_qmark(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -403,7 +396,6 @@ class TestAsyncSQLObject:
 class TestAsyncExecuteMany:
     """Test parameter conversion with execute_many for async driver."""
 
-    @pytest.mark.asyncio
     async def test_execute_many_with_qmark(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:
@@ -421,7 +413,6 @@ class TestAsyncExecuteMany:
 class TestAsyncEdgeCases:
     """Test edge cases for async driver."""
 
-    @pytest.mark.asyncio
     async def test_boolean_parameters(self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver) -> None:
         """Test boolean parameters are converted to integers for MySQL."""
         await mysqlconnector_async_parameter_session.execute_script("""
@@ -445,7 +436,6 @@ class TestAsyncEdgeCases:
 
         await mysqlconnector_async_parameter_session.execute_script("DROP TABLE IF EXISTS test_bools_async")
 
-    @pytest.mark.asyncio
     async def test_sql_injection_prevention(
         self, mysqlconnector_async_parameter_session: MysqlConnectorAsyncDriver
     ) -> None:

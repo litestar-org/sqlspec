@@ -186,7 +186,7 @@ def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None
         is_async = False
         extension_config: dict[str, Any] = {}
         driver_features: dict[str, Any] = {}
-        statement_config = None
+        statement_config: None = None
 
         def get_observability_runtime(self) -> Any:
 

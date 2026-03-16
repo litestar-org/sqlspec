@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from google.cloud.exceptions import GoogleCloudError
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQuerySessionContext
+from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
     build_dml_rowcount,
     build_inlined_script,
@@ -38,7 +38,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError, StorageCapabilityError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -48,7 +48,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from google.cloud.bigquery import QueryJob, QueryJobConfig
-    from typing_extensions import Self
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
@@ -66,32 +65,7 @@ logger = get_logger(__name__)
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
 
 
-class BigQueryCursor:
-    """BigQuery cursor with resource management."""
-
-    __slots__ = ("connection", "job")
-
-    def __init__(self, connection: "BigQueryConnection") -> None:
-        self.connection = connection
-        self.job: QueryJob | None = None
-
-    def __enter__(self) -> "BigQueryConnection":
-        return self.connection
-
-    def __exit__(self, *_: Any) -> None:
-        """Clean up cursor resources including active QueryJobs."""
-        if self.job is not None:
-            try:
-                # Cancel the job if it's still running to free up resources
-                if self.job.state in {"PENDING", "RUNNING"}:
-                    self.job.cancel()
-                # Clear the job reference
-                self.job = None
-            except Exception:
-                logger.exception("Failed to cancel BigQuery job during cursor cleanup")
-
-
-class BigQueryExceptionHandler:
+class BigQueryExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling BigQuery API exceptions.
 
     Maps HTTP status codes and error reasons to specific SQLSpec exceptions
@@ -102,16 +76,9 @@ class BigQueryExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> "Self":
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, GoogleCloudError):

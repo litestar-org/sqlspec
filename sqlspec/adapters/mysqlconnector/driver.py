@@ -30,7 +30,12 @@ from sqlspec.adapters.mysqlconnector.data_dictionary import (
     MysqlConnectorSyncDataDictionary,
 )
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
+    SyncDriverAdapterBase,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
@@ -44,9 +49,12 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from typing_extensions import Self
-
-from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorAsyncSessionContext, MysqlConnectorSyncSessionContext
+from sqlspec.adapters.mysqlconnector._typing import (
+    MysqlConnectorAsyncCursor,
+    MysqlConnectorAsyncSessionContext,
+    MysqlConnectorSyncCursor,
+    MysqlConnectorSyncSessionContext,
+)
 
 __all__ = (
     "MysqlConnectorAsyncCursor",
@@ -65,36 +73,12 @@ json_type_value = FieldType.JSON if supports_json_type(FieldType) else None
 MYSQLCONNECTOR_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
-class MysqlConnectorSyncCursor:
-    """Context manager for mysql-connector sync cursor operations."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MysqlConnectorSyncConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
-
-
-class MysqlConnectorSyncExceptionHandler:
+class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling mysql-connector sync exceptions."""
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, mysql.connector.Error):
@@ -303,36 +287,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return False
 
 
-class MysqlConnectorAsyncCursor:
-    """Async context manager for mysql-connector async cursor operations."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MysqlConnectorAsyncConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    async def __aenter__(self) -> Any:
-        self.cursor = await self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            await self.cursor.close()
-
-
-class MysqlConnectorAsyncExceptionHandler:
+class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling mysql-connector exceptions."""
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, mysql.connector.Error):

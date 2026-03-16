@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from sqlspec.utils.dispatch import TypeDispatcher
 
 # pyright: reportPrivateUsage=false
@@ -81,3 +83,11 @@ def test_dispatcher_clear_cache() -> None:
 
     dispatcher.clear_cache()
     assert Child not in dispatcher._cache
+
+
+def test_dispatcher_supports_virtual_abc_resolution() -> None:
+    dispatcher = TypeDispatcher[str]()
+    dispatcher.register(Sequence, "sequence")
+
+    assert dispatcher.get([1, 2, 3]) == "sequence"
+    assert dispatcher.resolve_type(list) == "sequence"

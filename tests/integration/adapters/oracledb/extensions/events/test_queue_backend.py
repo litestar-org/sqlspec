@@ -124,7 +124,6 @@ def test_oracle_sync_event_channel_queue_fallback(tmp_path: "Path") -> None:
 
 
 @pytest.mark.oracle
-@pytest.mark.asyncio
 async def test_oracle_async_event_channel_queue_fallback(tmp_path: "Path") -> None:
     """Async Oracle configs also use the queue fallback."""
 

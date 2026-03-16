@@ -19,6 +19,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -127,7 +128,7 @@ class CockroachAsyncpgConnectionContext:
         return self._connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             if self._config.connection_instance:
@@ -148,6 +149,10 @@ class CockroachAsyncpgConfig(
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[CockroachAsyncpgConnectionContext]]" = CockroachAsyncpgConnectionContext
+    _session_factory_class: "ClassVar[type[_CockroachAsyncpgSessionFactory]]" = _CockroachAsyncpgSessionFactory
+    _session_context_class: "ClassVar[type[CockroachAsyncpgSessionContext]]" = CockroachAsyncpgSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -207,9 +212,6 @@ class CockroachAsyncpgConfig(
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("CockroachAsyncpgConnection", await self.connection_instance.acquire())
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "CockroachAsyncpgConnectionContext":
-        return CockroachAsyncpgConnectionContext(self)
 
     def provide_session(
         self,

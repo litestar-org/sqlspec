@@ -3,7 +3,6 @@ import tempfile
 from typing import Any, cast
 
 import msgspec.json
-import pytest
 from litestar.channels.plugin import ChannelsPlugin
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -19,7 +18,6 @@ async def _next_event(subscriber: "Any") -> bytes:
     raise RuntimeError(msg)
 
 
-@pytest.mark.asyncio
 async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> None:
     migrations = tmp_path / "migrations"
     migrations.mkdir()

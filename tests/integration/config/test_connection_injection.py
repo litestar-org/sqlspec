@@ -20,7 +20,6 @@ from sqlspec.adapters.sqlite.config import SqliteConfig
 pytestmark = pytest.mark.xdist_group("config")
 
 
-@pytest.mark.asyncio
 @pytest.mark.postgres
 async def test_asyncpg_connection_instance_with_pre_created_pool(asyncpg_connection_config: dict) -> None:
     """Test AsyncpgConfig with connection_instance using pre-created pool."""
@@ -44,7 +43,6 @@ async def test_asyncpg_connection_instance_with_pre_created_pool(asyncpg_connect
         await pool.close()
 
 
-@pytest.mark.asyncio
 @pytest.mark.postgres
 async def test_asyncpg_connection_instance_bypasses_pool_creation(asyncpg_connection_config: dict) -> None:
     """Test that connection_instance bypasses _create_pool logic."""
@@ -69,7 +67,6 @@ async def test_asyncpg_connection_instance_bypasses_pool_creation(asyncpg_connec
         await pool.close()
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_connection_instance_with_pre_created_pool(tmp_path: Path) -> None:
     """Test AiosqliteConfig with connection_instance using pre-created pool."""
     from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
@@ -171,7 +168,6 @@ def test_sqlite_connection_instance_none_creates_new_pool(tmp_path: Path) -> Non
     config.close_pool()
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_connection_instance_none_creates_new_pool(tmp_path: Path) -> None:
     """Test that connection_instance=None causes new pool creation for async."""
     db_path = tmp_path / "test.db"
@@ -244,7 +240,6 @@ def test_connection_instance_with_empty_connection_config() -> None:
         pool.close()
 
 
-@pytest.mark.asyncio
 @pytest.mark.postgres
 async def test_asyncpg_connection_instance_overrides_connection_config_pool_params(
     asyncpg_connection_config: dict,
@@ -310,7 +305,6 @@ def test_sqlite_connection_instance_after_close_pool() -> None:
     assert config.connection_instance is None
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_connection_instance_after_close_pool() -> None:
     """Test that connection_instance can be closed via config."""
     from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
@@ -336,7 +330,6 @@ def test_connection_instance_with_mock_pool() -> None:
     assert config.connection_instance is mock_pool
 
 
-@pytest.mark.asyncio
 async def test_connection_instance_with_async_mock_pool() -> None:
     """Test that connection_instance accepts async mock pools for testing."""
     mock_pool = MagicMock()

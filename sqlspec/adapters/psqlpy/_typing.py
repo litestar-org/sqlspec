@@ -10,6 +10,7 @@ from psqlpy import Connection as _PsqlpyConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
@@ -19,6 +20,43 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     PsqlpyConnection = _PsqlpyConnection
+
+
+class PsqlpyCursor:
+    """Context manager for psqlpy cursor management."""
+
+    __slots__ = ("_in_use", "connection")
+
+    def __init__(self, connection: "PsqlpyConnection") -> None:
+        self.connection = connection
+        self._in_use = False
+
+    async def __aenter__(self) -> "PsqlpyConnection":
+        """Enter cursor context.
+
+        Returns:
+            Psqlpy connection object
+        """
+        self._in_use = True
+        return self.connection
+
+    async def __aexit__(self, *_: Any) -> None:
+        """Exit cursor context.
+
+        Args:
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
+        """
+        self._in_use = False
+
+    def is_in_use(self) -> bool:
+        """Check if cursor is currently in use.
+
+        Returns:
+            True if cursor is in use, False otherwise
+        """
+        return self._in_use
 
 
 class PsqlpySessionContext:
@@ -69,7 +107,7 @@ class PsqlpySessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)
@@ -77,4 +115,4 @@ class PsqlpySessionContext:
         return None
 
 
-__all__ = ("PsqlpyConnection", "PsqlpySessionContext")
+__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpySessionContext")

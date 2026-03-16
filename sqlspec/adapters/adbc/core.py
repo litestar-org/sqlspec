@@ -5,13 +5,18 @@ import decimal
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
+from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
     StatementConfig,
     build_null_pruning_transform,
     build_statement_config_from_profile,
+)
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
 )
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -29,8 +34,10 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
 if TYPE_CHECKING:
@@ -41,6 +48,7 @@ if TYPE_CHECKING:
 __all__ = (
     "apply_driver_features",
     "build_connection_config",
+    "build_postgres_extension_probe_names",
     "build_profile",
     "collect_rows",
     "create_mapped_exception",
@@ -68,7 +76,9 @@ __all__ = (
     "resolve_many_rowcount",
     "resolve_parameter_casts",
     "resolve_parameter_styles",
+    "resolve_postgres_extension_state",
     "resolve_rowcount",
+    "resolve_runtime_statement_config",
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
@@ -144,6 +154,7 @@ _PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ..
 )
 
 _BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "token")
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
 def detect_dialect(connection: Any, logger: Any | None = None) -> str:
@@ -643,6 +654,7 @@ def build_profile() -> "DriverParameterProfile":
             tuple: _convert_array_for_postgres_adbc,
             list: _convert_array_for_postgres_adbc,
             dict: _identity,
+            **build_uuid_coercions(native=True),
         },
         extras={
             "type_coercion_overrides": {list: _convert_array_for_postgres_adbc, tuple: _convert_array_for_postgres_adbc}
@@ -857,6 +869,20 @@ def resolve_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
+def _get_type_coercion_dispatcher(
+    type_map: "dict[type, Callable[[Any], Any]]",
+) -> "TypeDispatcher[Callable[[Any], Any]]":
+    fallback_items = tuple(type_map.items())
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
 def prepare_parameters_with_casts(
     parameters: Any,
     parameter_casts: "dict[int, str]",
@@ -870,7 +896,9 @@ def prepare_parameters_with_casts(
 
     if isinstance(parameters, (list, tuple)):
         result: list[Any] = []
-        converter = ADBCOutputConverter(dialect)
+        converter = get_adbc_type_converter(dialect)
+        type_map = statement_config.parameter_config.type_coercion_map
+        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "").upper()
             if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
@@ -881,11 +909,14 @@ def prepare_parameters_with_casts(
             elif isinstance(param, dict):
                 result.append(converter.convert_dict(param))
             else:
-                if statement_config.parameter_config.type_coercion_map:
-                    for type_check, converter_func in statement_config.parameter_config.type_coercion_map.items():
-                        if type_check is not dict and isinstance(param, type_check):
+                if type_map and dispatcher is not None:
+                    exact_converter = type_map.get(type(param))
+                    if exact_converter is not None and type(param) is not dict:
+                        param = exact_converter(param)
+                    else:
+                        converter_func = dispatcher.get(param)
+                        if converter_func is not None and type(param) is not dict:
                             param = converter_func(param)
-                            break
                 result.append(param)
         return tuple(result) if isinstance(parameters, tuple) else result
     return parameters

@@ -120,7 +120,25 @@ def test_sync_update_version_record_no_commit_on_idempotent_path() -> None:
     driver.commit.assert_not_called()
 
 
-@pytest.mark.asyncio
+def test_sync_schema_migration_rolls_back_on_failure() -> None:
+    """Schema migration should rollback after a failed column update."""
+    tracker = SyncMigrationTracker()
+    driver = Mock()
+    driver.driver_features = {}
+    driver.data_dictionary.get_columns.return_value = [{"column_name": "version"}]
+    driver.rollback = Mock()
+
+    def raise_on_add(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    tracker._add_column = Mock(side_effect=raise_on_add)  # type: ignore[method-assign]
+
+    tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
 async def test_async_update_version_record_success() -> None:
     """Test async update succeeds when old version exists."""
     from unittest.mock import AsyncMock
@@ -144,7 +162,7 @@ async def test_async_update_version_record_success() -> None:
     assert "ddl_migrations" in update_sql
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_update_version_record_idempotent_when_already_updated() -> None:
     """Test async update is idempotent when version already exists."""
     from unittest.mock import AsyncMock
@@ -177,7 +195,28 @@ async def test_async_update_version_record_idempotent_when_already_updated() -> 
     assert driver.execute.call_count == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
+async def test_async_schema_migration_rolls_back_on_failure() -> None:
+    """Async schema migration should rollback after a failed column update."""
+    from unittest.mock import AsyncMock
+
+    tracker = AsyncMigrationTracker()
+    driver = MagicMock()
+    driver.driver_features = {}
+    driver.data_dictionary.get_columns = AsyncMock(return_value=[{"column_name": "version"}])
+    driver.rollback = AsyncMock()
+
+    async def raise_on_add(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    tracker._add_column = AsyncMock(side_effect=raise_on_add)  # type: ignore[method-assign]
+
+    await tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.rollback.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_async_update_version_record_raises_when_neither_version_exists() -> None:
     """Test async update raises ValueError when neither old nor new version exists."""
     from unittest.mock import AsyncMock
@@ -206,7 +245,7 @@ async def test_async_update_version_record_raises_when_neither_version_exists() 
         await tracker.update_version_record(driver, "20251011120000", "0001")
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_update_version_record_empty_database() -> None:
     """Test async update raises when database is empty."""
     from unittest.mock import AsyncMock
@@ -235,7 +274,7 @@ async def test_async_update_version_record_empty_database() -> None:
         await tracker.update_version_record(driver, "20251011120000", "0001")
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_update_version_record_commits_after_success() -> None:
     """Test async update commits transaction after successful update."""
     from unittest.mock import AsyncMock
@@ -259,7 +298,7 @@ async def test_async_update_version_record_commits_after_success() -> None:
     driver.commit.assert_called_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_update_version_record_no_commit_on_idempotent_path() -> None:
     """Test async update does not commit when taking idempotent path."""
     from unittest.mock import AsyncMock

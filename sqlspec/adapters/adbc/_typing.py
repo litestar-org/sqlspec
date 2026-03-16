@@ -5,23 +5,47 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 from adbc_driver_manager.dbapi import Connection
+from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
 
 _AdbcConnection = Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import StatementConfig
 
     AdbcConnection: TypeAlias = _AdbcConnection
+    AdbcRawCursor: TypeAlias = _AdbcRawCursor
 
 if not TYPE_CHECKING:
     AdbcConnection = _AdbcConnection
+    AdbcRawCursor = _AdbcRawCursor
+
+
+class AdbcCursor:
+    """Context manager for cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "AdbcConnection") -> None:
+        self.connection = connection
+        self.cursor: AdbcRawCursor | None = None
+
+    def __enter__(self) -> "AdbcRawCursor":
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()  # type: ignore[no-untyped-call]
 
 
 class AdbcSessionContext:
@@ -71,7 +95,7 @@ class AdbcSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -79,4 +103,4 @@ class AdbcSessionContext:
         return None
 
 
-__all__ = ("AdbcConnection", "AdbcSessionContext")
+__all__ = ("AdbcConnection", "AdbcCursor", "AdbcRawCursor", "AdbcSessionContext")

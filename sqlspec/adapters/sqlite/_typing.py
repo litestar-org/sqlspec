@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -11,15 +12,57 @@ _SqliteConnection = sqlite3.Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.sqlite.driver import SqliteDriver
     from sqlspec.core import StatementConfig
 
     SqliteConnection: TypeAlias = _SqliteConnection
+    SqliteRawCursor: TypeAlias = sqlite3.Cursor
 
 if not TYPE_CHECKING:
     SqliteConnection = _SqliteConnection
+    SqliteRawCursor = sqlite3.Cursor
+
+
+class SqliteCursor:
+    """Context manager for SQLite cursor management.
+
+    Provides automatic cursor creation and cleanup for SQLite database operations.
+    """
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "SqliteConnection") -> None:
+        """Initialize cursor manager.
+
+        Args:
+            connection: SQLite database connection
+        """
+        self.connection = connection
+        self.cursor: SqliteRawCursor | None = None
+
+    def __enter__(self) -> "SqliteRawCursor":
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+        """
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        """Clean up cursor resources.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class SqliteSessionContext:
@@ -69,7 +112,7 @@ class SqliteSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -77,4 +120,4 @@ class SqliteSessionContext:
         return None
 
 
-__all__ = ("SqliteConnection", "SqliteSessionContext")
+__all__ = ("SqliteConnection", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")

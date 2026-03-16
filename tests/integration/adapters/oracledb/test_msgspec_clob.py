@@ -55,7 +55,6 @@ LARGE_JSON_CONTENT = {"key": "value", "nested": {"data": "x" * 5000}}
 LARGE_BINARY_CONTENT = b"\x00\x01\x02\x03" * 2000
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_clob_msgspec_hydration(oracle_async_session: OracleAsyncDriver) -> None:
     """Test async CLOB automatic hydration into msgspec struct.
 
@@ -130,7 +129,6 @@ def test_oracle_sync_clob_msgspec_hydration(oracle_sync_session: OracleSyncDrive
     )
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_mixed_clob_varchar2_msgspec(oracle_async_session: OracleAsyncDriver) -> None:
     """Test msgspec hydration with mixed CLOB and VARCHAR2 columns.
 
@@ -206,7 +204,6 @@ def test_oracle_sync_mixed_clob_varchar2_msgspec(oracle_sync_session: OracleSync
     )
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_json_in_clob_detection(oracle_async_session: OracleAsyncDriver) -> None:
     """Test JSON detection in CLOB with msgspec hydration.
 
@@ -283,7 +280,6 @@ def test_oracle_sync_json_in_clob_detection(oracle_sync_session: OracleSyncDrive
     )
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_blob_remains_bytes(oracle_async_session: OracleAsyncDriver) -> None:
     """Test that BLOB columns still return bytes, not strings.
 
@@ -356,7 +352,6 @@ def test_oracle_sync_blob_remains_bytes(oracle_sync_session: OracleSyncDriver) -
     )
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_multiple_clob_columns(oracle_async_session: OracleAsyncDriver) -> None:
     """Test msgspec hydration with multiple CLOB columns.
 
@@ -471,7 +466,6 @@ def test_oracle_sync_multiple_clob_columns(oracle_sync_session: OracleSyncDriver
     )
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_empty_clob_msgspec(oracle_async_session: OracleAsyncDriver) -> None:
     """Test msgspec hydration with NULL CLOB values.
 

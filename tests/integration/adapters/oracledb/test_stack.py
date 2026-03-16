@@ -41,7 +41,6 @@ def _reset_sync_table(driver: OracleSyncDriver, table_name: str) -> None:
     driver.execute_script(CREATE_TEMPLATE.format(table_name=table_name))
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_statement_stack_native_pipeline(
     monkeypatch: pytest.MonkeyPatch, oracle_async_session: OracleAsyncDriver
 ) -> None:
@@ -85,7 +84,6 @@ async def test_async_statement_stack_native_pipeline(
     await oracle_async_session.execute_script(DROP_TEMPLATE.format(table_name=table_name))
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_async_statement_stack_continue_on_error_pipeline(oracle_async_session: OracleAsyncDriver) -> None:
     """Ensure continue-on-error surfaces failures while executing remaining operations."""
 

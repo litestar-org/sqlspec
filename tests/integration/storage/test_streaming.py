@@ -17,7 +17,6 @@ def test_sync_stream_read_local(test_file):
     assert content == b"hello world" * 1000
 
 
-@pytest.mark.asyncio
 async def test_async_stream_read_local(test_file):
     pipeline = AsyncStoragePipeline()
     stream = await pipeline.stream_read_async(test_file, chunk_size=10)
@@ -27,7 +26,6 @@ async def test_async_stream_read_local(test_file):
     assert content == b"hello world" * 1000
 
 
-@pytest.mark.asyncio
 async def test_async_stream_read_local_explicit_uri(test_file):
     pipeline = AsyncStoragePipeline()
     uri = f"file://{test_file}"

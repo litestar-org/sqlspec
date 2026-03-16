@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite._typing import SqliteConnection
+from sqlspec.adapters.sqlite._typing import SqliteConnection, SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import apply_driver_features, build_connection_config, default_statement_config
-from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, SqliteSessionContext
+from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
@@ -17,6 +17,7 @@ logger = get_logger("sqlspec.adapters.sqlite")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -86,7 +87,7 @@ class SqliteConnectionContext:
         return cast("SqliteConnection", self._ctx.__enter__())
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
@@ -122,6 +123,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[SqliteConnectionContext]]" = SqliteConnectionContext
+    _session_factory_class: "ClassVar[type[_SqliteSessionConnectionHandler]]" = _SqliteSessionConnectionHandler
+    _session_context_class: "ClassVar[type[SqliteSessionContext]]" = SqliteSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -235,41 +240,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """
         pool = self.provide_pool()
         return pool.acquire()
-
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "SqliteConnectionContext":
-        """Provide a SQLite connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A Sqlite connection context manager.
-        """
-        return SqliteConnectionContext(self)
-
-    def provide_session(
-        self, *_args: "Any", statement_config: "StatementConfig | None" = None, **_kwargs: "Any"
-    ) -> "SqliteSessionContext":
-        """Provide a SQLite driver session.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            A Sqlite driver session context manager.
-        """
-        handler = _SqliteSessionConnectionHandler(self)
-
-        return SqliteSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SQLite types.

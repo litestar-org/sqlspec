@@ -1,12 +1,10 @@
 """PGO training workload for sqlspec.
 
 Exercises hot paths to generate compiler profile data for Profile-Guided Optimization.
-This module is excluded from mypyc compilation — it runs against compiled modules.
+This script runs against compiled modules and should not be packaged with the library.
 
-Run as: python -m sqlspec._pgo_training
+Run as: python tools/scripts/pgo_training.py
 """
-
-from __future__ import annotations
 
 import sys
 import tempfile
@@ -32,12 +30,12 @@ def _train_text_transforms() -> None:
         "multi_word_column_name_here",
     ]
     for _ in range(25000):
-        for s in inputs:
-            camelize(s)
-            snake_case(s)
-            pascalize(s)
-            kebabize(s)
-            slugify(s)
+        for value in inputs:
+            camelize(value)
+            snake_case(value)
+            pascalize(value)
+            kebabize(value)
+            slugify(value)
 
 
 def _train_schema_transforms() -> None:
@@ -55,11 +53,7 @@ def _train_schema_transforms() -> None:
 
 
 def _train_sqlite_sync() -> None:
-    """Exercise sync driver via in-memory SQLite.
-
-    Covers: driver initialization, execute, execute_many, fetch, fetch_one_or_none,
-    query cache warm/miss/evict paths, parameter processing, and type conversion.
-    """
+    """Exercise sync driver via in-memory SQLite."""
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
@@ -77,14 +71,10 @@ def _train_sqlite_sync() -> None:
         with spec.provide_session(config) as session:
             session.execute(create_sql)
 
-            # Write heavy: bulk insert via execute_many
             data = [(f"value_{i}",) for i in range(2000)]
             session.execute_many(insert_sql, data)
-
-            # Read heavy: fetch all rows
             session.fetch(select_all)
 
-            # Repeated queries: hammer the query cache
             for i in range(10000):
                 session.fetch_one_or_none(select_by, (f"value_{i % 100}",))
 
@@ -92,7 +82,6 @@ def _train_sqlite_sync() -> None:
     finally:
         Path(tmp_name).unlink()
 
-    # Second pass: focus on query cache warm path with more iterations
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         tmp_name = tmp.name
 
@@ -102,7 +91,6 @@ def _train_sqlite_sync() -> None:
             session.execute(create_sql)
             for i in range(500):
                 session.execute(insert_sql, (f"val_{i}",))
-            # 50k queries to thoroughly exercise the query cache fast path
             for i in range(50000):
                 session.fetch_one_or_none(select_by, (f"val_{i % 500}",))
 
@@ -115,7 +103,7 @@ def main() -> None:
     """Run all PGO training workloads."""
     start = time.perf_counter()
 
-    workloads: list[tuple[str, object]] = [
+    workloads = [
         ("text_transforms", _train_text_transforms),
         ("schema_transforms", _train_schema_transforms),
         ("sqlite_sync", _train_sqlite_sync),
@@ -123,7 +111,7 @@ def main() -> None:
 
     for name, fn in workloads:
         t0 = time.perf_counter()
-        fn()  # type: ignore[operator]
+        fn()
         elapsed = time.perf_counter() - t0
         print(f"  {name}: {elapsed:.2f}s")  # noqa: T201
 

@@ -1,11 +1,14 @@
 """Unit tests for ADBC core execute-many helpers."""
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
+from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc.core import (
     collect_rows,
     get_statement_config,
+    prepare_parameters_with_casts,
     prepare_postgres_parameters,
     resolve_column_names,
     resolve_many_rowcount,
@@ -74,3 +77,56 @@ def test_collect_rows_uses_precomputed_column_names() -> None:
 
     assert data is rows
     assert column_names == ["id", "name"]
+
+
+def test_prepare_parameters_with_casts_uses_type_converter_factory(monkeypatch: Any) -> None:
+    statement_config = get_statement_config("postgres")
+    factory_calls: list[tuple[str, int]] = []
+
+    class FakeConverter:
+        def convert_dict(self, value: dict[str, Any]) -> str:
+            return f"factory:{sorted(value.items())!r}"
+
+    def fake_factory(dialect: str, cache_size: int = 5000) -> FakeConverter:
+        factory_calls.append((dialect, cache_size))
+        return FakeConverter()
+
+    monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
+
+    prepared = prepare_parameters_with_casts(
+        [{"id": 1}], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    )
+
+    assert prepared == ["factory:[('id', 1)]"]
+    assert factory_calls == [("postgres", 5000)]
+
+
+def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None:
+    class MyInt(int):
+        pass
+
+    statement_config = get_statement_config("postgres")
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(type_coercion_map={int: lambda value: value + 1})
+    )
+
+    prepared = prepare_parameters_with_casts(
+        [MyInt(4)], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    )
+
+    assert prepared == [5]
+
+
+def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
+    statement_config = get_statement_config("postgres")
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            type_coercion_map={Sequence: lambda value: tuple(value)}
+        )
+    )
+
+    prepared = prepare_parameters_with_casts(
+        [[1, 2]], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    )
+
+    assert prepared == [(1, 2)]

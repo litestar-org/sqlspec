@@ -143,7 +143,6 @@ class TestDuckDBPoolLogging:
 class TestAiosqliteConnectionPoolLogging:
     """Tests for aiosqlite pool logging structure."""
 
-    @pytest.mark.asyncio
     async def test_aiosqlite_pool_uses_pool_logger(self) -> None:
         """Test that aiosqlite pool imports and uses POOL_LOGGER_NAME."""
         from sqlspec.adapters.aiosqlite.pool import _ADAPTER_NAME
@@ -152,7 +151,6 @@ class TestAiosqliteConnectionPoolLogging:
         assert aiosqlite_pool_logger_name == "sqlspec.pool"
         assert _ADAPTER_NAME == "aiosqlite"
 
-    @pytest.mark.asyncio
     async def test_aiosqlite_pool_has_pool_id(self) -> None:
         """Test that aiosqlite pool generates a pool_id."""
         from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
@@ -161,7 +159,6 @@ class TestAiosqliteConnectionPoolLogging:
         assert hasattr(pool, "_pool_id")
         assert len(pool._pool_id) == 8  # UUID prefix
 
-    @pytest.mark.asyncio
     async def test_aiosqlite_pool_database_name_property(self) -> None:
         """Test that aiosqlite pool has _database_name property for logging."""
         from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool

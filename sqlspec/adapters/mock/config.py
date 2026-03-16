@@ -10,15 +10,16 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockConnection, MockSyncSessionContext
+from sqlspec.adapters.mock._typing import MockAsyncSessionContext, MockConnection, MockCursor, MockSyncSessionContext
 from sqlspec.adapters.mock.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.mock.driver import MockAsyncDriver, MockCursor, MockExceptionHandler, MockSyncDriver
+from sqlspec.adapters.mock.driver import MockAsyncDriver, MockExceptionHandler, MockSyncDriver
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, NoPoolSyncConfig
 from sqlspec.driver import convert_to_dialect
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -70,7 +71,7 @@ class MockSyncConnectionContext:
         return self._connection
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._connection.close()
@@ -92,7 +93,7 @@ class MockAsyncConnectionContext:
         return self._connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._connection.close()
@@ -170,6 +171,10 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[MockSyncConnectionContext]]" = MockSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_MockSyncSessionFactory]]" = _MockSyncSessionFactory
+    _session_context_class: "ClassVar[type[MockSyncSessionContext]]" = MockSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -337,6 +342,10 @@ class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[MockAsyncConnectionContext]]" = MockAsyncConnectionContext
+    _session_factory_class: "ClassVar[type[_MockAsyncSessionFactory]]" = _MockAsyncSessionFactory
+    _session_context_class: "ClassVar[type[MockAsyncSessionContext]]" = MockAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

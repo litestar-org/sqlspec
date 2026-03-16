@@ -1,4 +1,4 @@
-from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
+from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor
 from sqlspec.adapters.asyncmy.config import (
     AsyncmyConfig,
     AsyncmyConnectionParams,
@@ -6,7 +6,7 @@ from sqlspec.adapters.asyncmy.config import (
     AsyncmyPoolParams,
 )
 from sqlspec.adapters.asyncmy.core import default_statement_config
-from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, AsyncmyExceptionHandler
+from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 
 __all__ = (
     "AsyncmyConfig",

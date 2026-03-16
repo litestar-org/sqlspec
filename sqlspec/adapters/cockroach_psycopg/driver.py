@@ -6,7 +6,6 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
-from typing_extensions import Self
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
@@ -29,6 +28,7 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
 from sqlspec.adapters.psycopg.core import create_mapped_exception
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.driver import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.exceptions import SerializationConflictError, TransactionRetryError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
@@ -50,18 +50,12 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.cockroach_psycopg")
 
 
-class CockroachPsycopgSyncExceptionHandler:
+class CockroachPsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling CockroachDB psycopg exceptions."""
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
@@ -73,18 +67,12 @@ class CockroachPsycopgSyncExceptionHandler:
         return False
 
 
-class CockroachPsycopgAsyncExceptionHandler:
+class CockroachPsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling CockroachDB psycopg exceptions."""
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):

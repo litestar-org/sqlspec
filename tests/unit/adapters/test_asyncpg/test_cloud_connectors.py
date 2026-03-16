@@ -179,7 +179,6 @@ def test_normal_config_without_connectors() -> None:
     assert config.driver_features.get("enable_alloydb", False) is not True
 
 
-@pytest.mark.asyncio
 async def test_cloud_sql_connector_initialization(mock_cloud_sql_module) -> None:
     """Cloud SQL connector should be initialized correctly in create_pool."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -209,7 +208,6 @@ async def test_cloud_sql_connector_initialization(mock_cloud_sql_module) -> None
             assert "user" not in call_kwargs
 
 
-@pytest.mark.asyncio
 async def test_cloud_sql_iam_auth_enabled(mock_cloud_sql_module) -> None:
     """Cloud SQL IAM authentication should configure enable_iam_auth=True."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -240,7 +238,6 @@ async def test_cloud_sql_iam_auth_enabled(mock_cloud_sql_module) -> None:
             await get_conn_func()
 
 
-@pytest.mark.asyncio
 async def test_cloud_sql_iam_auth_disabled(mock_cloud_sql_module) -> None:
     """Cloud SQL with IAM disabled should configure enable_iam_auth=False."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -271,7 +268,6 @@ async def test_cloud_sql_iam_auth_disabled(mock_cloud_sql_module) -> None:
             await get_conn_func()
 
 
-@pytest.mark.asyncio
 async def test_cloud_sql_ip_type_configuration(mock_cloud_sql_module) -> None:
     """Cloud SQL IP type should be passed to connector."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -302,7 +298,6 @@ async def test_cloud_sql_ip_type_configuration(mock_cloud_sql_module) -> None:
             await get_conn_func()
 
 
-@pytest.mark.asyncio
 async def test_cloud_sql_default_ip_type(mock_cloud_sql_module) -> None:
     """Cloud SQL should default to PRIVATE IP type."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -329,7 +324,6 @@ async def test_cloud_sql_default_ip_type(mock_cloud_sql_module) -> None:
             await get_conn_func()
 
 
-@pytest.mark.asyncio
 async def test_alloydb_connector_initialization(mock_alloydb_module) -> None:
     """AlloyDB connector should be initialized correctly in create_pool."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
@@ -362,7 +356,6 @@ async def test_alloydb_connector_initialization(mock_alloydb_module) -> None:
             assert "user" not in call_kwargs
 
 
-@pytest.mark.asyncio
 async def test_alloydb_iam_auth_enabled(mock_alloydb_module) -> None:
     """AlloyDB IAM authentication should configure enable_iam_auth=True."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
@@ -384,7 +377,7 @@ async def test_alloydb_iam_auth_enabled(mock_alloydb_module) -> None:
                 driver_features={
                     "enable_alloydb": True,
                     "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
-                    "alloydb_enable_iam_auth": True,
+                    "enable_alloydb_iam_auth": True,
                 },
             )
 
@@ -393,7 +386,6 @@ async def test_alloydb_iam_auth_enabled(mock_alloydb_module) -> None:
             await get_conn_func()
 
 
-@pytest.mark.asyncio
 async def test_alloydb_ip_type_configuration(mock_alloydb_module) -> None:
     """AlloyDB IP type should be passed to connector."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
@@ -424,7 +416,6 @@ async def test_alloydb_ip_type_configuration(mock_alloydb_module) -> None:
             await get_conn_func()
 
 
-@pytest.mark.asyncio
 async def test_cloud_sql_connector_cleanup(mock_cloud_sql_module) -> None:
     """Cloud SQL connector should be closed on pool close."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -450,7 +441,6 @@ async def test_cloud_sql_connector_cleanup(mock_cloud_sql_module) -> None:
             assert config._cloud_sql_connector is None
 
 
-@pytest.mark.asyncio
 async def test_alloydb_connector_cleanup(mock_alloydb_module) -> None:
     """AlloyDB connector should be closed on pool close."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
@@ -479,7 +469,6 @@ async def test_alloydb_connector_cleanup(mock_alloydb_module) -> None:
             assert config._alloydb_connector is None
 
 
-@pytest.mark.asyncio
 async def test_connection_factory_pattern_cloud_sql(mock_cloud_sql_module) -> None:
     """Cloud SQL should use connection factory pattern with connect parameter."""
     with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
@@ -503,7 +492,6 @@ async def test_connection_factory_pattern_cloud_sql(mock_cloud_sql_module) -> No
             assert callable(call_kwargs["connect"])
 
 
-@pytest.mark.asyncio
 async def test_connection_factory_pattern_alloydb(mock_alloydb_module) -> None:
     """AlloyDB should use connection factory pattern with connect parameter."""
     with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
@@ -530,7 +518,6 @@ async def test_connection_factory_pattern_alloydb(mock_alloydb_module) -> None:
             assert callable(call_kwargs["connect"])
 
 
-@pytest.mark.asyncio
 async def test_pool_close_without_connectors() -> None:
     """Closing pool without connectors should not raise errors."""
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})

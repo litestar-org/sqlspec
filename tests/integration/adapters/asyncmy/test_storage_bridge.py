@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyDriver
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.xdist_group("mysql")]
+pytestmark = [pytest.mark.xdist_group("mysql")]
 
 
 async def _fetch_rows(asyncmy_driver: AsyncmyDriver, table: str) -> list[dict[str, object]]:

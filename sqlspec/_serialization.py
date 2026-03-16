@@ -11,13 +11,28 @@ import contextlib
 import datetime
 import enum
 import json
+import uuid as _uuid_mod
 from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any, Final, Literal, Protocol, overload
 
-from sqlspec._typing import NUMPY_INSTALLED
+from sqlspec._typing import NUMPY_INSTALLED, UUID_UTILS_INSTALLED
 from sqlspec.core.filters import OffsetPagination
 from sqlspec.typing import MSGSPEC_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED, BaseModel
+
+
+def _get_uuid_utils_type() -> "type[Any] | None":
+    if not UUID_UTILS_INSTALLED:
+        return None
+    try:
+        import uuid_utils as _uuid_utils_mod  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        return None
+    else:
+        return _uuid_utils_mod.UUID  # type: ignore[no-any-return,unused-ignore]
+
+
+_UUID_UTILS_TYPE: "type[Any] | None" = _get_uuid_utils_type()
 
 
 def _type_to_string(value: Any) -> Any:  # pragma: no cover
@@ -44,6 +59,10 @@ def _type_to_string(value: Any) -> Any:  # pragma: no cover
         return str(value.value)
     if PYDANTIC_INSTALLED and isinstance(value, BaseModel):
         return value.model_dump_json()
+    if isinstance(value, _uuid_mod.UUID):
+        return str(value)
+    if _UUID_UTILS_TYPE is not None and isinstance(value, _UUID_UTILS_TYPE):
+        return str(value)
     if isinstance(value, OffsetPagination):
         return {"items": value.items, "limit": value.limit, "offset": value.offset, "total": value.total}
     if NUMPY_INSTALLED:

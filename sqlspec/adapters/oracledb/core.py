@@ -32,6 +32,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_readable
 
 if TYPE_CHECKING:
@@ -706,6 +707,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
+        custom_type_coercions={**build_uuid_coercions()},
         default_dialect="oracle",
     )
 

@@ -14,7 +14,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 
-pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.asyncio]
+pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector]
 
 
 @pytest.fixture

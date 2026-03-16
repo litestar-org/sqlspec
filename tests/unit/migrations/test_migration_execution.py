@@ -83,7 +83,7 @@ class MockMigrationRunner(BaseMigrationRunner):
         """Mock load migration."""
         return self._load_migration_metadata(file_path)
 
-    def execute_upgrade(self, driver: Any, migration: dict[str, Any]) -> ExecutionResult:
+    def execute_upgrade(self, driver: Any, migration: dict[str, Any]) -> Any:
         """Mock execute upgrade."""
         sql = self._get_migration_sql(migration, "up")
         if sql:
@@ -91,7 +91,7 @@ class MockMigrationRunner(BaseMigrationRunner):
             return Mock(spec=ExecutionResult)
         raise ValueError(f"No upgrade SQL for migration {migration['version']}")
 
-    def execute_downgrade(self, driver: Any, migration: dict[str, Any]) -> ExecutionResult:
+    def execute_downgrade(self, driver: Any, migration: dict[str, Any]) -> Any:
         """Mock execute downgrade."""
         sql = self._get_migration_sql(migration, "down")
         if sql:
@@ -99,7 +99,7 @@ class MockMigrationRunner(BaseMigrationRunner):
             return Mock(spec=ExecutionResult)
         return Mock(spec=ExecutionResult)
 
-    def load_all_migrations(self) -> None:
+    def load_all_migrations(self) -> Any:
         """Mock load all migrations."""
         pass
 

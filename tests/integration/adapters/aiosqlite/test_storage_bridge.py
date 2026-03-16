@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.xdist_group("sqlite")]
+pytestmark = [pytest.mark.xdist_group("sqlite")]
 
 
 async def test_aiosqlite_load_from_arrow(aiosqlite_session: AiosqliteDriver) -> None:

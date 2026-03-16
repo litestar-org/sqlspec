@@ -19,7 +19,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec.utils.profiling import HotPathProfiler
+from tools.profiling import HotPathProfiler
 
 __all__ = ("SubsystemBenchmark", "main", "print_results_table", "run_benchmarks")
 
@@ -322,7 +322,61 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 6. Cursor context manager overhead ---
+    # --- 6. Storage runtime + Arrow boundary helpers ---
+
+    from sqlspec.storage.pipeline import SyncStoragePipeline, _decode_arrow_payload, _encode_row_payload
+    from sqlspec.storage.registry import StorageRegistry
+
+    storage_root = db_path.parent / "bench-storage-runtime"
+    storage_root.mkdir(exist_ok=True)
+    storage_path = storage_root / "bench-storage.jsonl"
+    storage_uri = f"file://{storage_root}"
+    storage_destination = "alias://bench_store/bench-storage.jsonl"
+    storage_rows = [{"id": idx, "label": f"value_{idx}"} for idx in range(16)]
+    storage_registry = StorageRegistry()
+    storage_registry.register_alias("bench_store", storage_uri, backend="local")
+    storage_registry.get("bench_store")
+    storage_pipeline = SyncStoragePipeline(registry=storage_registry)
+    jsonl_payload = _encode_row_payload(storage_rows, "jsonl")
+    storage_pipeline.write_rows(storage_rows, storage_destination, format_hint="jsonl")
+
+    def bench_storage_registry_cached_alias() -> None:
+        storage_registry.get("bench_store")
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="StorageRegistry.get() - cached alias",
+            bench_fn=bench_storage_registry_cached_alias,
+            iterations=iterations,
+            description="Resolve a cached storage alias through the registry hot path",
+        )
+    )
+
+    def bench_storage_write_rows_local() -> None:
+        storage_pipeline.write_rows(storage_rows, storage_destination, format_hint="jsonl")
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="SyncStoragePipeline.write_rows() - local jsonl",
+            bench_fn=bench_storage_write_rows_local,
+            iterations=iterations,
+            description="Encode rows and route them through the sync local storage pipeline",
+        )
+    )
+
+    def bench_storage_decode_jsonl_arrow() -> None:
+        _decode_arrow_payload(jsonl_payload, "jsonl")
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="_decode_arrow_payload() - jsonl",
+            bench_fn=bench_storage_decode_jsonl_arrow,
+            iterations=iterations,
+            description="Decode JSONL bytes through the Arrow boundary helper",
+        )
+    )
+
+    # --- 7. Cursor context manager overhead ---
 
     raw_conn = sqlite3.connect(str(db_path))
     raw_conn.execute("PRAGMA journal_mode = WAL")
@@ -356,7 +410,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 7. Full execute() overhead (single statement, end-to-end) ---
+    # --- 8. Full execute() overhead (single statement, end-to-end) ---
 
     def bench_full_execute() -> None:
         session.execute("INSERT INTO test (value) VALUES (?)", ("bench_e2e",))
@@ -383,14 +437,16 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
+    def cleanup_benchmarks() -> None:
+        _session_ctx.__exit__(None, None, None)
+        raw_conn.close()
+        storage_path.unlink(missing_ok=True)
+        with suppress(OSError):
+            storage_root.rmdir()
+
     # Store session context for cleanup
     benchmarks.append(
-        SubsystemBenchmark(
-            name="_cleanup_",
-            bench_fn=lambda: None,
-            iterations=0,
-            setup_fn=lambda: (_session_ctx.__exit__(None, None, None), raw_conn.close()),
-        )
+        SubsystemBenchmark(name="_cleanup_", bench_fn=lambda: None, iterations=0, setup_fn=cleanup_benchmarks)
     )
 
     return benchmarks

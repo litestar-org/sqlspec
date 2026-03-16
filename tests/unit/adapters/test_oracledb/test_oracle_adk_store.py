@@ -2,12 +2,9 @@
 
 from decimal import Decimal
 
-import pytest
-
 from sqlspec.adapters.oracledb.adk.store import OracleAsyncADKStore, OracleSyncADKStore
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_adk_store_deserialize_dict_coerces_decimal() -> None:
     store = OracleAsyncADKStore.__new__(OracleAsyncADKStore)  # type: ignore[call-arg]
 
@@ -18,7 +15,6 @@ async def test_oracle_async_adk_store_deserialize_dict_coerces_decimal() -> None
     assert result == {"value": 1.25, "nested": {"score": 0.5}}
 
 
-@pytest.mark.asyncio
 async def test_oracle_async_adk_store_deserialize_state_dict_coerces_decimal() -> None:
     store = OracleAsyncADKStore.__new__(OracleAsyncADKStore)  # type: ignore[call-arg]
 

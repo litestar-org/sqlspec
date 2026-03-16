@@ -8,7 +8,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from sqlspec.core import SQL
 from sqlspec.loader import SQLFileLoader
@@ -21,7 +21,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_, await_
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Coroutine
+    from collections.abc import Awaitable, Callable
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -267,7 +267,7 @@ class BaseMigrationRunner(ABC):
         return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
 
     @abstractmethod
-    def load_migration(self, file_path: Path) -> Union["dict[str, Any]", "Coroutine[Any, Any, dict[str, Any]]"]:
+    def load_migration(self, file_path: Path) -> "dict[str, Any] | Awaitable[dict[str, Any]]":
         """Load a migration file and extract its components.
 
         Args:

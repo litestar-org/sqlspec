@@ -8,6 +8,11 @@ import uuid
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -24,9 +29,10 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_nested_decimal_normalizer
+from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
@@ -38,6 +44,7 @@ __all__ = (
     "apply_driver_features",
     "build_connection_config",
     "build_insert_statement",
+    "build_postgres_extension_probe_names",
     "build_profile",
     "build_statement_config",
     "coerce_numeric_for_write",
@@ -53,6 +60,8 @@ __all__ = (
     "get_parameter_casts",
     "normalize_scalar_parameter",
     "prepare_parameters_with_casts",
+    "resolve_postgres_extension_state",
+    "resolve_runtime_statement_config",
     "split_schema_and_table",
 )
 
@@ -68,6 +77,7 @@ _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: "type[Any] | None" = None
 _JSONB_RESOLVED: bool = False
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
@@ -173,7 +183,7 @@ def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
 
 def build_profile() -> "DriverParameterProfile":
     """Create the psqlpy driver parameter profile."""
-
+    coercions: dict[type, Callable[[Any], Any]] = {decimal.Decimal: float, **build_uuid_coercions(native=True)}
     return DriverParameterProfile(
         name="Psqlpy",
         default_style=ParameterStyle.NUMERIC,
@@ -186,7 +196,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={decimal.Decimal: float},
+        custom_type_coercions=coercions,
         default_dialect="postgres",
     )
 
@@ -285,12 +295,35 @@ def coerce_numeric_for_write(value: Any) -> Any:
     if isinstance(value, decimal.Decimal):
         return value
     if isinstance(value, list):
-        return [coerce_numeric_for_write(item) for item in value]
+        coerced_list: list[Any] | None = None
+        for index, item in enumerate(value):
+            coerced_item = coerce_numeric_for_write(item)
+            if coerced_list is None:
+                if coerced_item is item:
+                    continue
+                coerced_list = list(value[:index])
+            coerced_list.append(coerced_item)
+        return value if coerced_list is None else coerced_list
     if isinstance(value, tuple):
-        coerced = [coerce_numeric_for_write(item) for item in value]
-        return tuple(coerced)
+        coerced_tuple: list[Any] | None = None
+        for index, item in enumerate(value):
+            coerced_item = coerce_numeric_for_write(item)
+            if coerced_tuple is None:
+                if coerced_item is item:
+                    continue
+                coerced_tuple = list(value[:index])
+            coerced_tuple.append(coerced_item)
+        return value if coerced_tuple is None else tuple(coerced_tuple)
     if isinstance(value, dict):
-        return {key: coerce_numeric_for_write(item) for key, item in value.items()}
+        coerced_dict: dict[Any, Any] | None = None
+        for key, item in value.items():
+            coerced_item = coerce_numeric_for_write(item)
+            if coerced_dict is None:
+                if coerced_item is item:
+                    continue
+                coerced_dict = dict(value)
+            coerced_dict[key] = coerced_item
+        return value if coerced_dict is None else coerced_dict
     return value
 
 
@@ -386,6 +419,20 @@ def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
+def _get_type_coercion_dispatcher(
+    type_map: "dict[type, Callable[[Any], Any]]",
+) -> "TypeDispatcher[Callable[[Any], Any]]":
+    fallback_items = tuple(type_map.items())
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
 def prepare_parameters_with_casts(
     parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
 ) -> Any:
@@ -394,14 +441,18 @@ def prepare_parameters_with_casts(
         result: list[Any] = []
         serializer = statement_config.parameter_config.json_serializer or to_json
         type_map = statement_config.parameter_config.type_coercion_map
+        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "")
             prepared_value = param
-            if type_map:
-                for type_check, converter in type_map.items():
-                    if isinstance(prepared_value, type_check):
-                        prepared_value = converter(prepared_value)
-                        break
+            if type_map and dispatcher is not None:
+                exact_converter = type_map.get(type(prepared_value))
+                if exact_converter is not None:
+                    prepared_value = exact_converter(prepared_value)
+                else:
+                    fallback_converter = dispatcher.get(prepared_value)
+                    if fallback_converter is not None:
+                        prepared_value = fallback_converter(prepared_value)
             if cast_type:
                 prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
             result.append(prepared_value)

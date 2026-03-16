@@ -5,9 +5,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
-from typing_extensions import Self
 
-from sqlspec.adapters.spanner._typing import SpannerSessionContext
+from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     coerce_params,
@@ -24,7 +23,7 @@ from sqlspec.adapters.spanner.core import (
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
-from sqlspec.driver import ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
@@ -76,7 +75,7 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
     def rollback(self) -> None: ...
 
 
-class SpannerExceptionHandler:
+class SpannerExceptionHandler(BaseSyncExceptionHandler):
     """Map Spanner client exceptions to SQLSpec exceptions.
 
     Uses deferred exception pattern for mypyc compatibility: exceptions
@@ -84,16 +83,9 @@ class SpannerExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        _ = exc_tb
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
 
@@ -101,21 +93,6 @@ class SpannerExceptionHandler:
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
-
-
-class SpannerSyncCursor:
-    """Context manager that yields the active Spanner connection."""
-
-    __slots__ = ("connection",)
-
-    def __init__(self, connection: "SpannerConnection") -> None:
-        self.connection = connection
-
-    def __enter__(self) -> "SpannerConnection":
-        return self.connection
-
-    def __exit__(self, *_: Any) -> None:
-        return None
 
 
 class SpannerSyncDriver(SyncDriverAdapterBase):
@@ -380,7 +357,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     # PRIVATE/INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "SpannerConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Spanner rows for the direct execution path.
 
         Note: Spanner's collect_rows requires result set fields and a type converter.
@@ -398,7 +375,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         # For tuple rows without metadata, return as-is
         return fetched, [], len(fetched)
 
-    def resolve_rowcount(self, cursor: Any) -> int:
+    def resolve_rowcount(self, cursor: "SpannerConnection") -> int:
         """Resolve rowcount from Spanner cursor for the direct execution path."""
         # Spanner uses execute_update return value, not cursor.rowcount
         return 0

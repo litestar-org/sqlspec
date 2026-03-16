@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.duckdb._typing import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DuckDBConnection, DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
     apply_driver_features,
     build_connection_config,
     build_statement_config,
     default_statement_config,
 )
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExceptionHandler, DuckDBSessionContext
+from sqlspec.adapters.duckdb.driver import DuckDBDriver, DuckDBExceptionHandler
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.extensions.events import EventRuntimeHints
@@ -21,6 +21,7 @@ from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -179,7 +180,7 @@ class DuckDBConnectionContext:
         return cast("DuckDBConnection", self._ctx.__enter__())
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
@@ -257,6 +258,10 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk", "manifest")
+    _connection_context_class: "ClassVar[type[DuckDBConnectionContext]]" = DuckDBConnectionContext
+    _session_factory_class: "ClassVar[type[_DuckDBSessionConnectionHandler]]" = _DuckDBSessionConnectionHandler
+    _session_context_class: "ClassVar[type[DuckDBSessionContext]]" = DuckDBSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -378,41 +383,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         pool = self.provide_pool()
 
         return pool.acquire()
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "DuckDBConnectionContext":
-        """Provide a pooled DuckDB connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A DuckDB connection context manager.
-        """
-        return DuckDBConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "DuckDBSessionContext":
-        """Provide a DuckDB driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            A DuckDB driver session context manager.
-        """
-        handler = _DuckDBSessionConnectionHandler(self)
-
-        return DuckDBSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.

@@ -3,6 +3,8 @@
 import decimal
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.utils.dispatch import TypeDispatcher
+
 if TYPE_CHECKING:
     import datetime
     from collections.abc import Callable, Sequence
@@ -14,11 +16,13 @@ __all__ = (
     "build_json_tuple_converter",
     "build_nested_decimal_normalizer",
     "build_time_iso_converter",
+    "build_uuid_coercions",
     "should_json_encode_sequence",
 )
 
 JSON_NESTED_TYPES: "tuple[type[Any], ...]" = (dict, list, tuple)
 DEFAULT_DECIMAL_MODE: str = "preserve"
+_DECIMAL_NORMALIZER_DISPATCHER = TypeDispatcher["Callable[['_DecimalNormalizer', Any], Any]"]()
 
 
 def _decimal_identity(value: "decimal.Decimal") -> "decimal.Decimal":
@@ -67,15 +71,59 @@ class _DecimalNormalizer:
         self._decimal_converter = decimal_converter
 
     def __call__(self, value: Any) -> Any:
-        if isinstance(value, decimal.Decimal):
-            return self._decimal_converter(value)
-        if isinstance(value, list):
-            return [self(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(self(item) for item in value)
-        if isinstance(value, dict):
-            return {key: self(item) for key, item in value.items()}
-        return value
+        handler = _DECIMAL_NORMALIZER_DISPATCHER.get(value)
+        if handler is None:
+            return value
+        return handler(self, value)
+
+    def convert_decimal(self, value: "decimal.Decimal") -> Any:
+        return self._decimal_converter(value)
+
+
+def _normalize_decimal_value(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    return normalizer.convert_decimal(value)
+
+
+def _normalize_decimal_list(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    normalized_list: list[Any] | None = None
+    for index, item in enumerate(value):
+        normalized_item = normalizer(item)
+        if normalized_list is None:
+            if normalized_item is item:
+                continue
+            normalized_list = list(value[:index])
+        normalized_list.append(normalized_item)
+    return value if normalized_list is None else normalized_list
+
+
+def _normalize_decimal_tuple(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    normalized_tuple: list[Any] | None = None
+    for index, item in enumerate(value):
+        normalized_item = normalizer(item)
+        if normalized_tuple is None:
+            if normalized_item is item:
+                continue
+            normalized_tuple = list(value[:index])
+        normalized_tuple.append(normalized_item)
+    return value if normalized_tuple is None else tuple(normalized_tuple)
+
+
+def _normalize_decimal_dict(normalizer: "_DecimalNormalizer", value: Any) -> Any:
+    normalized_dict: dict[Any, Any] | None = None
+    for key, item in value.items():
+        normalized_item = normalizer(item)
+        if normalized_dict is None:
+            if normalized_item is item:
+                continue
+            normalized_dict = dict(value)
+        normalized_dict[key] = normalized_item
+    return value if normalized_dict is None else normalized_dict
+
+
+_DECIMAL_NORMALIZER_DISPATCHER.register(decimal.Decimal, _normalize_decimal_value)
+_DECIMAL_NORMALIZER_DISPATCHER.register(list, _normalize_decimal_list)
+_DECIMAL_NORMALIZER_DISPATCHER.register(tuple, _normalize_decimal_tuple)
+_DECIMAL_NORMALIZER_DISPATCHER.register(dict, _normalize_decimal_dict)
 
 
 def _time_iso_convert(value: "datetime.date | datetime.datetime | datetime.time") -> str:
@@ -126,3 +174,35 @@ def build_nested_decimal_normalizer(*, mode: str = DEFAULT_DECIMAL_MODE) -> "Cal
 def build_time_iso_converter() -> "Callable[[datetime.date | datetime.datetime | datetime.time], str]":
     """Return a converter that formats temporal values using ISO 8601."""
     return _time_iso_convert
+
+
+def _uuid_to_string(value: Any) -> str:
+    return str(value)
+
+
+def _uuid_utils_to_stdlib(value: Any) -> Any:
+    import uuid as _uuid_mod
+
+    return _uuid_mod.UUID(bytes=value.bytes)
+
+
+def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[Any], Any]]":
+    """Return coercions for ``uuid_utils.UUID`` parameter binding.
+
+    When ``uuid_utils`` is installed, returns a dict mapping its UUID type
+    to either ``str`` or ``uuid.UUID`` depending on the *native* flag.
+    When not installed, returns an empty dict.
+
+    Args:
+        native: When ``True``, convert ``uuid_utils.UUID`` → ``uuid.UUID``
+            (via ``.bytes``, for drivers that bind ``uuid.UUID`` natively).
+            When ``False`` (default), convert to ``str`` (for drivers that
+            need a plain string, e.g. DuckDB/SQLite).
+    """
+    try:
+        import uuid_utils as _uuid_utils_mod  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        return {}
+
+    converter = _uuid_utils_to_stdlib if native else _uuid_to_string
+    return {_uuid_utils_mod.UUID: converter}

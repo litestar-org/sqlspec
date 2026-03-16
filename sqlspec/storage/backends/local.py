@@ -15,7 +15,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.storage._utils import import_pyarrow_parquet
-from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
+from sqlspec.storage.backends._iterators import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 

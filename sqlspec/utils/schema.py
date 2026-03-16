@@ -22,6 +22,7 @@ from sqlspec.typing import (
     convert,
     get_type_adapter,
 )
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import camelize, kebabize, pascalize
@@ -56,6 +57,12 @@ logger = get_logger(__name__)
 
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
 _DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
+_MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
+    "camel": camelize,
+    "kebab": kebabize,
+    "pascal": pascalize,
+}
+_NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
 
 
 # =============================================================================
@@ -370,6 +377,11 @@ def _default_msgspec_deserializer(
     return value
 
 
+_DEFAULT_MSGSPEC_DESERIALIZER: Final[Callable[[Any, Any], Any]] = partial(
+    _default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS
+)
+
+
 def _convert_numpy_recursive(obj: Any) -> Any:
     """Recursively convert numpy arrays to lists.
 
@@ -385,28 +397,47 @@ def _convert_numpy_recursive(obj: Any) -> Any:
     if not NUMPY_INSTALLED:
         return obj
 
-    import numpy as np
-
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, dict):
-        return {k: _convert_numpy_recursive(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        converted = [_convert_numpy_recursive(item) for item in obj]
-        return type(obj)(converted)
+    handler = _get_numpy_recursive_dispatcher().get(obj)
+    if handler is not None:
+        return handler(obj)
     return obj
+
+
+def _convert_numpy_array(obj: Any) -> Any:
+    return obj.tolist()
+
+
+def _convert_numpy_mapping(obj: Any) -> Any:
+    return {key: _convert_numpy_recursive(value) for key, value in obj.items()}
+
+
+def _convert_numpy_sequence(obj: Any) -> Any:
+    converted = [_convert_numpy_recursive(item) for item in obj]
+    return type(obj)(converted)
+
+
+def _get_numpy_recursive_dispatcher() -> "TypeDispatcher[Callable[[Any], Any]]":
+    global _NUMPY_RECURSIVE_DISPATCHER
+    if _NUMPY_RECURSIVE_DISPATCHER is None:
+        import numpy as np
+
+        dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+        dispatcher.register(np.ndarray, _convert_numpy_array)
+        dispatcher.register(dict, _convert_numpy_mapping)
+        dispatcher.register(list, _convert_numpy_sequence)
+        dispatcher.register(tuple, _convert_numpy_sequence)
+        _NUMPY_RECURSIVE_DISPATCHER = dispatcher
+    return _NUMPY_RECURSIVE_DISPATCHER
 
 
 def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     """Convert data to msgspec Struct."""
     rename_config = get_msgspec_rename_config(schema_type)
-    deserializer = partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS)
 
     transformed_data = data
     if (rename_config and is_dict(data)) or (isinstance(data, Sequence) and data and is_dict(data[0])):
         try:
-            converter_map: dict[str, Callable[[str], str]] = {"camel": camelize, "kebab": kebabize, "pascal": pascalize}
-            converter = converter_map.get(rename_config) if rename_config else None
+            converter = _MSGSPEC_RENAME_CONVERTERS.get(rename_config) if rename_config else None
             if converter:
                 transformed_data = (
                     [transform_dict_keys(item, converter) if is_dict(item) else item for item in data]
@@ -423,7 +454,7 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
         obj=transformed_data,
         type=(list[schema_type] if isinstance(transformed_data, Sequence) else schema_type),
         from_attributes=True,
-        dec_hook=deserializer,
+        dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER,
     )
 
 
@@ -973,10 +1004,10 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
 
     # Schema types (Pydantic, dataclass, msgspec, attrs, TypedDict)
     # Deferred after scalar checks to avoid overhead for common scalar queries
-    schema_type_key = _detect_schema_type(value_type)  # type: ignore[arg-type]
-    if schema_type_key is not None:
+    schema_converter = _get_schema_converter(value_type)
+    if schema_converter is not None:
         parsed = _ensure_json_parsed(value)
-        return cast("ValueT", to_schema(parsed, schema_type=value_type))
+        return cast("ValueT", schema_converter(parsed, value_type))
 
     # Fallback: try direct construction for custom types
     try:

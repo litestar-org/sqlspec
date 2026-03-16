@@ -7,7 +7,12 @@ from sqlspec.adapters.oracledb._numpy_handlers import (
     numpy_output_type_handler,
     register_numpy_handlers,
 )
-from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb._typing import (
+    OracleAsyncConnection,
+    OracleAsyncCursor,
+    OracleSyncConnection,
+    OracleSyncCursor,
+)
 from sqlspec.adapters.oracledb._uuid_handlers import (
     register_uuid_handlers,
     uuid_converter_in,
@@ -23,10 +28,8 @@ from sqlspec.adapters.oracledb.config import (
 )
 from sqlspec.adapters.oracledb.core import default_statement_config
 from sqlspec.adapters.oracledb.driver import (
-    OracleAsyncCursor,
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
-    OracleSyncCursor,
     OracleSyncDriver,
     OracleSyncExceptionHandler,
 )

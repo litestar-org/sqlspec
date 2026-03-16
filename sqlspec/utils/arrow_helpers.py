@@ -8,8 +8,9 @@ when compiled drivers touch Arrow objects.
 """
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
 
@@ -33,6 +34,7 @@ __all__ = (
     "convert_dict_to_arrow_with_schema",
     "ensure_arrow_table",
 )
+_ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
 
 
 @overload
@@ -161,22 +163,45 @@ def convert_dict_to_arrow_with_schema(
 def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
     """Coerce various sources to a PyArrow Table."""
     ensure_pyarrow()
-    import pyarrow as pa
 
     if has_get_data(source):
         table = source.get_data()
-        if isinstance(table, pa.Table):
-            return table
+        if _get_arrow_table_coercer().get(table) is _coerce_arrow_table_identity:
+            return cast("ArrowTable", table)
         msg = "ArrowResult did not return a pyarrow.Table instance"
         raise TypeError(msg)
-    if isinstance(source, pa.Table):
-        return source
-    if isinstance(source, pa.RecordBatch):
-        return pa.Table.from_batches([source])
+    coercer = _get_arrow_table_coercer().get(source)
+    if coercer is not None:
+        return cast("ArrowTable", coercer(source))
     if isinstance(source, Iterable):
+        import pyarrow as pa
+
         return pa.Table.from_pylist(list(source))
     msg = f"Unsupported Arrow source type: {type(source).__name__}"
     raise TypeError(msg)
+
+
+def _coerce_arrow_table_identity(source: Any) -> Any:
+    return source
+
+
+def _coerce_arrow_record_batch(source: Any) -> Any:
+    import pyarrow as pa
+
+    return pa.Table.from_batches([source])
+
+
+def _get_arrow_table_coercer() -> "TypeDispatcher[Any]":
+    global _ARROW_TABLE_COERCER
+    if _ARROW_TABLE_COERCER is None:
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        dispatcher = TypeDispatcher[Any]()
+        dispatcher.register(pa.Table, _coerce_arrow_table_identity)
+        dispatcher.register(pa.RecordBatch, _coerce_arrow_record_batch)
+        _ARROW_TABLE_COERCER = dispatcher
+    return _ARROW_TABLE_COERCER
 
 
 def ensure_arrow_table(data: Any) -> "ArrowTable":

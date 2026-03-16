@@ -10,16 +10,16 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncConnection,
+    MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncSessionContext,
     MysqlConnectorSyncConnection,
+    MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
 )
 from sqlspec.adapters.mysqlconnector.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.mysqlconnector.driver import (
-    MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncDriver,
     MysqlConnectorAsyncExceptionHandler,
-    MysqlConnectorSyncCursor,
     MysqlConnectorSyncDriver,
     MysqlConnectorSyncExceptionHandler,
 )
@@ -29,6 +29,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from mysql.connector.pooling import MySQLConnectionPool
 
@@ -143,7 +144,7 @@ class MysqlConnectorSyncConnectionContext:
         return self._connection
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             self._connection.close()
@@ -187,7 +188,7 @@ class MysqlConnectorAsyncConnectionContext:
         return self._connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             await self._connection.close()
@@ -225,6 +226,14 @@ class MysqlConnectorSyncConfig(
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[MysqlConnectorSyncConnectionContext]]" = (
+        MysqlConnectorSyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_MysqlConnectorSyncSessionConnectionHandler]]" = (
+        _MysqlConnectorSyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[MysqlConnectorSyncSessionContext]]" = MysqlConnectorSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -295,23 +304,6 @@ class MysqlConnectorSyncConfig(
                 setattr(connection, "autocommit", bool(autocommit))
         return connection
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "MysqlConnectorSyncConnectionContext":
-        return MysqlConnectorSyncConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "MysqlConnectorSyncSessionContext":
-        statement_config = statement_config or self.statement_config or default_statement_config
-        handler = _MysqlConnectorSyncSessionConnectionHandler(self)
-
-        return MysqlConnectorSyncSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
-
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
         namespace.update({
@@ -339,6 +331,14 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[MysqlConnectorAsyncConnectionContext]]" = (
+        MysqlConnectorAsyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_MysqlConnectorAsyncSessionConnectionHandler]]" = (
+        _MysqlConnectorAsyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[MysqlConnectorAsyncSessionContext]]" = MysqlConnectorAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,

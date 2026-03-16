@@ -1,12 +1,9 @@
 """SQLite driver implementation."""
 
-import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import Self
-
-from sqlspec.adapters.sqlite._typing import SqliteSessionContext
+from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
     build_insert_statement,
     collect_rows,
@@ -21,7 +18,7 @@ from sqlspec.adapters.sqlite.core import (
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
 from sqlspec.core.result import DMLResult
-from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -39,46 +36,7 @@ if TYPE_CHECKING:
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
 
 
-class SqliteCursor:
-    """Context manager for SQLite cursor management.
-
-    Provides automatic cursor creation and cleanup for SQLite database operations.
-    """
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "SqliteConnection") -> None:
-        """Initialize cursor manager.
-
-        Args:
-            connection: SQLite database connection
-        """
-        self.connection = connection
-        self.cursor: sqlite3.Cursor | None = None
-
-    def __enter__(self) -> "sqlite3.Cursor":
-        """Create and return a new cursor.
-
-        Returns:
-            Active SQLite cursor object
-        """
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        """Clean up cursor resources.
-
-        Args:
-            exc_type: Exception type if an exception occurred
-            exc_val: Exception value if an exception occurred
-            exc_tb: Exception traceback if an exception occurred
-        """
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                self.cursor.close()
-
-
-class SqliteExceptionHandler:
+class SqliteExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SQLite database exceptions.
 
     Maps SQLite extended result codes to specific SQLSpec exceptions
@@ -89,15 +47,9 @@ class SqliteExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, sqlite3.Error):
@@ -141,7 +93,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def dispatch_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
         Args:
@@ -170,7 +122,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    def dispatch_execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
         Args:
@@ -185,7 +137,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
         Args:

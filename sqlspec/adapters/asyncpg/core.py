@@ -9,6 +9,11 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 import asyncpg
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -25,8 +30,10 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
@@ -38,6 +45,7 @@ __all__ = (
     "NormalizedStackOperation",
     "apply_driver_features",
     "build_connection_config",
+    "build_postgres_extension_probe_names",
     "build_profile",
     "build_statement_config",
     "collect_rows",
@@ -50,6 +58,8 @@ __all__ = (
     "register_json_codecs",
     "register_pgvector_support",
     "resolve_many_rowcount",
+    "resolve_postgres_extension_state",
+    "resolve_runtime_statement_config",
 )
 
 ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
@@ -69,6 +79,7 @@ class NormalizedStackOperation(NamedTuple):
 
 
 PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
+_EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 
 
 def _convert_datetime_param(value: Any) -> Any:
@@ -102,6 +113,7 @@ def _build_asyncpg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]"
         datetime.datetime: _convert_datetime_param,
         datetime.date: _convert_date_param,
         datetime.time: _convert_time_param,
+        **build_uuid_coercions(native=True),
     }
 
 
@@ -312,6 +324,50 @@ def _create_postgres_error(
     return exc
 
 
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.UniqueViolationError, ("23505", UniqueViolationError, "unique constraint violation")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.ForeignKeyViolationError, ("23503", ForeignKeyViolationError, "foreign key constraint violation")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.NotNullViolationError, ("23502", NotNullViolationError, "not-null constraint violation")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.CheckViolationError, ("23514", CheckViolationError, "check constraint violation")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.IntegrityConstraintViolationError, ("23000", IntegrityError, "integrity constraint violation")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.DeadlockDetectedError, ("40P01", DeadlockError, "deadlock detected")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.SerializationError, ("40001", SerializationConflictError, "serialization failure")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.QueryCanceledError, ("57014", QueryTimeoutError, "query canceled")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.InsufficientPrivilegeError, ("42501", PermissionDeniedError, "insufficient privilege")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.InvalidPasswordError, ("28P01", PermissionDeniedError, "invalid password")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.InvalidAuthorizationSpecificationError, ("28000", PermissionDeniedError, "authorization error")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", ConnectionTimeoutError, "connection does not exist")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.CannotConnectNowError, ("57P03", ConnectionTimeoutError, "cannot connect now")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")
+)
+
+
 def create_mapped_exception(error: Any) -> SQLSpecError:
     """Map asyncpg exceptions to SQLSpec exceptions.
 
@@ -330,57 +386,21 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    # Priority 1: Check specific exception types first (most reliable)
-    # Integrity constraint violations
-    if isinstance(error, asyncpg.exceptions.UniqueViolationError):
-        return _create_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
-    if isinstance(error, asyncpg.exceptions.ForeignKeyViolationError):
-        return _create_postgres_error(error, "23503", ForeignKeyViolationError, "foreign key constraint violation")
-    if isinstance(error, asyncpg.exceptions.NotNullViolationError):
-        return _create_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
-    if isinstance(error, asyncpg.exceptions.CheckViolationError):
-        return _create_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
-    if isinstance(error, asyncpg.exceptions.IntegrityConstraintViolationError):
-        return _create_postgres_error(error, "23000", IntegrityError, "integrity constraint violation")
-
-    # Transaction and serialization errors
-    if isinstance(error, asyncpg.exceptions.DeadlockDetectedError):
-        return _create_postgres_error(error, "40P01", DeadlockError, "deadlock detected")
-    if isinstance(error, asyncpg.exceptions.SerializationError):
-        return _create_postgres_error(error, "40001", SerializationConflictError, "serialization failure")
-
-    # Query timeout/cancellation
-    if isinstance(error, asyncpg.exceptions.QueryCanceledError):
-        return _create_postgres_error(error, "57014", QueryTimeoutError, "query canceled")
-
-    # Permission/authentication errors
-    if isinstance(error, asyncpg.exceptions.InsufficientPrivilegeError):
-        return _create_postgres_error(error, "42501", PermissionDeniedError, "insufficient privilege")
-    if isinstance(error, asyncpg.exceptions.InvalidPasswordError):
-        return _create_postgres_error(error, "28P01", PermissionDeniedError, "invalid password")
-    if isinstance(error, asyncpg.exceptions.InvalidAuthorizationSpecificationError):
-        return _create_postgres_error(error, "28000", PermissionDeniedError, "authorization error")
-
-    # Connection errors
-    if isinstance(error, asyncpg.exceptions.ConnectionDoesNotExistError):
-        return _create_postgres_error(error, "08003", ConnectionTimeoutError, "connection does not exist")
-    if isinstance(error, asyncpg.exceptions.CannotConnectNowError):
-        return _create_postgres_error(error, "57P03", ConnectionTimeoutError, "cannot connect now")
-
-    # SQL syntax errors
-    if isinstance(error, asyncpg.exceptions.PostgresSyntaxError):
-        return _create_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
+    mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
+    if mapped_error is not None:
+        error_code, error_class, description = mapped_error
+        return _create_postgres_error(error, error_code, error_class, description)
 
     # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
-    error_code = sqlstate_attr if sqlstate_attr is not None else None
-    if error_code:
-        exc_class = map_sqlstate_to_exception(error_code)
+    sqlstate_code: str | None = sqlstate_attr if sqlstate_attr is not None else None
+    if sqlstate_code:
+        exc_class = map_sqlstate_to_exception(sqlstate_code)
         if exc_class:
-            return _create_postgres_error(error, error_code, exc_class, "database error")
+            return _create_postgres_error(error, sqlstate_code, exc_class, "database error")
 
     # Priority 3: Default fallback
-    return _create_postgres_error(error, error_code, SQLSpecError, "database error")
+    return _create_postgres_error(error, sqlstate_code, SQLSpecError, "database error")
 
 
 def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":

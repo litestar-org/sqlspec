@@ -199,8 +199,7 @@ exclude = [
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
   "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
   "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
-  "sqlspec/utils/profiling.py",               # Uses sys.setprofile (dynamic, not mypyc compatible)
-  "sqlspec/_pgo_training.py",                 # PGO training script — runs against compiled modules
+  "sqlspec/storage/backends/_iterators.py",  # Async __anext__ + asyncio.to_thread causes mypyc segfault
 ]
 include = [
   "sqlspec/core/**/*.py",                  # Core module
@@ -209,6 +208,9 @@ include = [
   "sqlspec/loader.py",                     # Loader module
   "sqlspec/observability/**/*.py",         # Observability utilities
   "sqlspec/driver/**/*.py",                # Driver module
+  "sqlspec/storage/registry.py",           # Safe storage registry/runtime routing
+  "sqlspec/storage/errors.py",             # Safe storage error normalization
+  "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes (iterators in _iterators.py)
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters

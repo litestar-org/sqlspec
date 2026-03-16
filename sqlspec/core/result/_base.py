@@ -164,6 +164,8 @@ class SQLResult(StatementResult):
         "_materialized_dicts",
         "_operation_type",
         "_row_format",
+        "_schema_row_cache",
+        "_schema_rows_cache",
         "column_names",
         "error",
         "errors",
@@ -238,6 +240,8 @@ class SQLResult(StatementResult):
         self.parameters = parameters
         self._row_format = row_format
         self._materialized_dicts: list[dict[str, Any]] | None = None
+        self._schema_rows_cache: dict[type[Any], list[Any]] | None = None
+        self._schema_row_cache: dict[type[Any], Any] | None = None
 
         self.column_names = column_names or []
         self.total_count = total_count
@@ -384,8 +388,39 @@ class SQLResult(StatementResult):
             ]
         data = self._get_rows()
         if schema_type:
-            return cast("list[SchemaT]", to_schema(data, schema_type=schema_type))
+            return cast("list[SchemaT]", self._get_schema_rows(schema_type, data))
         return data
+
+    def _get_schema_rows(self, schema_type: "type[SchemaT]", rows: "list[dict[str, Any]]") -> "list[SchemaT]":
+        cache = self._schema_rows_cache
+        if cache is not None:
+            cached_rows = cache.get(schema_type)
+            if cached_rows is not None:
+                return cast("list[SchemaT]", cached_rows)
+        converted_rows = cast("list[SchemaT]", to_schema(rows, schema_type=schema_type))
+        if cache is None:
+            self._schema_rows_cache = {schema_type: converted_rows}
+        else:
+            cache[schema_type] = converted_rows
+        return converted_rows
+
+    def _get_schema_row(self, schema_type: "type[SchemaT]", row: "dict[str, Any]") -> "SchemaT":
+        rows_cache = self._schema_rows_cache
+        if rows_cache is not None:
+            cached_rows = rows_cache.get(schema_type)
+            if cached_rows:
+                return cast("SchemaT", cached_rows[0])
+        row_cache = self._schema_row_cache
+        if row_cache is not None:
+            cached_row = row_cache.get(schema_type)
+            if cached_row is not None:
+                return cast("SchemaT", cached_row)
+        converted_row = to_schema(row, schema_type=schema_type)
+        if row_cache is None:
+            self._schema_row_cache = {schema_type: converted_row}
+        else:
+            row_cache[schema_type] = converted_row
+        return converted_row
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results.
@@ -451,7 +486,7 @@ class SQLResult(StatementResult):
             return None
         row = rows[0]
         if schema_type:
-            return to_schema(row, schema_type=schema_type)
+            return self._get_schema_row(schema_type, row)
         return row
 
     def get_count(self) -> int:
@@ -551,7 +586,7 @@ class SQLResult(StatementResult):
         """
         data = self._get_rows()
         if schema_type:
-            return cast("list[SchemaT]", to_schema(data, schema_type=schema_type))
+            return cast("list[SchemaT]", self._get_schema_rows(schema_type, data))
         return data
 
     @overload
@@ -588,7 +623,7 @@ class SQLResult(StatementResult):
 
         row = rows[0]
         if schema_type:
-            return to_schema(row, schema_type=schema_type)
+            return self._get_schema_row(schema_type, row)
         return row
 
     @overload
@@ -623,7 +658,7 @@ class SQLResult(StatementResult):
 
         row = rows[0]
         if schema_type:
-            return to_schema(row, schema_type=schema_type)
+            return self._get_schema_row(schema_type, row)
         return row
 
     def scalar(self) -> Any:

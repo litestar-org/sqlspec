@@ -6,17 +6,26 @@ from mypy_extensions import mypyc_attr
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.psycopg.driver import (
+from sqlspec.adapters.psycopg._typing import (
+    PsycopgAsyncConnection,
     PsycopgAsyncCursor,
+    PsycopgAsyncSessionContext,
+    PsycopgSyncConnection,
+    PsycopgSyncCursor,
+    PsycopgSyncSessionContext,
+)
+from sqlspec.adapters.psycopg.core import (
+    apply_driver_features,
+    build_postgres_extension_probe_names,
+    default_statement_config,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
+from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
-    PsycopgAsyncSessionContext,
-    PsycopgSyncCursor,
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
-    PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
@@ -26,6 +35,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
 
@@ -137,7 +147,7 @@ class PsycopgSyncConnectionContext:
         return cast("PsycopgSyncConnection", self._ctx)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._config.connection_instance and self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
@@ -181,6 +191,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[PsycopgSyncConnectionContext]]" = PsycopgSyncConnectionContext
+    _session_factory_class: "ClassVar[type[_PsycopgSyncSessionConnectionHandler]]" = (
+        _PsycopgSyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[PsycopgSyncSessionContext]]" = PsycopgSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -281,30 +297,20 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
-            extensions = [
-                name
-                for name, enabled in [
-                    ("vector", self.driver_features.get("enable_pgvector", False)),
-                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
-                ]
-                if enabled
-            ]
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
             if extensions:
                 try:
                     cursor = conn.execute(
                         "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
                     )
                     results = cursor.fetchall()
-                    detected = {r[0] for r in results}  # type: ignore[index]
-                    self._pgvector_available = "vector" in detected
-                    self._paradedb_available = "pg_search" in detected
+                    detected_extensions = {r[0] for r in results}  # type: ignore[index]
                 except Exception:
-                    self._pgvector_available = False
-                    self._paradedb_available = False
-            else:
-                self._pgvector_available = False
-                self._paradedb_available = False
-            self._update_dialect_for_extensions()
+                    detected_extensions = set()
+            self.statement_config, self._pgvector_available, self._paradedb_available = (
+                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
+            )
 
         if self._pgvector_available:
             register_pgvector_sync(conn)
@@ -337,18 +343,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.connection_instance = self.create_pool()
         return cast("PsycopgSyncConnection", self.connection_instance.getconn())  # pyright: ignore
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsycopgSyncConnectionContext":
-        """Provide a connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A psycopg Connection context manager.
-        """
-        return PsycopgSyncConnectionContext(self)
-
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
     ) -> "PsycopgSyncSessionContext":
@@ -367,7 +361,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return PsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -430,7 +425,7 @@ class PsycopgAsyncConnectionContext:
         raise ImproperConfigurationError(msg)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
@@ -468,6 +463,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    _connection_context_class: "ClassVar[type[PsycopgAsyncConnectionContext]]" = PsycopgAsyncConnectionContext
+    _session_factory_class: "ClassVar[type[_PsycopgAsyncSessionConnectionHandler]]" = (
+        _PsycopgAsyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[PsycopgAsyncSessionContext]]" = PsycopgAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -571,30 +572,20 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
-            extensions = [
-                name
-                for name, enabled in [
-                    ("vector", self.driver_features.get("enable_pgvector", False)),
-                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
-                ]
-                if enabled
-            ]
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
             if extensions:
                 try:
                     cursor = await conn.execute(
                         "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
                     )
                     results = await cursor.fetchall()
-                    detected = {r[0] for r in results}  # type: ignore[index]
-                    self._pgvector_available = "vector" in detected
-                    self._paradedb_available = "pg_search" in detected
+                    detected_extensions = {r[0] for r in results}  # type: ignore[index]
                 except Exception:
-                    self._pgvector_available = False
-                    self._paradedb_available = False
-            else:
-                self._pgvector_available = False
-                self._paradedb_available = False
-            self._update_dialect_for_extensions()
+                    detected_extensions = set()
+            self.statement_config, self._pgvector_available, self._paradedb_available = (
+                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
+            )
 
         if self._pgvector_available:
             await register_pgvector_async(conn)
@@ -626,18 +617,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("PsycopgAsyncConnection", await self.connection_instance.getconn())  # pyright: ignore
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "PsycopgAsyncConnectionContext":  # pyright: ignore
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A psycopg AsyncConnection context manager.
-        """
-        return PsycopgAsyncConnectionContext(self)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for PsycopgAsyncConfig types.
@@ -676,7 +655,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return PsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

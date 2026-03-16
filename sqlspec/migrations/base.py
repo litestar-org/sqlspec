@@ -19,7 +19,11 @@ from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.sync_tools import await_
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.core import SQL
+    from sqlspec.migrations.version import MigrationVersion
     from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
@@ -310,7 +314,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         return target_columns - existing_lower
 
     @abstractmethod
-    def ensure_tracking_table(self, driver: DriverT) -> Any:
+    def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
         """Create the migration tracking table if it doesn't exist.
 
         Implementations should also check for and add any missing columns
@@ -319,24 +323,24 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         ...
 
     @abstractmethod
-    def get_current_version(self, driver: DriverT) -> Any:
+    def get_current_version(self, driver: DriverT) -> "str | None | Awaitable[str | None]":
         """Get the latest applied migration version."""
         ...
 
     @abstractmethod
-    def get_applied_migrations(self, driver: DriverT) -> Any:
+    def get_applied_migrations(self, driver: DriverT) -> "list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]":
         """Get all applied migrations in order."""
         ...
 
     @abstractmethod
     def record_migration(
         self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
-    ) -> Any:
+    ) -> "None | Awaitable[None]":
         """Record a successfully applied migration."""
         ...
 
     @abstractmethod
-    def remove_migration(self, driver: DriverT, version: str) -> Any:
+    def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
         """Remove a migration record."""
         ...
 
@@ -574,32 +578,32 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             return None
 
     @abstractmethod
-    def get_migration_files(self) -> Any:
+    def get_migration_files(self) -> "list[tuple[str, Path]] | Awaitable[list[tuple[str, Path]]]":
         """Get all migration files sorted by version."""
         ...
 
     @abstractmethod
-    def load_migration(self, file_path: Path) -> Any:
+    def load_migration(self, file_path: Path) -> "dict[str, Any] | Awaitable[dict[str, Any]]":
         """Load a migration file and extract its components."""
         ...
 
     @abstractmethod
-    def execute_upgrade(self, driver: DriverT, migration: "dict[str, Any]") -> Any:
+    def execute_upgrade(self, driver: DriverT, migration: "dict[str, Any]") -> "None | Awaitable[None]":
         """Execute an upgrade migration."""
         ...
 
     @abstractmethod
-    def execute_downgrade(self, driver: DriverT, migration: "dict[str, Any]") -> Any:
+    def execute_downgrade(self, driver: DriverT, migration: "dict[str, Any]") -> "None | Awaitable[None]":
         """Execute a downgrade migration."""
         ...
 
     @abstractmethod
-    def load_all_migrations(self) -> Any:
+    def load_all_migrations(self) -> "dict[str, SQL] | Awaitable[dict[str, SQL]]":
         """Load all migrations into a single namespace for bulk operations."""
         ...
 
 
-def _migration_sort_key(item: "tuple[str, Path]") -> Any:
+def _migration_sort_key(item: "tuple[str, Path]") -> "MigrationVersion":
     return parse_version(item[0])
 
 
@@ -824,31 +828,31 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         return resolved_use_logger, resolved_echo, resolved_summary_only
 
     @abstractmethod
-    def init(self, directory: str, package: bool = True) -> Any:
+    def init(self, directory: str, package: bool = True) -> "None | Awaitable[None]":
         """Initialize migration directory structure."""
         ...
 
     @abstractmethod
-    def current(self, verbose: bool = False) -> Any:
+    def current(self, verbose: bool = False) -> "str | None | Awaitable[str | None]":
         """Show current migration version."""
         ...
 
     @abstractmethod
-    def upgrade(self, revision: str = "head") -> Any:
+    def upgrade(self, revision: str = "head") -> "None | Awaitable[None]":
         """Upgrade to a target revision."""
         ...
 
     @abstractmethod
-    def downgrade(self, revision: str = "-1") -> Any:
+    def downgrade(self, revision: str = "-1") -> "None | Awaitable[None]":
         """Downgrade to a target revision."""
         ...
 
     @abstractmethod
-    def stamp(self, revision: str) -> Any:
+    def stamp(self, revision: str) -> "None | Awaitable[None]":
         """Mark database as being at a specific revision without running migrations."""
         ...
 
     @abstractmethod
-    def revision(self, message: str, file_type: str = "sql") -> Any:
+    def revision(self, message: str, file_type: str = "sql") -> "None | Awaitable[None]":
         """Create a new migration file."""
         ...

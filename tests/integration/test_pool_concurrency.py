@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb import DuckDBConnectionPool
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_pool_concurrency(postgres_service: PostgresService) -> None:
     """Verify that multiple concurrent calls to provide_pool result in a single pool."""
     config_params = {

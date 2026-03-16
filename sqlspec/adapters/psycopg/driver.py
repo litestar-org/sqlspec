@@ -5,12 +5,15 @@ from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
-from typing_extensions import Self
+from psycopg import sql as psycopg_sql
+from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
+    PsycopgAsyncCursor,
     PsycopgAsyncSessionContext,
     PsycopgSyncConnection,
+    PsycopgSyncCursor,
     PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg.core import (
@@ -45,6 +48,8 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
     StackExecutionObserver,
     SyncDriverAdapterBase,
     describe_stack_statement,
@@ -106,32 +111,14 @@ class PsycopgPipelineMixin:
                     operation_index=index,
                     operation=operation,
                     statement=sql_statement,
-                    sql=sql_text,
+                    sql=cast("LiteralString | psycopg_sql.SQL", sql_text),
                     parameters=prepared_parameters,
                 )
             )
         return prepared
 
 
-class PsycopgSyncCursor:
-    """Context manager for PostgreSQL psycopg cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: PsycopgSyncConnection) -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    def __enter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    def __exit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            self.cursor.close()
-
-
-class PsycopgSyncExceptionHandler:
+class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling PostgreSQL psycopg database exceptions.
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
@@ -142,15 +129,9 @@ class PsycopgSyncExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
@@ -415,10 +396,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         cursor = resource_stack.enter_context(self.with_cursor(self.connection))
 
                         try:
+                            sql = cast("LiteralString | psycopg_sql.SQL", prepared.sql)  # type: ignore[redundant-cast]
                             if prepared.parameters:
-                                cursor.execute(prepared.sql, prepared.parameters)
+                                cursor.execute(sql, prepared.parameters)
                             else:
-                                cursor.execute(prepared.sql)
+                                cursor.execute(sql)
                         except Exception as exc:
                             stack_error = StackExecutionError(
                                 prepared.operation_index,
@@ -586,26 +568,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
 
 
-class PsycopgAsyncCursor:
-    """Async context manager for PostgreSQL psycopg cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
-        self.connection = connection
-        self.cursor: Any | None = None
-
-    async def __aenter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)
-        if self.cursor is not None:
-            await self.cursor.close()
-
-
-class PsycopgAsyncExceptionHandler:
+class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling PostgreSQL psycopg database exceptions.
 
     Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
@@ -616,15 +579,9 @@ class PsycopgAsyncExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
@@ -898,10 +855,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
 
                         try:
+                            sql = cast("LiteralString | psycopg_sql.SQL", prepared.sql)  # type: ignore[redundant-cast]
                             if prepared.parameters:
-                                await cursor.execute(prepared.sql, prepared.parameters)
+                                await cursor.execute(sql, prepared.parameters)
                             else:
-                                await cursor.execute(prepared.sql)
+                                await cursor.execute(sql)
                         except Exception as exc:
                             stack_error = StackExecutionError(
                                 prepared.operation_index,

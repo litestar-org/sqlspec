@@ -5,6 +5,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -13,15 +14,41 @@ _AiosqliteConnection = aiosqlite.Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
     from sqlspec.core import StatementConfig
 
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
+    AiosqliteRawCursor: TypeAlias = aiosqlite.Cursor
 
 if not TYPE_CHECKING:
     AiosqliteConnection = _AiosqliteConnection
+    AiosqliteRawCursor = aiosqlite.Cursor
+
+
+class AiosqliteCursor:
+    """Async context manager for AIOSQLite cursors."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "AiosqliteConnection") -> None:
+        self.connection = connection
+        self.cursor: AiosqliteRawCursor | None = None
+
+    async def __aenter__(self) -> "AiosqliteRawCursor":
+        self.cursor = await self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        if exc_type is not None:
+            return
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                await self.cursor.close()
 
 
 class AiosqliteSessionContext:
@@ -71,7 +98,7 @@ class AiosqliteSessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)
@@ -79,4 +106,4 @@ class AiosqliteSessionContext:
         return None
 
 
-__all__ = ("AiosqliteConnection", "AiosqliteSessionContext")
+__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteRawCursor", "AiosqliteSessionContext")

@@ -9,15 +9,24 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPool, AsyncpgPreparedStatement
+from sqlspec.adapters.asyncpg._typing import (
+    AsyncpgConnection,
+    AsyncpgCursor,
+    AsyncpgPool,
+    AsyncpgPreparedStatement,
+    AsyncpgSessionContext,
+)
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
+    build_postgres_extension_probe_names,
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
 )
-from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, AsyncpgExceptionHandler, AsyncpgSessionContext
+from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -29,6 +38,7 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -129,7 +139,7 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_instance_uri: AlloyDB instance URI.
         Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
         Required when enable_alloydb is True.
-    alloydb_enable_iam_auth: Enable IAM database authentication.
+    enable_alloydb_iam_auth: Enable IAM database authentication.
         Defaults to False for passwordless authentication.
     alloydb_ip_type: IP address type for connection.
         Options: "PUBLIC", "PRIVATE", "PSC"
@@ -158,7 +168,7 @@ class AsyncpgDriverFeatures(TypedDict):
     cloud_sql_ip_type: NotRequired[str]
     enable_alloydb: NotRequired[bool]
     alloydb_instance_uri: NotRequired[str]
-    alloydb_enable_iam_auth: NotRequired[bool]
+    enable_alloydb_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
@@ -212,7 +222,7 @@ class _AsyncpgAlloydbConnector:
         conn_kwargs: dict[str, Any] = {
             "instance_uri": self._config.driver_features["alloydb_instance_uri"],
             "driver": "asyncpg",
-            "enable_iam_auth": self._config.driver_features.get("alloydb_enable_iam_auth", False),
+            "enable_iam_auth": self._config.driver_features.get("enable_alloydb_iam_auth", False),
             "ip_type": self._config.driver_features.get("alloydb_ip_type", "PRIVATE"),
         }
         if self._user:
@@ -263,7 +273,7 @@ class AsyncpgConnectionContext:
         return self._connection
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._connection is not None:
             if self._config.connection_instance:
@@ -283,6 +293,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[AsyncpgConnectionContext]]" = AsyncpgConnectionContext
+    _session_factory_class: "ClassVar[type[_AsyncpgSessionFactory]]" = _AsyncpgSessionFactory
+    _session_context_class: "ClassVar[type[AsyncpgSessionContext]]" = AsyncpgSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -459,29 +473,19 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
-            extensions = [
-                name
-                for name, enabled in [
-                    ("vector", self.driver_features.get("enable_pgvector", False)),
-                    ("pg_search", self.driver_features.get("enable_paradedb", False)),
-                ]
-                if enabled
-            ]
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
             if extensions:
                 try:
                     results = await connection.fetch(
                         "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", extensions
                     )
-                    detected = {r["extname"] for r in results}
-                    self._pgvector_available = "vector" in detected
-                    self._paradedb_available = "pg_search" in detected
+                    detected_extensions = {r["extname"] for r in results}
                 except Exception:
-                    self._pgvector_available = False
-                    self._paradedb_available = False
-            else:
-                self._pgvector_available = False
-                self._paradedb_available = False
-            self._update_dialect_for_extensions()
+                    detected_extensions = set()
+            self.statement_config, self._pgvector_available, self._paradedb_available = (
+                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
+            )
 
         if self._pgvector_available:
             await register_pgvector_support(connection)
@@ -534,18 +538,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             self.connection_instance = pool
         return await pool.acquire()
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncpgConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An AsyncPG connection context manager.
-        """
-        return AsyncpgConnectionContext(self)
-
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
     ) -> "AsyncpgSessionContext":
@@ -563,7 +555,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return AsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or (lambda: self.statement_config or default_statement_config),
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )

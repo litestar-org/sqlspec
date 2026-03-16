@@ -13,7 +13,6 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 @pytest.mark.postgres
-@pytest.mark.asyncio
 async def test_psqlpy_event_channel_queue_fallback(tmp_path, postgres_service: "PostgresService") -> None:
     """Psqlpy adapters consume events via the queue backend."""
 

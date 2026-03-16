@@ -10,15 +10,36 @@ import pymysql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.pymysql.driver import PyMysqlDriver
     from sqlspec.core import StatementConfig
 
     PyMysqlConnection: TypeAlias = pymysql.connections.Connection
+    PyMysqlRawCursor: TypeAlias = pymysql.cursors.Cursor
 
 if not TYPE_CHECKING:
     PyMysqlConnection = pymysql.connections.Connection
+    PyMysqlRawCursor = pymysql.cursors.Cursor
+
+
+class PyMysqlCursor:
+    """Context manager for PyMySQL cursor operations."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "PyMysqlConnection") -> None:
+        self.connection = connection
+        self.cursor: PyMysqlRawCursor | None = None
+
+    def __enter__(self) -> "PyMysqlRawCursor":
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: Any) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
 
 
 class PyMysqlSessionContext:
@@ -60,7 +81,7 @@ class PyMysqlSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -68,4 +89,4 @@ class PyMysqlSessionContext:
         return None
 
 
-__all__ = ("PyMysqlConnection", "PyMysqlSessionContext")
+__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")

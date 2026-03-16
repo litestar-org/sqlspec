@@ -8,7 +8,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
-from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -37,6 +37,7 @@ from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFil
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.typing import VersionCacheResult, VersionInfo
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
@@ -51,6 +52,7 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from types import TracebackType
 
     from sqlspec.core import FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
@@ -193,11 +195,14 @@ class SyncExceptionHandler(Protocol):
     handlers store mapped exceptions in pending_exception for the caller to raise.
     """
 
-    pending_exception: Exception | None
+    @property
+    def pending_exception(self) -> Exception | None: ...
 
     def __enter__(self) -> Self: ...
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> bool: ...
 
 
 class AsyncExceptionHandler(Protocol):
@@ -208,11 +213,14 @@ class AsyncExceptionHandler(Protocol):
     handlers store mapped exceptions in pending_exception for the caller to raise.
     """
 
-    pending_exception: Exception | None
+    @property
+    def pending_exception(self) -> Exception | None: ...
 
     async def __aenter__(self) -> Self: ...
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool: ...
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> bool: ...
 
 
 logger = get_logger("sqlspec.driver")
@@ -223,6 +231,24 @@ VERSION_GROUPS_MIN_FOR_PATCH = 2
 
 _CONVERT_TO_TUPLE = object()
 _CONVERT_TO_FROZENSET = object()
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Any], ...], TypeDispatcher[Any]]" = {}
+
+
+def _type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
+    if not type_coercion_map:
+        return ()
+    return tuple(type_coercion_map.items())
+
+
+def _get_type_coercion_dispatcher(fallback_items: "tuple[tuple[type, Any], ...]") -> "TypeDispatcher[Any]":
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher[Any]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
 
 
 def make_cache_key_hashable(obj: Any) -> Any:
@@ -423,19 +449,21 @@ class StackExecutionObserver:
         )
         return self
 
-    def __exit__(self, exc_type: Any, exc: Exception | None, exc_tb: Any) -> Literal[False]:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> Literal[False]:
         duration = perf_counter() - self.started
         self.metrics.record_duration(duration)
-        if exc is not None:
-            self.metrics.record_error(exc)
-        self.runtime.span_manager.end_span(self.span, error=exc if exc is not None else None)
+        if isinstance(exc_val, Exception):
+            self.metrics.record_error(exc_val)
+        self.runtime.span_manager.end_span(self.span, error=exc_val if exc_val is not None else None)
         self.metrics.emit(self.runtime)
-        level = logging.ERROR if exc is not None else logging.DEBUG
+        level = logging.ERROR if exc_val is not None else logging.DEBUG
         trace_id, span_id = get_trace_context()
         log_with_context(
             logger,
             level,
-            "stack.execute.failed" if exc is not None else "stack.execute.complete",
+            "stack.execute.failed" if exc_val is not None else "stack.execute.complete",
             driver=type(self.driver).__name__,
             db_system=resolve_db_system(type(self.driver).__name__),
             stack_size=len(self.stack.operations),
@@ -444,7 +472,7 @@ class StackExecutionObserver:
             forced_disable=self.driver.stack_native_disabled,
             hashed_operations=self.hashed_operations,
             duration_ms=duration * 1000,
-            error_type=type(exc).__name__ if exc is not None else None,
+            error_type=type(exc_val).__name__ if exc_val is not None else None,
             trace_id=trace_id,
             span_id=span_id,
         )
@@ -473,27 +501,28 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     raise error
 
 
-@mypyc_attr(native_class=False, allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class DataDictionaryDialectMixin:
     """Mixin providing dialect SQL helpers for data dictionaries."""
 
     __slots__ = ()
 
-    dialect: str
+    dialect: "ClassVar[str]"
 
     def get_dialect_config(self) -> "DialectConfig":
         """Return the dialect configuration for this data dictionary."""
-        return get_dialect_config(self.dialect)
+        return get_dialect_config(type(self).dialect)
 
     def get_query(self, name: str) -> "SQL":
         """Return a named SQL query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query(self.dialect, name)
+        return loader.get_query(type(self).dialect, name)
 
     def get_query_text(self, name: str) -> str:
         """Return raw SQL text for a named query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query_text(self.dialect, name)
+        return loader.get_query_text(type(self).dialect, name)
 
     def get_query_text_or_none(self, name: str) -> "str | None":
         """Return raw SQL text for a named query or None if missing."""
@@ -520,14 +549,26 @@ class DataDictionaryDialectMixin:
             return False
         return bool(version >= required_version)
 
+    def get_default_features(self) -> "list[str]":
+        """Get default feature flags. Overridden by DataDictionaryMixin."""
+        return []
+
     def list_available_features(self) -> "list[str]":
-        """List available feature flags for this dialect."""
+        """List all features that can be checked via get_feature_flag.
+
+        Returns:
+            List of feature names this data dictionary supports
+
+        """
         config = self.get_dialect_config()
-        features = set(config.feature_flags.keys()) | set(config.feature_versions.keys())
+        features = set(self.get_default_features())
+        features.update(config.feature_flags.keys())
+        features.update(config.feature_versions.keys())
         return sorted(features)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+@trait
 class DataDictionaryMixin:
     """Mixin providing common data dictionary functionality.
 
@@ -535,14 +576,12 @@ class DataDictionaryMixin:
     feature flags or optimal types.
     """
 
-    __slots__ = ("_version_cache", "_version_fetch_attempted")
+    __slots__ = ()
+
+    dialect: "ClassVar[str]"
 
     _version_cache: "dict[int, VersionInfo | None]"
     _version_fetch_attempted: "set[int]"
-
-    def __init__(self) -> None:
-        self._version_cache = {}
-        self._version_fetch_attempted = set()
 
     def get_cached_version(self, driver_id: int) -> "VersionCacheResult":
         """Get cached version info for a driver.
@@ -643,9 +682,7 @@ class DataDictionaryMixin:
 
     def _resolve_log_adapter(self) -> str:
         """Resolve adapter identifier for logging."""
-        if hasattr(self, "dialect"):
-            return str(self.dialect)  # pyright: ignore[reportAttributeAccessIssue]
-        return type(self).__name__
+        return str(type(self).dialect)
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
@@ -1545,30 +1582,21 @@ class CommonDriverAttributesMixin:
         if is_many:
             if isinstance(parameters, list):
                 type_coercion_map = statement_config.parameter_config.type_coercion_map
+                fallback_items = _type_coercion_fallbacks(type_coercion_map)
                 needs_transform = False
                 for param_set in parameters:
                     if isinstance(param_set, dict):
                         for value in param_set.values():
-                            value_type = type(value)
-                            if value_type is TypedParameter:
-                                needs_transform = True
-                                break
-                            if type_coercion_map and value_type in type_coercion_map:
+                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
                     elif isinstance(param_set, (list, tuple)):
                         for value in param_set:
-                            value_type = type(value)
-                            if value_type is TypedParameter:
+                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
-                            if type_coercion_map and value_type in type_coercion_map:
-                                needs_transform = True
-                                break
-                    else:
-                        value_type = type(param_set)
-                        if value_type is TypedParameter or (type_coercion_map and value_type in type_coercion_map):
-                            needs_transform = True
+                    elif self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
+                        needs_transform = True
                     if needs_transform:
                         break
 
@@ -1604,17 +1632,40 @@ class CommonDriverAttributesMixin:
         if not type_coercion_map:
             return unwrapped_value
 
-        value_type = type(unwrapped_value)
+        return self._apply_coercion_with_fallback(
+            unwrapped_value, type_coercion_map, _type_coercion_fallbacks(type_coercion_map)
+        )
+
+    def _apply_coercion_with_fallback(
+        self,
+        value: object,
+        type_coercion_map: "dict[type, Callable[[Any], Any]]",
+        fallback_items: "tuple[tuple[type, Any], ...]",
+    ) -> object:
+        value_type = type(value)
         exact_converter = type_coercion_map.get(value_type)
         if exact_converter is not None:
-            return exact_converter(unwrapped_value)
+            return exact_converter(value)
+        fallback_converter = _get_type_coercion_dispatcher(fallback_items).get(value)
+        if fallback_converter is not None:
+            return fallback_converter(value)
+        return value
 
-        for type_check, converter in type_coercion_map.items():
-            if type_check is value_type:
-                continue
-            if isinstance(unwrapped_value, type_check):
-                return converter(unwrapped_value)
-        return unwrapped_value
+    def _needs_coercion_candidate(
+        self,
+        value: object,
+        type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
+        fallback_items: "tuple[tuple[type, Any], ...]",
+    ) -> bool:
+        if type(value) is TypedParameter:
+            return True
+        if not type_coercion_map:
+            return False
+
+        value_type = type(value)
+        if value_type in type_coercion_map:
+            return True
+        return _get_type_coercion_dispatcher(fallback_items).get(value) is not None
 
     def _format_parameter_set_for_many(
         self, parameters: "StatementParameters", statement_config: "StatementConfig"
@@ -1636,15 +1687,15 @@ class CommonDriverAttributesMixin:
             return []
 
         type_coercion_map = statement_config.parameter_config.type_coercion_map
-        coerce_value = self._apply_coercion
+        fallback_items = _type_coercion_fallbacks(type_coercion_map)
 
         if not isinstance(parameters, (dict, list, tuple)):
-            return [coerce_value(parameters, type_coercion_map)]
+            return [self._apply_coercion_with_fallback(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
             coerced_mapping: dict[str, Any] | None = None
             for key, value in parameters.items():
-                coerced_value = coerce_value(value, type_coercion_map)
+                coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
                 if coerced_mapping is None:
                     if coerced_value is value:
                         continue
@@ -1656,7 +1707,7 @@ class CommonDriverAttributesMixin:
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
-            coerced_value = coerce_value(value, type_coercion_map)
+            coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
             if updated_params is None:
                 if coerced_value is value:
                     continue

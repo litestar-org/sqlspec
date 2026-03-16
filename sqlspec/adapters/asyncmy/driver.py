@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncmy.errors  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
-from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 
+from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmySessionContext
 from sqlspec.adapters.asyncmy.core import (
     build_insert_statement,
     collect_rows,
@@ -28,7 +28,7 @@ from sqlspec.adapters.asyncmy.core import (
 )
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
@@ -42,10 +42,6 @@ if TYPE_CHECKING:
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-from typing_extensions import Self
-
-from sqlspec.adapters.asyncmy._typing import AsyncmySessionContext
-
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")
 
 logger = get_logger(__name__)
@@ -56,28 +52,7 @@ json_type_value = (
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
-class AsyncmyCursor:
-    """Context manager for AsyncMy cursor operations.
-
-    Provides automatic cursor acquisition and cleanup for database operations.
-    """
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "AsyncmyConnection") -> None:
-        self.connection = connection
-        self.cursor: Cursor | DictCursor | None = None
-
-    async def __aenter__(self) -> Cursor | DictCursor:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self.cursor is not None:
-            await self.cursor.close()
-
-
-class AsyncmyExceptionHandler:
+class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling asyncmy (MySQL) database exceptions.
 
     Maps MySQL error codes and SQLSTATE to specific SQLSpec exceptions
@@ -88,15 +63,9 @@ class AsyncmyExceptionHandler:
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ("pending_exception",)
+    __slots__ = ()
 
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, asyncmy.errors.Error):

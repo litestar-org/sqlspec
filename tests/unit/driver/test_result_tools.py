@@ -12,6 +12,7 @@ import msgspec
 import pytest
 from typing_extensions import TypedDict
 
+import sqlspec.utils.schema as schema_utils
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.schema import (
@@ -289,6 +290,17 @@ def test_to_schema_mixin_with_regular_lists() -> None:
     assert result.embedding == [1.0, 2.0, 3.0]
     assert isinstance(result.embedding, list)
     assert result.metadata == {"type": "manual"}
+
+
+def test_to_schema_msgspec_reuses_module_scope_helpers() -> None:
+    """Msgspec schema conversion should not rebuild helper partials per call."""
+    test_data = {"name": "test", "embedding": [1.0, 2.0], "metadata": None}
+
+    with patch.object(schema_utils, "partial", wraps=schema_utils.partial) as mock_partial:
+        result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleMsgspecStruct)
+
+    assert isinstance(result, SampleMsgspecStruct)
+    assert mock_partial.call_count == 0
 
 
 def test_to_schema_mixin_without_schema_type() -> None:

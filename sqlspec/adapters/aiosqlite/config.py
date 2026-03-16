@@ -6,14 +6,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import apply_driver_features, build_connection_config, default_statement_config
-from sqlspec.adapters.aiosqlite.driver import (
-    AiosqliteCursor,
-    AiosqliteDriver,
-    AiosqliteExceptionHandler,
-    AiosqliteSessionContext,
-)
+from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
     AiosqlitePoolConnection,
@@ -26,6 +21,7 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -130,7 +126,7 @@ class AiosqliteConnectionContext:
         return await self._ctx.__aenter__()
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)
@@ -148,6 +144,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[AiosqliteConnectionContext]]" = AiosqliteConnectionContext
+    _session_factory_class: "ClassVar[type[_AiosqliteSessionFactory]]" = _AiosqliteSessionFactory
+    _session_context_class: "ClassVar[type[AiosqliteSessionContext]]" = AiosqliteSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -212,42 +212,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             extension_config=extension_config,
             observability_config=observability_config,
             **kwargs,
-        )
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "AiosqliteConnectionContext":
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An aiosqlite connection context manager.
-
-        """
-        return AiosqliteConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "AiosqliteSessionContext":
-        """Provide an async driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            An AiosqliteDriver session context manager.
-
-        """
-        factory = _AiosqliteSessionFactory(self)
-        return AiosqliteSessionContext(
-            acquire_connection=factory.acquire_connection,
-            release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
         )
 
     async def _create_pool(self) -> AiosqliteConnectionPool:

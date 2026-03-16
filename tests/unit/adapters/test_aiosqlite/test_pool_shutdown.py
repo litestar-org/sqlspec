@@ -65,7 +65,6 @@ class _ModernConnectProxy:
         return _resolve().__await__()
 
 
-@pytest.mark.asyncio
 async def test_create_connection_sets_daemon_for_legacy_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool should set daemon mode for pre-0.22 thread-based connect proxy."""
     from sqlspec.adapters.aiosqlite import pool as pool_module
@@ -83,7 +82,6 @@ async def test_create_connection_sets_daemon_for_legacy_proxy(monkeypatch: pytes
         await pool._retire_connection(pool_connection, reason="test_cleanup")
 
 
-@pytest.mark.asyncio
 async def test_create_connection_sets_daemon_for_modern_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool should set daemon mode for 0.22+ connect proxy internal worker thread."""
     from sqlspec.adapters.aiosqlite import pool as pool_module
@@ -101,7 +99,6 @@ async def test_create_connection_sets_daemon_for_modern_proxy(monkeypatch: pytes
         await pool._retire_connection(pool_connection, reason="test_cleanup")
 
 
-@pytest.mark.asyncio
 async def test_pool_close_uses_force_stop_when_close_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool should trigger force-stop fallback when graceful close times out."""
     from sqlspec.adapters.aiosqlite import pool as pool_module

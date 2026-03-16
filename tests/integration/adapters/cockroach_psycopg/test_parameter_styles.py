@@ -258,7 +258,7 @@ class TestSyncEdgeCases:
 class TestAsyncNumericParameterStyle:
     """Test NUMERIC ($1, $2) parameter style (native) for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_numeric_single_parameter(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -271,7 +271,7 @@ class TestAsyncNumericParameterStyle:
         assert len(result.data) == 1
         assert result.get_data()[0]["name"] == "test1"
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_numeric_multiple_parameters(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -289,7 +289,7 @@ class TestAsyncNumericParameterStyle:
 class TestAsyncQmarkConversion:
     """Test QMARK (?) to NUMERIC ($1) conversion for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_qmark_single_parameter(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -302,7 +302,7 @@ class TestAsyncQmarkConversion:
         assert len(result.data) == 1
         assert result.get_data()[0]["name"] == "test1"
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_qmark_multiple_parameters(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -319,7 +319,7 @@ class TestAsyncQmarkConversion:
 class TestAsyncNamedColonConversion:
     """Test NAMED_COLON (:name) to NUMERIC ($1) conversion for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_named_colon_single_parameter(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -332,7 +332,7 @@ class TestAsyncNamedColonConversion:
         assert len(result.data) == 1
         assert result.get_data()[0]["name"] == "test1"
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_named_colon_multiple_parameters(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -350,7 +350,7 @@ class TestAsyncNamedColonConversion:
 class TestAsyncNamedPyformatConversion:
     """Test NAMED_PYFORMAT (%(name)s) to NUMERIC ($1) conversion for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_named_pyformat_parameters(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -368,7 +368,7 @@ class TestAsyncNamedPyformatConversion:
 class TestAsyncSQLObject:
     """Test parameter conversion with SQL objects for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_sql_object_with_qmark(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -383,7 +383,7 @@ class TestAsyncSQLObject:
 class TestAsyncExecuteMany:
     """Test parameter conversion with execute_many for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_execute_many_with_numeric(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:
@@ -401,7 +401,7 @@ class TestAsyncExecuteMany:
 class TestAsyncEdgeCases:
     """Test edge cases for async driver."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_sql_injection_prevention(
         self, cockroach_psycopg_async_parameter_session: CockroachPsycopgAsyncDriver
     ) -> None:

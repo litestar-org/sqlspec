@@ -11,7 +11,7 @@ from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLSpecError
 
-pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.asyncio(loop_scope="function")]
+pytestmark = [pytest.mark.xdist_group("oracle")]
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 

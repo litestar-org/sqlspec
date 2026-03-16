@@ -30,6 +30,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -41,6 +42,8 @@ __all__ = (
     "CockroachPsycopgPoolConfig",
     "CockroachPsycopgSyncConfig",
 )
+
+default_statement_config = build_statement_config()
 
 
 class CockroachPsycopgConnectionConfig(TypedDict):
@@ -121,7 +124,7 @@ class CockroachPsycopgSyncConnectionContext:
         return cast("CockroachSyncConnection", self._ctx)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._config.connection_instance and self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
@@ -167,6 +170,14 @@ class CockroachPsycopgSyncConfig(
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[CockroachPsycopgSyncConnectionContext]]" = (
+        CockroachPsycopgSyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_CockroachPsycopgSyncSessionConnectionHandler]]" = (
+        _CockroachPsycopgSyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[CockroachPsycopgSyncSessionContext]]" = CockroachPsycopgSyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -182,7 +193,7 @@ class CockroachPsycopgSyncConfig(
         **kwargs: Any,
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
-        statement_config = statement_config or build_statement_config()
+        statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
@@ -256,9 +267,6 @@ class CockroachPsycopgSyncConfig(
             self.connection_instance = self.create_pool()
         return cast("CockroachSyncConnection", self.connection_instance.getconn())
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "CockroachPsycopgSyncConnectionContext":
-        return CockroachPsycopgSyncConnectionContext(self)
-
     def provide_session(
         self,
         *_args: Any,
@@ -277,7 +285,7 @@ class CockroachPsycopgSyncConfig(
         return CockroachPsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or build_statement_config(),
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )
@@ -322,7 +330,7 @@ class CockroachPsycopgAsyncConnectionContext:
         raise ImproperConfigurationError(msg)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
             return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
@@ -363,6 +371,14 @@ class CockroachPsycopgAsyncConfig(
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
+    _connection_context_class: "ClassVar[type[CockroachPsycopgAsyncConnectionContext]]" = (
+        CockroachPsycopgAsyncConnectionContext
+    )
+    _session_factory_class: "ClassVar[type[_CockroachPsycopgAsyncSessionConnectionHandler]]" = (
+        _CockroachPsycopgAsyncSessionConnectionHandler
+    )
+    _session_context_class: "ClassVar[type[CockroachPsycopgAsyncSessionContext]]" = CockroachPsycopgAsyncSessionContext
+    _default_statement_config = default_statement_config
 
     def __init__(
         self,
@@ -378,7 +394,7 @@ class CockroachPsycopgAsyncConfig(
         **kwargs: Any,
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
-        statement_config = statement_config or build_statement_config()
+        statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
@@ -456,9 +472,6 @@ class CockroachPsycopgAsyncConfig(
         if self.connection_instance is None:
             self.connection_instance = await self.create_pool()
         return cast("CockroachAsyncConnection", await self.connection_instance.getconn())
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "CockroachPsycopgAsyncConnectionContext":
-        return CockroachPsycopgAsyncConnectionContext(self)
 
     def provide_session(
         self,

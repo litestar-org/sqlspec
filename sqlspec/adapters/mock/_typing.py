@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -11,15 +12,87 @@ _MockConnection = sqlite3.Connection
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.mock.driver import MockAsyncDriver, MockSyncDriver
     from sqlspec.core import StatementConfig
 
     MockConnection: TypeAlias = _MockConnection
+    MockRawCursor: TypeAlias = sqlite3.Cursor
 
 if not TYPE_CHECKING:
     MockConnection = _MockConnection
+    MockRawCursor = sqlite3.Cursor
+
+
+class MockCursor:
+    """Context manager for Mock SQLite cursor management.
+
+    Provides automatic cursor creation and cleanup for SQLite database operations.
+    """
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "MockConnection") -> None:
+        """Initialize cursor manager.
+
+        Args:
+            connection: SQLite database connection
+
+        """
+        self.connection = connection
+        self.cursor: MockRawCursor | None = None
+
+    def __enter__(self) -> "MockRawCursor":
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+
+        """
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, *_: object) -> None:
+        """Clean up cursor resources."""
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
+
+
+class MockAsyncCursor:
+    """Async context manager for Mock SQLite cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "MockConnection") -> None:
+        """Initialize async cursor manager.
+
+        Args:
+            connection: SQLite database connection
+
+        """
+        self.connection = connection
+        self.cursor: MockRawCursor | None = None
+
+    async def __aenter__(self) -> "MockRawCursor":
+        """Create and return a new cursor.
+
+        Returns:
+            Active SQLite cursor object
+
+        """
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        """Clean up cursor resources."""
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class MockSyncSessionContext:
@@ -75,7 +148,7 @@ class MockSyncSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -136,7 +209,7 @@ class MockAsyncSessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)
@@ -144,4 +217,11 @@ class MockAsyncSessionContext:
         return None
 
 
-__all__ = ("MockAsyncSessionContext", "MockConnection", "MockSyncSessionContext")
+__all__ = (
+    "MockAsyncCursor",
+    "MockAsyncSessionContext",
+    "MockConnection",
+    "MockCursor",
+    "MockRawCursor",
+    "MockSyncSessionContext",
+)

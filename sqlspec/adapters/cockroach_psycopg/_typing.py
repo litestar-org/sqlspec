@@ -6,11 +6,13 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as psycopg_crdb
 from psycopg.rows import DictRow as PsycopgDictRow
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from psycopg.crdb import AsyncCrdbConnection, CrdbConnection
@@ -18,12 +20,16 @@ if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
     from sqlspec.core import StatementConfig
 
-    # Parametrize with DictRow so type system knows rows are dict-like
     CockroachSyncConnection: TypeAlias = CrdbConnection[PsycopgDictRow]
     CockroachAsyncConnection: TypeAlias = AsyncCrdbConnection[PsycopgDictRow]
-else:
+    CockroachSyncCursor: TypeAlias = Cursor[PsycopgDictRow]
+    CockroachAsyncCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
+
+if not TYPE_CHECKING:
     CockroachSyncConnection = psycopg_crdb.CrdbConnection
     CockroachAsyncConnection = psycopg_crdb.AsyncCrdbConnection
+    CockroachSyncCursor = Cursor
+    CockroachAsyncCursor = AsyncCursor
 
 
 class CockroachPsycopgSyncSessionContext:
@@ -65,7 +71,7 @@ class CockroachPsycopgSyncSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
@@ -112,7 +118,7 @@ class CockroachPsycopgAsyncSessionContext:
         return self._prepare_driver(self._driver)
 
     async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
             await self._release_connection(self._connection)
@@ -122,8 +128,10 @@ class CockroachPsycopgAsyncSessionContext:
 
 __all__ = (
     "CockroachAsyncConnection",
+    "CockroachAsyncCursor",
     "CockroachPsycopgAsyncSessionContext",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
+    "CockroachSyncCursor",
     "PsycopgDictRow",
 )

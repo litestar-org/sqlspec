@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+import sqlspec._serialization
 from sqlspec.core import (
     BaseTypeConverter,
     convert_decimal,
@@ -231,6 +232,19 @@ def test_convert_json() -> None:
     result = convert_json(json_str)
     assert isinstance(result, dict)
     assert result["key"] == "value"
+
+
+def test_convert_json_avoids_serializer_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSON coercion should not bounce through serializer selection."""
+
+    def fail_get_default_serializer() -> None:
+        raise AssertionError("convert_json should not call serializer selection")
+
+    monkeypatch.setattr(sqlspec._serialization, "get_default_serializer", fail_get_default_serializer)
+
+    result = convert_json('{"key": "value"}')
+
+    assert result == {"key": "value"}
 
 
 def test_convert_decimal() -> None:
