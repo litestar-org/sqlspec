@@ -21,7 +21,6 @@ pytestmark = [
 ]
 
 
-@pytest.mark.asyncio(loop_scope="function")
 async def test_asyncpg_storage_bridge_with_minio(
     asyncpg_async_driver: AsyncpgDriver,
     minio_service: "MinioService",

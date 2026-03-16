@@ -9,7 +9,7 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
 from tests.integration.adapters._events_helpers import setup_async_event_channel
 
-pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.asyncio]
+pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector]
 
 
 @pytest.mark.mysql

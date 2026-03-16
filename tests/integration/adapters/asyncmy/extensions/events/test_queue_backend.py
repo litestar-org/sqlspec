@@ -13,7 +13,6 @@ pytestmark = pytest.mark.xdist_group("mysql")
 
 
 @pytest.mark.mysql
-@pytest.mark.asyncio
 async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService, tmp_path: Any) -> None:
     """AsyncMy configs publish, consume, and ack events via the queue backend."""
     migrations = tmp_path / "migrations"
@@ -58,7 +57,6 @@ async def test_asyncmy_event_channel_queue_fallback(mysql_service: MySQLService,
 
 
 @pytest.mark.mysql
-@pytest.mark.asyncio
 async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLService, tmp_path: Any) -> None:
     """AsyncMy queue backend handles multiple messages correctly."""
     migrations = tmp_path / "migrations"
@@ -104,7 +102,6 @@ async def test_asyncmy_event_channel_multiple_messages(mysql_service: MySQLServi
 
 
 @pytest.mark.mysql
-@pytest.mark.asyncio
 async def test_asyncmy_event_channel_nack_redelivery(mysql_service: MySQLService, tmp_path: Any) -> None:
     """AsyncMy queue backend redelivers nacked messages."""
     migrations = tmp_path / "migrations"

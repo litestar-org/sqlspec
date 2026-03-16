@@ -18,7 +18,6 @@ def test_sync_execute_script_tracks_all_successful_statements(mock_sync_driver) 
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_execute_script_tracks_all_successful_statements(mock_async_driver) -> None:
     """Async execute_script should report all statements as successful."""
     result = await mock_async_driver.execute_script("SELECT 1; SELECT 2; SELECT 3;")

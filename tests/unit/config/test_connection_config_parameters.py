@@ -15,8 +15,6 @@ Key aspects tested:
 5. Configuration merging and overrides
 """
 
-import pytest
-
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
@@ -464,7 +462,6 @@ def test_connection_instance_parameter_naming_consistency() -> None:
         assert config.connection_instance is None
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_config_with_pre_created_pool() -> None:
     """Test AsyncpgConfig with connection_instance set to pre-created pool."""
     from unittest.mock import AsyncMock, MagicMock

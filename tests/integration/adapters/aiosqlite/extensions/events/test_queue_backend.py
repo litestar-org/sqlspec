@@ -8,7 +8,6 @@ from tests.integration.adapters._events_helpers import prepare_events_migrations
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
     """Aiosqlite event channel publishes events asynchronously."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -35,7 +34,6 @@ async def test_aiosqlite_event_channel_publish(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_consume(tmp_path) -> None:
     """Aiosqlite event channel consumes events asynchronously."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -61,7 +59,6 @@ async def test_aiosqlite_event_channel_consume(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_ack(tmp_path) -> None:
     """Aiosqlite event channel acknowledges events asynchronously."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -93,7 +90,6 @@ async def test_aiosqlite_event_channel_ack(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_metadata(tmp_path) -> None:
     """Aiosqlite event channel preserves metadata in async operations."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -122,7 +118,6 @@ async def test_aiosqlite_event_channel_metadata(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_telemetry(tmp_path) -> None:
     """Aiosqlite event operations are tracked in telemetry."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -150,7 +145,6 @@ async def test_aiosqlite_event_channel_telemetry(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_custom_table_name(tmp_path) -> None:
     """Custom queue table name is used for events."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -177,7 +171,6 @@ async def test_aiosqlite_event_channel_custom_table_name(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_multiple_channels(tmp_path) -> None:
     """Events are correctly filtered by channel."""
     migrations_dir = prepare_events_migrations(tmp_path)
@@ -205,7 +198,6 @@ async def test_aiosqlite_event_channel_multiple_channels(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
 async def test_aiosqlite_event_channel_attempts_tracked(tmp_path) -> None:
     """Event attempts counter is incremented on dequeue."""
     migrations_dir = prepare_events_migrations(tmp_path)

@@ -4,8 +4,6 @@ Tests unusual scenarios, boundary conditions, and error cases for the
 standardized parameter naming.
 """
 
-import pytest
-
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
@@ -310,7 +308,6 @@ def test_connection_config_with_bytes_values() -> None:
     assert config.connection_config["ssl_cert"] == b"certificate data"
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_connection_config_with_pathlib_path() -> None:
     """Test that connection_config accepts pathlib.Path objects."""
     from pathlib import Path

@@ -10,7 +10,6 @@ from tests.conftest import requires_interpreted
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_execute_stack_fail_fast_rolls_back(mock_async_driver) -> None:
     original_execute = mock_async_driver.execute
 
@@ -31,7 +30,6 @@ async def test_async_execute_stack_fail_fast_rolls_back(mock_async_driver) -> No
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_execute_stack_continue_on_error(mock_async_driver) -> None:
     original_execute = mock_async_driver.execute
 
@@ -53,7 +51,6 @@ async def test_async_execute_stack_continue_on_error(mock_async_driver) -> None:
 
 
 @requires_interpreted
-@pytest.mark.asyncio
 async def test_async_execute_stack_execute_arrow(mock_async_driver) -> None:
     sentinel = object()
 

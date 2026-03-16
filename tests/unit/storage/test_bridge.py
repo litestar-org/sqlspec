@@ -93,7 +93,6 @@ class DummyAsyncmyConnection:
         return DummyAsyncmyCursorImpl(self.operations)
 
 
-@pytest.mark.asyncio
 async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     arrow_table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
 
@@ -140,7 +139,6 @@ def test_duckdb_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     assert job.telemetry["destination"] == "ingest_target"
 
 
-@pytest.mark.asyncio
 async def test_psqlpy_load_from_arrow_overwrite() -> None:
     arrow_table = pa.table({"id": [7, 8], "name": ["east", "west"]})
     dummy_connection = DummyPsqlpyConnection()
@@ -164,7 +162,6 @@ async def test_psqlpy_load_from_arrow_overwrite() -> None:
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
 
-@pytest.mark.asyncio
 async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     arrow_table = pa.table({"id": [1, 2], "name": ["north", "south"]})
     dummy_connection = DummyPsqlpyConnection()
@@ -187,7 +184,6 @@ async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.Mon
     assert job.telemetry["extra"]["source"]["destination"] == "s3://bucket/part-2.parquet"  # type: ignore[index]
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_load_from_arrow_overwrite() -> None:
     connection = await aiosqlite.connect(":memory:")
     try:
@@ -213,7 +209,6 @@ async def test_aiosqlite_load_from_arrow_overwrite() -> None:
         await connection.close()
 
 
-@pytest.mark.asyncio
 async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = await aiosqlite.connect(":memory:")
     try:
@@ -292,7 +287,6 @@ def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch)
         connection.close()
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_load_from_arrow_overwrite() -> None:
     connection = DummyAsyncmyConnection()
     driver = AsyncmyDriver(
@@ -309,7 +303,6 @@ async def test_asyncmy_load_from_arrow_overwrite() -> None:
     assert job.telemetry["destination"] == "analytics.scores"
 
 
-@pytest.mark.asyncio
 async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = DummyAsyncmyConnection()
     driver = AsyncmyDriver(

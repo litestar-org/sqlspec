@@ -32,7 +32,6 @@ pytestmark = [
 
 
 @pytest.mark.skipif(not HAS_CLOUD_SQL_CREDENTIALS, reason="Cloud SQL credentials missing")
-@pytest.mark.asyncio
 async def test_cloud_sql_connection_basic() -> None:
     """Test basic Cloud SQL connection via connector."""
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
@@ -55,7 +54,6 @@ async def test_cloud_sql_connection_basic() -> None:
 
 
 @pytest.mark.skipif(not HAS_CLOUD_SQL_CREDENTIALS, reason="Cloud SQL credentials missing")
-@pytest.mark.asyncio
 async def test_cloud_sql_query_execution() -> None:
     """Test query execution via Cloud SQL connector."""
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
@@ -79,7 +77,6 @@ async def test_cloud_sql_query_execution() -> None:
 
 
 @pytest.mark.skipif(not HAS_CLOUD_SQL_CREDENTIALS, reason="Cloud SQL IAM requires credentials")
-@pytest.mark.asyncio
 async def test_cloud_sql_iam_auth() -> None:
     """Test Cloud SQL with IAM authentication."""
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
@@ -101,7 +98,6 @@ async def test_cloud_sql_iam_auth() -> None:
 
 
 @pytest.mark.skipif(not HAS_CLOUD_SQL_CREDENTIALS, reason="Cloud SQL credentials missing")
-@pytest.mark.asyncio
 async def test_cloud_sql_private_ip() -> None:
     """Test Cloud SQL connection using PRIVATE IP type."""
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
@@ -129,7 +125,6 @@ async def test_cloud_sql_private_ip() -> None:
 
 
 @pytest.mark.skipif(not HAS_ALLOYDB_CREDENTIALS, reason="AlloyDB credentials missing")
-@pytest.mark.asyncio
 async def test_alloydb_connection_basic() -> None:
     """Test basic AlloyDB connection via connector."""
     instance_uri = os.environ["GOOGLE_ALLOYDB_INSTANCE_URI"]
@@ -156,7 +151,6 @@ async def test_alloydb_connection_basic() -> None:
 
 
 @pytest.mark.skipif(not HAS_ALLOYDB_CREDENTIALS, reason="AlloyDB credentials missing")
-@pytest.mark.asyncio
 async def test_alloydb_query_execution() -> None:
     """Test query execution via AlloyDB connector."""
     instance_uri = os.environ["GOOGLE_ALLOYDB_INSTANCE_URI"]
@@ -184,7 +178,6 @@ async def test_alloydb_query_execution() -> None:
 
 
 @pytest.mark.skipif(not HAS_ALLOYDB_CREDENTIALS, reason="AlloyDB IAM requires credentials")
-@pytest.mark.asyncio
 async def test_alloydb_iam_auth() -> None:
     """Test AlloyDB with IAM authentication."""
     instance_uri = os.environ["GOOGLE_ALLOYDB_INSTANCE_URI"]
