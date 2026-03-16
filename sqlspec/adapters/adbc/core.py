@@ -37,6 +37,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
 if TYPE_CHECKING:
@@ -653,6 +654,7 @@ def build_profile() -> "DriverParameterProfile":
             tuple: _convert_array_for_postgres_adbc,
             list: _convert_array_for_postgres_adbc,
             dict: _identity,
+            **build_uuid_coercions(native=True),
         },
         extras={
             "type_coercion_overrides": {list: _convert_array_for_postgres_adbc, tuple: _convert_array_for_postgres_adbc}

@@ -37,7 +37,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter
+from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
 # Module-level lazy import for psycopg errors (mypyc optimization)
@@ -139,7 +139,12 @@ def _identity(value: Any) -> Any:
 def _build_psycopg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for psycopg."""
 
-    return {datetime.datetime: _identity, datetime.date: _identity, datetime.time: _identity}
+    return {
+        datetime.datetime: _identity,
+        datetime.date: _identity,
+        datetime.time: _identity,
+        **build_uuid_coercions(native=True),
+    }
 
 
 def _build_psycopg_parameter_config(

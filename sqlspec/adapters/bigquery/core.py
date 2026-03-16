@@ -34,6 +34,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
@@ -643,6 +644,7 @@ def build_profile() -> "DriverParameterProfile":
             dict: _identity,
             list: _identity,
             type(None): _return_none,
+            **build_uuid_coercions(),
         },
         default_ast_transformer=build_null_pruning_transform(dialect="bigquery"),
         extras={"json_tuple_strategy": "tuple", "type_coercion_overrides": {list: _identity, tuple: _tuple_to_list}},

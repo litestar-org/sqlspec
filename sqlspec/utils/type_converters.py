@@ -16,6 +16,7 @@ __all__ = (
     "build_json_tuple_converter",
     "build_nested_decimal_normalizer",
     "build_time_iso_converter",
+    "build_uuid_coercions",
     "should_json_encode_sequence",
 )
 
@@ -173,3 +174,35 @@ def build_nested_decimal_normalizer(*, mode: str = DEFAULT_DECIMAL_MODE) -> "Cal
 def build_time_iso_converter() -> "Callable[[datetime.date | datetime.datetime | datetime.time], str]":
     """Return a converter that formats temporal values using ISO 8601."""
     return _time_iso_convert
+
+
+def _uuid_to_string(value: Any) -> str:
+    return str(value)
+
+
+def _uuid_utils_to_stdlib(value: Any) -> Any:
+    import uuid as _uuid_mod
+
+    return _uuid_mod.UUID(bytes=value.bytes)
+
+
+def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[Any], Any]]":
+    """Return coercions for ``uuid_utils.UUID`` parameter binding.
+
+    When ``uuid_utils`` is installed, returns a dict mapping its UUID type
+    to either ``str`` or ``uuid.UUID`` depending on the *native* flag.
+    When not installed, returns an empty dict.
+
+    Args:
+        native: When ``True``, convert ``uuid_utils.UUID`` → ``uuid.UUID``
+            (via ``.bytes``, for drivers that bind ``uuid.UUID`` natively).
+            When ``False`` (default), convert to ``str`` (for drivers that
+            need a plain string, e.g. DuckDB/SQLite).
+    """
+    try:
+        import uuid_utils as _uuid_utils_mod  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        return {}
+
+    converter = _uuid_utils_to_stdlib if native else _uuid_to_string
+    return {_uuid_utils_mod.UUID: converter}

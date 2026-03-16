@@ -21,6 +21,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate
 
 if TYPE_CHECKING:
@@ -138,7 +139,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={bool: _bool_to_int},
+        custom_type_coercions={bool: _bool_to_int, **build_uuid_coercions()},
         default_dialect="mysql",
     )
 

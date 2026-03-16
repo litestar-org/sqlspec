@@ -32,7 +32,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_nested_decimal_normalizer
+from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
@@ -196,7 +196,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={decimal.Decimal: float},
+        custom_type_coercions={decimal.Decimal: float, **build_uuid_coercions(native=True)},
         default_dialect="postgres",
     )
 

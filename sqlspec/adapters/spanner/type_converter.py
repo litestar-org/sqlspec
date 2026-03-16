@@ -21,9 +21,19 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+from sqlspec._typing import UUID_UTILS_INSTALLED
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
+
+_UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
+if UUID_UTILS_INSTALLED:
+    try:
+        import uuid_utils as _uuid_utils  # pyright: ignore[reportMissingImports]
+
+        _UUID_TYPES = (UUID, _uuid_utils.UUID)
+    except ImportError:
+        pass
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -259,8 +269,9 @@ def coerce_params_for_spanner(
     json_object_type = _get_json_object_type()
     coerced: dict[str, Any] = {}
     for key, value in params.items():
-        if isinstance(value, UUID):
-            coerced[key] = bytes_to_spanner(uuid_to_spanner(value))
+        if isinstance(value, _UUID_TYPES):
+            std_uuid = value if isinstance(value, UUID) else UUID(bytes=value.bytes)
+            coerced[key] = bytes_to_spanner(uuid_to_spanner(std_uuid))
         elif isinstance(value, bytes):
             coerced[key] = bytes_to_spanner(value)
         elif isinstance(value, datetime) and value.tzinfo is None:

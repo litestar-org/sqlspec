@@ -33,6 +33,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
@@ -112,6 +113,7 @@ def _build_asyncpg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]"
         datetime.datetime: _convert_datetime_param,
         datetime.date: _convert_date_param,
         datetime.time: _convert_time_param,
+        **build_uuid_coercions(native=True),
     }
 
 
