@@ -39,7 +39,6 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import Awaitable, Callable
-    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig

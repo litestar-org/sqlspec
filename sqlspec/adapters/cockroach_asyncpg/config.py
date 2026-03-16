@@ -20,7 +20,6 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig

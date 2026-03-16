@@ -59,12 +59,7 @@ if TYPE_CHECKING:
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
 
-__all__ = (
-    "SyncDataDictionaryBase",
-    "SyncDriverAdapterBase",
-    "SyncPoolConnectionContext",
-    "SyncPoolSessionFactory",
-)
+__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectionContext", "SyncPoolSessionFactory")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
@@ -89,10 +84,7 @@ class SyncPoolConnectionContext:
         return self._ctx.__enter__()
 
     def __exit__(
-        self,
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: Any,
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
