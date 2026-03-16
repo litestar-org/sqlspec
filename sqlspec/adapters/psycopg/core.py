@@ -5,6 +5,7 @@ from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from psycopg import sql as psycopg_sql
+from typing_extensions import LiteralString
 
 from sqlspec.core import (
     SQL,
@@ -87,7 +88,7 @@ class PreparedStackOperation(NamedTuple):
     operation_index: int
     operation: "StackOperation"
     statement: "SQL"
-    sql: str
+    sql: "LiteralString | psycopg_sql.SQL"
     parameters: "tuple[Any, ...] | dict[str, Any] | None"
 
 

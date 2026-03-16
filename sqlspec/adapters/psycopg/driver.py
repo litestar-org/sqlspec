@@ -5,6 +5,8 @@ from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
+from psycopg import sql as psycopg_sql
+from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -109,7 +111,7 @@ class PsycopgPipelineMixin:
                     operation_index=index,
                     operation=operation,
                     statement=sql_statement,
-                    sql=sql_text,
+                    sql=cast("LiteralString | psycopg_sql.SQL", sql_text),
                     parameters=prepared_parameters,
                 )
             )
@@ -394,10 +396,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         cursor = resource_stack.enter_context(self.with_cursor(self.connection))
 
                         try:
+                            sql = cast("LiteralString | psycopg_sql.SQL", prepared.sql)  # type: ignore[redundant-cast]
                             if prepared.parameters:
-                                cursor.execute(prepared.sql, prepared.parameters)
+                                cursor.execute(sql, prepared.parameters)
                             else:
-                                cursor.execute(prepared.sql)
+                                cursor.execute(sql)
                         except Exception as exc:
                             stack_error = StackExecutionError(
                                 prepared.operation_index,
@@ -852,10 +855,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
 
                         try:
+                            sql = cast("LiteralString | psycopg_sql.SQL", prepared.sql)  # type: ignore[redundant-cast]
                             if prepared.parameters:
-                                await cursor.execute(prepared.sql, prepared.parameters)
+                                await cursor.execute(sql, prepared.parameters)
                             else:
-                                await cursor.execute(prepared.sql)
+                                await cursor.execute(sql)
                         except Exception as exc:
                             stack_error = StackExecutionError(
                                 prepared.operation_index,
