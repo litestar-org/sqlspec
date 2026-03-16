@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
@@ -51,6 +51,20 @@ def _next_or_sentinel(iterator: "Iterator[Any]") -> "Any":
     try:
         return next(iterator)
     except StopIteration:
+        return _EXHAUSTED
+
+
+def _read_chunk_or_sentinel(file_obj: Any, chunk_size: int) -> Any:
+    """Read a chunk from a file-like object or return sentinel if exhausted.
+
+    This helper is used by AsyncThreadedBytesIterator to offload blocking reads.
+    """
+    try:
+        chunk = file_obj.read(chunk_size)
+        if not chunk:
+            return _EXHAUSTED
+        return chunk
+    except EOFError:
         return _EXHAUSTED
 
 
@@ -304,26 +318,18 @@ class AsyncThreadedBytesIterator:
         with contextlib.suppress(Exception):
             await asyncio.to_thread(self._file_obj.close)
 
-    def _raise_stop(self) -> NoReturn:
-        raise StopAsyncIteration
-
     async def __anext__(self) -> bytes:
         if self._closed:
-            self._raise_stop()
+            raise StopAsyncIteration
 
-        try:
-            # We use a simple while loop if we needed to retry, but here one read is enough
-            chunk = await asyncio.to_thread(self._file_obj.read, self._chunk_size)
-            if not chunk:
-                await self.aclose()
-                self._raise_stop()
-            return cast("bytes", chunk)
-        except (EOFError, StopAsyncIteration):
+        # Offload blocking read to a thread pool
+        result = await asyncio.to_thread(_read_chunk_or_sentinel, self._file_obj, self._chunk_size)
+
+        if result is _EXHAUSTED:
             await self.aclose()
-            self._raise_stop()
-        except Exception:
-            await asyncio.shield(self.aclose())
-            raise
+            raise StopAsyncIteration  # noqa: TRY301
+
+        return cast("bytes", result)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
