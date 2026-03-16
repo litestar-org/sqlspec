@@ -143,7 +143,7 @@ class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
         else:
             self._connection = self._config.create_connection()
         self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
-        return self._connection
+        return cast("MysqlConnectorSyncConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -167,7 +167,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
         else:
             self._connection = self._config.create_connection()
         self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
-        return self._connection
+        return cast("MysqlConnectorSyncConnection", self._connection)
 
     def release_connection(self, _conn: MysqlConnectorSyncConnection) -> None:
         if self._connection is None:
@@ -183,7 +183,7 @@ class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
 
     async def __aenter__(self) -> MysqlConnectorAsyncConnection:
         self._connection = await self._config.create_connection()
-        return self._connection
+        return cast("MysqlConnectorAsyncConnection", self._connection)
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -199,7 +199,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
     async def acquire_connection(self) -> MysqlConnectorAsyncConnection:
         self._connection = await self._config.create_connection()
-        return self._connection
+        return cast("MysqlConnectorAsyncConnection", self._connection)
 
     async def release_connection(self, _conn: MysqlConnectorAsyncConnection) -> None:
         if self._connection is None:

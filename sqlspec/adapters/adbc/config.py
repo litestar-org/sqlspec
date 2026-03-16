@@ -134,7 +134,7 @@ class AdbcConnectionContext(SyncPoolConnectionContext):
 
     def __enter__(self) -> "AdbcConnection":
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("AdbcConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -154,7 +154,7 @@ class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
 
     def acquire_connection(self) -> "AdbcConnection":
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("AdbcConnection", self._connection)
 
     def release_connection(self, _conn: "AdbcConnection") -> None:
         if self._connection is None:

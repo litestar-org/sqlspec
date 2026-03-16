@@ -119,7 +119,7 @@ class AsyncPoolSessionFactory:
         self._connection = await pool.acquire()
         return self._connection
 
-    async def release_connection(self, _conn: Any) -> None:
+    async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
         if self._connection is not None and self._config.connection_instance is not None:
             await self._config.connection_instance.release(self._connection)
             self._connection = None

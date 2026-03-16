@@ -142,7 +142,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         if self._config.connection_instance is None:
             self._config.connection_instance = self._config.create_pool()
         self._conn = self._config.connection_instance.acquire()
-        return self._conn
+        return cast("OracleSyncConnection", self._conn)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -165,7 +165,7 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
         if self._config.connection_instance is None:
             self._config.connection_instance = self._config.create_pool()
         self._conn = self._config.connection_instance.acquire()
-        return self._conn
+        return cast("OracleSyncConnection", self._conn)
 
     def release_connection(self, _conn: "OracleSyncConnection") -> None:
         if self._conn is None:

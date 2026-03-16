@@ -6,7 +6,7 @@ other dialects (Postgres, MySQL, Oracle, etc.).
 """
 
 import sqlite3
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -70,7 +70,7 @@ class MockSyncConnectionContext(SyncPoolConnectionContext):
 
     def __enter__(self) -> MockConnection:
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("MockConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -88,7 +88,7 @@ class MockAsyncConnectionContext(AsyncPoolConnectionContext):
 
     async def __aenter__(self) -> MockConnection:
         self._connection = await self._config.create_connection()
-        return self._connection
+        return cast("MockConnection", self._connection)
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -110,7 +110,7 @@ class _MockSyncSessionFactory(SyncPoolSessionFactory):
 
     def acquire_connection(self) -> MockConnection:
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("MockConnection", self._connection)
 
     def release_connection(self, conn: MockConnection) -> None:
         if self._connection is not None:
@@ -125,7 +125,7 @@ class _MockAsyncSessionFactory(AsyncPoolSessionFactory):
 
     async def acquire_connection(self) -> MockConnection:
         self._connection = await self._config.create_connection()
-        return self._connection
+        return cast("MockConnection", self._connection)
 
     async def release_connection(self, conn: MockConnection) -> None:
         if self._connection is not None:

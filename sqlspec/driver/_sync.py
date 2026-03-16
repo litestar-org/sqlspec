@@ -109,7 +109,7 @@ class SyncPoolSessionFactory:
         self._ctx = pool.get_connection()
         return self._ctx.__enter__()
 
-    def release_connection(self, _conn: Any) -> None:
+    def release_connection(self, _conn: Any, **kwargs: Any) -> None:
         if self._ctx is None:
             return
         self._ctx.__exit__(None, None, None)

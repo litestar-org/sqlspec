@@ -169,7 +169,7 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
             self._ctx = self._config.connection_instance.connection()
             return cast("PsycopgSyncConnection", self._ctx.__enter__())
         self._conn = self._config.create_connection()
-        return self._conn
+        return cast("PsycopgSyncConnection", self._conn)
 
     def release_connection(self, _conn: "PsycopgSyncConnection") -> None:
         if self._ctx is not None:

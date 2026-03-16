@@ -1,7 +1,7 @@
 """Aiosqlite database configuration."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
@@ -101,7 +101,7 @@ class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
             self._config.connection_instance = pool
         pool_conn = await pool.acquire()
         self._pool_conn = pool_conn
-        return pool_conn.connection
+        return cast("AiosqliteConnection", pool_conn.connection)
 
     async def release_connection(self, _conn: "AiosqliteConnection") -> None:
         if self._pool_conn is not None and self._config.connection_instance is not None:
@@ -124,7 +124,8 @@ class AiosqliteConnectionContext(AsyncPoolConnectionContext):
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
         self._ctx = pool.get_connection()
-        return await self._ctx.__aenter__()
+        assert self._ctx is not None
+        return cast("AiosqliteConnection", await self._ctx.__aenter__())
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

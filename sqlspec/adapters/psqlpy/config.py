@@ -1,6 +1,6 @@
 """Psqlpy database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from psqlpy import ConnectionPool
@@ -134,7 +134,7 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
             self._config.connection_instance = pool
         ctx = pool.acquire()
         self._ctx = ctx
-        connection = await ctx.__aenter__()
+        connection = cast("PsqlpyConnection", await ctx.__aenter__())
         await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 

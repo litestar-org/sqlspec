@@ -110,7 +110,7 @@ class BigQueryConnectionContext(SyncPoolConnectionContext):
 
     def __enter__(self) -> BigQueryConnection:
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("BigQueryConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -138,7 +138,7 @@ class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
         super().__init__(config)
 
     def acquire_connection(self) -> "BigQueryConnection":
-        return self._config.create_connection()
+        return cast("BigQueryConnection", self._config.create_connection())
 
     def release_connection(self, _conn: "BigQueryConnection") -> None:
         return None

@@ -148,14 +148,12 @@ class _SpannerSessionConnectionHandler(SyncPoolSessionFactory):
     def acquire_connection(self) -> "SpannerConnection":
         return self._connection_ctx.__enter__()
 
-    def release_connection(
-        self,
-        _conn: "SpannerConnection",
-        exc_type: "type[BaseException] | None",
-        exc_val: "BaseException | None",
-        exc_tb: "TracebackType | None",
-    ) -> None:
-        self._connection_ctx.__exit__(exc_type, exc_val, exc_tb)
+    def release_connection(self, _conn: "SpannerConnection", **kwargs: Any) -> None:
+        self._connection_ctx.__exit__(
+            kwargs.get("exc_type"),
+            kwargs.get("exc_val"),
+            kwargs.get("exc_tb"),
+        )
 
 
 class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSessionPool", SpannerSyncDriver]):
