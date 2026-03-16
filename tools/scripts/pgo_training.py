@@ -136,7 +136,7 @@ def _train_hashable_keys() -> None:
 
 def _train_serialization() -> None:
     """Exercise JSON encode/decode paths."""
-    from datetime import date, datetime, timezone
+    from datetime import datetime, timezone
 
     from sqlspec._serialization import convert_date_to_iso, convert_datetime_to_gmt_iso, decode_json, encode_json
 
@@ -144,7 +144,7 @@ def _train_serialization() -> None:
     medium_obj = {f"field_{i}": i * 1.5 for i in range(20)}
     list_obj = [{"id": i, "name": f"item_{i}", "active": i % 2 == 0} for i in range(50)]
     now = datetime.now(tz=timezone.utc)
-    today = date.today()
+    today = datetime.now(tz=timezone.utc).date()
 
     for _ in range(10000):
         s1 = encode_json(small_obj)
@@ -246,6 +246,8 @@ def _train_aiosqlite_async() -> None:
     """Exercise async driver via file-backed aiosqlite."""
     import asyncio
 
+    import anyio
+
     async def _run() -> None:
         from sqlspec import SQLSpec
         from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -270,7 +272,7 @@ def _train_aiosqlite_async() -> None:
                     await session.fetch_one_or_none(select_by, (i % 100,))
             await config.close_pool()
         finally:
-            Path(tmp_name).unlink()
+            await anyio.Path(tmp_name).unlink()
 
     asyncio.run(_run())
 
