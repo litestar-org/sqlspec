@@ -24,6 +24,8 @@ from sqlspec.adapters.mysqlconnector.driver import (
     MysqlConnectorSyncExceptionHandler,
 )
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, SyncDatabaseConfig
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -126,13 +128,13 @@ class MysqlConnectorDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class MysqlConnectorSyncConnectionContext:
+class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for mysql-connector sync connections."""
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: MysqlConnectorSyncConnection | None = None
 
     def __enter__(self) -> MysqlConnectorSyncConnection:
@@ -152,11 +154,11 @@ class MysqlConnectorSyncConnectionContext:
         return None
 
 
-class _MysqlConnectorSyncSessionConnectionHandler:
-    __slots__ = ("_config", "_connection")
+class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: MysqlConnectorSyncConnection | None = None
 
     def acquire_connection(self) -> MysqlConnectorSyncConnection:
@@ -174,14 +176,10 @@ class _MysqlConnectorSyncSessionConnectionHandler:
         self._connection = None
 
 
-class MysqlConnectorAsyncConnectionContext:
+class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for mysql-connector async connections."""
 
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
-        self._config = config
-        self._connection: MysqlConnectorAsyncConnection | None = None
+    __slots__ = ()
 
     async def __aenter__(self) -> MysqlConnectorAsyncConnection:
         self._connection = await self._config.create_connection()
@@ -196,12 +194,8 @@ class MysqlConnectorAsyncConnectionContext:
         return None
 
 
-class _MysqlConnectorAsyncSessionConnectionHandler:
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
-        self._config = config
-        self._connection: MysqlConnectorAsyncConnection | None = None
+class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
+    __slots__ = ()
 
     async def acquire_connection(self) -> MysqlConnectorAsyncConnection:
         self._connection = await self._config.create_connection()

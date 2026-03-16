@@ -13,6 +13,7 @@ from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor, A
 from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -93,11 +94,11 @@ class AsyncmyDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class _AsyncmySessionFactory:
-    __slots__ = ("_config", "_ctx")
+class _AsyncmySessionFactory(AsyncPoolSessionFactory):
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "AsyncmyConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any | None = None
 
     async def acquire_connection(self) -> "AsyncmyConnection":
@@ -117,13 +118,13 @@ class _AsyncmySessionFactory:
             self._ctx = None
 
 
-class AsyncmyConnectionContext:
+class AsyncmyConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Asyncmy connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "AsyncmyConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any = None
 
     async def __aenter__(self) -> AsyncmyConnection:

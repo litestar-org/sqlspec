@@ -28,6 +28,7 @@ from sqlspec.adapters.asyncpg.core import (
 )
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
@@ -234,52 +235,14 @@ class _AsyncpgAlloydbConnector:
         return cast("AsyncpgConnection", await connector.connect(**conn_kwargs))
 
 
-class _AsyncpgSessionFactory:
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "AsyncpgConfig") -> None:
-        self._config = config
-        self._connection: AsyncpgConnection | None = None
-
-    async def acquire_connection(self) -> "AsyncpgConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        self._connection = await pool.acquire()
-        return self._connection
-
-    async def release_connection(self, _conn: "AsyncpgConnection") -> None:
-        if self._connection is not None and self._config.connection_instance is not None:
-            await self._config.connection_instance.release(self._connection)  # type: ignore[arg-type]
-            self._connection = None
+class _AsyncpgSessionFactory(AsyncPoolSessionFactory):
+    __slots__ = ()
 
 
-class AsyncpgConnectionContext:
+class AsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for AsyncPG connections."""
 
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "AsyncpgConfig") -> None:
-        self._config = config
-        self._connection: AsyncpgConnection | None = None
-
-    async def __aenter__(self) -> "AsyncpgConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        self._connection = await pool.acquire()
-        return self._connection
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> bool | None:
-        if self._connection is not None:
-            if self._config.connection_instance:
-                await self._config.connection_instance.release(self._connection)  # type: ignore[arg-type]
-            self._connection = None
-        return None
+    __slots__ = ()
 
 
 @mypyc_attr(native_class=False)

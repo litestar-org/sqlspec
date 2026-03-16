@@ -10,6 +10,7 @@ from sqlspec.adapters.spanner._typing import SpannerConnection
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
 from sqlspec.config import SyncDatabaseConfig
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -72,13 +73,13 @@ class SpannerDriverFeatures(TypedDict):
     events_backend: "NotRequired[str]"
 
 
-class SpannerConnectionContext:
+class SpannerConnectionContext(SyncPoolConnectionContext):
     """Context manager for Spanner connections."""
 
-    __slots__ = ("_config", "_connection", "_session", "_transaction")
+    __slots__ = ("_connection", "_session", "_transaction")
 
     def __init__(self, config: "SpannerSyncConfig", transaction: bool = False) -> None:
-        self._config = config
+        super().__init__(config)
         self._transaction = transaction
         self._connection: SpannerConnection | None = None
         self._session: Any = None
@@ -137,10 +138,11 @@ class SpannerConnectionContext:
         return None
 
 
-class _SpannerSessionConnectionHandler:
+class _SpannerSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ("_connection_ctx",)
 
-    def __init__(self, connection_ctx: "SpannerConnectionContext") -> None:
+    def __init__(self, config: "SpannerSyncConfig", connection_ctx: "SpannerConnectionContext") -> None:
+        super().__init__(config)
         self._connection_ctx = connection_ctx
 
     def acquire_connection(self) -> "SpannerConnection":
@@ -309,7 +311,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             A Spanner driver session context manager.
         """
         connection_ctx = SpannerConnectionContext(self, transaction=transaction)
-        handler = _SpannerSessionConnectionHandler(connection_ctx)
+        handler = _SpannerSessionConnectionHandler(self, connection_ctx)
 
         return SpannerSessionContext(
             acquire_connection=handler.acquire_connection,

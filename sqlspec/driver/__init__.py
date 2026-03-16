@@ -1,6 +1,11 @@
 """Driver protocols and base classes for database adapters."""
 
-from sqlspec.driver._async import AsyncDataDictionaryBase, AsyncDriverAdapterBase
+from sqlspec.driver._async import (
+    AsyncDataDictionaryBase,
+    AsyncDriverAdapterBase,
+    AsyncPoolConnectionContext,
+    AsyncPoolSessionFactory,
+)
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -22,6 +27,8 @@ from sqlspec.driver._sync import (
 __all__ = (
     "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
+    "AsyncPoolConnectionContext",
+    "AsyncPoolSessionFactory",
     "BaseAsyncExceptionHandler",
     "BaseSyncExceptionHandler",
     "CommonDriverAttributesMixin",

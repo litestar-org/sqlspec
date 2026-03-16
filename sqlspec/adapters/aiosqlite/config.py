@@ -16,6 +16,7 @@ from sqlspec.adapters.aiosqlite.pool import (
 )
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 
@@ -86,11 +87,11 @@ class AiosqliteDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class _AiosqliteSessionFactory:
-    __slots__ = ("_config", "_pool_conn")
+class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
+    __slots__ = ("_pool_conn",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._pool_conn: AiosqlitePoolConnection | None = None
 
     async def acquire_connection(self) -> "AiosqliteConnection":
@@ -108,13 +109,13 @@ class _AiosqliteSessionFactory:
             self._pool_conn = None
 
 
-class AiosqliteConnectionContext:
+class AiosqliteConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for AioSQLite connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def __aenter__(self) -> AiosqliteConnection:

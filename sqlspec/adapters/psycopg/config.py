@@ -29,6 +29,8 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -129,14 +131,13 @@ __all__ = (
 )
 
 
-class PsycopgSyncConnectionContext:
+class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Psycopg connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ()
 
     def __init__(self, config: "PsycopgSyncConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
+        super().__init__(config)
 
     def __enter__(self) -> "PsycopgSyncConnection":
         if self._config.connection_instance:
@@ -156,12 +157,11 @@ class PsycopgSyncConnectionContext:
         return None
 
 
-class _PsycopgSyncSessionConnectionHandler:
-    __slots__ = ("_config", "_conn", "_ctx")
+class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "PsycopgSyncConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
+        super().__init__(config)
         self._conn: PsycopgSyncConnection | None = None
 
     def acquire_connection(self) -> "PsycopgSyncConnection":
@@ -405,13 +405,13 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
 
-class PsycopgAsyncConnectionContext:
+class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Psycopg connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any = None
 
     async def __aenter__(self) -> "PsycopgAsyncConnection":
@@ -432,11 +432,11 @@ class PsycopgAsyncConnectionContext:
         return None
 
 
-class _PsycopgAsyncSessionConnectionHandler:
-    __slots__ = ("_config", "_ctx")
+class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any = None
 
     async def acquire_connection(self) -> "PsycopgAsyncConnection":

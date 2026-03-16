@@ -15,6 +15,8 @@ from sqlspec.adapters.mock.core import apply_driver_features, default_statement_
 from sqlspec.adapters.mock.driver import MockAsyncDriver, MockExceptionHandler, MockSyncDriver
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, NoPoolSyncConfig
 from sqlspec.driver import convert_to_dialect
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -57,13 +59,13 @@ class MockDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
 
 
-class MockSyncConnectionContext:
+class MockSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Mock sync connections."""
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "MockSyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: MockConnection | None = None
 
     def __enter__(self) -> MockConnection:
@@ -79,14 +81,10 @@ class MockSyncConnectionContext:
         return None
 
 
-class MockAsyncConnectionContext:
+class MockAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Mock async connections."""
 
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "MockAsyncConfig") -> None:
-        self._config = config
-        self._connection: MockConnection | None = None
+    __slots__ = ()
 
     async def __aenter__(self) -> MockConnection:
         self._connection = await self._config.create_connection()
@@ -101,13 +99,13 @@ class MockAsyncConnectionContext:
         return None
 
 
-class _MockSyncSessionFactory:
+class _MockSyncSessionFactory(SyncPoolSessionFactory):
     """Factory for creating mock sync sessions."""
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "MockSyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: MockConnection | None = None
 
     def acquire_connection(self) -> MockConnection:
@@ -120,14 +118,10 @@ class _MockSyncSessionFactory:
             self._connection = None
 
 
-class _MockAsyncSessionFactory:
+class _MockAsyncSessionFactory(AsyncPoolSessionFactory):
     """Factory for creating mock async sessions."""
 
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "MockAsyncConfig") -> None:
-        self._config = config
-        self._connection: MockConnection | None = None
+    __slots__ = ()
 
     async def acquire_connection(self) -> MockConnection:
         self._connection = await self._config.create_connection()
