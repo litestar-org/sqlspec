@@ -1,7 +1,7 @@
 """SQLite database configuration with thread-local connections."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -11,13 +11,13 @@ from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.logging import get_logger
 
 logger = get_logger("sqlspec.adapters.sqlite")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -72,45 +72,14 @@ class SqliteDriverFeatures(TypedDict):
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
 
 
-class SqliteConnectionContext:
+class SqliteConnectionContext(SyncPoolConnectionContext):
     """Context manager for Sqlite connections."""
 
-    __slots__ = ("_config", "_ctx")
-
-    def __init__(self, config: "SqliteConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
-
-    def __enter__(self) -> SqliteConnection:
-        pool = self._config.provide_pool()
-        self._ctx = pool.get_connection()
-        return cast("SqliteConnection", self._ctx.__enter__())
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> bool | None:
-        if self._ctx:
-            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
-        return None
+    __slots__ = ()
 
 
-class _SqliteSessionConnectionHandler:
-    __slots__ = ("_config", "_ctx")
-
-    def __init__(self, config: "SqliteConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
-
-    def acquire_connection(self) -> "SqliteConnection":
-        pool = self._config.provide_pool()
-        self._ctx = pool.get_connection()
-        return cast("SqliteConnection", self._ctx.__enter__())
-
-    def release_connection(self, _conn: "SqliteConnection") -> None:
-        if self._ctx is None:
-            return
-        self._ctx.__exit__(None, None, None)
-        self._ctx = None
+class _SqliteSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ()
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):

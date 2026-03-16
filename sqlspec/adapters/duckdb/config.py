@@ -15,13 +15,13 @@ from sqlspec.adapters.duckdb.core import (
 from sqlspec.adapters.duckdb.driver import DuckDBDriver, DuckDBExceptionHandler
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -165,45 +165,14 @@ class DuckDBDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class DuckDBConnectionContext:
+class DuckDBConnectionContext(SyncPoolConnectionContext):
     """Context manager for DuckDB connections."""
 
-    __slots__ = ("_config", "_ctx")
-
-    def __init__(self, config: "DuckDBConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
-
-    def __enter__(self) -> DuckDBConnection:
-        pool = self._config.provide_pool()
-        self._ctx = pool.get_connection()
-        return cast("DuckDBConnection", self._ctx.__enter__())
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> bool | None:
-        if self._ctx:
-            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
-        return None
+    __slots__ = ()
 
 
-class _DuckDBSessionConnectionHandler:
-    __slots__ = ("_config", "_ctx")
-
-    def __init__(self, config: "DuckDBConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
-
-    def acquire_connection(self) -> "DuckDBConnection":
-        pool = self._config.provide_pool()
-        self._ctx = pool.get_connection()
-        return cast("DuckDBConnection", self._ctx.__enter__())
-
-    def release_connection(self, _conn: "DuckDBConnection") -> None:
-        if self._ctx is None:
-            return
-        self._ctx.__exit__(None, None, None)
-        self._ctx = None
+class _DuckDBSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ()
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):

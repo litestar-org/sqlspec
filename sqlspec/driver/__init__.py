@@ -12,7 +12,12 @@ from sqlspec.driver._common import (
 )
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._sql_helpers import convert_to_dialect
-from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
+from sqlspec.driver._sync import (
+    SyncDataDictionaryBase,
+    SyncDriverAdapterBase,
+    SyncPoolConnectionContext,
+    SyncPoolSessionFactory,
+)
 
 __all__ = (
     "AsyncDataDictionaryBase",
@@ -27,6 +32,8 @@ __all__ = (
     "StackExecutionObserver",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
+    "SyncPoolConnectionContext",
+    "SyncPoolSessionFactory",
     "convert_to_dialect",
     "describe_stack_statement",
     "hash_stack_operations",
