@@ -116,7 +116,7 @@ jobs:
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             pip install {package} --no-build-isolation &&
-            python -m sqlspec._pgo_training &&
+            python /project/tools/scripts/pgo_training.py &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
@@ -137,7 +137,7 @@ jobs:
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             pip install {package} --no-build-isolation &&
-            python -m sqlspec._pgo_training &&
+            python /project/tools/scripts/pgo_training.py &&
             xcrun llvm-profdata merge -o "$PGO_DIR/merged.profdata" "$PGO_DIR"/*.profraw &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
