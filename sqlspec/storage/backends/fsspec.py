@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
-from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
+from sqlspec.storage.backends._iterators import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec

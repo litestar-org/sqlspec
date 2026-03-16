@@ -2,7 +2,7 @@
 
 import io
 
-from sqlspec.storage.backends.base import AsyncThreadedBytesIterator
+from sqlspec.storage.backends._iterators import AsyncThreadedBytesIterator
 
 
 async def test_async_threaded_bytes_iterator_aclose_closes_file() -> None:

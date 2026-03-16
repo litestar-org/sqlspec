@@ -19,7 +19,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
-from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
+from sqlspec.storage.backends._iterators import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.logging import get_logger, log_with_context

@@ -69,7 +69,11 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/storage/backends/base.py": {
         "classification": "compile_now",
-        "reason": "Mypyc-safe runtime base classes and iterator wrappers.",
+        "reason": "ObjectStoreBase ABC and storage_limiter (iterators split to _iterators.py).",
+    },
+    "sqlspec/storage/backends/_iterators.py": {
+        "classification": "keep_interpreted",
+        "reason": "Async __anext__ + asyncio.to_thread causes mypyc segfault on coroutine suspend/resume across threads.",
     },
     "sqlspec/utils/arrow_helpers.py": {
         "classification": "keep_interpreted",
