@@ -220,6 +220,146 @@ def _train_sqlite_sync() -> None:
         Path(tmp_name).unlink()
 
 
+def _train_duckdb_sync() -> None:
+    """Exercise sync driver via in-memory DuckDB."""
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.duckdb.config import DuckDBConfig
+
+    create_sql = "CREATE TABLE test (id INTEGER, value TEXT);"
+    insert_sql = "INSERT INTO test (id, value) VALUES (?, ?);"
+    select_all = "SELECT * FROM test;"
+    select_by = "SELECT * FROM test WHERE id = ?;"
+
+    spec = SQLSpec()
+    config = DuckDBConfig()
+    with spec.provide_session(config) as session:
+        session.execute(create_sql)
+        data = [(i, f"value_{i}") for i in range(2000)]
+        session.execute_many(insert_sql, data)
+        session.fetch(select_all)
+        for i in range(10000):
+            session.fetch_one_or_none(select_by, (i % 100,))
+    config.close_pool()
+
+
+def _train_aiosqlite_async() -> None:
+    """Exercise async driver via file-backed aiosqlite."""
+    import asyncio
+
+    async def _run() -> None:
+        from sqlspec import SQLSpec
+        from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+
+        create_sql = "CREATE TABLE test (id INTEGER, value TEXT);"
+        insert_sql = "INSERT INTO test (id, value) VALUES (?, ?);"
+        select_all = "SELECT * FROM test;"
+        select_by = "SELECT * FROM test WHERE id = ?;"
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp_name = tmp.name
+
+        try:
+            spec = SQLSpec()
+            config = AiosqliteConfig(database=tmp_name)
+            async with spec.provide_session(config) as session:
+                await session.execute(create_sql)
+                data = [(i, f"value_{i}") for i in range(1000)]
+                await session.execute_many(insert_sql, data)
+                await session.fetch(select_all)
+                for i in range(5000):
+                    await session.fetch_one_or_none(select_by, (i % 100,))
+            await config.close_pool()
+        finally:
+            Path(tmp_name).unlink()
+
+    asyncio.run(_run())
+
+
+def _train_builder_and_where() -> None:
+    """Exercise SQL builder construction, WHERE clauses, and compilation."""
+    from sqlspec.builder import Delete, Insert, Select, Update
+    from sqlspec.builder._merge import Merge
+
+    # SELECT with various WHERE patterns
+    for _ in range(1000):
+        q = Select("id", "name", "email").from_("users").where("id = :id", id=42).where("active = :active", active=True)
+        q.build()
+
+        q = (
+            Select("*")
+            .from_("orders")
+            .where("status = :status", status="pending")
+            .where("total > :total", total=99.99)
+            .order_by("created_at")
+            .limit(10)
+        )
+        q.build()
+
+        q = (
+            Select("u.id", "u.name", "o.total")
+            .from_("users", alias="u")
+            .join("orders", alias="o", on="u.id = o.user_id")
+            .where("u.active = :active", active=True)
+            .order_by("o.total", desc=True)
+            .limit(25)
+            .offset(50)
+        )
+        q.build()
+
+        q = Select("category", "COUNT(*) as cnt").from_("products").group_by("category").having("COUNT(*) > 5")
+        q.build()
+
+    # INSERT builder
+    for _ in range(1000):
+        q = Insert().into("users").columns("name", "email", "active").values("Alice", "alice@test.com", True)
+        q.build()
+
+    # UPDATE with WHERE
+    for _ in range(1000):
+        q = Update().table("users").set(name="Bob", active=False).where("id = :id", id=1)
+        q.build()
+
+    # DELETE with WHERE
+    for _ in range(1000):
+        q = Delete().from_("sessions").where("expired = :expired", expired=True)
+        q.build()
+
+    # MERGE (exercises TypeDispatcher for type inference)
+    for _ in range(500):
+        q = (
+            Merge()
+            .into("target_table")
+            .using("source_table", alias="s")
+            .on("target_table.id = s.id")
+            .when_matched_then_update(name="s.name", updated_at="NOW()")
+            .when_not_matched_then_insert(columns=["id", "name"], values=["s.id", "s.name"])
+        )
+        q.build()
+
+
+def _train_adbc_sqlite() -> None:
+    """Exercise ADBC driver via SQLite backend."""
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.adbc.config import AdbcConfig
+
+    spec = SQLSpec()
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_name = tmp.name
+
+    try:
+        config = AdbcConfig(connection_config={"uri": f"sqlite://{tmp_name}"})
+        with spec.provide_session(config) as session:
+            session.execute("CREATE TABLE test (id INTEGER, value TEXT);")
+            data = [(i, f"value_{i}") for i in range(1000)]
+            session.execute_many("INSERT INTO test (id, value) VALUES (?, ?);", data)
+            session.fetch("SELECT * FROM test;")
+            for i in range(5000):
+                session.fetch_one_or_none("SELECT * FROM test WHERE id = ?;", (i % 100,))
+    finally:
+        Path(tmp_name).unlink()
+
+
 def main() -> None:
     """Run all PGO training workloads."""
     start = time.perf_counter()
@@ -232,7 +372,11 @@ def main() -> None:
         ("hashable_keys", _train_hashable_keys),
         ("serialization", _train_serialization),
         ("param_fingerprinting", _train_parameter_fingerprinting),
+        ("builder_and_where", _train_builder_and_where),
         ("sqlite_sync", _train_sqlite_sync),
+        ("duckdb_sync", _train_duckdb_sync),
+        ("aiosqlite_async", _train_aiosqlite_async),
+        ("adbc_sqlite", _train_adbc_sqlite),
     ]
 
     for name, fn in workloads:
