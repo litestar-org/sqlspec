@@ -313,27 +313,6 @@ class SQLResult(StatementResult):
         """
         return (self.data if self.data is not None else [], self.column_names)
 
-    def get_metadata(self, key: str, default: Any = None) -> Any:
-        """Get metadata value by key.
-
-        Args:
-            key: The metadata key to retrieve.
-            default: Default value if key is not found.
-
-        Returns:
-            The metadata value or default.
-        """
-        return self.metadata.get(key, default)
-
-    def set_metadata(self, key: str, value: Any) -> None:
-        """Set metadata value by key.
-
-        Args:
-            key: The metadata key to set.
-            value: The value to set.
-        """
-        self.metadata[key] = value
-
     def is_success(self) -> bool:
         """Check if the operation was successful.
 
