@@ -1,6 +1,6 @@
 """AsyncMy adapter compiled helpers."""
 
-from collections.abc import Sized
+from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -25,7 +25,7 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
 __all__ = (
     "apply_driver_features",
@@ -126,7 +126,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the AsyncMy driver parameter profile."""
-
+    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="AsyncMy",
         default_style=ParameterStyle.QMARK,
@@ -139,7 +139,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={bool: _bool_to_int, **build_uuid_coercions()},
+        custom_type_coercions=coercions,
         default_dialect="mysql",
     )
 

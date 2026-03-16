@@ -183,7 +183,7 @@ def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
 
 def build_profile() -> "DriverParameterProfile":
     """Create the psqlpy driver parameter profile."""
-
+    coercions: dict[type, Callable[[Any], Any]] = {decimal.Decimal: float, **build_uuid_coercions(native=True)}
     return DriverParameterProfile(
         name="Psqlpy",
         default_style=ParameterStyle.NUMERIC,
@@ -196,7 +196,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={decimal.Decimal: float, **build_uuid_coercions(native=True)},
+        custom_type_coercions=coercions,
         default_dialect="postgres",
     )
 
