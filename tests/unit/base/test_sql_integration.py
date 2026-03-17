@@ -151,34 +151,26 @@ def test_get_sql_files_empty() -> None:
     assert sql_spec.get_sql_files() == []
 
 
-def test_load_sql_files() -> None:
-    """Test loading SQL files from a directory."""
-    sql_spec = SQLSpec()
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
-        tf.write("""
--- name: test_query
-SELECT id, name FROM users WHERE active = true;
-
--- name: count_users
-SELECT COUNT(*) as total FROM users;
+def test_load_sql_files_accepts_file_and_directory_paths(tmp_path: Path) -> None:
+    """Regression test for bug #374: load_sql_files accepts file and directory inputs."""
+    sql_file = tmp_path / "hello.sql"
+    sql_file.write_text("""
+-- name: hello_world
+SELECT 'Hello, World!' as greeting;
 """)
-        tf.flush()
-        temp_path = Path(tf.name)
 
-    try:
-        sql_spec.load_sql_files(temp_path)
+    for path in (sql_file, str(sql_file), tmp_path, str(tmp_path)):
+        sql_spec = SQLSpec()
+
+        sql_spec.load_sql_files(path)
 
         queries = sql_spec.list_sql_queries()
-        assert "test_query" in queries
-        assert "count_users" in queries
+        assert "hello_world" in queries
+        assert sql_spec.get_sql_files() == [str(sql_file)]
 
-        test_sql = sql_spec.get_sql("test_query")
+        test_sql = sql_spec.get_sql("hello_world")
         assert isinstance(test_sql, SQL)
-        assert "SELECT id, name FROM users" in test_sql.sql
-
-    finally:
-        temp_path.unlink()
+        assert "SELECT 'Hello, World!'" in test_sql.sql
 
 
 def test_provided_loader_is_used() -> None:
