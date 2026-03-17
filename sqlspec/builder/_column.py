@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from sqlglot import exp
 
-from sqlspec.builder._vector_expressions import VectorDistance
+from sqlspec.builder._vector_distance import VectorDistance
 
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 

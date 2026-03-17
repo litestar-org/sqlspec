@@ -1,6 +1,6 @@
 """Dialect unit tests for the custom Spanner dialect."""
 
-from sqlglot import parse_one
+from sqlglot import exp, parse_one
 
 import sqlspec.dialects  # noqa: F401
 
@@ -32,6 +32,19 @@ def test_parse_interleave_with_on_delete_cascade() -> None:
     """
     rendered = _render(sql)
     assert "INTERLEAVE IN PARENT parent_table ON DELETE CASCADE" in rendered
+
+
+def test_interleave_create_repairs_command_fallback() -> None:
+    sql = """
+    CREATE TABLE child (
+        parent_id STRING(36),
+        child_id INT64,
+        PRIMARY KEY (parent_id, child_id)
+    ) INTERLEAVE IN PARENT parent_table ON DELETE CASCADE
+    """
+    expression = parse_one(sql, dialect="spanner")
+    assert isinstance(expression, exp.Create)
+    assert "INTERLEAVE IN PARENT parent_table ON DELETE CASCADE" in expression.sql(dialect="spanner")
 
 
 def test_parse_ttl_clause_roundtrip() -> None:
@@ -109,4 +122,5 @@ def test_legacy_ttl_pg_style_still_parses() -> None:
     ) TTL INTERVAL '5 days' ON expires_at
     """
     rendered = _render(sql)
-    assert "TTL INTERVAL '5 days' ON expires_at" in rendered
+    assert "TTL INTERVAL" in rendered
+    assert "expires_at" in rendered

@@ -60,10 +60,12 @@ def test_build_inventory_preserves_known_exclusions() -> None:
 
     assert inventory["preserved_exclusions"] == [
         "sqlspec/adapters/**/data_dictionary.py",
-        "sqlspec/builder/_vector_expressions.py",
         "sqlspec/config.py",
         "sqlspec/data_dictionary/_loader.py",
-        "sqlspec/dialects/**",
+        "sqlspec/dialects/postgres/_paradedb.py",
+        "sqlspec/dialects/postgres/_pgvector.py",
+        "sqlspec/dialects/spanner/_spangres.py",
+        "sqlspec/dialects/spanner/_spanner.py",
         "sqlspec/migrations/commands.py",
         "sqlspec/observability/_formatting.py",
         "sqlspec/utils/arrow_helpers.py",

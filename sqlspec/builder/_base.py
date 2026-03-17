@@ -17,7 +17,7 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
-from sqlspec.builder._vector_expressions import VectorDistance
+from sqlspec.builder._vector_distance import has_vector_distance_ancestor
 from sqlspec.core import (
     SQL,
     ParameterStyle,
@@ -50,7 +50,7 @@ class _ExpressionParameterizer:
                 return node
 
             parent = node.parent
-            if isinstance(parent, exp.Array) and node.find_ancestor(VectorDistance) is not None:
+            if isinstance(parent, exp.Array) and has_vector_distance_ancestor(node):
                 return node
 
             value = node.this
@@ -186,6 +186,7 @@ class QueryBuilder(ABC):
 
         Returns:
             The current SQLGlot expression or None if not set
+
         """
         return self._expression
 
@@ -194,6 +195,7 @@ class QueryBuilder(ABC):
 
         Args:
             expression: SQLGlot expression to set
+
         """
         if not is_expression(expression):
             self._raise_invalid_expression_type(expression)
@@ -204,6 +206,7 @@ class QueryBuilder(ABC):
 
         Returns:
             True if expression is set, False otherwise
+
         """
         return self._expression is not None
 
@@ -213,6 +216,7 @@ class QueryBuilder(ABC):
 
         Returns:
             A new sqlglot expression appropriate for the query type.
+
         """
 
     @property
@@ -222,6 +226,7 @@ class QueryBuilder(ABC):
 
         Returns:
             type[ResultT]: The type of the result.
+
         """
 
     @staticmethod
@@ -234,6 +239,7 @@ class QueryBuilder(ABC):
 
         Raises:
             SQLBuilderError: Always raises this exception.
+
         """
         raise SQLBuilderError(message) from cause
 
@@ -246,6 +252,7 @@ class QueryBuilder(ABC):
 
         Raises:
             TypeError: Always raised for type mismatch
+
         """
         msg = f"Expected Expression, got {type(expression)}"
         raise TypeError(msg)
@@ -260,6 +267,7 @@ class QueryBuilder(ABC):
 
         Raises:
             SQLBuilderError: Always raised for CTE errors
+
         """
         msg = f"CTE '{alias}': {message}"
         raise SQLBuilderError(msg)
@@ -273,6 +281,7 @@ class QueryBuilder(ABC):
 
         Raises:
             SQLBuilderError: Always raised with chained cause
+
         """
         msg = f"Failed to parse CTE query: {cause!s}"
         raise SQLBuilderError(msg) from cause
@@ -286,6 +295,7 @@ class QueryBuilder(ABC):
 
         Returns:
             Expression representing the current builder state with CTEs applied.
+
         """
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
@@ -360,6 +370,7 @@ class QueryBuilder(ABC):
 
         Returns:
             str: The placeholder name for the parameter (e.g., :param_1 or :where_param_1).
+
         """
         self._parameter_counter += 1
 
@@ -377,6 +388,7 @@ class QueryBuilder(ABC):
 
         Returns:
             Parameter placeholder name.
+
         """
         return self._add_parameter(value, context=context)
 
@@ -392,8 +404,8 @@ class QueryBuilder(ABC):
 
         Returns:
             A new expression with literals replaced by parameter placeholders
-        """
 
+        """
         return cast("exp.Expr", expression.transform(_ExpressionParameterizer(self), copy=False))
 
     def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
@@ -409,6 +421,7 @@ class QueryBuilder(ABC):
 
         Returns:
             tuple[Self, str]: The builder instance and the parameter name.
+
         """
         if name:
             if name in self._parameters:
@@ -426,6 +439,7 @@ class QueryBuilder(ABC):
 
         Args:
             parameters: Mapping of parameter names to values.
+
         """
         if not parameters:
             return
@@ -441,6 +455,7 @@ class QueryBuilder(ABC):
 
         Args:
             ctes: Iterable of CTE expressions to register.
+
         """
         for cte in ctes:
             alias = self._resolve_cte_alias(cte)
@@ -469,6 +484,7 @@ class QueryBuilder(ABC):
 
         Returns:
             A unique parameter name that doesn't exist in current parameters
+
         """
         current_index = self._parameter_name_counters.get(base_name, 0)
 
@@ -502,6 +518,7 @@ class QueryBuilder(ABC):
 
         Returns:
             Tuple of placeholder expression and the final parameter name.
+
         """
         param_name = self._generate_unique_parameter_name(base_name)
         _, param_name = self.add_parameter(value, name=param_name)
@@ -516,6 +533,7 @@ class QueryBuilder(ABC):
 
         Returns:
             Mapping of old parameter names to new unique names
+
         """
         param_mapping = {}
         for old_name, value in parameters.items():
@@ -533,8 +551,8 @@ class QueryBuilder(ABC):
 
         Returns:
             Updated expression with new placeholder names
-        """
 
+        """
         return cast("exp.Expr", expression.transform(_PlaceholderReplacer(param_mapping), copy=False))
 
     def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
@@ -545,6 +563,7 @@ class QueryBuilder(ABC):
 
         Returns:
             A unique cache key representing the builder state and configuration
+
         """
         dialect_name: str = self.dialect_name or "default"
 
@@ -597,6 +616,7 @@ class QueryBuilder(ABC):
 
         Returns:
             Self: The current builder instance for method chaining.
+
         """
         if alias in self._with_ctes:
             self._raise_sql_builder_error(f"CTE with alias '{alias}' already exists.")
@@ -623,6 +643,7 @@ class QueryBuilder(ABC):
             # Override dialect at build time
             postgres_sql = query.build(dialect="postgres")
             mysql_sql = query.build(dialect="mysql")
+
         """
         final_expression = self._build_final_expression()
 
@@ -677,6 +698,7 @@ class QueryBuilder(ABC):
         Warning:
             SQL with show_parameters=True is for debugging ONLY.
             Never execute SQL with interpolated parameters directly - use parameterized queries.
+
         """
         safe_query = self.build(dialect=dialect)
 
@@ -709,6 +731,7 @@ class QueryBuilder(ABC):
 
         Returns:
             The optimized expression
+
         """
         if not self.enable_optimization:
             return expression
@@ -751,6 +774,7 @@ class QueryBuilder(ABC):
 
         Returns:
             SQL: A SQL statement object.
+
         """
         cache_config = get_cache_config()
         if not cache_config.compiled_cache_enabled:
@@ -776,6 +800,7 @@ class QueryBuilder(ABC):
 
         Returns:
             SQL: A SQL statement object.
+
         """
         dialect_override = config.dialect if config else None
         safe_query = self.build(dialect=dialect_override)
@@ -818,6 +843,7 @@ class QueryBuilder(ABC):
 
         Returns:
             Tuple of (kwargs, parameters) for SQL statement construction
+
         """
         if isinstance(raw_parameters, dict):
             return raw_parameters, None
@@ -835,6 +861,7 @@ class QueryBuilder(ABC):
 
         Returns:
             str: The SQL string for this query.
+
         """
         return self.build().sql
 
@@ -858,6 +885,7 @@ class QueryBuilder(ABC):
 
         Args:
             sql_obj: Object with parameters attribute containing parameter mappings
+
         """
         if not has_expression_and_parameters(sql_obj):
             return
@@ -884,7 +912,6 @@ class QueryBuilder(ABC):
 
     def _unquote_identifiers_for_oracle(self, expression: exp.Expr) -> exp.Expr:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
-
         return cast("exp.Expr", expression.copy().transform(_unquote_identifier, copy=False))
 
     def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
@@ -946,8 +973,8 @@ class QueryBuilder(ABC):
 
         Returns:
             BuiltQuery containing SQL and parameters.
-        """
 
+        """
         expr: exp.Expr | None = None
 
         if cache_key is not None:

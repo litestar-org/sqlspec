@@ -777,6 +777,11 @@ class WhereClauseMixin:
         operator: str | None,
         kwargs: dict[str, Any],
     ) -> exp.Expr:
+        def _normalize_condition_expression(expression: exp.Expr) -> exp.Expr:
+            if isinstance(expression, exp.Alias) and isinstance(expression.this, exp.Expr):
+                return expression.this
+            return expression
+
         if values or kwargs:
             if not isinstance(condition, str):
                 msg = "When values are provided, condition must be a string"
@@ -817,7 +822,7 @@ class WhereClauseMixin:
         if isinstance(condition, str):
             return parse_condition_expression(condition)
         if isinstance(condition, exp.Expr):
-            return condition
+            return _normalize_condition_expression(condition)
         if isinstance(condition, tuple):
             return self._process_tuple_condition(condition)
         if has_parameter_builder(condition):
@@ -826,17 +831,17 @@ class WhereClauseMixin:
             if expression_attr is None:
                 msg = "Column expression is missing underlying sqlglot expression."
                 raise SQLBuilderError(msg)
-            return expression_attr
+            return _normalize_condition_expression(expression_attr)
         if has_sqlglot_expression(condition):
             raw_expr = condition.sqlglot_expression
             if isinstance(raw_expr, exp.Expr):
-                return builder._parameterize_expression(raw_expr)
+                return builder._parameterize_expression(_normalize_condition_expression(raw_expr))
             return parse_condition_expression(str(condition))
         if has_expression_and_sql(condition):
             expression_attr = condition.expression
             if isinstance(expression_attr, exp.Expr):
                 self._merge_sql_object_parameters(condition)
-                return expression_attr
+                return _normalize_condition_expression(expression_attr)
             sql_text = condition.sql
             self._merge_sql_object_parameters(condition)
             return parse_condition_expression(sql_text)

@@ -12,6 +12,7 @@ Supported syntax by dialect:
 """
 
 from sqlglot import exp
+from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.dialects.duckdb import DuckDB
 from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
@@ -26,6 +27,12 @@ def _oracle_version_sql(self: "Oracle.Generator", expression: exp.Version) -> st
     expr = self.sql(expression, "expression")
     this = expression.name or "TIMESTAMP"
     return f"AS OF {this} {expr}"
+
+
+def _bigquery_version_sql(self: "BigQuery.Generator", expression: exp.Version) -> str:
+    """BigQuery: FOR SYSTEM_TIME AS OF timestamp."""
+    expr = self.sql(expression, "expression")
+    return f"FOR SYSTEM_TIME AS OF {expr}"
 
 
 def _snowflake_version_sql(self: "Snowflake.Generator", expression: exp.Version) -> str:
@@ -119,11 +126,11 @@ def register_version_generators() -> None:
 
     Registers custom SQL generators for temporal (time-travel) queries:
     - Default (no dialect): AS OF SYSTEM TIME (CockroachDB style)
+    - BigQuery: FOR SYSTEM_TIME AS OF
     - Oracle: AS OF TIMESTAMP / AS OF SCN
     - Snowflake: AT (TIMESTAMP => ...) / BEFORE (...)
     - DuckDB: AT (TIMESTAMP => ...)
     - Postgres/CockroachDB: AS OF SYSTEM TIME
-    - BigQuery: Uses built-in FOR SYSTEM_TIME AS OF
     """
     global _VERSION_GENERATORS_REGISTERED
     if _VERSION_GENERATORS_REGISTERED:
@@ -131,6 +138,7 @@ def register_version_generators() -> None:
 
     Generator.TRANSFORMS[exp.Version] = _default_version_sql
 
+    BigQuery.Generator.TRANSFORMS[exp.Version] = _bigquery_version_sql
     Oracle.Generator.TRANSFORMS[exp.Version] = _oracle_version_sql
     Snowflake.Generator.TRANSFORMS[exp.Version] = _snowflake_version_sql
     DuckDB.Generator.TRANSFORMS[exp.Version] = _duckdb_version_sql

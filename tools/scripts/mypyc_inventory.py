@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import tomllib
+    import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
@@ -159,9 +159,11 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             for pattern in exclude_patterns
             if pattern
             in {
-                "sqlspec/dialects/**",
+                "sqlspec/dialects/postgres/_paradedb.py",
+                "sqlspec/dialects/postgres/_pgvector.py",
+                "sqlspec/dialects/spanner/_spangres.py",
+                "sqlspec/dialects/spanner/_spanner.py",
                 "sqlspec/utils/arrow_helpers.py",
-                "sqlspec/builder/_vector_expressions.py",
                 "sqlspec/data_dictionary/_loader.py",
                 "sqlspec/adapters/**/data_dictionary.py",
                 "sqlspec/observability/_formatting.py",

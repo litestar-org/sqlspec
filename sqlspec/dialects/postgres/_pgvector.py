@@ -9,44 +9,64 @@ Adds support for pgvector distance operators:
 - <%> : Jaccard distance (binary vectors)
 """
 
-from __future__ import annotations
-
+from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.dialects.postgres import Postgres
 
-from sqlspec.dialects.postgres._parsers import _PGVECTOR_DISTANCE_TOKEN, PGVectorParser, VectorDistance
+from sqlspec.builder._vector_distance import (
+    is_vector_distance_expression,
+    render_vector_distance_postgres,
+    vector_distance_metric,
+)
+from sqlspec.dialects.postgres._operators import (
+    PGVECTOR_OPERATOR_TOKENS,
+    is_postgres_extension_operator,
+    postgres_extension_operator,
+    register_postgres_extension_operators,
+)
 
 __all__ = ("PGVector",)
+
+register_postgres_extension_operators()
+
+_BASE_OPERATOR_TRANSFORM = Postgres.Generator.TRANSFORMS[exp.Operator]
+
+
+def _postgres_extension_operator_sql(generator: Postgres.Generator, expression: exp.Operator) -> str:
+    if is_vector_distance_expression(expression):
+        return render_vector_distance_postgres(
+            generator.sql(expression, "this"),
+            generator.sql(expression, "expression"),
+            vector_distance_metric(expression),
+        )
+
+    if is_postgres_extension_operator(expression):
+        return (
+            f"{generator.sql(expression, 'this')} "
+            f"{postgres_extension_operator(expression)} "
+            f"{generator.sql(expression, 'expression')}"
+        )
+
+    return _BASE_OPERATOR_TRANSFORM(generator, expression)
 
 
 class PGVectorTokenizer(Postgres.Tokenizer):
     """Tokenizer with pgvector distance operators."""
 
-    KEYWORDS = {
-        **Postgres.Tokenizer.KEYWORDS,
-        "<#>": _PGVECTOR_DISTANCE_TOKEN,
-        "<=>": _PGVECTOR_DISTANCE_TOKEN,
-        "<+>": _PGVECTOR_DISTANCE_TOKEN,
-        "<~>": _PGVECTOR_DISTANCE_TOKEN,
-        "<%>": _PGVECTOR_DISTANCE_TOKEN,
-    }
+    KEYWORDS = {**Postgres.Tokenizer.KEYWORDS, **PGVECTOR_OPERATOR_TOKENS}
 
 
 class PGVectorGenerator(Postgres.Generator):
-    """Generator that renders pgvector distance operators."""
+    """Generator that renders pgvector and SQLSpec vector-distance operators."""
 
-    def vectordistance_sql(self, expression: VectorDistance) -> str:
-        op = expression.args.get("operator", "<->")
-        left = self.sql(expression, "this")
-        right = self.sql(expression, "expression")
-        return f"{left} {op} {right}"
+
+PGVectorGenerator.TRANSFORMS[exp.Operator] = _postgres_extension_operator_sql
 
 
 class PGVector(Postgres):
     """PostgreSQL dialect with pgvector extension support."""
 
     Tokenizer = PGVectorTokenizer
-    Parser = PGVectorParser
     Generator = PGVectorGenerator
 
 

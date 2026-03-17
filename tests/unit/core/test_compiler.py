@@ -446,7 +446,6 @@ def test_single_pass_processing(
 
     with patch("sqlglot.parse_one") as mock_parse:
         real_expression = exp.Select()
-        real_expression.sql = Mock(return_value="SELECT * FROM users WHERE id = ?")
         mock_parse.return_value = real_expression
 
         result = processor.compile(sample_sql_queries["select"], [123])

@@ -18,46 +18,30 @@ Also inherits pgvector distance operators from PGVector:
 - <%>  : Jaccard distance (binary vectors)
 """
 
-from __future__ import annotations
-
 from sqlglot.dialects.dialect import Dialect
 
-from sqlspec.dialects.postgres._parsers import _PARADEDB_SEARCH_TOKEN, ParadeDBParser, SearchOperator
+from sqlspec.dialects.postgres._operators import PARADEDB_OPERATOR_TOKENS, register_postgres_extension_operators
 from sqlspec.dialects.postgres._pgvector import PGVector, PGVectorGenerator, PGVectorTokenizer
 
 __all__ = ("ParadeDB",)
+
+register_postgres_extension_operators()
 
 
 class ParadeDBTokenizer(PGVectorTokenizer):
     """Tokenizer with ParadeDB search operators and pgvector distance operators."""
 
-    KEYWORDS = {
-        **PGVectorTokenizer.KEYWORDS,
-        "@@@": _PARADEDB_SEARCH_TOKEN,
-        "&&&": _PARADEDB_SEARCH_TOKEN,
-        "|||": _PARADEDB_SEARCH_TOKEN,
-        "===": _PARADEDB_SEARCH_TOKEN,
-        "###": _PARADEDB_SEARCH_TOKEN,
-        "##": _PARADEDB_SEARCH_TOKEN,
-        "##>": _PARADEDB_SEARCH_TOKEN,
-    }
+    KEYWORDS = {**PGVectorTokenizer.KEYWORDS, **PARADEDB_OPERATOR_TOKENS}
 
 
 class ParadeDBGenerator(PGVectorGenerator):
     """Generator that renders ParadeDB search operators and pgvector distance operators."""
-
-    def searchoperator_sql(self, expression: SearchOperator) -> str:
-        op = expression.args.get("operator", "@@@")
-        left = self.sql(expression, "this")
-        right = self.sql(expression, "expression")
-        return f"{left} {op} {right}"
 
 
 class ParadeDB(PGVector):
     """ParadeDB dialect with pg_search and pgvector extension support."""
 
     Tokenizer = ParadeDBTokenizer
-    Parser = ParadeDBParser
     Generator = ParadeDBGenerator
 
 

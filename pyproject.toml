@@ -192,11 +192,10 @@ exclude = [
   "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
   "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
-  "sqlspec/dialects/postgres/_pgvector.py",   # Generator uses _Generator metaclass, Dialect uses _Dialect metaclass
-  "sqlspec/dialects/postgres/_paradedb.py",   # Generator uses _Generator metaclass, Dialect uses _Dialect metaclass
-  "sqlspec/dialects/spanner/_spanner.py",     # Generator uses _Generator metaclass, Dialect uses _Dialect metaclass
-  "sqlspec/dialects/spanner/_spangres.py",    # Generator uses _Generator metaclass, Dialect uses _Dialect metaclass
-  "sqlspec/builder/_vector_expressions.py",   # Inherits from sqlglot.exp.Expression which has a metaclass
+  "sqlspec/dialects/postgres/_pgvector.py",   # Dialect shell patches compiled sqlglot parser/generator registries
+  "sqlspec/dialects/postgres/_paradedb.py",   # Dialect shell patches compiled sqlglot parser/generator registries
+  "sqlspec/dialects/spanner/_spanner.py",     # Dialect shell patches compiled sqlglot parser hooks and post-processes DDL
+  "sqlspec/dialects/spanner/_spangres.py",    # Dialect shell patches compiled sqlglot parser hooks
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
@@ -228,8 +227,6 @@ include = [
   "sqlspec/utils/singleton.py",            # Lightweight singleton helpers
   "sqlspec/utils/schema.py",               # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                # UUID utilities
-  "sqlspec/dialects/postgres/_parsers.py", # Parser+Expression classes (no __slots__ in Parser base)
-  "sqlspec/dialects/spanner/_parsers.py",  # Parser classes (no __slots__ in Parser base)
 ]
 mypy-args = [
   "--ignore-missing-imports",
