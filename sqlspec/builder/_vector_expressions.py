@@ -4,7 +4,6 @@ Provides dialect-specific SQL generation for vector similarity search
 across PostgreSQL (pgvector), MySQL 9+, Oracle 23ai+, BigQuery, and Spanner.
 """
 
-from contextlib import suppress
 from typing import Any
 
 from sqlglot import exp
@@ -15,10 +14,14 @@ from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.generator import Generator
 
+from sqlspec.dialects.postgres.paradedb import ParadeDB
+from sqlspec.dialects.postgres.pgvector import PGVector
+from sqlspec.dialects.spanner import Spangres, Spanner
+
 __all__ = ("VectorDistance",)
 
 
-class VectorDistance(exp.Expression):
+class VectorDistance(exp.Expr):
     """Vector distance expression with dialect-specific generation.
 
     Generates database-specific SQL for vector distance calculations:
@@ -49,15 +52,15 @@ class VectorDistance(exp.Expression):
         super().__init__(**args)
 
     @property
-    def left(self) -> "exp.Expression":
+    def left(self) -> "exp.Expr":
         """Get the left operand (column)."""
-        result: exp.Expression = self.this
+        result: exp.Expr = self.this
         return result
 
     @property
-    def right(self) -> "exp.Expression":
+    def right(self) -> "exp.Expr":
         """Get the right operand (vector value)."""
-        result: exp.Expression = self.expression
+        result: exp.Expr = self.expression
         return result
 
     @property
@@ -243,14 +246,6 @@ def _vector_distance_sql_duckdb(generator: "Generator", expression: "VectorDista
 
 def _register_with_sqlglot() -> None:
     """Register VectorDistance with SQLGlot's generator dispatch system."""
-    spanner_dialect: type | None = None
-    spangres_dialect: type | None = None
-    with suppress(ImportError):
-        from sqlspec.dialects.spanner import Spangres, Spanner
-
-        spanner_dialect = Spanner
-        spangres_dialect = Spangres
-
     Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_base
 
     Postgres.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres
@@ -258,10 +253,10 @@ def _register_with_sqlglot() -> None:
     Oracle.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_oracle
     BigQuery.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_bigquery
     DuckDB.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_duckdb
-    if spanner_dialect is not None:
-        spanner_dialect.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_spanner  # type: ignore[attr-defined]
-    if spangres_dialect is not None:
-        spangres_dialect.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres  # type: ignore[attr-defined]
+    Spanner.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_spanner
+    Spangres.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres
+    PGVector.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres
+    ParadeDB.Generator.TRANSFORMS[VectorDistance] = _vector_distance_sql_postgres
 
 
 _register_with_sqlglot()

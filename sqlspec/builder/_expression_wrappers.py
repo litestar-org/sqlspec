@@ -10,7 +10,7 @@ __all__ = ("AggregateExpression", "ConversionExpression", "FunctionExpression", 
 class ExpressionWrapper:
     """Base wrapper for SQLGlot expressions."""
 
-    def __init__(self, expression: exp.Expression) -> None:
+    def __init__(self, expression: exp.Expr) -> None:
         self._expression = expression
 
     def as_(self, alias: str) -> exp.Alias:
@@ -18,7 +18,7 @@ class ExpressionWrapper:
         return cast("exp.Alias", exp.alias_(self._expression, alias))
 
     @property
-    def expression(self) -> exp.Expression:
+    def expression(self) -> exp.Expr:
         """Get the underlying SQLGlot expression."""
         return self._expression
 

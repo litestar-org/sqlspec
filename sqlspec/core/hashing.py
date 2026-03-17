@@ -26,7 +26,7 @@ __all__ = (
 )
 
 
-def hash_expression(expr: "exp.Expression | None", _seen: "set[int] | None" = None) -> int:
+def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) -> int:
     """Generate hash from AST structure.
 
     Args:
@@ -50,8 +50,11 @@ def hash_expression(expr: "exp.Expression | None", _seen: "set[int] | None" = No
 
     components: list[Any] = [type(expr).__name__]
 
-    for key, value in sorted(expr.args.items()):
-        components.extend((key, _hash_value(value, _seen)))
+    if isinstance(expr, exp.Expression):
+        for key, value in sorted(expr.args.items()):
+            components.extend((key, _hash_value(value, _seen)))
+    else:
+        components.append(hash(expr.sql()))
 
     return hash(tuple(components))
 
@@ -66,7 +69,7 @@ def _hash_value(value: Any, _seen: "set[int]") -> int:
     Returns:
         Hash of the value
     """
-    if isinstance(value, exp.Expression):
+    if isinstance(value, exp.Expr):
         return hash_expression(value, _seen)
     if isinstance(value, list):
         return hash(tuple(_hash_value(v, _seen) for v in value))
@@ -196,7 +199,9 @@ def hash_sql_statement(statement: "SQL") -> str:
     return f"sql:{hash(tuple(state_components))}"
 
 
-def hash_expression_node(node: exp.Expression, include_children: bool = True, dialect: str | None = None) -> str:
+def hash_expression_node(
+    node: "exp.Expr", include_children: bool = True, dialect: str | None = None
+) -> str:
     """Generate cache key for an expression node.
 
     Args:
@@ -211,9 +216,10 @@ def hash_expression_node(node: exp.Expression, include_children: bool = True, di
         node_hash = hash_expression(node)
     else:
         components: list[Any] = [type(node).__name__]
-        for key, value in sorted(node.args.items()):
-            if not isinstance(value, (list, exp.Expression)):
-                components.extend((key, hash(value)))
+        if isinstance(node, exp.Expression):
+            for key, value in sorted(node.args.items()):
+                if not isinstance(value, (list, exp.Expr)):
+                    components.extend((key, hash(value)))
         node_hash = hash(tuple(components))
 
     dialect_part = f":{dialect}" if dialect else ""
@@ -221,7 +227,7 @@ def hash_expression_node(node: exp.Expression, include_children: bool = True, di
 
 
 def hash_optimized_expression(
-    expr: exp.Expression,
+    expr: "exp.Expr",
     dialect: str,
     schema: "dict[str, Any] | None" = None,
     optimizer_settings: "dict[str, Any] | None" = None,

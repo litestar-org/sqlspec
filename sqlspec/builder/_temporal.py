@@ -64,7 +64,7 @@ def _default_version_sql(self: "Generator", expression: exp.Version) -> str:
 
 
 def create_temporal_table(
-    table: "str | exp.Table | exp.Expression", as_of: "exp.Expression | str", kind: "str | None" = None
+    table: "str | exp.Table | exp.Expr", as_of: "exp.Expr | str", kind: "str | None" = None
 ) -> exp.Table:
     """Create a table expression with temporal (time-travel) version clause.
 

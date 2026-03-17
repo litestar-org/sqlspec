@@ -117,7 +117,7 @@ def try_bulk_insert(
     connection: "BigQueryConnection",
     sql: str,
     parameters: "list[dict[str, Any]]",
-    expression: "exp.Expression | None" = None,
+    expression: "exp.Expr | None" = None,
     *,
     allow_parse: bool = True,
 ) -> "int | None":
@@ -162,7 +162,7 @@ def try_bulk_insert(
 def build_inlined_script(
     sql: str,
     parameters: "list[dict[str, Any]]",
-    expression: "exp.Expression | None" = None,
+    expression: "exp.Expr | None" = None,
     *,
     allow_parse: bool = True,
     literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
@@ -191,7 +191,7 @@ def build_inlined_script(
 
     script_statements: list[str] = []
     for param_set in parameters:
-        expression_copy = parsed_expression.copy()
+        expression_copy: exp.Expr = parsed_expression.copy()  # type: ignore[assignment]
         script_statements.append(_inline_bigquery_literals(expression_copy, param_set, literal_inliner))
     return ";\n".join(script_statements)
 
@@ -325,7 +325,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
 
 
 def _inline_bigquery_literals(
-    expression: "exp.Expression", parameters: Any, inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]"
+    expression: "exp.Expr", parameters: Any, inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]"
 ) -> str:
     """Inline literal values into a parsed SQLGlot expression."""
     if not parameters:
@@ -471,7 +471,7 @@ def build_load_job_telemetry(job: QueryJob, table: str, *, format_label: str) ->
     return telemetry
 
 
-def is_simple_insert(sql: str, expression: "exp.Expression | None" = None, *, allow_parse: bool = True) -> bool:
+def is_simple_insert(sql: str, expression: "exp.Expr | None" = None, *, allow_parse: bool = True) -> bool:
     """Check if SQL is a simple INSERT VALUES statement.
 
     Args:
@@ -491,7 +491,7 @@ def is_simple_insert(sql: str, expression: "exp.Expression | None" = None, *, al
 
 
 def extract_insert_table(
-    sql: str, expression: "exp.Expression | None" = None, *, allow_parse: bool = True
+    sql: str, expression: "exp.Expr | None" = None, *, allow_parse: bool = True
 ) -> str | None:
     """Extract table name from INSERT statement using sqlglot.
 

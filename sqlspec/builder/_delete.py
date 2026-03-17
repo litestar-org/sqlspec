@@ -29,7 +29,7 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
     """
 
     __slots__ = ()
-    _expression: exp.Expression | None
+    _expression: exp.Expr | None
 
     def __init__(self, table: str | None = None, **kwargs: Any) -> None:
         """Initialize DELETE with optional table.

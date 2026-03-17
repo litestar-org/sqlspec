@@ -112,7 +112,7 @@ def _select_dominant_style(
     return cast("ParameterStyle", best_style)
 
 
-def _extract_pagination_placeholders_from_expression(expression: "exp.Expression") -> "set[str]":
+def _extract_pagination_placeholders_from_expression(expression: "exp.Expr") -> "set[str]":
     """Extract named placeholder names from LIMIT and OFFSET clauses of an expression.
 
     Args:
@@ -2042,7 +2042,7 @@ class CommonDriverAttributesMixin:
             raise ImproperConfigurationError(msg)
 
         expr = original_sql.expression
-        cte: exp.Expression | None = None
+        cte: exp.Expr | None = None
         if isinstance(expr, exp.Expression):  # pyright: ignore
             cte = expr.args.get("with_")
             if cte is not None:

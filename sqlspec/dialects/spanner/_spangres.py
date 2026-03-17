@@ -16,15 +16,15 @@ _TTL_MIN_COMPONENTS = 2
 class SpangresParser(Postgres.Parser):
     """Parse Spanner row deletion policies."""
 
-    def _parse_property(self) -> exp.Expression:
+    def _parse_property(self) -> exp.Expr:
         if self._match_text_seq("ROW", "DELETION", "POLICY"):
             self._match(TokenType.L_PAREN)
             self._match_text_seq("OLDER_THAN")
             self._match(TokenType.L_PAREN)
-            column = cast("exp.Expression", self._parse_id_var())
+            column = cast("exp.Expr", self._parse_id_var())
             self._match(TokenType.COMMA)
             self._match_text_seq("INTERVAL")
-            interval = cast("exp.Expression", self._parse_expression())
+            interval = cast("exp.Expr", self._parse_expression())
             self._match(TokenType.R_PAREN)
             self._match(TokenType.R_PAREN)
 
@@ -32,7 +32,7 @@ class SpangresParser(Postgres.Parser):
                 this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])
             )
 
-        return cast("exp.Expression", super()._parse_property())
+        return cast("exp.Expr", super()._parse_property())
 
 
 class SpangresGenerator(Postgres.Generator):

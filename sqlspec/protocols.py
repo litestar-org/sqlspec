@@ -699,7 +699,7 @@ class HasSQLGlotExpressionProtocol(Protocol):
     """Protocol for objects with a sqlglot_expression property."""
 
     @property
-    def sqlglot_expression(self) -> "exp.Expression | None":
+    def sqlglot_expression(self) -> "exp.Expr | None":
         """Return the SQLGlot expression for this object."""
         ...
 
@@ -717,11 +717,11 @@ class HasParameterBuilderProtocol(Protocol):
         """Add a parameter to the builder."""
         ...
 
-    def get_expression(self) -> "exp.Expression | None":
+    def get_expression(self) -> "exp.Expr | None":
         """Return the underlying SQLGlot expression."""
         ...
 
-    def set_expression(self, expression: "exp.Expression") -> None:
+    def set_expression(self, expression: "exp.Expr") -> None:
         """Replace the underlying SQLGlot expression."""
         ...
 
@@ -734,14 +734,14 @@ class HasParameterBuilderProtocol(Protocol):
 class HasExpressionProtocol(Protocol):
     """Protocol for objects with an _expression attribute."""
 
-    _expression: "exp.Expression | None"
+    _expression: "exp.Expr | None"
 
 
 @runtime_checkable
 class SQLBuilderProtocol(Protocol):
     """Protocol for SQL query builders."""
 
-    _expression: "exp.Expression | None"
+    _expression: "exp.Expr | None"
     _parameters: dict[str, Any]
     _parameter_counter: int
     _parameter_name_counters: dict[str, int]
@@ -755,7 +755,7 @@ class SQLBuilderProtocol(Protocol):
         """Public access to query parameters."""
         ...
 
-    def get_expression(self) -> "exp.Expression | None":
+    def get_expression(self) -> "exp.Expr | None":
         """Return the current SQLGlot expression."""
         ...
 
@@ -775,11 +775,11 @@ class SQLBuilderProtocol(Protocol):
         """Create placeholder expression with bound parameter (public)."""
         ...
 
-    def _parameterize_expression(self, expression: "exp.Expression") -> "exp.Expression":
+    def _parameterize_expression(self, expression: "exp.Expr") -> "exp.Expr":
         """Replace literal values in an expression with bound parameters."""
         ...
 
-    def build(self) -> "exp.Expression | Any":
+    def build(self) -> "exp.Expr | Any":
         """Build and return the final expression."""
         ...
 
@@ -787,7 +787,7 @@ class SQLBuilderProtocol(Protocol):
         """Merge parameters from SQL objects into the builder."""
         ...
 
-    def _build_final_expression(self, *, copy: bool = False) -> "exp.Expression":
+    def _build_final_expression(self, *, copy: bool = False) -> "exp.Expr":
         """Return the expression with attached CTEs."""
         ...
 
@@ -795,7 +795,7 @@ class SQLBuilderProtocol(Protocol):
         """Create a new builder with matching configuration."""
         ...
 
-    def set_expression(self, expression: "exp.Expression") -> None:
+    def set_expression(self, expression: "exp.Expr") -> None:
         """Replace the underlying SQLGlot expression."""
         ...
 
@@ -805,11 +805,11 @@ class SQLBuilderProtocol(Protocol):
 
     def build_static_expression(
         self,
-        expression: "exp.Expression | None" = None,
+        expression: "exp.Expr | None" = None,
         parameters: dict[str, Any] | None = None,
         *,
         cache_key: str | None = None,
-        expression_factory: "Callable[[], exp.Expression] | None" = None,
+        expression_factory: "Callable[[], exp.Expr] | None" = None,
         copy: bool = True,
         optimize_expression: bool | None = None,
         dialect: "DialectType | None" = None,

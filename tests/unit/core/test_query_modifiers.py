@@ -460,7 +460,7 @@ class TestCTEUtilities:
         main_select = main_select.with_("active_users", as_=cte_select)
 
         # Apply a modification that would normally disrupt CTE
-        def add_where(expr: exp.Expression) -> exp.Expression:
+        def add_where(expr: exp.Expr) -> exp.Expr:
             return apply_where(expr, exp.EQ(this=exp.column("id"), expression=exp.Literal.number(1)))
 
         result = safe_modify_with_cte(main_select, add_where)
@@ -476,7 +476,7 @@ class TestCTEUtilities:
         """Test modification works normally without CTE."""
         select_expr = exp.select("*").from_("users")
 
-        def add_limit(expr: exp.Expression) -> exp.Expression:
+        def add_limit(expr: exp.Expr) -> exp.Expr:
             return apply_limit(expr, 10)
 
         result = safe_modify_with_cte(select_expr, add_limit)
@@ -489,7 +489,7 @@ class TestCTEUtilities:
         """Test that non-SELECT expressions pass through unchanged."""
         update_expr = exp.update("users", {"name": exp.Literal.string("test")})
 
-        def add_where(expr: exp.Expression) -> exp.Expression:
+        def add_where(expr: exp.Expr) -> exp.Expr:
             return apply_where(expr, exp.EQ(this=exp.column("id"), expression=exp.Literal.number(1)))
 
         result = safe_modify_with_cte(update_expr, add_where)
@@ -546,7 +546,7 @@ class TestIntegration:
         main_select = exp.select("*").from_("top_sales")
         main_select = main_select.with_("top_sales", as_=cte_select)
 
-        def select_columns(expr: exp.Expression) -> exp.Expression:
+        def select_columns(expr: exp.Expr) -> exp.Expr:
             return apply_select_only(expr, ("id", "name"))
 
         result = safe_modify_with_cte(main_select, select_columns)
@@ -791,7 +791,7 @@ class TestSetOperationSupport:
 
         cte_union = sqlglot.parse_one("WITH cte AS (SELECT 1 AS id) SELECT id FROM cte UNION ALL SELECT id FROM b")
 
-        def add_limit(expr: exp.Expression) -> exp.Expression:
+        def add_limit(expr: exp.Expr) -> exp.Expr:
             return apply_limit(expr, 10)
 
         result = safe_modify_with_cte(cte_union, add_limit)
@@ -807,7 +807,7 @@ class TestSetOperationSupport:
 
         cte_except = sqlglot.parse_one("WITH cte AS (SELECT 1 AS id) SELECT id FROM cte EXCEPT SELECT id FROM b")
 
-        def add_offset(expr: exp.Expression) -> exp.Expression:
+        def add_offset(expr: exp.Expr) -> exp.Expr:
             return apply_offset(expr, 5)
 
         result = safe_modify_with_cte(cte_except, add_offset)

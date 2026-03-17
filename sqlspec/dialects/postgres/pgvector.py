@@ -49,7 +49,7 @@ class PGVectorParser(Postgres.Parser):
 
     FACTOR = {**Postgres.Parser.FACTOR, _PGVECTOR_DISTANCE_TOKEN: VectorDistance}
 
-    def _parse_factor(self) -> exp.Expression | None:
+    def _parse_factor(self) -> exp.Expr | None:
         parse_method = self._parse_exponent if self.EXPONENT else self._parse_unary
         this = self._parse_at_time_zone(parse_method())
 
@@ -65,10 +65,10 @@ class PGVectorParser(Postgres.Parser):
 
             if "operator" in klass.arg_types:
                 this = self.expression(
-                    klass, this=this, comments=comments, expression=expression, operator=operator_text
+                    klass(this=this, expression=expression, operator=operator_text), comments=comments
                 )
             else:
-                this = self.expression(klass, this=this, comments=comments, expression=expression)
+                this = self.expression(klass(this=this, expression=expression), comments=comments)
 
             if isinstance(this, exp.Div):
                 this.set("typed", self.dialect.TYPED_DIVISION)

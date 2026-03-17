@@ -1011,7 +1011,7 @@ def is_dto_data(v: Any) -> "TypeGuard[DTODataStub[Any]]":
     return bool(LITESTAR_INSTALLED) and isinstance(v, DTOData)
 
 
-def is_expression(obj: Any) -> "TypeGuard[exp.Expression]":
+def is_expression(obj: Any) -> "TypeGuard[exp.Expr]":
     """Check if a value is a sqlglot Expression.
 
     Args:
@@ -1020,7 +1020,7 @@ def is_expression(obj: Any) -> "TypeGuard[exp.Expression]":
     Returns:
         bool
     """
-    return isinstance(obj, exp.Expression)
+    return isinstance(obj, exp.Expr)
 
 
 def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
@@ -1131,7 +1131,7 @@ def dataclass_to_dict(
     return cast("dict[str, Any]", ret)
 
 
-def get_node_this(node: "exp.Expression", default: Any | None = None) -> Any:
+def get_node_this(node: "exp.Expr", default: Any | None = None) -> Any:
     """Safely get the 'this' attribute from a SQLGlot node.
 
     Args:
@@ -1147,7 +1147,7 @@ def get_node_this(node: "exp.Expression", default: Any | None = None) -> Any:
         return default
 
 
-def has_this_attribute(node: "exp.Expression") -> bool:
+def has_this_attribute(node: "exp.Expr") -> bool:
     """Check if a node has the 'this' attribute without using hasattr().
 
     Args:
@@ -1266,7 +1266,7 @@ def is_number_literal(literal: "exp.Literal") -> bool:
         return False
 
 
-def get_initial_expression(context: Any) -> "exp.Expression | None":
+def get_initial_expression(context: Any) -> "exp.Expr | None":
     """Safely get initial_expression from context.
 
     Args:
@@ -1329,7 +1329,7 @@ def get_param_style_and_name(param: Any) -> "tuple[str | None, str | None]":
     return style, name
 
 
-def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
+def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expr]":
     """Check if the SQL expression is a PostgreSQL COPY statement.
 
     Args:

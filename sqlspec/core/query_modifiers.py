@@ -59,7 +59,7 @@ __all__ = (
 )
 
 # Type alias for condition factory functions
-ConditionFactory = Callable[[exp.Expression, exp.Placeholder], exp.Expression]
+ConditionFactory = Callable[[exp.Expr, exp.Placeholder], exp.Expr]
 
 
 # =============================================================================
@@ -67,52 +67,52 @@ ConditionFactory = Callable[[exp.Expression, exp.Placeholder], exp.Expression]
 # =============================================================================
 
 
-def expr_eq(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_eq(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create equality expression: column = :param."""
     return exp.EQ(this=col, expression=placeholder)
 
 
-def expr_neq(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_neq(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create not-equal expression: column != :param."""
     return exp.NEQ(this=col, expression=placeholder)
 
 
-def expr_lt(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_lt(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create less-than expression: column < :param."""
     return exp.LT(this=col, expression=placeholder)
 
 
-def expr_lte(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_lte(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create less-than-or-equal expression: column <= :param."""
     return exp.LTE(this=col, expression=placeholder)
 
 
-def expr_gt(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_gt(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create greater-than expression: column > :param."""
     return exp.GT(this=col, expression=placeholder)
 
 
-def expr_gte(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_gte(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create greater-than-or-equal expression: column >= :param."""
     return exp.GTE(this=col, expression=placeholder)
 
 
-def expr_like(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_like(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create LIKE expression: column LIKE :param."""
     return exp.Like(this=col, expression=placeholder)
 
 
-def expr_not_like(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_not_like(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create NOT LIKE expression: NOT (column LIKE :param)."""
     return exp.Not(this=exp.Like(this=col, expression=placeholder))
 
 
-def expr_ilike(col: exp.Expression, placeholder: exp.Placeholder) -> exp.Expression:
+def expr_ilike(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create case-insensitive LIKE expression: column ILIKE :param."""
     return exp.ILike(this=col, expression=placeholder)
 
 
-def expr_is_null(col: exp.Expression, _placeholder: exp.Placeholder) -> exp.Expression:
+def expr_is_null(col: exp.Expr, _placeholder: exp.Placeholder) -> exp.Expr:
     """Create IS NULL expression: column IS NULL.
 
     Note: placeholder is ignored but kept for consistent factory signature.
@@ -120,7 +120,7 @@ def expr_is_null(col: exp.Expression, _placeholder: exp.Placeholder) -> exp.Expr
     return exp.Is(this=col, expression=exp.null())
 
 
-def expr_is_not_null(col: exp.Expression, _placeholder: exp.Placeholder) -> exp.Expression:
+def expr_is_not_null(col: exp.Expr, _placeholder: exp.Placeholder) -> exp.Expr:
     """Create IS NOT NULL expression: column IS NOT NULL.
 
     Note: placeholder is ignored but kept for consistent factory signature.
@@ -133,14 +133,14 @@ def expr_is_not_null(col: exp.Expression, _placeholder: exp.Placeholder) -> exp.
 # =============================================================================
 
 
-def parse_column_for_condition(column: str | exp.Column | exp.Expression) -> exp.Expression:
+def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
     """Parse column specification for use in conditions.
 
     Handles various input formats:
         - "column_name" -> exp.Column
         - "table.column" -> exp.Column with table
         - exp.Column -> returned as-is
-        - Other exp.Expression -> returned as-is
+        - Other exp.Expr -> returned as-is
 
     Args:
         column: Column specification
@@ -148,7 +148,7 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expression) -> exp
     Returns:
         SQLGlot column expression
     """
-    if isinstance(column, exp.Expression):
+    if isinstance(column, exp.Expr):
         return column
 
     if isinstance(column, str):
@@ -160,7 +160,7 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expression) -> exp
     return exp.column(str(column))
 
 
-def extract_column_name(column: str | exp.Column | exp.Expression) -> str:
+def extract_column_name(column: str | exp.Column | exp.Expr) -> str:
     """Extract column name from column expression for parameter naming.
 
     Args:
@@ -175,7 +175,7 @@ def extract_column_name(column: str | exp.Column | exp.Expression) -> str:
     if isinstance(column, exp.Column):
         return column.name
 
-    if isinstance(column, exp.Expression) and hasattr(column, "name") and column.name:
+    if isinstance(column, exp.Expr) and hasattr(column, "name") and column.name:
         return str(column.name)
 
     return "column"
@@ -187,8 +187,8 @@ def extract_column_name(column: str | exp.Column | exp.Expression) -> str:
 
 
 def create_condition(
-    column: str | exp.Column | exp.Expression, param_name: str, condition_factory: ConditionFactory
-) -> exp.Expression:
+    column: str | exp.Column | exp.Expr, param_name: str, condition_factory: ConditionFactory
+) -> exp.Expr:
     """Create parameterized condition expression.
 
     This is a pure function - parameter value binding happens in the caller.
@@ -206,7 +206,7 @@ def create_condition(
     return condition_factory(col_expr, placeholder)
 
 
-def create_in_condition(column: str | exp.Column | exp.Expression, param_names: list[str]) -> exp.Expression:
+def create_in_condition(column: str | exp.Column | exp.Expr, param_names: list[str]) -> exp.Expr:
     """Create IN condition with multiple placeholders.
 
     Args:
@@ -221,7 +221,7 @@ def create_in_condition(column: str | exp.Column | exp.Expression, param_names: 
     return exp.In(this=col_expr, expressions=placeholders)
 
 
-def create_not_in_condition(column: str | exp.Column | exp.Expression, param_names: list[str]) -> exp.Expression:
+def create_not_in_condition(column: str | exp.Column | exp.Expr, param_names: list[str]) -> exp.Expr:
     """Create NOT IN condition with multiple placeholders.
 
     Args:
@@ -236,8 +236,8 @@ def create_not_in_condition(column: str | exp.Column | exp.Expression, param_nam
 
 
 def create_between_condition(
-    column: str | exp.Column | exp.Expression, low_param: str, high_param: str
-) -> exp.Expression:
+    column: str | exp.Column | exp.Expr, low_param: str, high_param: str
+) -> exp.Expr:
     """Create BETWEEN condition.
 
     Args:
@@ -254,7 +254,7 @@ def create_between_condition(
     return exp.Between(this=col_expr, low=low_placeholder, high=high_placeholder)
 
 
-def create_exists_condition(subquery: exp.Expression) -> exp.Expression:
+def create_exists_condition(subquery: exp.Expr) -> exp.Expr:
     """Create EXISTS condition.
 
     Args:
@@ -266,7 +266,7 @@ def create_exists_condition(subquery: exp.Expression) -> exp.Expression:
     return exp.Exists(this=subquery)
 
 
-def create_not_exists_condition(subquery: exp.Expression) -> exp.Expression:
+def create_not_exists_condition(subquery: exp.Expr) -> exp.Expr:
     """Create NOT EXISTS condition.
 
     Args:
@@ -283,7 +283,7 @@ def create_not_exists_condition(subquery: exp.Expression) -> exp.Expression:
 # =============================================================================
 
 
-def apply_where(expression: exp.Expression, condition: exp.Expression) -> exp.Expression:
+def apply_where(expression: "exp.Expr", condition: exp.Expr) -> "exp.Expr":
     """Apply WHERE condition to an expression using AND.
 
     Works with SELECT, UPDATE, and DELETE expressions.
@@ -305,7 +305,7 @@ def apply_where(expression: exp.Expression, condition: exp.Expression) -> exp.Ex
     return expression.where(condition, copy=False)
 
 
-def apply_or_where(expression: exp.Expression, condition: exp.Expression) -> exp.Expression:
+def apply_or_where(expression: "exp.Expr", condition: exp.Expr) -> "exp.Expr":
     """Apply WHERE condition to an expression using OR.
 
     Combines the new condition with any existing WHERE clause using OR.
@@ -334,7 +334,7 @@ def apply_or_where(expression: exp.Expression, condition: exp.Expression) -> exp
     return expression
 
 
-def apply_limit(expression: exp.Expression, limit_value: int) -> exp.Expression:
+def apply_limit(expression: "exp.Expr", limit_value: int) -> "exp.Expr":
     """Apply LIMIT clause to expression.
 
     Args:
@@ -354,7 +354,7 @@ def apply_limit(expression: exp.Expression, limit_value: int) -> exp.Expression:
     return expression.limit(limit_value, copy=False)
 
 
-def apply_offset(expression: exp.Expression, offset_value: int) -> exp.Expression:
+def apply_offset(expression: "exp.Expr", offset_value: int) -> "exp.Expr":
     """Apply OFFSET clause to expression.
 
     Args:
@@ -374,7 +374,9 @@ def apply_offset(expression: exp.Expression, offset_value: int) -> exp.Expressio
     return expression.offset(offset_value, copy=False)
 
 
-def apply_select_only(expression: exp.Expression, columns: tuple[str | exp.Expression, ...]) -> exp.Expression:
+def apply_select_only(
+    expression: "exp.Expr", columns: "tuple[str | exp.Expr, ...]"
+) -> "exp.Expr":
     """Replace SELECT clause with only specified columns.
 
     Args:
@@ -406,8 +408,9 @@ def apply_select_only(expression: exp.Expression, columns: tuple[str | exp.Expre
 
 
 def safe_modify_with_cte(
-    expression: exp.Expression, modification_fn: Callable[[exp.Expression], exp.Expression]
-) -> exp.Expression:
+    expression: "exp.Expr",
+    modification_fn: "Callable[[exp.Expr], exp.Expr]",
+) -> "exp.Expr":
     """Safely apply a modification, preserving CTEs at top level.
 
     This ensures CTEs stay at the outermost level even when the modification
@@ -444,8 +447,8 @@ def safe_modify_with_cte(
 
 
 def apply_column_pruning(
-    expression: exp.Expression, dialect: str | None = None, cache_key: str | None = None
-) -> exp.Expression:
+    expression: "exp.Expr", dialect: str | None = None, cache_key: str | None = None
+) -> "exp.Expr":
     """Apply column pruning optimization to remove unused columns from subqueries.
 
     Uses SQLGlot's `qualify()` to resolve column references and table aliases,
@@ -484,8 +487,8 @@ def apply_column_pruning(
     if cache_key is not None:
         cache = get_cache()
         cached = cache.get_optimized(cache_key, dialect)
-        if cached is not None and isinstance(cached, exp.Expression):
-            cached_expr: exp.Expression = cached
+        if cached is not None and isinstance(cached, exp.Expr):
+            cached_expr: exp.Expr = cached
             return cached_expr.copy()
 
     # Apply qualification to resolve column references
@@ -497,7 +500,7 @@ def apply_column_pruning(
 
     # Apply pushdown_projections to remove unused columns
     try:
-        pruned = pushdown_projections_module.pushdown_projections(qualified, dialect=dialect)
+        pruned: exp.Expr = pushdown_projections_module.pushdown_projections(qualified, dialect=dialect)
     except Exception:
         # If pushdown fails, return the qualified expression
         pruned = qualified
@@ -507,4 +510,6 @@ def apply_column_pruning(
         cache = get_cache()
         cache.put_optimized(cache_key, pruned, dialect)
 
-    return pruned
+    if isinstance(pruned, exp.Expr):
+        return pruned
+    return expression

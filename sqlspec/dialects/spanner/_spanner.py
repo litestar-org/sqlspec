@@ -42,7 +42,7 @@ class SpannerParser(BigQuery.Parser):
         table = super()._parse_table_parts(schema=schema, is_db_reference=is_db_reference, wildcard=wildcard)
 
         if self._match_text_seq("INTERLEAVE", "IN", "PARENT"):
-            parent = cast("exp.Expression", self._parse_table(schema=True, is_db_reference=True))
+            parent = cast("exp.Expr", self._parse_table(schema=True, is_db_reference=True))
             on_delete: str | None = None
 
             if self._match_text_seq("ON", "DELETE"):
@@ -57,16 +57,16 @@ class SpannerParser(BigQuery.Parser):
 
         return table
 
-    def _parse_property(self) -> exp.Expression:
+    def _parse_property(self) -> exp.Expr:
         """Parse Spanner row deletion policy or PostgreSQL-style TTL."""
         if self._match_text_seq("ROW", "DELETION", "POLICY"):
             self._match(TokenType.L_PAREN)
             self._match_text_seq("OLDER_THAN")
             self._match(TokenType.L_PAREN)
-            column = cast("exp.Expression", self._parse_id_var())
+            column = cast("exp.Expr", self._parse_id_var())
             self._match(TokenType.COMMA)
             self._match_text_seq("INTERVAL")
-            interval = cast("exp.Expression", self._parse_expression())
+            interval = cast("exp.Expr", self._parse_expression())
             self._match(TokenType.R_PAREN)
             self._match(TokenType.R_PAREN)
 
@@ -76,13 +76,13 @@ class SpannerParser(BigQuery.Parser):
 
         if self._match_text_seq("TTL"):
             self._match_text_seq("INTERVAL")
-            interval = cast("exp.Expression", self._parse_expression())
+            interval = cast("exp.Expr", self._parse_expression())
             self._match_text_seq("ON")
-            column = cast("exp.Expression", self._parse_id_var())
+            column = cast("exp.Expr", self._parse_id_var())
 
             return exp.Property(this=exp.Literal.string("TTL"), value=exp.Tuple(expressions=[interval, column]))
 
-        return cast("exp.Expression", super()._parse_property())
+        return cast("exp.Expr", super()._parse_property())
 
 
 class SpannerGenerator(BigQuery.Generator):

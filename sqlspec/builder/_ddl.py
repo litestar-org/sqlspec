@@ -74,7 +74,7 @@ CURRENT_DATE_KEYWORD = "CURRENT_DATE"
 CURRENT_TIME_KEYWORD = "CURRENT_TIME"
 
 
-def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
+def build_column_expression(col: "ColumnDefinition") -> "exp.Expr":
     """Build SQLGlot expression for a column definition."""
     col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=exp.DataType.build(col.dtype))
 
@@ -90,7 +90,7 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
         constraints.append(exp.ColumnConstraint(kind=exp.UniqueColumnConstraint()))
 
     if col.default is not None:
-        default_expr: exp.Expression | None = None
+        default_expr: exp.Expr | None = None
         if isinstance(col.default, str):
             default_upper = col.default.upper()
             if default_upper == CURRENT_TIMESTAMP_KEYWORD:
@@ -128,7 +128,7 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
     return col_def
 
 
-def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expression | None":
+def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr | None":
     """Build SQLGlot expression for a table constraint."""
     if constraint.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY:
         pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
@@ -176,9 +176,9 @@ class DDLBuilder(QueryBuilder):
 
     def __init__(self, dialect: "DialectType" = None) -> None:
         super().__init__(dialect=dialect)
-        self._expression: exp.Expression | None = None
+        self._expression: exp.Expr | None = None
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         msg = "Subclasses must implement _create_base_expression."
         raise NotImplementedError(msg)
 
@@ -513,12 +513,12 @@ class CreateTable(DDLBuilder):
         self._table_options[key] = value
         return self
 
-    def _create_base_expression(self) -> "exp.Expression":
+    def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for CREATE TABLE."""
         if not self._columns and not self._like_table:
             self._raise_sql_builder_error("Table must have at least one column or use LIKE clause")
 
-        column_defs: list[exp.Expression] = []
+        column_defs: list[exp.Expr] = []
         for col in self._columns:
             col_expr = build_column_expression(col)
             column_defs.append(col_expr)
@@ -624,7 +624,7 @@ class DropTable(DDLBuilder):
         self._cascade = False
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
             self._raise_sql_builder_error("Table name must be set for DROP TABLE.")
         return exp.Drop(
@@ -670,7 +670,7 @@ class DropIndex(DDLBuilder):
         self._cascade = False
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._index_name:
             self._raise_sql_builder_error("Index name must be set for DROP INDEX.")
         return exp.Drop(
@@ -715,7 +715,7 @@ class DropView(DDLBuilder):
         self._cascade = False
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
             self._raise_sql_builder_error("View name must be set for DROP VIEW.")
         return exp.Drop(
@@ -756,7 +756,7 @@ class DropSchema(DDLBuilder):
         self._cascade = False
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._schema_name:
             self._raise_sql_builder_error("Schema name must be set for DROP SCHEMA.")
         return exp.Drop(
@@ -801,7 +801,7 @@ class DropMaterializedView(DDLBuilder):
         self._cascade = False
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
             self._raise_sql_builder_error("View name must be set for DROP MATERIALIZED VIEW.")
         return exp.Drop(
@@ -827,11 +827,11 @@ class CreateIndex(DDLBuilder):
         super().__init__(dialect=dialect)
         self._index_name = index_name
         self._table_name: str | None = None
-        self._columns: list[str | exp.Ordered | exp.Expression] = []
+        self._columns: list[str | exp.Ordered | exp.Expr] = []
         self._unique = False
         self._if_not_exists = False
         self._using: str | None = None
-        self._where: str | exp.Expression | None = None
+        self._where: str | exp.Expr | None = None
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -841,11 +841,11 @@ class CreateIndex(DDLBuilder):
         self._table_name = table_name
         return self
 
-    def columns(self, *cols: str | exp.Ordered | exp.Expression) -> Self:
+    def columns(self, *cols: str | exp.Ordered | exp.Expr) -> Self:
         self._columns.extend(cols)
         return self
 
-    def expressions(self, *exprs: str | exp.Expression) -> Self:
+    def expressions(self, *exprs: str | exp.Expr) -> Self:
         self._columns.extend(exprs)
         return self
 
@@ -861,11 +861,11 @@ class CreateIndex(DDLBuilder):
         self._using = method
         return self
 
-    def where(self, condition: str | exp.Expression) -> Self:
+    def where(self, condition: str | exp.Expr) -> Self:
         self._where = condition
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         """Build the CREATE INDEX expression used by this builder.
 
         Columns are turned into raw expressions (not ``Ordered``) to preserve natural NULL ordering,
@@ -874,7 +874,7 @@ class CreateIndex(DDLBuilder):
         if not self._index_name or not self._table_name:
             self._raise_sql_builder_error("Index name and table name must be set for CREATE INDEX.")
 
-        cols: list[exp.Expression] = []
+        cols: list[exp.Expr] = []
         for col in self._columns:
             if isinstance(col, str):
                 cols.append(exp.column(col))
@@ -934,7 +934,7 @@ class Truncate(DDLBuilder):
         self._identity = "CONTINUE"
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
             self._raise_sql_builder_error("Table name must be set for TRUNCATE TABLE.")
         identity_expr = exp.Var(this=self._identity) if self._identity else None
@@ -1011,7 +1011,7 @@ class CreateSchema(DDLBuilder):
         self._authorization = user_name
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._schema_name:
             self._raise_sql_builder_error("Schema name must be set for CREATE SCHEMA.")
         props: list[exp.Property] = []
@@ -1069,11 +1069,11 @@ class CreateTableAsSelect(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "str | exp.Expression") -> Self:
+    def as_select(self, select_query: "str | exp.Expr") -> Self:
         self._select_query = select_query
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
             self._raise_sql_builder_error("Table name must be set for CREATE TABLE AS SELECT.")
         if self._select_query is None:
@@ -1146,7 +1146,7 @@ class CreateMaterializedView(DDLBuilder):
         self._view_name = view_name
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: str | exp.Expression | None = None
+        self._select_query: str | exp.Expr | None = None
         self._with_data: bool | None = None
         self._refresh_mode: str | None = None
         self._storage_parameters: dict[str, Any] = {}
@@ -1166,7 +1166,7 @@ class CreateMaterializedView(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "str | exp.Expression") -> Self:
+    def as_select(self, select_query: "str | exp.Expr") -> Self:
         self._select_query = select_query
         return self
 
@@ -1198,13 +1198,13 @@ class CreateMaterializedView(DDLBuilder):
         self._hints.append(hint)
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
             self._raise_sql_builder_error("View name must be set for CREATE MATERIALIZED VIEW.")
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
-        select_expr: exp.Expression | None = None
+        select_expr: exp.Expr | None = None
         select_parameters: dict[str, Any] | None = None
 
         if isinstance(self._select_query, SQL):
@@ -1271,7 +1271,7 @@ class CreateView(DDLBuilder):
         self._view_name = view_name
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: str | exp.Expression | None = None
+        self._select_query: str | exp.Expr | None = None
         self._hints: list[str] = []
 
     def name(self, view_name: str) -> Self:
@@ -1286,7 +1286,7 @@ class CreateView(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "str | exp.Expression") -> Self:
+    def as_select(self, select_query: "str | exp.Expr") -> Self:
         self._select_query = select_query
         return self
 
@@ -1294,13 +1294,13 @@ class CreateView(DDLBuilder):
         self._hints.append(hint)
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
             self._raise_sql_builder_error("View name must be set for CREATE VIEW.")
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
 
-        select_expr: exp.Expression | None = None
+        select_expr: exp.Expr | None = None
         select_parameters: dict[str, Any] | None = None
 
         if isinstance(self._select_query, SQL):
@@ -1517,7 +1517,7 @@ class AlterTable(DDLBuilder):
         self._operations.append(operation)
         return self
 
-    def _create_base_expression(self) -> "exp.Expression":
+    def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for ALTER TABLE."""
         if not self._operations:
             self._raise_sql_builder_error("At least one operation must be specified for ALTER TABLE")
@@ -1527,11 +1527,11 @@ class AlterTable(DDLBuilder):
         else:
             table = exp.to_table(self._table_name)
 
-        actions: list[exp.Expression] = [self._build_operation_expression(op) for op in self._operations]
+        actions: list[exp.Expr] = [self._build_operation_expression(op) for op in self._operations]
 
         return exp.Alter(this=table, kind="TABLE", actions=actions, exists=self._if_exists)
 
-    def _build_operation_expression(self, op: "AlterOperation") -> exp.Expression:
+    def _build_operation_expression(self, op: "AlterOperation") -> exp.Expr:
         """Build a structured SQLGlot expression for a single alter operation."""
         op_type = op.operation_type.upper()
 
@@ -1580,7 +1580,7 @@ class AlterTable(DDLBuilder):
             if not op.column_definition or op.column_definition.default is None:
                 self._raise_sql_builder_error("Default value required for SET DEFAULT")
             default_val = op.column_definition.default
-            default_expr: exp.Expression | None
+            default_expr: exp.Expr | None
             if isinstance(default_val, str):
                 if self._is_sql_function_default(default_val):
                     default_expr = exp.maybe_parse(default_val)
@@ -1644,7 +1644,7 @@ class CommentOn(DDLBuilder):
         self._comment = comment
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if self._target_type == "TABLE" and self._table and self._comment is not None:
             return exp.Comment(this=exp.to_table(self._table), kind="TABLE", expression=exp.convert(self._comment))
         if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
@@ -1681,7 +1681,7 @@ class RenameTable(DDLBuilder):
         self._new_name = new_name
         return self
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if not self._old_name or not self._new_name:
             self._raise_sql_builder_error("Both old and new table names must be set for RENAME TABLE.")
         return exp.Alter(

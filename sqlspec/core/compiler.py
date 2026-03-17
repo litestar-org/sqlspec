@@ -59,21 +59,45 @@ OperationType = Literal[
     "UNKNOWN",
 ]
 
-OPERATION_TYPE_MAP: "dict[type[exp.Expression], OperationType]" = {
+OPERATION_TYPE_MAP: "dict[type[exp.Expr], OperationType]" = {
+    # Queries
     exp.Select: "SELECT",
     exp.Union: "SELECT",
     exp.Except: "SELECT",
     exp.Intersect: "SELECT",
-    exp.With: "SELECT",
+    exp.Summarize: "SELECT",  # DuckDB SUMMARIZE — returns rows
+    # DML
     exp.Insert: "INSERT",
     exp.Update: "UPDATE",
     exp.Delete: "DELETE",
-    exp.Pragma: "PRAGMA",
-    exp.Command: "COMMAND",
+    exp.Merge: "MERGE",
+    exp.LoadData: "INSERT",  # Hive LOAD DATA — ingests data into a table
+    # DDL
     exp.Create: "DDL",
     exp.Drop: "DDL",
     exp.Alter: "DDL",
-    exp.Merge: "MERGE",
+    exp.TruncateTable: "DDL",
+    exp.Grant: "DDL",
+    exp.Revoke: "DDL",
+    exp.Comment: "DDL",
+    # Procedure execution
+    exp.Execute: "EXECUTE",  # TSQL EXEC/EXECUTE
+    # Session / Admin
+    exp.Pragma: "PRAGMA",
+    exp.Command: "COMMAND",
+    exp.Set: "COMMAND",
+    exp.Show: "COMMAND",  # MySQL dialect
+    exp.Describe: "COMMAND",
+    exp.Use: "COMMAND",
+    exp.Kill: "COMMAND",
+    exp.Analyze: "COMMAND",
+    exp.Install: "COMMAND",  # DuckDB
+    exp.Attach: "COMMAND",  # DuckDB / SQLite
+    # Transaction control — mapped to COMMAND for now; a dedicated "TRANSACTION"
+    # OperationType could be added if downstream code needs to distinguish these.
+    exp.Transaction: "COMMAND",
+    exp.Commit: "COMMAND",
+    exp.Rollback: "COMMAND",
 }
 
 COPY_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM", "COPY_TO")
@@ -82,7 +106,7 @@ COPY_FROM_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM")
 
 COPY_TO_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY_TO",)
 
-ParseCacheEntry = tuple[exp.Expression | None, OperationType, dict[int, str], tuple[bool, bool]]
+ParseCacheEntry = tuple[exp.Expr | None, OperationType, dict[int, str], tuple[bool, bool]]
 
 
 def is_copy_operation(operation_type: "OperationType") -> bool:
@@ -208,7 +232,7 @@ class CompiledSQL:
         compiled_sql: str,
         execution_parameters: Any,
         operation_type: "OperationType",
-        expression: "exp.Expression | None" = None,
+        expression: "exp.Expr | None" = None,
         parameter_style: str | None = None,
         supports_many: bool = False,
         parameter_casts: "dict[int, str] | None" = None,
@@ -342,7 +366,7 @@ class SQLProcessor:
         self._cache_hits = 0
         self._cache_misses = 0
         self._parse_cache: OrderedDict[
-            Any, tuple[exp.Expression | None, OperationType, dict[int, str], tuple[bool, bool]]
+            Any, tuple[exp.Expr | None, OperationType, dict[int, str], tuple[bool, bool]]
         ] = OrderedDict()
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
@@ -359,7 +383,7 @@ class SQLProcessor:
         )
 
     def compile(
-        self, sql: str, parameters: Any = None, is_many: bool = False, expression: "exp.Expression | None" = None
+        self, sql: str, parameters: Any = None, is_many: bool = False, expression: "exp.Expr | None" = None
     ) -> CompiledSQL:
         """Compile SQL statement.
 
@@ -505,8 +529,8 @@ class SQLProcessor:
         )
 
     def _normalize_expression_override(
-        self, expression_override: "exp.Expression | None", sqlglot_sql: str, sql: str
-    ) -> "exp.Expression | None":
+        self, expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str
+    ) -> "exp.Expr | None":
         """Validate expression overrides against the input SQL.
 
         Args:
@@ -524,8 +548,8 @@ class SQLProcessor:
         return expression_override
 
     def _parse_expression_uncached(
-        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expression | None"
-    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile]":
+        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
+    ) -> "tuple[exp.Expr | None, OperationType, dict[int, str], OperationProfile]":
         """Parse SQL into an expression without cache.
 
         Args:
@@ -538,9 +562,9 @@ class SQLProcessor:
         """
         try:
             if expression_override is not None:
-                expression = expression_override
+                expression: exp.Expr = expression_override
             else:
-                expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
+                expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)  # type: ignore[assignment]
         except ParseError:
             return None, "COMMAND", {}, OperationProfile.empty()
         else:
@@ -552,7 +576,7 @@ class SQLProcessor:
     def _store_parse_cache(
         self,
         parse_cache_key: Any,
-        expression: "exp.Expression | None",
+        expression: "exp.Expr | None",
         operation_type: "OperationType",
         parameter_casts: "dict[int, str]",
         operation_profile: "OperationProfile",
@@ -579,7 +603,7 @@ class SQLProcessor:
 
     def _unpack_parse_cache_entry(
         self, parse_cache_entry: "ParseCacheEntry"
-    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile]":
+    ) -> "tuple[exp.Expr | None, OperationType, dict[int, str], OperationProfile]":
         """Expand cached parse results into runtime objects.
 
         Args:
@@ -597,8 +621,8 @@ class SQLProcessor:
         return cached_expression, cached_operation, cached_casts, operation_profile
 
     def _resolve_expression(
-        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expression | None"
-    ) -> "tuple[exp.Expression | None, OperationType, dict[int, str], OperationProfile, Any | None, ParseCacheEntry | None]":
+        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
+    ) -> "tuple[exp.Expr | None, OperationType, dict[int, str], OperationProfile, Any | None, ParseCacheEntry | None]":
         """Resolve an SQLGlot expression with caching.
 
         Args:
@@ -632,7 +656,7 @@ class SQLProcessor:
 
     def _apply_ast_transformers(
         self,
-        expression: "exp.Expression | None",
+        expression: "exp.Expr | None",
         parameters: Any,
         parameter_profile: "ParameterProfile",
         operation_type: "OperationType",
@@ -640,8 +664,8 @@ class SQLProcessor:
         operation_profile: "OperationProfile",
         parse_cache_key: "Any | None",
         parse_cache_entry: "ParseCacheEntry | None",
-        expression_override: "exp.Expression | None",
-    ) -> "tuple[exp.Expression | None, Any, bool, OperationType, dict[int, str], OperationProfile]":
+        expression_override: "exp.Expr | None",
+    ) -> "tuple[exp.Expr | None, Any, bool, OperationType, dict[int, str], OperationProfile]":
         """Apply AST transformers and update metadata.
 
         Args:
@@ -696,7 +720,7 @@ class SQLProcessor:
         self,
         processed_sql: str,
         processed_params: Any,
-        expression: "exp.Expression | None",
+        expression: "exp.Expr | None",
         parameters: Any,
         parameter_profile: "ParameterProfile",
         is_many: bool,
@@ -787,7 +811,7 @@ class SQLProcessor:
         sql: str,
         parameters: Any,
         is_many: bool = False,
-        expression_override: "exp.Expression | None" = None,
+        expression_override: "exp.Expr | None" = None,
         *,
         param_fingerprint: Any | None,
     ) -> CompiledSQL:
@@ -914,7 +938,7 @@ class SQLProcessor:
         # Use pre-calculated static components for speed
         return (sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many)
 
-    def _detect_operation_type(self, expression: "exp.Expression") -> "OperationType":
+    def _detect_operation_type(self, expression: "exp.Expr") -> "OperationType":
         """Detect operation type from AST.
 
         Args:
@@ -945,7 +969,7 @@ class SQLProcessor:
         # that doesn't fit specific categories
         return "COMMAND"
 
-    def _detect_parameter_casts(self, expression: "exp.Expression | None") -> "dict[int, str]":
+    def _detect_parameter_casts(self, expression: "exp.Expr | None") -> "dict[int, str]":
         """Detect explicit type casts on parameters in the AST.
 
         Args:
@@ -994,7 +1018,7 @@ class SQLProcessor:
         return cast_positions
 
     def _apply_final_transformations(
-        self, expression: "exp.Expression | None", sql: str, parameters: Any, dialect_str: "str | None"
+        self, expression: "exp.Expr | None", sql: str, parameters: Any, dialect_str: "str | None"
     ) -> "tuple[str, Any]":
         """Apply final transformations.
 
@@ -1017,7 +1041,7 @@ class SQLProcessor:
         return sql, parameters
 
     def _build_operation_profile(
-        self, expression: "exp.Expression | None", operation_type: "OperationType"
+        self, expression: "exp.Expr | None", operation_type: "OperationType"
     ) -> "OperationProfile":
         if expression is None:
             return OperationProfile.empty()
@@ -1027,12 +1051,15 @@ class SQLProcessor:
 
         expr = expression
         if isinstance(
-            expr, (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Values, exp.Table, exp.TableSample, exp.With)
+            expr,
+            (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Values, exp.Table, exp.TableSample, exp.Summarize),
         ):
             returns_rows = True
         elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
             modifies_rows = True
             returns_rows = bool(expr.args.get("returning"))
+        elif isinstance(expr, exp.TruncateTable):
+            modifies_rows = True
         elif isinstance(expr, exp.Copy):
             copy_kind = expr.args.get("kind")
             modifies_rows = copy_kind is True

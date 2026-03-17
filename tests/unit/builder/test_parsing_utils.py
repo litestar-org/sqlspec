@@ -22,7 +22,7 @@ def test_parse_condition_expression_with_dollar_parameters() -> None:
     # Should parse without errors and convert $1 to SQLGlot-compatible format
     expr = parse_condition_expression(condition)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_with_colon_numeric_parameters() -> None:
@@ -32,7 +32,7 @@ def test_parse_condition_expression_with_colon_numeric_parameters() -> None:
     # Should parse without errors and convert :1 to SQLGlot-compatible format
     expr = parse_condition_expression(condition)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_with_named_parameters() -> None:
@@ -42,7 +42,7 @@ def test_parse_condition_expression_with_named_parameters() -> None:
     # Should parse without errors - named parameters are already SQLGlot-compatible
     expr = parse_condition_expression(condition)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_with_question_mark_parameters() -> None:
@@ -52,7 +52,7 @@ def test_parse_condition_expression_with_question_mark_parameters() -> None:
     # Should parse without errors
     expr = parse_condition_expression(condition)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_no_parameters() -> None:
@@ -62,7 +62,7 @@ def test_parse_condition_expression_no_parameters() -> None:
     # Should parse without errors
     expr = parse_condition_expression(condition)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_complex_conditions() -> None:
@@ -77,7 +77,7 @@ def test_parse_condition_expression_complex_conditions() -> None:
     for condition in conditions:
         expr = parse_condition_expression(condition)
         assert expr is not None
-        assert isinstance(expr, exp.Expression)
+        assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_tuple_format() -> None:
@@ -87,7 +87,7 @@ def test_parse_condition_expression_tuple_format() -> None:
 
     expr = parse_condition_expression(condition)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_condition_expression_sqlglot_expression_passthrough() -> None:
@@ -104,7 +104,7 @@ def test_parse_column_expression_basic() -> None:
 
     expr = parse_column_expression(column)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_column_expression_qualified() -> None:
@@ -113,7 +113,7 @@ def test_parse_column_expression_qualified() -> None:
 
     expr = parse_column_expression(column)
     assert expr is not None
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_parse_column_expression_sqlglot_passthrough() -> None:
@@ -135,7 +135,7 @@ def test_parameter_style_conversion_regression() -> None:
 
     # The expression should be parseable by SQLGlot without treating $1 as a column
     # This verifies our parameter conversion fix works
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
 
 
 def test_cached_static_expression_reuses_factory() -> None:
@@ -144,7 +144,7 @@ def test_cached_static_expression_reuses_factory() -> None:
 
     factory_calls = {"count": 0}
 
-    def factory() -> exp.Expression:
+    def factory() -> exp.Expr:
         factory_calls["count"] += 1
         return exp.select("1")
 

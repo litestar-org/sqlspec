@@ -44,7 +44,7 @@ class _ExpressionParameterizer:
     def __init__(self, builder: "QueryBuilder") -> None:
         self._builder = builder
 
-    def __call__(self, node: exp.Expression) -> exp.Expression:
+    def __call__(self, node: exp.Expr) -> exp.Expr:
         if isinstance(node, exp.Literal):
             if node.this in {True, False, None}:
                 return node
@@ -71,13 +71,13 @@ class _PlaceholderReplacer:
     def __init__(self, param_mapping: dict[str, str]) -> None:
         self._param_mapping = param_mapping
 
-    def __call__(self, node: exp.Expression) -> exp.Expression:
+    def __call__(self, node: exp.Expr) -> exp.Expr:
         if isinstance(node, exp.Placeholder) and str(node.this) in self._param_mapping:
             return exp.Placeholder(this=self._param_mapping[str(node.this)])
         return node
 
 
-def _unquote_identifier(node: exp.Expression) -> exp.Expression:
+def _unquote_identifier(node: exp.Expr) -> exp.Expr:
     if isinstance(node, exp.Identifier):
         node.set("quoted", False)
     return node
@@ -148,7 +148,7 @@ class QueryBuilder(ABC):
         self.optimize_predicates = optimize_predicates
         self.simplify_expressions = simplify_expressions
 
-        self._expression: exp.Expression | None = None
+        self._expression: exp.Expr | None = None
         self._parameter_name_counters: dict[str, int] = {}
         self._parameters: dict[str, Any] = {}
         self._parameter_counter: int = 0
@@ -181,7 +181,7 @@ class QueryBuilder(ABC):
                 "QueryBuilder._create_base_expression must return a valid sqlglot expression."
             )
 
-    def get_expression(self) -> exp.Expression | None:
+    def get_expression(self) -> exp.Expr | None:
         """Get expression reference (no copy).
 
         Returns:
@@ -189,7 +189,7 @@ class QueryBuilder(ABC):
         """
         return self._expression
 
-    def set_expression(self, expression: exp.Expression) -> None:
+    def set_expression(self, expression: exp.Expr) -> None:
         """Set expression with validation.
 
         Args:
@@ -208,7 +208,7 @@ class QueryBuilder(ABC):
         return self._expression is not None
 
     @abstractmethod
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         """Create the base sqlglot expression for the specific query type.
 
         Returns:
@@ -277,7 +277,7 @@ class QueryBuilder(ABC):
         msg = f"Failed to parse CTE query: {cause!s}"
         raise SQLBuilderError(msg) from cause
 
-    def _build_final_expression(self, *, copy: bool = False) -> exp.Expression:
+    def _build_final_expression(self, *, copy: bool = False) -> exp.Expr:
         """Construct the current expression with attached CTEs.
 
         Args:
@@ -295,11 +295,11 @@ class QueryBuilder(ABC):
         if not self._with_ctes:
             return base_expression
 
-        final_expression: exp.Expression = base_expression
+        final_expression: exp.Expr = base_expression
         if has_with_method(final_expression):
             for alias, cte_node in self._with_ctes.items():
                 final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
-            return cast("exp.Expression", final_expression)
+            return cast("exp.Expr", final_expression)
 
         if isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
             return exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
@@ -380,7 +380,7 @@ class QueryBuilder(ABC):
         """
         return self._add_parameter(value, context=context)
 
-    def _parameterize_expression(self, expression: exp.Expression) -> exp.Expression:
+    def _parameterize_expression(self, expression: exp.Expr) -> exp.Expr:
         """Replace literal values in an expression with bound parameters.
 
         This method traverses a SQLGlot expression tree and replaces literal
@@ -394,7 +394,7 @@ class QueryBuilder(ABC):
             A new expression with literals replaced by parameter placeholders
         """
 
-        return cast("exp.Expression", expression.transform(_ExpressionParameterizer(self), copy=False))
+        return cast("exp.Expr", expression.transform(_ExpressionParameterizer(self), copy=False))
 
     def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
@@ -525,8 +525,8 @@ class QueryBuilder(ABC):
         return param_mapping
 
     def _update_placeholders_in_expression(
-        self, expression: exp.Expression, param_mapping: dict[str, str]
-    ) -> exp.Expression:
+        self, expression: exp.Expr, param_mapping: dict[str, str]
+    ) -> exp.Expr:
         """Update parameter placeholders in expression to use new names.
 
         Args:
@@ -537,7 +537,7 @@ class QueryBuilder(ABC):
             Updated expression with new placeholder names
         """
 
-        return cast("exp.Expression", expression.transform(_PlaceholderReplacer(param_mapping), copy=False))
+        return cast("exp.Expr", expression.transform(_PlaceholderReplacer(param_mapping), copy=False))
 
     def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
         """Generate cache key based on builder state and configuration.
@@ -628,13 +628,13 @@ class QueryBuilder(ABC):
         """
         final_expression = self._build_final_expression()
 
-        if self.enable_optimization and isinstance(final_expression, exp.Expression):
+        if self.enable_optimization and isinstance(final_expression, exp.Expr):
             final_expression = self._optimize_expression(final_expression)
 
         target_dialect = str(dialect) if dialect else self.dialect_name
 
         try:
-            if isinstance(final_expression, exp.Expression):
+            if isinstance(final_expression, exp.Expr):
                 normalized_expression = (
                     self._unquote_identifiers_for_oracle(final_expression)
                     if self._is_oracle_dialect(target_dialect)
@@ -703,7 +703,7 @@ class QueryBuilder(ABC):
 
         return sql
 
-    def _optimize_expression(self, expression: exp.Expression) -> exp.Expression:
+    def _optimize_expression(self, expression: exp.Expr) -> exp.Expr:
         """Apply SQLGlot optimizations to the expression.
 
         Args:
@@ -732,7 +732,7 @@ class QueryBuilder(ABC):
         cache = get_cache()
         cached_optimized = cache.get_optimized(cache_key)
         if cached_optimized:
-            return cast("exp.Expression", cached_optimized)
+            return cast("exp.Expr", cached_optimized)
 
         try:
             optimized = optimize(
@@ -743,7 +743,7 @@ class QueryBuilder(ABC):
             logger.debug("Expression optimization failed, using original expression")
             return expression
         else:
-            return optimized
+            return optimized  # type: ignore[return-value]
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
@@ -796,7 +796,7 @@ class QueryBuilder(ABC):
         if (
             config.dialect is not None
             and config.dialect != safe_query.dialect
-            and isinstance(self._expression, exp.Expression)
+            and isinstance(self._expression, exp.Expr)
         ):
             try:
                 identify = self._should_identify(config.dialect)
@@ -884,10 +884,10 @@ class QueryBuilder(ABC):
             return False
         return str(dialect).lower() == "oracle"
 
-    def _unquote_identifiers_for_oracle(self, expression: exp.Expression) -> exp.Expression:
+    def _unquote_identifiers_for_oracle(self, expression: exp.Expr) -> exp.Expr:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
 
-        return cast("exp.Expression", expression.copy().transform(_unquote_identifier, copy=False))
+        return cast("exp.Expr", expression.copy().transform(_unquote_identifier, copy=False))
 
     def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
         for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):
@@ -923,11 +923,11 @@ class QueryBuilder(ABC):
 
     def build_static_expression(
         self,
-        expression: exp.Expression | None = None,
+        expression: exp.Expr | None = None,
         parameters: dict[str, Any] | None = None,
         *,
         cache_key: str | None = None,
-        expression_factory: Callable[[], exp.Expression] | None = None,
+        expression_factory: Callable[[], exp.Expr] | None = None,
         copy: bool = True,
         optimize_expression: bool | None = None,
         dialect: DialectType | None = None,
@@ -950,7 +950,7 @@ class QueryBuilder(ABC):
             BuiltQuery containing SQL and parameters.
         """
 
-        expr: exp.Expression | None = None
+        expr: exp.Expr | None = None
 
         if cache_key is not None:
             cache = get_cache()
@@ -994,7 +994,7 @@ class ExpressionBuilder(QueryBuilder):
 
     __slots__ = ()
 
-    def __init__(self, expression: exp.Expression, **kwargs: Any) -> None:
+    def __init__(self, expression: exp.Expr, **kwargs: Any) -> None:
         (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
             self._parse_query_builder_kwargs(kwargs)
         )
@@ -1010,7 +1010,7 @@ class ExpressionBuilder(QueryBuilder):
             self._raise_invalid_expression_type(expression)
         self._expression = expression
 
-    def _create_base_expression(self) -> exp.Expression:
+    def _create_base_expression(self) -> exp.Expr:
         if self._expression is None:
             msg = "ExpressionBuilder requires an expression at construction."
             self._raise_sql_builder_error(msg)
