@@ -32,7 +32,7 @@ class SpannerTokenizer(BigQuery.Tokenizer):
     KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, **_SPANNER_KEYWORDS}
 
 
-class SpannerParser(BigQuery.Parser):
+class SpannerParser(BigQuery.Parser):  # type: ignore[valid-type, misc]
     """Parse Spanner extensions such as INTERLEAVE and row deletion policies."""
 
     def _parse_table_parts(
@@ -55,7 +55,7 @@ class SpannerParser(BigQuery.Parser):
             if on_delete:
                 table.set("interleave_on_delete", on_delete)
 
-        return table
+        return table  # type: ignore[no-any-return]
 
     def _parse_property(self) -> exp.Expr:
         """Parse Spanner row deletion policy or PostgreSQL-style TTL."""

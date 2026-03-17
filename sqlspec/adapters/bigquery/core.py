@@ -191,7 +191,7 @@ def build_inlined_script(
 
     script_statements: list[str] = []
     for param_set in parameters:
-        expression_copy: exp.Expr = parsed_expression.copy()  # type: ignore[assignment]
+        expression_copy: exp.Expr = parsed_expression.copy()
         script_statements.append(_inline_bigquery_literals(expression_copy, param_set, literal_inliner))
     return ";\n".join(script_statements)
 

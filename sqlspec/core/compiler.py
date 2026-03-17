@@ -564,7 +564,7 @@ class SQLProcessor:
             if expression_override is not None:
                 expression: exp.Expr = expression_override
             else:
-                expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)  # type: ignore[assignment]
+                expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
         except ParseError:
             return None, "COMMAND", {}, OperationProfile.empty()
         else:

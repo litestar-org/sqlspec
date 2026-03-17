@@ -297,7 +297,7 @@ class SQLFactory:
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
             builder = Select(dialect=dialect or self.dialect)
-            builder.set_expression(parsed_expr)  # type: ignore[arg-type]
+            builder.set_expression(parsed_expr)
             return builder
 
         if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
@@ -1589,7 +1589,7 @@ class SQLFactory:
         """
         if isinstance(value, exp.Expr):
             return FunctionExpression(value)
-        return FunctionExpression(exp.convert(value))  # type: ignore[arg-type]
+        return FunctionExpression(exp.convert(value))
 
     @staticmethod
     def decode(column: str | exp.Expr, *args: str | exp.Expr | Any) -> FunctionExpression:

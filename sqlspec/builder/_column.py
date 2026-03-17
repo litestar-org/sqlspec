@@ -30,7 +30,7 @@ def _convert_value(value: Any) -> exp.Expr:
     """
     if isinstance(value, (datetime, date)):
         return exp.Literal(this=value, is_string=False)
-    return exp.convert(value)  # type: ignore[return-value]
+    return exp.convert(value)
 
 
 class ColumnExpression:

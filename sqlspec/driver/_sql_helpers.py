@@ -42,7 +42,7 @@ def parse_statement_safely(statement: "Statement", dialect: "DialectType | None"
     """
     try:
         sql_string = str(statement)
-        return parse_one(sql_string, dialect=dialect)  # type: ignore[return-value]
+        return parse_one(sql_string, dialect=dialect)
     except Exception as e:
         raise_parse_error(e)
 

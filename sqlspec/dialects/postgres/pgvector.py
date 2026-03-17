@@ -44,7 +44,7 @@ class PGVectorTokenizer(Postgres.Tokenizer):
     }
 
 
-class PGVectorParser(Postgres.Parser):
+class PGVectorParser(Postgres.Parser):  # type: ignore[valid-type, misc]
     """Parser that captures the original operator string for pgvector operations."""
 
     FACTOR = {**Postgres.Parser.FACTOR, _PGVECTOR_DISTANCE_TOKEN: VectorDistance}
@@ -61,7 +61,7 @@ class PGVectorParser(Postgres.Parser):
 
             if not expression and klass is exp.IntDiv and self._prev.text.isalpha():
                 self._retreat(self._index - 1)
-                return this
+                return this  # type: ignore[no-any-return]
 
             if "operator" in klass.arg_types:
                 this = self.expression(
@@ -74,7 +74,7 @@ class PGVectorParser(Postgres.Parser):
                 this.set("typed", self.dialect.TYPED_DIVISION)
                 this.set("safe", self.dialect.SAFE_DIVISION)
 
-        return this
+        return this  # type: ignore[no-any-return]
 
 
 class PGVectorGenerator(Postgres.Generator):

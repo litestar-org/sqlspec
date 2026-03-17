@@ -384,7 +384,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 source_expr = source
             else:
                 # Table name or other expression - use standard aliasing
-                source_expr = exp.alias_(source, alias) if alias else source  # type: ignore[assignment]
+                source_expr = exp.alias_(source, alias) if alias else source
         else:
             msg = f"Unsupported source type for USING clause: {type(source)}"
             raise SQLBuilderError(msg)

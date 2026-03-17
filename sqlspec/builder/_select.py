@@ -739,7 +739,7 @@ class WhereClauseMixin:
             return parsed_expression_from_str
 
         converted_expr: exp.Expr = exp.convert(subquery)
-        return converted_expr  # type: ignore[return-value]
+        return converted_expr
 
     def _create_or_expression(self, conditions: "list[exp.Expr]") -> exp.Expr:
         if not conditions:

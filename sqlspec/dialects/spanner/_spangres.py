@@ -13,7 +13,7 @@ _ROW_DELETION_NAME = "ROW_DELETION_POLICY"
 _TTL_MIN_COMPONENTS = 2
 
 
-class SpangresParser(Postgres.Parser):
+class SpangresParser(Postgres.Parser):  # type: ignore[valid-type, misc]
     """Parse Spanner row deletion policies."""
 
     def _parse_property(self) -> exp.Expr:

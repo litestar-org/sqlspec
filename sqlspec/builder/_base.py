@@ -743,7 +743,7 @@ class QueryBuilder(ABC):
             logger.debug("Expression optimization failed, using original expression")
             return expression
         else:
-            return optimized  # type: ignore[return-value]
+            return optimized
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Converts the built query into a SQL statement object.

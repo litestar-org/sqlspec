@@ -110,8 +110,8 @@ def parse_table_expression(table_input: str, explicit_alias: str | None = None) 
             table_expr = from_clause.this
 
             if explicit_alias:
-                return exp.alias_(table_expr, explicit_alias)  # type:ignore[no-any-return]
-            return table_expr  # type:ignore[no-any-return]
+                return exp.alias_(table_expr, explicit_alias)
+            return table_expr  # type: ignore[no-any-return]
 
     return exp.to_table(table_input, alias=explicit_alias)
 
@@ -267,7 +267,7 @@ def extract_expression(value: Any) -> exp.Expr:
         return exp.Case(ifs=value.conditions, default=value.default)
     if isinstance(value, exp.Expr):
         return value
-    return exp.convert(value)  # type: ignore[return-value]
+    return exp.convert(value)
 
 
 def to_expression(value: Any) -> exp.Expr:
@@ -281,7 +281,7 @@ def to_expression(value: Any) -> exp.Expr:
     """
     if isinstance(value, exp.Expr):
         return value
-    return exp.convert(value)  # type: ignore[return-value]
+    return exp.convert(value)
 
 
 __all__ = (

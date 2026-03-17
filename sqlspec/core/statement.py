@@ -893,14 +893,14 @@ class SQL:
             return self._raw_expression.copy()
         # Fall back to parsing if enabled
         if not self._statement_config.enable_parsing:
-            return exp.Select().from_(f"({self._raw_sql})")  # type: ignore[return-value]
+            return exp.Select().from_(f"({self._raw_sql})")
         try:
             parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
             if isinstance(parsed, exp.Expr):
                 return parsed
-            return exp.Select().from_(f"({self._raw_sql})")  # type: ignore[return-value]
+            return exp.Select().from_(f"({self._raw_sql})")
         except ParseError:
-            return exp.Select().from_(f"({self._raw_sql})")  # type: ignore[return-value]
+            return exp.Select().from_(f"({self._raw_sql})")
 
     def _create_modified_copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
         """Create a new SQL instance with a modified expression.
@@ -1314,7 +1314,7 @@ class SQL:
         original_params = self._original_parameters
         config = self._statement_config
         is_many = self._is_many
-        stmt_expr: exp.Expr = new_expr if isinstance(new_expr, exp.Expr) else exp.Select().from_(new_expr)  # type: ignore[return-value]
+        stmt_expr: exp.Expr = new_expr if isinstance(new_expr, exp.Expr) else exp.Select().from_(new_expr)
         new_sql = SQL(stmt_expr, *original_params, statement_config=config, is_many=is_many)
 
         new_sql._named_parameters.update(self._named_parameters)
