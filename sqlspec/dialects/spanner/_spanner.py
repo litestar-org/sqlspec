@@ -78,7 +78,7 @@ def _render_interval_sql(generator: Any, expression: exp.Expr) -> str:
         if isinstance(expression.this, exp.Literal) and not expression.this.is_string and isinstance(unit, exp.Expr):
             return f"INTERVAL {generator.sql(expression.this)} {generator.sql(unit)}"
 
-    interval_sql = generator.sql(expression)
+    interval_sql = cast("str", generator.sql(expression))
     if not interval_sql.upper().startswith("INTERVAL"):
         return f"INTERVAL {interval_sql}"
     return interval_sql
