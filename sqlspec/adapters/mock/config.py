@@ -112,7 +112,7 @@ class _MockSyncSessionFactory(SyncPoolSessionFactory):
         self._connection = self._config.create_connection()
         return cast("MockConnection", self._connection)
 
-    def release_connection(self, conn: MockConnection) -> None:
+    def release_connection(self, conn: MockConnection, **kwargs: Any) -> None:
         if self._connection is not None:
             self._connection.close()
             self._connection = None
@@ -127,7 +127,7 @@ class _MockAsyncSessionFactory(AsyncPoolSessionFactory):
         self._connection = await self._config.create_connection()
         return cast("MockConnection", self._connection)
 
-    async def release_connection(self, conn: MockConnection) -> None:
+    async def release_connection(self, conn: MockConnection, **kwargs: Any) -> None:
         if self._connection is not None:
             self._connection.close()
             self._connection = None

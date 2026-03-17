@@ -156,7 +156,7 @@ class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
         self._connection = self._config.create_connection()
         return cast("AdbcConnection", self._connection)
 
-    def release_connection(self, _conn: "AdbcConnection") -> None:
+    def release_connection(self, _conn: "AdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
         self._connection.close()

@@ -138,7 +138,7 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
-    async def release_connection(self, _conn: "PsqlpyConnection") -> None:
+    async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             await self._ctx.__aexit__(None, None, None)
             self._ctx = None

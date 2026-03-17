@@ -140,7 +140,7 @@ class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
     def acquire_connection(self) -> "BigQueryConnection":
         return cast("BigQueryConnection", self._config.create_connection())
 
-    def release_connection(self, _conn: "BigQueryConnection") -> None:
+    def release_connection(self, _conn: "BigQueryConnection", **kwargs: Any) -> None:
         return None
 
 

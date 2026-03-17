@@ -169,7 +169,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
         return cast("MysqlConnectorSyncConnection", self._connection)
 
-    def release_connection(self, _conn: MysqlConnectorSyncConnection) -> None:
+    def release_connection(self, _conn: MysqlConnectorSyncConnection, **kwargs: Any) -> None:
         if self._connection is None:
             return
         self._connection.close()
@@ -201,7 +201,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
         self._connection = await self._config.create_connection()
         return cast("MysqlConnectorAsyncConnection", self._connection)
 
-    async def release_connection(self, _conn: MysqlConnectorAsyncConnection) -> None:
+    async def release_connection(self, _conn: MysqlConnectorAsyncConnection, **kwargs: Any) -> None:
         if self._connection is None:
             return
         await self._connection.close()

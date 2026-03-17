@@ -103,7 +103,7 @@ class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
         self._pool_conn = pool_conn
         return cast("AiosqliteConnection", pool_conn.connection)
 
-    async def release_connection(self, _conn: "AiosqliteConnection") -> None:
+    async def release_connection(self, _conn: "AiosqliteConnection", **kwargs: Any) -> None:
         if self._pool_conn is not None and self._config.connection_instance is not None:
             await self._config.connection_instance.release(self._pool_conn)
             self._pool_conn = None

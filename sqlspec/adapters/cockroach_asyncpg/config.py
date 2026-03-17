@@ -106,7 +106,7 @@ class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
         self._ctx = ctx
         return cast("CockroachAsyncpgConnection", await ctx.__aenter__())
 
-    async def release_connection(self, _conn: "CockroachAsyncpgConnection") -> None:
+    async def release_connection(self, _conn: "CockroachAsyncpgConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             await self._ctx.__aexit__(None, None, None)
             self._ctx = None

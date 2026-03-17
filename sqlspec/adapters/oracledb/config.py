@@ -167,7 +167,7 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._conn = self._config.connection_instance.acquire()
         return cast("OracleSyncConnection", self._conn)
 
-    def release_connection(self, _conn: "OracleSyncConnection") -> None:
+    def release_connection(self, _conn: "OracleSyncConnection", **kwargs: Any) -> None:
         if self._conn is None:
             return
         if self._config.connection_instance:
