@@ -29,8 +29,8 @@ def test_importing_sqlspec_dialects_registers_postgres_and_spanner_dialects(monk
         "sqlspec.dialects",
         "sqlspec.dialects.postgres",
         "sqlspec.dialects.spanner",
-        "sqlspec.dialects.postgres.pgvector",
-        "sqlspec.dialects.postgres.paradedb",
+        "sqlspec.dialects.postgres._pgvector",
+        "sqlspec.dialects.postgres._paradedb",
     ):
         monkeypatch.delitem(sys.modules, module_name, raising=False)
 

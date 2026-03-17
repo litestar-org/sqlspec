@@ -20,42 +20,12 @@ Also inherits pgvector distance operators from PGVector:
 
 from __future__ import annotations
 
-from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
-from sqlglot.tokens import TokenType  # type: ignore[attr-defined]  # pyright: ignore[reportPrivateImportUsage]
 
-from sqlspec.dialects.postgres.pgvector import PGVector, PGVectorGenerator, PGVectorParser, PGVectorTokenizer
+from sqlspec.dialects.postgres._parsers import ParadeDBParser, ParadeDBTokenizer, SearchOperator
+from sqlspec.dialects.postgres._pgvector import PGVector, PGVectorGenerator
 
 __all__ = ("ParadeDB",)
-
-_PARADEDB_SEARCH_TOKEN = TokenType.DAT
-
-
-class SearchOperator(exp.Binary):
-    """ParadeDB search operation that preserves the original operator."""
-
-    arg_types = {"this": True, "expression": True, "operator": True}
-
-
-class ParadeDBTokenizer(PGVectorTokenizer):
-    """Tokenizer with ParadeDB search operators and pgvector distance operators."""
-
-    KEYWORDS = {
-        **PGVectorTokenizer.KEYWORDS,
-        "@@@": _PARADEDB_SEARCH_TOKEN,
-        "&&&": _PARADEDB_SEARCH_TOKEN,
-        "|||": _PARADEDB_SEARCH_TOKEN,
-        "===": _PARADEDB_SEARCH_TOKEN,
-        "###": _PARADEDB_SEARCH_TOKEN,
-        "##": _PARADEDB_SEARCH_TOKEN,
-        "##>": _PARADEDB_SEARCH_TOKEN,
-    }
-
-
-class ParadeDBParser(PGVectorParser):
-    """Parser with ParadeDB search operators and pgvector distance operators."""
-
-    FACTOR = {**PGVectorParser.FACTOR, _PARADEDB_SEARCH_TOKEN: SearchOperator}
 
 
 class ParadeDBGenerator(PGVectorGenerator):

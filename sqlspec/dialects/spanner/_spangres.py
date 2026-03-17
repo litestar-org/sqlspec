@@ -1,38 +1,14 @@
 r"""Google Cloud Spanner PostgreSQL-interface dialect ("Spangres")."""
 
-from typing import cast
-
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
-from sqlglot.tokenizer_core import TokenType
+
+from sqlspec.dialects.spanner._parsers import SpangresParser
 
 __all__ = ("Spangres",)
 
-
 _ROW_DELETION_NAME = "ROW_DELETION_POLICY"
 _TTL_MIN_COMPONENTS = 2
-
-
-class SpangresParser(Postgres.Parser):  # type: ignore[valid-type, misc]
-    """Parse Spanner row deletion policies."""
-
-    def _parse_property(self) -> exp.Expr:
-        if self._match_text_seq("ROW", "DELETION", "POLICY"):
-            self._match(TokenType.L_PAREN)
-            self._match_text_seq("OLDER_THAN")
-            self._match(TokenType.L_PAREN)
-            column = cast("exp.Expr", self._parse_id_var())
-            self._match(TokenType.COMMA)
-            self._match_text_seq("INTERVAL")
-            interval = cast("exp.Expr", self._parse_expression())
-            self._match(TokenType.R_PAREN)
-            self._match(TokenType.R_PAREN)
-
-            return exp.Property(
-                this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])
-            )
-
-        return cast("exp.Expr", super()._parse_property())
 
 
 class SpangresGenerator(Postgres.Generator):

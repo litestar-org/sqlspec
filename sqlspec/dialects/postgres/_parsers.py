@@ -1,22 +1,25 @@
-"""PGVector dialect extending Postgres with vector distance operators.
+"""Compilable Parser and Tokenizer classes for PostgreSQL extension dialects.
 
-Adds support for pgvector distance operators:
-- <-> : L2 (Euclidean) distance (already in base Postgres)
-- <#> : Negative inner product
-- <=> : Cosine distance
-- <+> : L1 (Taxicab/Manhattan) distance
-- <~> : Hamming distance (binary vectors)
-- <%> : Jaccard distance (binary vectors)
+These classes use the plain ``type`` metaclass and can be compiled by mypyc.
+Generator and Dialect classes (which use custom metaclasses) remain in their
+respective dialect modules.
 """
 
 from __future__ import annotations
 
 from sqlglot import exp
-from sqlglot.dialects.dialect import Dialect
 from sqlglot.dialects.postgres import Postgres
+from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokens import TokenType  # type: ignore[attr-defined]  # pyright: ignore[reportPrivateImportUsage]
 
-__all__ = ("PGVector",)
+__all__ = (
+    "ParadeDBParser",
+    "ParadeDBTokenizer",
+    "PGVectorParser",
+    "PGVectorTokenizer",
+    "SearchOperator",
+    "VectorDistance",
+)
 
 # Use a single unused token type for all pgvector distance operators.
 # The actual operator string is captured during parsing and stored in the expression.
@@ -24,9 +27,18 @@ __all__ = ("PGVector",)
 # to work around the limitation: https://github.com/tobymao/sqlglot/issues/6949
 _PGVECTOR_DISTANCE_TOKEN = TokenType.CARET_AT
 
+# ParadeDB search operators use a separate unused token type.
+_PARADEDB_SEARCH_TOKEN = TokenType.DAT
 
-class VectorDistance(exp.Binary):
+
+class VectorDistance(exp.Expression, exp.Binary):
     """Vector distance operation that preserves the original operator."""
+
+    arg_types = {"this": True, "expression": True, "operator": True}
+
+
+class SearchOperator(exp.Expression, exp.Binary):
+    """ParadeDB search operation that preserves the original operator."""
 
     arg_types = {"this": True, "expression": True, "operator": True}
 
@@ -44,10 +56,10 @@ class PGVectorTokenizer(Postgres.Tokenizer):
     }
 
 
-class PGVectorParser(Postgres.Parser):  # type: ignore[valid-type, misc]
+class PGVectorParser(PostgresParser):
     """Parser that captures the original operator string for pgvector operations."""
 
-    FACTOR = {**Postgres.Parser.FACTOR, _PGVECTOR_DISTANCE_TOKEN: VectorDistance}
+    FACTOR = {**PostgresParser.FACTOR, _PGVECTOR_DISTANCE_TOKEN: VectorDistance}
 
     def _parse_factor(self) -> exp.Expr | None:
         parse_method = self._parse_exponent if self.EXPONENT else self._parse_unary
@@ -61,7 +73,7 @@ class PGVectorParser(Postgres.Parser):  # type: ignore[valid-type, misc]
 
             if not expression and klass is exp.IntDiv and self._prev.text.isalpha():
                 self._retreat(self._index - 1)
-                return this  # type: ignore[no-any-return]
+                return this
 
             if "operator" in klass.arg_types:
                 this = self.expression(
@@ -74,25 +86,25 @@ class PGVectorParser(Postgres.Parser):  # type: ignore[valid-type, misc]
                 this.set("typed", self.dialect.TYPED_DIVISION)
                 this.set("safe", self.dialect.SAFE_DIVISION)
 
-        return this  # type: ignore[no-any-return]
+        return this
 
 
-class PGVectorGenerator(Postgres.Generator):
-    """Generator that renders pgvector distance operators."""
+class ParadeDBTokenizer(PGVectorTokenizer):
+    """Tokenizer with ParadeDB search operators and pgvector distance operators."""
 
-    def vectordistance_sql(self, expression: VectorDistance) -> str:
-        op = expression.args.get("operator", "<->")
-        left = self.sql(expression, "this")
-        right = self.sql(expression, "expression")
-        return f"{left} {op} {right}"
-
-
-class PGVector(Postgres):
-    """PostgreSQL dialect with pgvector extension support."""
-
-    Tokenizer = PGVectorTokenizer
-    Parser = PGVectorParser
-    Generator = PGVectorGenerator
+    KEYWORDS = {
+        **PGVectorTokenizer.KEYWORDS,
+        "@@@": _PARADEDB_SEARCH_TOKEN,
+        "&&&": _PARADEDB_SEARCH_TOKEN,
+        "|||": _PARADEDB_SEARCH_TOKEN,
+        "===": _PARADEDB_SEARCH_TOKEN,
+        "###": _PARADEDB_SEARCH_TOKEN,
+        "##": _PARADEDB_SEARCH_TOKEN,
+        "##>": _PARADEDB_SEARCH_TOKEN,
+    }
 
 
-Dialect.classes["pgvector"] = PGVector
+class ParadeDBParser(PGVectorParser):
+    """Parser with ParadeDB search operators and pgvector distance operators."""
+
+    FACTOR = {**PGVectorParser.FACTOR, _PARADEDB_SEARCH_TOKEN: SearchOperator}

@@ -14,14 +14,12 @@ from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.generator import Generator
 
-from sqlspec.dialects.postgres.paradedb import ParadeDB
-from sqlspec.dialects.postgres.pgvector import PGVector
-from sqlspec.dialects.spanner import Spangres, Spanner
+from sqlspec.dialects import ParadeDB, PGVector, Spangres, Spanner
 
 __all__ = ("VectorDistance",)
 
 
-class VectorDistance(exp.Expr):
+class VectorDistance(exp.Expression, exp.Expr):
     """Vector distance expression with dialect-specific generation.
 
     Generates database-specific SQL for vector distance calculations:
