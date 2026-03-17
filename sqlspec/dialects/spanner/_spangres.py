@@ -29,6 +29,26 @@ def _original_postgres_parse_property() -> Any:
     return original
 
 
+def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
+    if isinstance(expression, exp.Alias):
+        alias = expression.args.get("alias")
+        if isinstance(alias, exp.Identifier) and isinstance(expression.this, exp.Expr):
+            return exp.Interval(this=expression.this.copy(), unit=alias.copy())
+    return expression
+
+
+def _render_interval_sql(generator: Any, expression: exp.Expr) -> str:
+    if isinstance(expression, exp.Interval):
+        unit = expression.args.get("unit")
+        if isinstance(expression.this, exp.Literal) and not expression.this.is_string and isinstance(unit, exp.Expr):
+            return f"INTERVAL {generator.sql(expression.this)} {generator.sql(unit)}"
+
+    interval_sql = generator.sql(expression)
+    if not interval_sql.upper().startswith("INTERVAL"):
+        return f"INTERVAL {interval_sql}"
+    return interval_sql
+
+
 def _spangres_parse_property(self: Any) -> exp.Expr:
     if _is_spangres_dialect(self) and self._match_text_seq("ROW", "DELETION", "POLICY"):
         self._match(TokenType.L_PAREN)
@@ -37,7 +57,7 @@ def _spangres_parse_property(self: Any) -> exp.Expr:
         column = cast("exp.Expr", self._parse_id_var())
         self._match(TokenType.COMMA)
         self._match_text_seq("INTERVAL")
-        interval = cast("exp.Expr", self._parse_expression())
+        interval = _normalize_interval_expression(cast("exp.Expr", self._parse_expression()))
         self._match(TokenType.R_PAREN)
         self._match(TokenType.R_PAREN)
 
@@ -65,9 +85,7 @@ class SpangresGenerator(Postgres.Generator):
             values = expression.args.get("value")
             if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
                 column = self.sql(values.expressions[0])
-                interval_sql = self.sql(values.expressions[1])
-                if not interval_sql.upper().startswith("INTERVAL"):
-                    interval_sql = f"INTERVAL {interval_sql}"
+                interval_sql = _render_interval_sql(self, values.expressions[1])
                 return f"ROW DELETION POLICY (OLDER_THAN({column}, {interval_sql}))"
 
         return super().property_sql(expression)

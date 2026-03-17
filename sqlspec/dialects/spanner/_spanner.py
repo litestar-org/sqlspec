@@ -64,6 +64,26 @@ def _build_interleave_property(parent: exp.Expr, on_delete: str | None = None) -
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
 
 
+def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
+    if isinstance(expression, exp.Alias):
+        alias = expression.args.get("alias")
+        if isinstance(alias, exp.Identifier) and isinstance(expression.this, exp.Expr):
+            return exp.Interval(this=expression.this.copy(), unit=alias.copy())
+    return expression
+
+
+def _render_interval_sql(generator: Any, expression: exp.Expr) -> str:
+    if isinstance(expression, exp.Interval):
+        unit = expression.args.get("unit")
+        if isinstance(expression.this, exp.Literal) and not expression.this.is_string and isinstance(unit, exp.Expr):
+            return f"INTERVAL {generator.sql(expression.this)} {generator.sql(unit)}"
+
+    interval_sql = generator.sql(expression)
+    if not interval_sql.upper().startswith("INTERVAL"):
+        return f"INTERVAL {interval_sql}"
+    return interval_sql
+
+
 def _extract_interleave_property(sql: str) -> tuple[str, exp.Property | None]:
     match = _INTERLEAVE_PATTERN.search(sql)
     if match is None:
@@ -114,7 +134,7 @@ def _spanner_parse_property(self: Any) -> exp.Expr:
             column = cast("exp.Expr", self._parse_id_var())
             self._match(TokenType.COMMA)
             self._match_text_seq("INTERVAL")
-            interval = cast("exp.Expr", self._parse_expression())
+            interval = _normalize_interval_expression(cast("exp.Expr", self._parse_expression()))
             self._match(TokenType.R_PAREN)
             self._match(TokenType.R_PAREN)
 
@@ -124,7 +144,7 @@ def _spanner_parse_property(self: Any) -> exp.Expr:
 
         if self._match_text_seq("TTL"):
             self._match_text_seq("INTERVAL")
-            interval = cast("exp.Expr", self._parse_expression())
+            interval = _normalize_interval_expression(cast("exp.Expr", self._parse_expression()))
             self._match_text_seq("ON")
             column = cast("exp.Expr", self._parse_id_var())
 
@@ -214,15 +234,13 @@ class SpannerGenerator(BigQuery.Generator):
             values = expression.args.get("value")
             if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
                 column = self.sql(values.expressions[0])
-                interval_sql = self.sql(values.expressions[1])
-                if not interval_sql.upper().startswith("INTERVAL"):
-                    interval_sql = f"INTERVAL {interval_sql}"
+                interval_sql = _render_interval_sql(self, values.expressions[1])
                 return f"ROW DELETION POLICY (OLDER_THAN({column}, {interval_sql}))"
 
         if isinstance(expression.this, exp.Literal) and expression.this.name.upper() == "TTL":
             values = expression.args.get("value")
             if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
-                interval = self.sql(values.expressions[0])
+                interval = _render_interval_sql(self, values.expressions[0]).removeprefix("INTERVAL ")
                 column = self.sql(values.expressions[1])
                 return f"TTL INTERVAL {interval} ON {column}"
 
