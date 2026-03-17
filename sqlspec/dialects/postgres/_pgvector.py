@@ -14,9 +14,22 @@ from __future__ import annotations
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.dialects.postgres import Postgres
 
-from sqlspec.dialects.postgres._parsers import PGVectorParser, PGVectorTokenizer, VectorDistance
+from sqlspec.dialects.postgres._parsers import _PGVECTOR_DISTANCE_TOKEN, PGVectorParser, VectorDistance
 
 __all__ = ("PGVector",)
+
+
+class PGVectorTokenizer(Postgres.Tokenizer):
+    """Tokenizer with pgvector distance operators."""
+
+    KEYWORDS = {
+        **Postgres.Tokenizer.KEYWORDS,
+        "<#>": _PGVECTOR_DISTANCE_TOKEN,
+        "<=>": _PGVECTOR_DISTANCE_TOKEN,
+        "<+>": _PGVECTOR_DISTANCE_TOKEN,
+        "<~>": _PGVECTOR_DISTANCE_TOKEN,
+        "<%>": _PGVECTOR_DISTANCE_TOKEN,
+    }
 
 
 class PGVectorGenerator(Postgres.Generator):

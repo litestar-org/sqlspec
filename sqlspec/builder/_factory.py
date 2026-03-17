@@ -1314,9 +1314,7 @@ class SQLFactory:
         return self._create_window_function("MIN", [col_expr], partition_by, order_by)
 
     @staticmethod
-    def sum(
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"], distinct: bool = False
-    ) -> AggregateExpression:
+    def sum(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"], distinct: bool = False) -> AggregateExpression:
         """Create a SUM expression.
 
         Args:
@@ -1685,9 +1683,7 @@ class SQLFactory:
 
     @staticmethod
     def nvl2(
-        column: str | exp.Expr,
-        value_if_not_null: str | exp.Expr | Any,
-        value_if_null: str | exp.Expr | Any,
+        column: str | exp.Expr, value_if_not_null: str | exp.Expr | Any, value_if_null: str | exp.Expr | Any
     ) -> ConversionExpression:
         """Create an NVL2 (Oracle-style) expression using CASE.
 
@@ -1800,9 +1796,7 @@ class SQLFactory:
         return Case()
 
     def row_number(
-        self,
-        partition_by: str | list[str] | exp.Expr | None = None,
-        order_by: str | list[str] | exp.Expr | None = None,
+        self, partition_by: str | list[str] | exp.Expr | None = None, order_by: str | list[str] | exp.Expr | None = None
     ) -> FunctionExpression:
         """Create a ROW_NUMBER() window function.
 
@@ -1816,9 +1810,7 @@ class SQLFactory:
         return self._create_window_function("ROW_NUMBER", [], partition_by, order_by)
 
     def rank(
-        self,
-        partition_by: str | list[str] | exp.Expr | None = None,
-        order_by: str | list[str] | exp.Expr | None = None,
+        self, partition_by: str | list[str] | exp.Expr | None = None, order_by: str | list[str] | exp.Expr | None = None
     ) -> FunctionExpression:
         """Create a RANK() window function.
 
@@ -1832,9 +1824,7 @@ class SQLFactory:
         return self._create_window_function("RANK", [], partition_by, order_by)
 
     def dense_rank(
-        self,
-        partition_by: str | list[str] | exp.Expr | None = None,
-        order_by: str | list[str] | exp.Expr | None = None,
+        self, partition_by: str | list[str] | exp.Expr | None = None, order_by: str | list[str] | exp.Expr | None = None
     ) -> FunctionExpression:
         """Create a DENSE_RANK() window function.
 

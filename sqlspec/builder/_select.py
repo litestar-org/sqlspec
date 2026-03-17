@@ -480,10 +480,7 @@ class WhereClauseMixin:
     def set_expression(self, expression: exp.Expr) -> None: ...
 
     def _create_parameterized_condition(
-        self,
-        column: str | exp.Column,
-        value: Any,
-        condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]",
+        self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]"
     ) -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
@@ -519,9 +516,7 @@ class WhereClauseMixin:
         builder.set_expression(expression)
         return cast("Self", builder)
 
-    def _handle_in_operator(
-        self, column_exp: exp.Expr, value: Any, column_name: str = "column"
-    ) -> exp.Expr:
+    def _handle_in_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         if has_parameter_builder(value) or isinstance(value, exp.Expr):
             subquery_expr = self._normalize_subquery_expression(value, builder)
@@ -539,9 +534,7 @@ class WhereClauseMixin:
         _, param_name = builder.add_parameter(value, name=param_name)
         return exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)])
 
-    def _handle_not_in_operator(
-        self, column_exp: exp.Expr, value: Any, column_name: str = "column"
-    ) -> exp.Expr:
+    def _handle_not_in_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         if has_parameter_builder(value) or isinstance(value, exp.Expr):
             subquery_expr = self._normalize_subquery_expression(value, builder)
@@ -567,9 +560,7 @@ class WhereClauseMixin:
         value_expr = exp.Null() if value is None else exp.convert(value)
         return exp.Not(this=exp.Is(this=column_exp, expression=value_expr))
 
-    def _handle_between_operator(
-        self, column_exp: exp.Expr, value: Any, column_name: str = "column"
-    ) -> exp.Expr:
+    def _handle_between_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
             builder = cast("SQLBuilderProtocol", self)
             low, high = value
@@ -583,9 +574,7 @@ class WhereClauseMixin:
         msg = f"BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
 
-    def _handle_not_between_operator(
-        self, column_exp: exp.Expr, value: Any, column_name: str = "column"
-    ) -> exp.Expr:
+    def _handle_not_between_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
             builder = cast("SQLBuilderProtocol", self)
             low, high = value
@@ -1104,9 +1093,7 @@ class WhereClauseMixin:
 
     def or_where(
         self,
-        condition: Union[
-            str, exp.Expr, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", SQL
-        ],
+        condition: Union[str, exp.Expr, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", SQL],
         *values: Any,
         operator: str | None = None,
         **kwargs: Any,

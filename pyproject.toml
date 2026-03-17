@@ -228,8 +228,8 @@ include = [
   "sqlspec/utils/singleton.py",            # Lightweight singleton helpers
   "sqlspec/utils/schema.py",               # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                # UUID utilities
-  "sqlspec/dialects/postgres/_parsers.py", # Parser+Tokenizer (type metaclass, mypyc-compilable)
-  "sqlspec/dialects/spanner/_parsers.py",  # Parser+Tokenizer (type metaclass, mypyc-compilable)
+  "sqlspec/dialects/postgres/_parsers.py", # Parser+Expression classes (no __slots__ in Parser base)
+  "sqlspec/dialects/spanner/_parsers.py",  # Parser classes (no __slots__ in Parser base)
 ]
 mypy-args = [
   "--ignore-missing-imports",

@@ -725,9 +725,7 @@ class SQL:
         new_sql._is_script = True
         return new_sql
 
-    def copy(
-        self, statement: "str | exp.Expr | None" = None, parameters: Any | None = None, **kwargs: Any
-    ) -> "SQL":
+    def copy(self, statement: "str | exp.Expr | None" = None, parameters: Any | None = None, **kwargs: Any) -> "SQL":
         """Create copy with modifications.
 
         Args:

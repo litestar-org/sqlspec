@@ -22,10 +22,25 @@ from __future__ import annotations
 
 from sqlglot.dialects.dialect import Dialect
 
-from sqlspec.dialects.postgres._parsers import ParadeDBParser, ParadeDBTokenizer, SearchOperator
-from sqlspec.dialects.postgres._pgvector import PGVector, PGVectorGenerator
+from sqlspec.dialects.postgres._parsers import _PARADEDB_SEARCH_TOKEN, ParadeDBParser, SearchOperator
+from sqlspec.dialects.postgres._pgvector import PGVector, PGVectorGenerator, PGVectorTokenizer
 
 __all__ = ("ParadeDB",)
+
+
+class ParadeDBTokenizer(PGVectorTokenizer):
+    """Tokenizer with ParadeDB search operators and pgvector distance operators."""
+
+    KEYWORDS = {
+        **PGVectorTokenizer.KEYWORDS,
+        "@@@": _PARADEDB_SEARCH_TOKEN,
+        "&&&": _PARADEDB_SEARCH_TOKEN,
+        "|||": _PARADEDB_SEARCH_TOKEN,
+        "===": _PARADEDB_SEARCH_TOKEN,
+        "###": _PARADEDB_SEARCH_TOKEN,
+        "##": _PARADEDB_SEARCH_TOKEN,
+        "##>": _PARADEDB_SEARCH_TOKEN,
+    }
 
 
 class ParadeDBGenerator(PGVectorGenerator):

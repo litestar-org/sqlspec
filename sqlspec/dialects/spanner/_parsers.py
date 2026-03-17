@@ -1,42 +1,25 @@
-"""Compilable Parser and Tokenizer classes for Spanner dialects.
+"""Compilable Parser classes for Spanner dialects.
 
-These classes use the plain ``type`` metaclass and can be compiled by mypyc.
-Generator and Dialect classes (which use custom metaclasses) remain in their
-respective dialect modules.
+Parser subclasses can be compiled by mypyc (sqlglot's Parser has no __slots__).
+Tokenizer subclasses cannot be compiled (Tokenizer has __slots__) and remain
+in the dialect modules.
 """
 
 from typing import cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
-from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.parsers.bigquery import BigQueryParser
 from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokenizer_core import TokenType
 
-__all__ = (
-    "SpangresParser",
-    "SpannerParser",
-    "SpannerTokenizer",
-)
+__all__ = ("SpangresParser", "SpannerParser")
 
-_SPANNER_KEYWORDS: "dict[str, TokenType]" = {}
-interleave_token = cast("TokenType | None", TokenType.__dict__.get("INTERLEAVE"))
-if interleave_token is not None:
-    _SPANNER_KEYWORDS["INTERLEAVE"] = interleave_token
-ttl_token = cast("TokenType | None", TokenType.__dict__.get("TTL"))
-if ttl_token is not None:
-    _SPANNER_KEYWORDS["TTL"] = ttl_token
-
-_TTL_MIN_COMPONENTS = 2
 _ROW_DELETION_NAME = "ROW_DELETION_POLICY"
+_TTL_MIN_COMPONENTS = 2
 
 
-class SpannerTokenizer(BigQuery.Tokenizer):
-    """Tokenizer adds Spanner-only keywords when supported by sqlglot."""
-
-    KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, **_SPANNER_KEYWORDS}
-
-
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SpannerParser(BigQueryParser):
     """Parse Spanner extensions such as INTERLEAVE and row deletion policies."""
 
@@ -90,6 +73,7 @@ class SpannerParser(BigQueryParser):
         return cast("exp.Expr", super()._parse_property())
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SpangresParser(PostgresParser):
     """Parse Spanner row deletion policies."""
 

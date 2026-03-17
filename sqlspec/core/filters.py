@@ -462,9 +462,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: list[exp.Expr] = [
-            exp.Placeholder(this=param_name) for param_name in resolved_names
-        ]
+        placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
@@ -520,9 +518,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: list[exp.Expr] = [
-            exp.Placeholder(this=param_name) for param_name in resolved_names
-        ]
+        placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))

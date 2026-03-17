@@ -199,9 +199,7 @@ def hash_sql_statement(statement: "SQL") -> str:
     return f"sql:{hash(tuple(state_components))}"
 
 
-def hash_expression_node(
-    node: "exp.Expr", include_children: bool = True, dialect: str | None = None
-) -> str:
+def hash_expression_node(node: "exp.Expr", include_children: bool = True, dialect: str | None = None) -> str:
     """Generate cache key for an expression node.
 
     Args:

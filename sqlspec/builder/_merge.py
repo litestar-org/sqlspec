@@ -436,10 +436,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
     def set_expression(self, expression: exp.Expr) -> None: ...
 
     def when_matched_then_update(
-        self,
-        set_values: dict[str, Any] | None = None,
-        condition: str | exp.Expr | None = None,
-        **assignments: Any,
+        self, set_values: dict[str, Any] | None = None, condition: str | exp.Expr | None = None, **assignments: Any
     ) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):

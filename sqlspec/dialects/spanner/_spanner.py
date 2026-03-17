@@ -5,15 +5,32 @@ Extends the BigQuery dialect with Spanner-only DDL features:
 for row-level time-to-live policies (GoogleSQL).
 """
 
+from typing import cast
+
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.dialects.spanner._parsers import SpannerParser, SpannerTokenizer
+from sqlspec.dialects.spanner._parsers import SpannerParser
 
 __all__ = ("Spanner",)
 
+_SPANNER_KEYWORDS: "dict[str, TokenType]" = {}
+interleave_token = cast("TokenType | None", TokenType.__dict__.get("INTERLEAVE"))
+if interleave_token is not None:
+    _SPANNER_KEYWORDS["INTERLEAVE"] = interleave_token
+ttl_token = cast("TokenType | None", TokenType.__dict__.get("TTL"))
+if ttl_token is not None:
+    _SPANNER_KEYWORDS["TTL"] = ttl_token
+
 _TTL_MIN_COMPONENTS = 2
 _ROW_DELETION_NAME = "ROW_DELETION_POLICY"
+
+
+class SpannerTokenizer(BigQuery.Tokenizer):
+    """Tokenizer adds Spanner-only keywords when supported by sqlglot."""
+
+    KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, **_SPANNER_KEYWORDS}
 
 
 class SpannerGenerator(BigQuery.Generator):

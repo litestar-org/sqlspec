@@ -1,25 +1,20 @@
-"""Compilable Parser and Tokenizer classes for PostgreSQL extension dialects.
+"""Compilable Parser and Expression classes for PostgreSQL extension dialects.
 
-These classes use the plain ``type`` metaclass and can be compiled by mypyc.
-Generator and Dialect classes (which use custom metaclasses) remain in their
-respective dialect modules.
+Parser subclasses and Expression types can be compiled by mypyc (sqlglot's
+Parser has no __slots__).  Tokenizer subclasses cannot be compiled (Tokenizer
+has __slots__) and remain in the dialect modules.
 """
 
 from __future__ import annotations
 
+from typing import ClassVar
+
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
-from sqlglot.dialects.postgres import Postgres
 from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokens import TokenType  # type: ignore[attr-defined]  # pyright: ignore[reportPrivateImportUsage]
 
-__all__ = (
-    "ParadeDBParser",
-    "ParadeDBTokenizer",
-    "PGVectorParser",
-    "PGVectorTokenizer",
-    "SearchOperator",
-    "VectorDistance",
-)
+__all__ = ("PGVectorParser", "ParadeDBParser", "SearchOperator", "VectorDistance")
 
 # Use a single unused token type for all pgvector distance operators.
 # The actual operator string is captured during parsing and stored in the expression.
@@ -31,35 +26,28 @@ _PGVECTOR_DISTANCE_TOKEN = TokenType.CARET_AT
 _PARADEDB_SEARCH_TOKEN = TokenType.DAT
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class VectorDistance(exp.Expression, exp.Binary):
     """Vector distance operation that preserves the original operator."""
 
-    arg_types = {"this": True, "expression": True, "operator": True}
+    arg_types: ClassVar[dict[str, bool]] = {"this": True, "expression": True, "operator": True}
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SearchOperator(exp.Expression, exp.Binary):
     """ParadeDB search operation that preserves the original operator."""
 
-    arg_types = {"this": True, "expression": True, "operator": True}
+    arg_types: ClassVar[dict[str, bool]] = {"this": True, "expression": True, "operator": True}
 
 
-class PGVectorTokenizer(Postgres.Tokenizer):
-    """Tokenizer with pgvector distance operators."""
-
-    KEYWORDS = {
-        **Postgres.Tokenizer.KEYWORDS,
-        "<#>": _PGVECTOR_DISTANCE_TOKEN,
-        "<=>": _PGVECTOR_DISTANCE_TOKEN,
-        "<+>": _PGVECTOR_DISTANCE_TOKEN,
-        "<~>": _PGVECTOR_DISTANCE_TOKEN,
-        "<%>": _PGVECTOR_DISTANCE_TOKEN,
-    }
-
-
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PGVectorParser(PostgresParser):
     """Parser that captures the original operator string for pgvector operations."""
 
-    FACTOR = {**PostgresParser.FACTOR, _PGVECTOR_DISTANCE_TOKEN: VectorDistance}
+    FACTOR: ClassVar[dict[TokenType, type[exp.Binary]]] = {
+        **PostgresParser.FACTOR,
+        _PGVECTOR_DISTANCE_TOKEN: VectorDistance,
+    }
 
     def _parse_factor(self) -> exp.Expr | None:
         parse_method = self._parse_exponent if self.EXPONENT else self._parse_unary
@@ -89,22 +77,11 @@ class PGVectorParser(PostgresParser):
         return this
 
 
-class ParadeDBTokenizer(PGVectorTokenizer):
-    """Tokenizer with ParadeDB search operators and pgvector distance operators."""
-
-    KEYWORDS = {
-        **PGVectorTokenizer.KEYWORDS,
-        "@@@": _PARADEDB_SEARCH_TOKEN,
-        "&&&": _PARADEDB_SEARCH_TOKEN,
-        "|||": _PARADEDB_SEARCH_TOKEN,
-        "===": _PARADEDB_SEARCH_TOKEN,
-        "###": _PARADEDB_SEARCH_TOKEN,
-        "##": _PARADEDB_SEARCH_TOKEN,
-        "##>": _PARADEDB_SEARCH_TOKEN,
-    }
-
-
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ParadeDBParser(PGVectorParser):
     """Parser with ParadeDB search operators and pgvector distance operators."""
 
-    FACTOR = {**PGVectorParser.FACTOR, _PARADEDB_SEARCH_TOKEN: SearchOperator}
+    FACTOR: ClassVar[dict[TokenType, type[exp.Binary]]] = {
+        **PGVectorParser.FACTOR,
+        _PARADEDB_SEARCH_TOKEN: SearchOperator,
+    }

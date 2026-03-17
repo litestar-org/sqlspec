@@ -490,9 +490,7 @@ def is_simple_insert(sql: str, expression: "exp.Expr | None" = None, *, allow_pa
         return False
 
 
-def extract_insert_table(
-    sql: str, expression: "exp.Expr | None" = None, *, allow_parse: bool = True
-) -> str | None:
+def extract_insert_table(sql: str, expression: "exp.Expr | None" = None, *, allow_parse: bool = True) -> str | None:
     """Extract table name from INSERT statement using sqlglot.
 
     Args:

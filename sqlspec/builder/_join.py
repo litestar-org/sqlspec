@@ -34,9 +34,7 @@ def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.
     return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def _parse_join_condition(
-    builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None
-) -> exp.Expr | None:
+def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None) -> exp.Expr | None:
     if on is None:
         return None
     if isinstance(on, str):
@@ -268,10 +266,7 @@ class JoinClauseMixin:
         return cast("Self", builder)
 
     def lateral_join(
-        self,
-        table: str | exp.Expr | Any,
-        on: Union[str, exp.Expr, "SQL"] | None = None,
-        alias: str | None = None,
+        self, table: str | exp.Expr | Any, on: Union[str, exp.Expr, "SQL"] | None = None, alias: str | None = None
     ) -> Self:
         """Create a LATERAL JOIN.
 
@@ -296,10 +291,7 @@ class JoinClauseMixin:
         return self.join(table, on=on, alias=alias, join_type="INNER", lateral=True)
 
     def left_lateral_join(
-        self,
-        table: str | exp.Expr | Any,
-        on: Union[str, exp.Expr, "SQL"] | None = None,
-        alias: str | None = None,
+        self, table: str | exp.Expr | Any, on: Union[str, exp.Expr, "SQL"] | None = None, alias: str | None = None
     ) -> Self:
         """Create a LEFT LATERAL JOIN.
 

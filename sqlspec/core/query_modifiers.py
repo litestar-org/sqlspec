@@ -235,9 +235,7 @@ def create_not_in_condition(column: str | exp.Column | exp.Expr, param_names: li
     return exp.Not(this=in_expr)
 
 
-def create_between_condition(
-    column: str | exp.Column | exp.Expr, low_param: str, high_param: str
-) -> exp.Expr:
+def create_between_condition(column: str | exp.Column | exp.Expr, low_param: str, high_param: str) -> exp.Expr:
     """Create BETWEEN condition.
 
     Args:
@@ -374,9 +372,7 @@ def apply_offset(expression: "exp.Expr", offset_value: int) -> "exp.Expr":
     return expression.offset(offset_value, copy=False)
 
 
-def apply_select_only(
-    expression: "exp.Expr", columns: "tuple[str | exp.Expr, ...]"
-) -> "exp.Expr":
+def apply_select_only(expression: "exp.Expr", columns: "tuple[str | exp.Expr, ...]") -> "exp.Expr":
     """Replace SELECT clause with only specified columns.
 
     Args:
@@ -407,10 +403,7 @@ def apply_select_only(
 # =============================================================================
 
 
-def safe_modify_with_cte(
-    expression: "exp.Expr",
-    modification_fn: "Callable[[exp.Expr], exp.Expr]",
-) -> "exp.Expr":
+def safe_modify_with_cte(expression: "exp.Expr", modification_fn: "Callable[[exp.Expr], exp.Expr]") -> "exp.Expr":
     """Safely apply a modification, preserving CTEs at top level.
 
     This ensures CTEs stay at the outermost level even when the modification

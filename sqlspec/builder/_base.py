@@ -524,9 +524,7 @@ class QueryBuilder(ABC):
             self.add_parameter(value, name=new_name)
         return param_mapping
 
-    def _update_placeholders_in_expression(
-        self, expression: exp.Expr, param_mapping: dict[str, str]
-    ) -> exp.Expr:
+    def _update_placeholders_in_expression(self, expression: exp.Expr, param_mapping: dict[str, str]) -> exp.Expr:
         """Update parameter placeholders in expression to use new names.
 
         Args:
