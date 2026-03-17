@@ -81,27 +81,49 @@ def _train_type_dispatch() -> None:
 
 def _train_query_cache() -> None:
     """Exercise QueryCache LRU operations — cache hits, misses, and eviction."""
+    from sqlspec.core.compiler import OperationProfile
+    from sqlspec.core.parameters._types import ParameterInfo, ParameterProfile, ParameterStyle
+    from sqlspec.core.statement import ProcessedState
     from sqlspec.driver._query_cache import CachedQuery, QueryCache
 
     cache = QueryCache(max_size=64)
 
     # Build dummy cached entries
-    from sqlspec.core.parameters._types import ParameterStyle
+    parameter_profile = ParameterProfile((
+        ParameterInfo(name=None, style=ParameterStyle.QMARK, position=1, ordinal=1, placeholder_text="?"),
+    ))
+    operation_profile = OperationProfile(returns_rows=True, modifies_rows=False)
 
     dummy_entries = []
     for i in range(100):
+        compiled_sql = f"SELECT * FROM t{i} WHERE id = ?"
+        processed_state = ProcessedState(
+            compiled_sql=compiled_sql,
+            execution_parameters=(),
+            parsed_expression=None,
+            operation_type="SELECT",
+            input_named_parameters=(),
+            applied_wrap_types=False,
+            filter_hash=0,
+            parameter_fingerprint=None,
+            parameter_casts={},
+            validation_errors=[],
+            parameter_profile=parameter_profile,
+            operation_profile=operation_profile,
+            is_many=False,
+        )
         entry = CachedQuery(
-            compiled_sql=f"SELECT * FROM t{i} WHERE id = ?",
-            parameter_profile=ParameterStyle.QMARK,  # type: ignore[arg-type]
+            compiled_sql=compiled_sql,
+            parameter_profile=parameter_profile,
             input_named_parameters=(),
             applied_wrap_types=False,
             parameter_casts={},
             operation_type="SELECT",  # type: ignore[arg-type]
-            operation_profile="read",  # type: ignore[arg-type]
-            param_count=1,
-            processed_state="compiled",  # type: ignore[arg-type]
+            operation_profile=operation_profile,
+            param_count=parameter_profile.total_count,
+            processed_state=processed_state,
         )
-        dummy_entries.append((f"SELECT * FROM t{i} WHERE id = ?", entry))
+        dummy_entries.append((compiled_sql, entry))
 
     # Exercise cache set (with eviction) and get (hits + misses)
     for _ in range(5000):
