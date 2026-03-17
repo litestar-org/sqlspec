@@ -363,9 +363,12 @@ def _train_builder_and_where() -> None:
 
 def _train_adbc_sqlite() -> None:
     """Exercise ADBC driver via SQLite backend."""
+    import pyarrow as pa
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.adbc.config import AdbcConfig
 
+    _ = pa.__version__
     spec = SQLSpec()
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
