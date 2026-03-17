@@ -383,7 +383,12 @@ def main() -> None:
 
     for name, fn in workloads:
         t0 = time.perf_counter()
-        fn()
+        try:
+            fn()
+        except ImportError as exc:
+            elapsed = time.perf_counter() - t0
+            print(f"  {name}: skipped ({exc.name} not installed)")  # noqa: T201
+            continue
         elapsed = time.perf_counter() - t0
         print(f"  {name}: {elapsed:.2f}s")  # noqa: T201
 
