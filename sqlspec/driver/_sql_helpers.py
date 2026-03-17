@@ -29,7 +29,7 @@ __all__ = (
 DEFAULT_PRETTY: Final[bool] = True
 
 
-def parse_statement_safely(statement: "Statement", dialect: "DialectType | None") -> "exp.Expression":
+def parse_statement_safely(statement: "Statement", dialect: "DialectType | None") -> "exp.Expr":
     """Parse statement with error handling.
 
     Args:
@@ -39,9 +39,6 @@ def parse_statement_safely(statement: "Statement", dialect: "DialectType | None"
     Returns:
         Parsed expression.
 
-    Raises:
-        SQLConversionError: If parsing fails.
-
     """
     try:
         sql_string = str(statement)
@@ -50,7 +47,7 @@ def parse_statement_safely(statement: "Statement", dialect: "DialectType | None"
         raise_parse_error(e)
 
 
-def generate_sql_safely(expression: "exp.Expression", dialect: "DialectType | None", pretty: bool) -> str:
+def generate_sql_safely(expression: "exp.Expr", dialect: "DialectType | None", pretty: bool) -> str:
     """Generate SQL with error handling.
 
     Args:
@@ -60,9 +57,6 @@ def generate_sql_safely(expression: "exp.Expression", dialect: "DialectType | No
 
     Returns:
         Generated SQL string.
-
-    Raises:
-        SQLConversionError: If generation fails.
 
     """
     try:
@@ -88,17 +82,14 @@ def convert_to_dialect(
     Returns:
         SQL string in target dialect.
 
-    Raises:
-        SQLConversionError: If conversion fails.
-
     """
-    parsed_expression: exp.Expression | None = None
+    parsed_expression: exp.Expr | None = None
 
     if statement is not None and isinstance(statement, SQL):
         if statement.expression is None:
             raise_statement_parse_error()
         parsed_expression = statement.expression
-    elif isinstance(statement, exp.Expression):
+    elif isinstance(statement, exp.Expr):
         parsed_expression = statement
     else:
         parsed_expression = parse_statement_safely(statement, source_dialect)

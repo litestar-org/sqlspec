@@ -1,0 +1,55 @@
+name: PGO Validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate-pgo:
+    name: Validate PGO three-stage build (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel
+
+      - name: Build wheel with PGO
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD: "cp312-*"
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_ARCHS_LINUX: "x86_64"
+          CIBW_SKIP: "*-musllinux*"
+
+          CIBW_BEFORE_BUILD_LINUX: >-
+            pip install hatch-mypyc hatchling &&
+            PGO_DIR=/tmp/sqlspec-pgo &&
+            BUILD_DIR=/tmp/sqlspec-mypyc-build &&
+            mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
+            CFLAGS="-fprofile-generate=$PGO_DIR"
+            HATCH_BUILD_HOOKS_ENABLE=1
+            HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
+            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            pip install {package} --no-build-isolation &&
+            pip install anyio pyarrow oracledb asyncpg aiosqlite duckdb adbc-driver-sqlite adbc-driver-manager &&
+            python /project/tools/scripts/pgo_training.py &&
+            pip uninstall -y sqlspec &&
+            rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
+
+          CIBW_ENVIRONMENT_LINUX: >-
+            HATCH_BUILD_HOOKS_ENABLE=1
+            HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
+            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+
+          CIBW_TEST_COMMAND: >-
+            python -c "import sqlspec; from sqlspec.driver._query_cache import QueryCache; print('PGO wheel OK')"
+
+      - name: List built wheels
+        run: ls -la wheelhouse/

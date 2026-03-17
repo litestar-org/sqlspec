@@ -462,9 +462,7 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: list[exp.Expression] = [
-            exp.Placeholder(this=param_name) for param_name in resolved_names
-        ]
+        placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
@@ -520,9 +518,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
-        placeholder_expressions: list[exp.Expression] = [
-            exp.Placeholder(this=param_name) for param_name in resolved_names
-        ]
+        placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
@@ -585,7 +581,7 @@ class LimitOffsetFilter(PaginationFilter):
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
         # Prefer cached expression to avoid re-parsing
-        current_statement: exp.Expression
+        current_statement: exp.Expr
         if statement.statement_expression is not None:
             current_statement = statement.statement_expression.copy()
         elif statement.raw_expression is not None:
@@ -645,7 +641,7 @@ class OrderByFilter(StatementFilter):
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
         # Prefer cached expression to avoid re-parsing
-        current_statement: exp.Expression
+        current_statement: exp.Expr
         if statement.statement_expression is not None:
             current_statement = statement.statement_expression.copy()
         elif statement.raw_expression is not None:

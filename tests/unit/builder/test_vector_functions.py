@@ -9,6 +9,7 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import Column, VectorDistance
+from sqlspec.builder._vector_distance import is_vector_distance_expression, vector_distance_metric
 
 pytestmark = pytest.mark.xdist_group("builder")
 
@@ -21,9 +22,9 @@ def test_vector_distance_expression_creation() -> None:
 
     distance_expr = VectorDistance(this=col_expr, expression=vec_expr, metric=metric_expr)
 
-    assert distance_expr.left == col_expr
-    assert distance_expr.right == vec_expr
-    assert distance_expr.metric == "euclidean"
+    assert distance_expr.this == col_expr
+    assert distance_expr.expression == vec_expr
+    assert vector_distance_metric(distance_expr) == "euclidean"
 
 
 def test_vector_distance_metric_extraction() -> None:
@@ -33,7 +34,7 @@ def test_vector_distance_metric_extraction() -> None:
 
     for metric in ["euclidean", "cosine", "inner_product", "euclidean_squared"]:
         distance_expr = VectorDistance(this=col_expr, expression=vec_expr, metric=exp.Literal.string(metric))
-        assert distance_expr.metric == metric
+        assert vector_distance_metric(distance_expr) == metric
 
 
 def test_column_vector_distance_with_list() -> None:
@@ -41,8 +42,8 @@ def test_column_vector_distance_with_list() -> None:
     col = Column("embedding")
     distance = col.vector_distance([0.1, 0.2, 0.3])
 
-    assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
-    assert distance._expression.metric == "euclidean"  # pyright: ignore[reportPrivateUsage]
+    assert is_vector_distance_expression(distance._expression)  # pyright: ignore[reportPrivateUsage]
+    assert vector_distance_metric(distance._expression) == "euclidean"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_column_vector_distance_with_column() -> None:
@@ -51,8 +52,8 @@ def test_column_vector_distance_with_column() -> None:
     col2 = Column("embedding2")
     distance = col1.vector_distance(col2)
 
-    assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
-    assert distance._expression.metric == "euclidean"  # pyright: ignore[reportPrivateUsage]
+    assert is_vector_distance_expression(distance._expression)  # pyright: ignore[reportPrivateUsage]
+    assert vector_distance_metric(distance._expression) == "euclidean"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_column_vector_distance_with_expression() -> None:
@@ -61,8 +62,8 @@ def test_column_vector_distance_with_expression() -> None:
     vec_expr = exp.Array(expressions=[exp.Literal.number(0.5)])
     distance = col.vector_distance(vec_expr)
 
-    assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
-    assert distance._expression.metric == "euclidean"  # pyright: ignore[reportPrivateUsage]
+    assert is_vector_distance_expression(distance._expression)  # pyright: ignore[reportPrivateUsage]
+    assert vector_distance_metric(distance._expression) == "euclidean"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_column_vector_distance_invalid_metric() -> None:
@@ -88,8 +89,8 @@ def test_column_vector_distance_all_metrics() -> None:
 
     for metric in valid_metrics:
         distance = col.vector_distance([0.1, 0.2], metric=metric)
-        assert isinstance(distance._expression, VectorDistance)  # pyright: ignore[reportPrivateUsage]
-        assert distance._expression.metric == metric  # pyright: ignore[reportPrivateUsage]
+        assert is_vector_distance_expression(distance._expression)  # pyright: ignore[reportPrivateUsage]
+        assert vector_distance_metric(distance._expression) == metric  # pyright: ignore[reportPrivateUsage]
 
 
 def test_cosine_similarity_basic() -> None:
@@ -107,8 +108,8 @@ def test_cosine_similarity_basic() -> None:
     assert isinstance(right_operand, exp.Paren)
 
     inner_expr = right_operand.this
-    assert isinstance(inner_expr, VectorDistance)
-    assert inner_expr.metric == "cosine"
+    assert is_vector_distance_expression(inner_expr)
+    assert vector_distance_metric(inner_expr) == "cosine"
 
 
 def test_cosine_similarity_with_column() -> None:
@@ -121,7 +122,7 @@ def test_cosine_similarity_with_column() -> None:
 
     right_operand = similarity._expression.expression  # pyright: ignore[reportPrivateUsage]
     assert isinstance(right_operand, exp.Paren)
-    assert isinstance(right_operand.this, VectorDistance)
+    assert is_vector_distance_expression(right_operand.this)
 
 
 def test_postgres_euclidean_distance_sql() -> None:

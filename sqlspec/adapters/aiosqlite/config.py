@@ -1,7 +1,7 @@
 """Aiosqlite database configuration."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
@@ -16,6 +16,7 @@ from sqlspec.adapters.aiosqlite.pool import (
 )
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.logging import get_logger
 
@@ -86,11 +87,11 @@ class AiosqliteDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class _AiosqliteSessionFactory:
-    __slots__ = ("_config", "_pool_conn")
+class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
+    __slots__ = ("_pool_conn",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._pool_conn: AiosqlitePoolConnection | None = None
 
     async def acquire_connection(self) -> "AiosqliteConnection":
@@ -100,21 +101,21 @@ class _AiosqliteSessionFactory:
             self._config.connection_instance = pool
         pool_conn = await pool.acquire()
         self._pool_conn = pool_conn
-        return pool_conn.connection
+        return cast("AiosqliteConnection", pool_conn.connection)
 
-    async def release_connection(self, _conn: "AiosqliteConnection") -> None:
+    async def release_connection(self, _conn: "AiosqliteConnection", **kwargs: Any) -> None:
         if self._pool_conn is not None and self._config.connection_instance is not None:
             await self._config.connection_instance.release(self._pool_conn)
             self._pool_conn = None
 
 
-class AiosqliteConnectionContext:
+class AiosqliteConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for AioSQLite connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def __aenter__(self) -> AiosqliteConnection:
@@ -123,7 +124,8 @@ class AiosqliteConnectionContext:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
         self._ctx = pool.get_connection()
-        return await self._ctx.__aenter__()
+        assert self._ctx is not None
+        return cast("AiosqliteConnection", await self._ctx.__aenter__())
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

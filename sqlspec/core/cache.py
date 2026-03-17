@@ -603,7 +603,7 @@ class CachedStatement:
         self,
         compiled_sql: str,
         parameters: "tuple[Any, ...] | list[Any] | dict[str, Any] | None",
-        expression: "exp.Expression | None",
+        expression: "exp.Expr | None",
     ) -> None:
         self.compiled_sql = compiled_sql
         self.parameters = parameters

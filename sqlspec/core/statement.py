@@ -132,7 +132,7 @@ class ProcessedState:
         self,
         compiled_sql: str,
         execution_parameters: Any,
-        parsed_expression: "exp.Expression | None" = None,
+        parsed_expression: "exp.Expr | None" = None,
         operation_type: "OperationType" = "COMMAND",
         input_named_parameters: "tuple[str, ...] | None" = None,
         applied_wrap_types: bool = False,
@@ -229,7 +229,7 @@ class SQL:
 
     def __init__(
         self,
-        statement: "str | exp.Expression | 'SQL'",
+        statement: "str | exp.Expr | 'SQL'",
         *parameters: "Any | StatementFilter | list[Any | StatementFilter]",
         statement_config: "StatementConfig | None" = None,
         is_many: bool | None = None,
@@ -257,7 +257,7 @@ class SQL:
         self._positional_parameters: list[Any] = []
         self._sql_param_counters = {}
         self._is_script = False
-        self._raw_expression: exp.Expression | None = None
+        self._raw_expression: exp.Expr | None = None
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)
@@ -277,7 +277,7 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _create_auto_config(
-        self, _statement: "str | exp.Expression | 'SQL'", _parameters: tuple, _kwargs: "dict[str, Any]"
+        self, _statement: "str | exp.Expr | 'SQL'", _parameters: tuple, _kwargs: "dict[str, Any]"
     ) -> "StatementConfig":
         """Create default StatementConfig when none provided.
 
@@ -484,14 +484,14 @@ class SQL:
         return self._statement_config
 
     @property
-    def expression(self) -> "exp.Expression | None":
+    def expression(self) -> "exp.Expr | None":
         """SQLGlot expression."""
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
         return self._raw_expression
 
     @property
-    def raw_expression(self) -> "exp.Expression | None":
+    def raw_expression(self) -> "exp.Expr | None":
         """Original expression supplied at construction, if available."""
         return self._raw_expression
 
@@ -523,7 +523,7 @@ class SQL:
         return self._dialect
 
     @property
-    def statement_expression(self) -> "exp.Expression | None":
+    def statement_expression(self) -> "exp.Expr | None":
         """Get parsed statement expression (public API).
 
         Returns:
@@ -725,9 +725,7 @@ class SQL:
         new_sql._is_script = True
         return new_sql
 
-    def copy(
-        self, statement: "str | exp.Expression | None" = None, parameters: Any | None = None, **kwargs: Any
-    ) -> "SQL":
+    def copy(self, statement: "str | exp.Expr | None" = None, parameters: Any | None = None, **kwargs: Any) -> "SQL":
         """Create copy with modifications.
 
         Args:
@@ -786,7 +784,7 @@ class SQL:
         *,
         compiled_sql: str,
         execution_parameters: Any,
-        parsed_expression: "exp.Expression | None",
+        parsed_expression: "exp.Expr | None",
         operation_type: "OperationType",
         input_named_parameters: "tuple[str, ...] | None",
         applied_wrap_types: bool,
@@ -874,7 +872,7 @@ class SQL:
         self._sql_param_counters[prefixed_base] = next_index
         return candidate
 
-    def _get_or_parse_expression(self) -> exp.Expression:
+    def _get_or_parse_expression(self) -> exp.Expr:
         """Get the current expression or parse the raw SQL.
 
         Prefers cached parsed expression over re-parsing raw SQL.
@@ -895,11 +893,14 @@ class SQL:
         if not self._statement_config.enable_parsing:
             return exp.Select().from_(f"({self._raw_sql})")
         try:
-            return sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            if isinstance(parsed, exp.Expr):
+                return parsed
+            return exp.Select().from_(f"({self._raw_sql})")
         except ParseError:
             return exp.Select().from_(f"({self._raw_sql})")
 
-    def _create_modified_copy_with_expression(self, new_expr: exp.Expression) -> "SQL":
+    def _create_modified_copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
         """Create a new SQL instance with a modified expression.
 
         Args:
@@ -938,7 +939,7 @@ class SQL:
         new_sql._filters = self._filters.copy()
         return new_sql
 
-    def where(self, condition: "str | exp.Expression") -> "SQL":
+    def where(self, condition: "str | exp.Expr") -> "SQL":
         """Add WHERE condition to the SQL statement.
 
         Args:
@@ -958,7 +959,7 @@ class SQL:
                 subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
                 current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
 
-        condition_expr: exp.Expression
+        condition_expr: exp.Expr
         if isinstance(condition, str):
             if not self._statement_config.enable_parsing:
                 condition_expr = exp.Condition(this=condition)
@@ -1252,7 +1253,7 @@ class SQL:
         new_sql._named_parameters[high_param] = high
         return new_sql
 
-    def order_by(self, *items: "str | exp.Expression", desc: bool = False) -> "SQL":
+    def order_by(self, *items: "str | exp.Expr", desc: bool = False) -> "SQL":
         """Add ORDER BY clause to the SQL statement.
 
         Args:
@@ -1275,7 +1276,7 @@ class SQL:
             except ParseError:
                 current_expr = exp.Select().from_(f"({self._raw_sql})")
 
-        def parse_order_item(order_item: str) -> exp.Expression:
+        def parse_order_item(order_item: str) -> exp.Expr:
             normalized = order_item.strip()
             if not normalized:
                 return exp.column(order_item)
@@ -1295,7 +1296,7 @@ class SQL:
 
             return exp.column(normalized)
 
-        new_expr = current_expr
+        new_expr: exp.Expr = current_expr
         for item in items:
             if isinstance(item, str):
                 order_expr = parse_order_item(item)
@@ -1311,7 +1312,8 @@ class SQL:
         original_params = self._original_parameters
         config = self._statement_config
         is_many = self._is_many
-        new_sql = SQL(new_expr, *original_params, statement_config=config, is_many=is_many)
+        stmt_expr: exp.Expr = new_expr if isinstance(new_expr, exp.Expr) else exp.Select().from_(new_expr)
+        new_sql = SQL(stmt_expr, *original_params, statement_config=config, is_many=is_many)
 
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -1382,7 +1384,7 @@ class SQL:
     # Column Projection Methods
     # ==========================================================================
 
-    def select_only(self, *columns: "str | exp.Expression", prune_columns: bool | None = None) -> "SQL":
+    def select_only(self, *columns: "str | exp.Expr", prune_columns: bool | None = None) -> "SQL":
         """Replace SELECT columns with only the specified columns.
 
         This is useful for narrowing down the columns returned by a query
@@ -1526,7 +1528,11 @@ class SQL:
             builder = Merge(dialect=builder_dialect)
             builder.set_expression(base_expression.copy())
         else:
-            builder = ExpressionBuilder(base_expression.copy(), dialect=builder_dialect)
+            copied = base_expression.copy()
+            if not isinstance(copied, exp.Expression):
+                msg = f"Unsupported expression type for builder: {type(copied).__name__}"
+                raise sqlspec.exceptions.SQLBuilderError(msg)
+            builder = ExpressionBuilder(copied, dialect=builder_dialect)
 
         if ctes:
             builder.load_ctes(ctes)
@@ -1620,7 +1626,7 @@ class StatementConfig:
         execution_mode: "str | None" = None,
         execution_args: "dict[str, Any] | None" = None,
         output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
-        statement_transformers: "Sequence[Callable[[exp.Expression, Any], tuple[exp.Expression, Any]]] | None" = None,
+        statement_transformers: "Sequence[Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]] | None" = None,
     ) -> None:
         """Initialize StatementConfig.
 
@@ -1821,4 +1827,4 @@ def get_default_parameter_config() -> ParameterStyleConfig:
     )
 
 
-Statement: TypeAlias = str | exp.Expression | SQL
+Statement: TypeAlias = str | exp.Expr | SQL

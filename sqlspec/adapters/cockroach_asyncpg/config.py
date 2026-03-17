@@ -14,12 +14,12 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
 from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -88,11 +88,13 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class _CockroachAsyncpgSessionFactory:
-    __slots__ = ("_config", "_ctx")
+class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
+    """Uses pool.acquire() context manager pattern instead of direct acquire/release."""
+
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any | None = None
 
     async def acquire_connection(self) -> "CockroachAsyncpgConnection":
@@ -104,37 +106,16 @@ class _CockroachAsyncpgSessionFactory:
         self._ctx = ctx
         return cast("CockroachAsyncpgConnection", await ctx.__aenter__())
 
-    async def release_connection(self, _conn: "CockroachAsyncpgConnection") -> None:
+    async def release_connection(self, _conn: "CockroachAsyncpgConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             await self._ctx.__aexit__(None, None, None)
             self._ctx = None
 
 
-class CockroachAsyncpgConnectionContext:
+class CockroachAsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for CockroachDB AsyncPG connections."""
 
-    __slots__ = ("_config", "_connection")
-
-    def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        self._config = config
-        self._connection: CockroachAsyncpgConnection | None = None
-
-    async def __aenter__(self) -> "CockroachAsyncpgConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        self._connection = await pool.acquire()
-        return self._connection
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> bool | None:
-        if self._connection is not None:
-            if self._config.connection_instance:
-                await self._config.connection_instance.release(self._connection)  # type: ignore[arg-type]
-            self._connection = None
-        return None
+    __slots__ = ()
 
 
 class CockroachAsyncpgConfig(

@@ -45,7 +45,7 @@ install: destroy clean                              ## Install the project, depe
 	@echo "${INFO} Starting fresh installation..."
 	@uv python pin 3.10 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
-	@uv sync --all-extras --dev
+	@uv sync --all-extras --no-extra mypyc --dev
 	@echo "${OK} Installation complete! 🎉"
 
 .PHONY: install-compiled
@@ -54,8 +54,8 @@ install-compiled: destroy clean                  ## Install with mypyc compilati
 	@uv python pin 3.10 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
 	@echo "${INFO} Installing in editable mode with mypyc compilation..."
-	@HATCH_BUILD_HOOKS_ENABLE=1 uv pip install -e .
 	@uv sync --all-extras --dev
+	@HATCH_BUILD_HOOKS_ENABLE=1 uv pip install -e .
 	@echo "${OK} Performance installation complete! 🚀"
 	@echo "${INFO} Verifying compilation..."
 	@find sqlspec -name "*.so" | wc -l | xargs -I {} echo "${OK} Compiled {} modules"

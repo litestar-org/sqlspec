@@ -59,10 +59,61 @@ if TYPE_CHECKING:
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
 
-__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase")
+__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectionContext", "SyncPoolSessionFactory")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class SyncPoolConnectionContext:
+    """Generic sync connection context using pool.get_connection() pattern.
+
+    Subclass per adapter for type-safe ``provide_connection()`` return annotations.
+    """
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: Any) -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def __enter__(self) -> Any:
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return self._ctx.__enter__()
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> "bool | None":
+        if self._ctx:
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
+        return None
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class SyncPoolSessionFactory:
+    """Generic sync session factory using pool.get_connection() pattern.
+
+    Subclass per adapter for type-safe ``acquire_connection()`` return annotations.
+    """
+
+    __slots__ = ("_config", "_ctx")
+
+    def __init__(self, config: Any) -> None:
+        self._config = config
+        self._ctx: Any = None
+
+    def acquire_connection(self) -> Any:
+        pool = self._config.provide_pool()
+        self._ctx = pool.get_connection()
+        return self._ctx.__enter__()
+
+    def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._ctx is None:
+            return
+        self._ctx.__exit__(None, None, None)
+        self._ctx = None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

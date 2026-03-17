@@ -71,7 +71,7 @@ class Update(
     """
 
     __slots__ = ()
-    _expression: exp.Expression | None
+    _expression: exp.Expr | None
 
     def __init__(self, table: str | None = None, **kwargs: Any) -> None:
         """Initialize UPDATE with optional table.
@@ -111,8 +111,8 @@ class Update(
 
     def join(
         self,
-        table: "str | exp.Expression | Select",
-        on: "str | exp.Expression",
+        table: "str | exp.Expr | Select",
+        on: "str | exp.Expr",
         alias: "str | None" = None,
         join_type: str = "INNER",
     ) -> "Self":

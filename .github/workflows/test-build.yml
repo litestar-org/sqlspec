@@ -13,8 +13,11 @@ on:
           - 'subset'
   pull_request:
     paths:
+      - '.github/workflows/test-build.yml'
+      - '.github/workflows/pgo-validate.yml'
       - '.github/workflows/publish.yml'
       - 'pyproject.toml'
+      - 'tools/scripts/pgo_training.py'
 
 jobs:
   build-source:
@@ -94,12 +97,6 @@ jobs:
       - name: Build wheels with cibuildwheel
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          # Enable mypyc compilation
-          HATCH_BUILD_HOOKS_ENABLE: "1"
-          MYPYC_OPT_LEVEL: "3"
-          MYPYC_DEBUG_LEVEL: "0"
-          MYPYC_MULTI_FILE: "1"
-
           # Configure cibuildwheel
           CIBW_BUILD: "cp${{ matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' }}-*"
           CIBW_BUILD_VERBOSITY: 1
@@ -112,13 +109,35 @@ jobs:
           # Skip problematic combinations
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
 
-          # Install dependencies using pip for broader compatibility
+          # Install build dependencies (base, overridden per-platform below)
           CIBW_BEFORE_BUILD: "pip install hatch-mypyc hatchling"
-          CIBW_ENVIRONMENT: "HATCH_BUILD_HOOKS_ENABLE=1 MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1"
 
           # Test the built wheels
           CIBW_TEST_REQUIRES: "cloud-sql-python-connector google-cloud-alloydb-connector"
-          CIBW_TEST_COMMAND: "python -c \"import sqlspec; print('MyPyC wheel test passed')\""
+          CIBW_TEST_COMMAND: >-
+            python -c "import sqlspec; from sqlspec.driver._query_cache import QueryCache; print('MyPyC+PGO wheel test passed')"
+
+          # Linux PR validation should exercise the same three-stage PGO path as publish.yml.
+          CIBW_BEFORE_BUILD_LINUX: >-
+            pip install hatch-mypyc hatchling &&
+            PGO_DIR=/tmp/sqlspec-pgo &&
+            BUILD_DIR=/tmp/sqlspec-mypyc-build &&
+            mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
+            CFLAGS="-fprofile-generate=$PGO_DIR"
+            HATCH_BUILD_HOOKS_ENABLE=1
+            HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
+            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            pip install {package} --no-build-isolation &&
+            pip install anyio pyarrow aiosqlite duckdb adbc-driver-sqlite adbc-driver-manager &&
+            python /project/tools/scripts/pgo_training.py &&
+            pip uninstall -y sqlspec &&
+            rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
+
+          CIBW_ENVIRONMENT_LINUX: >-
+            HATCH_BUILD_HOOKS_ENABLE=1
+            HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
+            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4

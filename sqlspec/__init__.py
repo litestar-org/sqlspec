@@ -13,7 +13,20 @@ _warnings.filterwarnings(
 )
 del _warnings
 
-from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
+from sqlspec import (
+    adapters,
+    base,
+    builder,
+    core,
+    dialects,
+    driver,
+    exceptions,
+    extensions,
+    loader,
+    migrations,
+    typing,
+    utils,
+)
 from sqlspec.__metadata__ import __version__
 from sqlspec.base import SQLSpec
 from sqlspec.builder import (
@@ -140,6 +153,7 @@ __all__ = (
     "create_event",
     "create_statement_observer",
     "default_statement_observer",
+    "dialects",
     "driver",
     "exceptions",
     "extensions",

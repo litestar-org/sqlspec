@@ -1,6 +1,6 @@
 """Psqlpy database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from psqlpy import ConnectionPool
@@ -18,6 +18,7 @@ from sqlspec.adapters.psqlpy.core import (
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
 from sqlspec.adapters.psqlpy.type_converter import register_pgvector
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -119,11 +120,11 @@ class PsqlpyDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class _PsqlpySessionFactory:
-    __slots__ = ("_config", "_ctx")
+class _PsqlpySessionFactory(AsyncPoolSessionFactory):
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsqlpyConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any | None = None
 
     async def acquire_connection(self) -> "PsqlpyConnection":
@@ -133,11 +134,11 @@ class _PsqlpySessionFactory:
             self._config.connection_instance = pool
         ctx = pool.acquire()
         self._ctx = ctx
-        connection = await ctx.__aenter__()
+        connection = cast("PsqlpyConnection", await ctx.__aenter__())
         await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
-    async def release_connection(self, _conn: "PsqlpyConnection") -> None:
+    async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             await self._ctx.__aexit__(None, None, None)
             self._ctx = None
@@ -146,13 +147,13 @@ class _PsqlpySessionFactory:
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 
-class PsqlpyConnectionContext:
+class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Psqlpy connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsqlpyConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any = None
 
     async def __aenter__(self) -> PsqlpyConnection:

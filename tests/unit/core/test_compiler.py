@@ -395,6 +395,16 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
         ("VACUUM", "COMMAND"),
         ("LISTEN channel", "COMMAND"),
         ("UNLISTEN channel", "COMMAND"),
+        ("TRUNCATE TABLE users", "DDL"),
+        ("GRANT SELECT ON users TO admin", "DDL"),
+        ("REVOKE SELECT ON users FROM admin", "DDL"),
+        ("COMMENT ON TABLE users IS 'description'", "DDL"),
+        ("BEGIN", "COMMAND"),
+        ("COMMIT", "COMMAND"),
+        ("ROLLBACK", "COMMAND"),
+        ("SET x = 1", "COMMAND"),
+        ("DESCRIBE users", "COMMAND"),
+        ("USE mydb", "COMMAND"),
     ],
 )
 def test_operation_type_detection_via_ast(
@@ -436,7 +446,6 @@ def test_single_pass_processing(
 
     with patch("sqlglot.parse_one") as mock_parse:
         real_expression = exp.Select()
-        real_expression.sql = Mock(return_value="SELECT * FROM users WHERE id = ?")
         mock_parse.return_value = real_expression
 
         result = processor.compile(sample_sql_queries["select"], [123])
@@ -475,7 +484,7 @@ def test_compilation_with_transformations(basic_statement_config: "StatementConf
 def test_statement_transformers_apply(basic_statement_config: "StatementConfig") -> None:
     """Statement transformers should update the AST before compilation."""
 
-    def rename_table(expression: exp.Expression, parameters: Any) -> "tuple[exp.Expression, Any]":
+    def rename_table(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
         updated = expression.transform(
             lambda node: exp.to_table("users_archive") if isinstance(node, exp.Table) else node
         )
@@ -494,8 +503,8 @@ def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig")
     """AST transformers should not trigger a second parse."""
 
     def pass_through(
-        expression: exp.Expression, parameters: Any, _parameter_profile: "ParameterProfile"
-    ) -> "tuple[exp.Expression, Any]":
+        expression: exp.Expr, parameters: Any, _parameter_profile: "ParameterProfile"
+    ) -> "tuple[exp.Expr, Any]":
         return expression, parameters
 
     parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=pass_through)
@@ -513,8 +522,8 @@ def test_ast_transformer_receives_parameter_profile(basic_statement_config: "Sta
     captured: dict[str, int] = {}
 
     def capture_profile(
-        expression: exp.Expression, parameters: Any, parameter_profile: "ParameterProfile"
-    ) -> "tuple[exp.Expression, Any]":
+        expression: exp.Expr, parameters: Any, parameter_profile: "ParameterProfile"
+    ) -> "tuple[exp.Expr, Any]":
         captured["count"] = parameter_profile.total_count
         return expression, parameters
 
@@ -530,7 +539,7 @@ def test_ast_transformer_receives_parameter_profile(basic_statement_config: "Sta
 def test_statement_transformer_updates_operation_type(basic_statement_config: "StatementConfig") -> None:
     """Statement transformers should refresh detected operation metadata."""
 
-    def to_delete(expression: exp.Expression, parameters: Any) -> "tuple[exp.Expression, Any]":
+    def to_delete(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
         return exp.Delete(this=exp.to_table("users")), parameters
 
     config = basic_statement_config.replace(statement_transformers=(to_delete,))

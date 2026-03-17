@@ -27,6 +27,8 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
@@ -127,20 +129,20 @@ class OracleDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class OracleSyncConnectionContext:
+class OracleSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Oracle sync connections."""
 
-    __slots__ = ("_config", "_conn")
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._conn: OracleSyncConnection | None = None
 
     def __enter__(self) -> "OracleSyncConnection":
         if self._config.connection_instance is None:
             self._config.connection_instance = self._config.create_pool()
         self._conn = self._config.connection_instance.acquire()
-        return self._conn
+        return cast("OracleSyncConnection", self._conn)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -152,20 +154,20 @@ class OracleSyncConnectionContext:
         return None
 
 
-class _OracleSyncSessionConnectionHandler:
-    __slots__ = ("_config", "_conn")
+class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._conn: OracleSyncConnection | None = None
 
     def acquire_connection(self) -> "OracleSyncConnection":
         if self._config.connection_instance is None:
             self._config.connection_instance = self._config.create_pool()
         self._conn = self._config.connection_instance.acquire()
-        return self._conn
+        return cast("OracleSyncConnection", self._conn)
 
-    def release_connection(self, _conn: "OracleSyncConnection") -> None:
+    def release_connection(self, _conn: "OracleSyncConnection", **kwargs: Any) -> None:
         if self._conn is None:
             return
         if self._config.connection_instance:
@@ -324,50 +326,14 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return namespace
 
 
-class OracleAsyncConnectionContext:
+class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Oracle connections."""
 
-    __slots__ = ("_config", "_conn")
-
-    def __init__(self, config: "OracleAsyncConfig") -> None:
-        self._config = config
-        self._conn: OracleAsyncConnection | None = None
-
-    async def __aenter__(self) -> "OracleAsyncConnection":
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config.create_pool()
-        self._conn = cast("OracleAsyncConnection", await self._config.connection_instance.acquire())
-        return self._conn
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> bool | None:
-        if self._conn:
-            if self._config.connection_instance:
-                await self._config.connection_instance.release(self._conn)
-            self._conn = None
-        return None
+    __slots__ = ()
 
 
-class _OracleAsyncSessionConnectionHandler:
-    __slots__ = ("_config", "_conn")
-
-    def __init__(self, config: "OracleAsyncConfig") -> None:
-        self._config = config
-        self._conn: OracleAsyncConnection | None = None
-
-    async def acquire_connection(self) -> "OracleAsyncConnection":
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config.create_pool()
-        self._conn = cast("OracleAsyncConnection", await self._config.connection_instance.acquire())
-        return self._conn
-
-    async def release_connection(self, _conn: "OracleAsyncConnection") -> None:
-        if self._conn is None:
-            return
-        if self._config.connection_instance:
-            await self._config.connection_instance.release(self._conn)
-        self._conn = None
+class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
+    __slots__ = ()
 
 
 @mypyc_attr(native_class=False)

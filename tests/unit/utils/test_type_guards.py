@@ -472,26 +472,26 @@ def test_is_expression_with_non_expression() -> None:
 
 def test_get_node_this_with_this_attribute() -> None:
     """Test get_node_this returns this attribute when present."""
-    node = cast("exp.Expression", MockSQLGlotExpression(this="test_value"))
+    node = cast("exp.Expr", MockSQLGlotExpression(this="test_value"))
     assert get_node_this(node) == "test_value"
 
 
 def test_get_node_this_without_this_attribute() -> None:
     """Test get_node_this returns default when this attribute missing."""
-    node = cast("exp.Expression", MockSQLGlotExpression())
+    node = cast("exp.Expr", MockSQLGlotExpression())
     assert get_node_this(node, "default") == "default"
     assert get_node_this(node) is None
 
 
 def test_has_this_attribute_with_attribute() -> None:
     """Test has_this_attribute returns True when this exists."""
-    node = cast("exp.Expression", MockSQLGlotExpression(this="test_value"))
+    node = cast("exp.Expr", MockSQLGlotExpression(this="test_value"))
     assert has_this_attribute(node) is True
 
 
 def test_has_this_attribute_without_attribute() -> None:
     """Test has_this_attribute returns False when this doesn't exist."""
-    node = cast("exp.Expression", MockSQLGlotExpression())
+    node = cast("exp.Expr", MockSQLGlotExpression())
     assert has_this_attribute(node) is False
 
 
@@ -908,14 +908,15 @@ def test_type_guards_with_empty_containers() -> None:
 
 def test_sqlglot_helpers_with_invalid_objects() -> None:
     """Test SQLGlot helper functions handle invalid objects gracefully."""
-    invalid_obj = cast("exp.Expression", "not an expression")
+    invalid_expr = cast("exp.Expr", "not an expression")
+    invalid_expression = cast("exp.Expression", "not an expression")
 
-    assert get_node_this(invalid_obj) is None
-    assert get_node_expressions(invalid_obj) is None
-    assert get_literal_parent(invalid_obj) is None
-    assert has_this_attribute(invalid_obj) is False
-    assert has_expressions_attribute(invalid_obj) is False
-    assert has_parent_attribute(invalid_obj) is False
+    assert get_node_this(invalid_expr) is None
+    assert get_node_expressions(invalid_expression) is None
+    assert get_literal_parent(invalid_expression) is None
+    assert has_this_attribute(invalid_expr) is False
+    assert has_expressions_attribute(invalid_expression) is False
+    assert has_parent_attribute(invalid_expression) is False
 
 
 def test_edge_case_empty_string_literal() -> None:

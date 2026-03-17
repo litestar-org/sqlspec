@@ -10,12 +10,12 @@ from typing import Any, cast
 
 from sqlglot import exp
 
-from sqlspec.builder._vector_expressions import VectorDistance
+from sqlspec.builder._vector_distance import VectorDistance
 
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
 
-def _convert_value(value: Any) -> exp.Expression:
+def _convert_value(value: Any) -> exp.Expr:
     """Convert a Python value to a SQLGlot expression.
 
     Special handling for datetime objects to prevent SQLGlot from
@@ -38,7 +38,7 @@ class ColumnExpression:
 
     __slots__ = ("_expression",)
 
-    def __init__(self, expression: exp.Expression) -> None:
+    def __init__(self, expression: exp.Expr) -> None:
         self._expression = expression
 
     def __and__(self, other: "ColumnExpression") -> "ColumnExpression":
@@ -67,7 +67,7 @@ class ColumnExpression:
         raise TypeError(msg)
 
     @property
-    def sqlglot_expression(self) -> exp.Expression:
+    def sqlglot_expression(self) -> exp.Expr:
         """Get the underlying SQLGlot expression."""
         return self._expression
 
@@ -86,7 +86,7 @@ class Column:
         else:
             self._expression = exp.Column(this=exp.Identifier(this=name))
 
-    def _convert_value(self, value: Any) -> exp.Expression:
+    def _convert_value(self, value: Any) -> exp.Expr:
         """Convert a Python value to a SQLGlot expression."""
         return _convert_value(value)
 
@@ -266,19 +266,19 @@ class Column:
             raise ValueError(msg)
         return normalized_metric
 
-    def _convert_vector_value(self, value: "list[float] | Column | exp.Expression") -> "exp.Expression":
+    def _convert_vector_value(self, value: "list[float] | Column | exp.Expr") -> "exp.Expr":
         """Convert a vector input into a SQLGlot expression."""
         if isinstance(value, list):
             return exp.Array(expressions=[exp.Literal.number(v) for v in value])
         if isinstance(value, Column):
             return value._expression
-        if isinstance(value, exp.Expression):
+        if isinstance(value, exp.Expr):
             return value
         msg = f"Unsupported vector type: {type(value)}"
         raise TypeError(msg)
 
     def vector_distance(
-        self, other_vector: "list[float] | Column | exp.Expression", metric: str = "euclidean"
+        self, other_vector: "list[float] | Column | exp.Expr", metric: str = "euclidean"
     ) -> "FunctionColumn":
         """Calculate vector distance using specified metric.
 
@@ -343,7 +343,7 @@ class Column:
         distance_expr = VectorDistance(this=self._expression, expression=vec_expr, metric=normalized_metric)
         return FunctionColumn(distance_expr)
 
-    def cosine_similarity(self, other_vector: "list[float] | Column | exp.Expression") -> "FunctionColumn":
+    def cosine_similarity(self, other_vector: "list[float] | Column | exp.Expr") -> "FunctionColumn":
         """Calculate cosine similarity (1 - cosine_distance).
 
         Convenience method that computes similarity instead of distance.
@@ -374,7 +374,7 @@ class Column:
         similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))  # pyright: ignore[reportPrivateUsage]
         return FunctionColumn(similarity_expr)
 
-    def alias(self, alias_name: str) -> exp.Expression:
+    def alias(self, alias_name: str) -> exp.Expr:
         """Create an aliased column expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
 
@@ -400,7 +400,7 @@ class Column:
         return hash((self.table, self.name))
 
     @property
-    def sqlglot_expression(self) -> exp.Expression:
+    def sqlglot_expression(self) -> exp.Expr:
         """Get the underlying SQLGlot expression (public API).
 
         Returns:
@@ -414,15 +414,15 @@ class FunctionColumn:
 
     __slots__ = ("_expression",)
 
-    def __init__(self, expression: "exp.Expression") -> None:
+    def __init__(self, expression: "exp.Expr") -> None:
         self._expression = expression
 
-    def _convert_value(self, value: Any) -> exp.Expression:
+    def _convert_value(self, value: Any) -> exp.Expr:
         """Convert a Python value to a SQLGlot expression."""
         return _convert_value(value)
 
     @property
-    def sqlglot_expression(self) -> "exp.Expression":
+    def sqlglot_expression(self) -> "exp.Expr":
         """Return underlying SQLGlot expression."""
         return self._expression
 
@@ -496,7 +496,7 @@ class FunctionColumn:
         converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
-    def alias(self, alias_name: str) -> "exp.Expression":
+    def alias(self, alias_name: str) -> "exp.Expr":
         """Create an aliased function expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
 

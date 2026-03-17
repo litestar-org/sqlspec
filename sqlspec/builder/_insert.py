@@ -230,7 +230,7 @@ class Insert(
         for col, val in kwargs.items():
             if has_expression_and_sql(val):
                 value_expr = extract_sql_object_expression(val, builder=self)
-            elif isinstance(val, exp.Expression):
+            elif isinstance(val, exp.Expr):
                 value_expr = val
             else:
                 param_name = self.generate_unique_parameter_name(col)
@@ -310,7 +310,7 @@ class ConflictBuilder:
         for col, val in kwargs.items():
             if has_expression_and_sql(val):
                 value_expr = extract_sql_object_expression(val, builder=self._insert_builder)
-            elif isinstance(val, exp.Expression):
+            elif isinstance(val, exp.Expr):
                 value_expr = val
             else:
                 param_name = self._insert_builder.generate_unique_parameter_name(col)

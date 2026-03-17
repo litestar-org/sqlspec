@@ -2,7 +2,7 @@
 
 from sqlglot import parse_one
 
-import sqlspec.dialects.postgres.pgvector  # noqa: F401
+import sqlspec.dialects.postgres._pgvector  # noqa: F401
 
 
 def _render(sql: str) -> str:

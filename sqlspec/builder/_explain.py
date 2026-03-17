@@ -289,7 +289,7 @@ class Explain:
 
     def __init__(
         self,
-        statement: "str | exp.Expression | SQL | SQLBuilderProtocol",
+        statement: "str | exp.Expr | SQL | SQLBuilderProtocol",
         dialect: "DialectType | None" = None,
         options: "ExplainOptions | None" = None,
     ) -> None:
@@ -307,7 +307,7 @@ class Explain:
 
         self._statement_sql = self._resolve_statement_sql(statement)
 
-    def _resolve_statement_sql(self, statement: "str | exp.Expression | SQL | SQLBuilderProtocol") -> str:
+    def _resolve_statement_sql(self, statement: "str | exp.Expr | SQL | SQLBuilderProtocol") -> str:
         """Resolve statement to SQL string.
 
         Args:

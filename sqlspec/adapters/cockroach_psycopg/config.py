@@ -24,6 +24,8 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgSyncExceptionHandler,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -107,14 +109,13 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class CockroachPsycopgSyncConnectionContext:
+class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for CockroachDB psycopg connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ()
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
+        super().__init__(config)
 
     def __enter__(self) -> "CockroachSyncConnection":
         if self._config.connection_instance:
@@ -133,12 +134,11 @@ class CockroachPsycopgSyncConnectionContext:
         return None
 
 
-class _CockroachPsycopgSyncSessionConnectionHandler:
-    __slots__ = ("_config", "_conn", "_ctx")
+class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        self._config = config
-        self._ctx: Any = None
+        super().__init__(config)
         self._conn: CockroachSyncConnection | None = None
 
     def acquire_connection(self) -> "CockroachSyncConnection":
@@ -146,9 +146,9 @@ class _CockroachPsycopgSyncSessionConnectionHandler:
             self._ctx = self._config.connection_instance.connection()
             return cast("CockroachSyncConnection", self._ctx.__enter__())
         self._conn = self._config.create_connection()
-        return self._conn
+        return cast("CockroachSyncConnection", self._conn)
 
-    def release_connection(self, _conn: "CockroachSyncConnection") -> None:
+    def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             self._ctx.__exit__(None, None, None)
             self._ctx = None
@@ -311,13 +311,13 @@ class CockroachPsycopgSyncConfig(
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
 
-class CockroachPsycopgAsyncConnectionContext:
+class CockroachPsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for CockroachDB psycopg connections."""
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any = None
 
     async def __aenter__(self) -> "CockroachAsyncConnection":
@@ -337,11 +337,11 @@ class CockroachPsycopgAsyncConnectionContext:
         return None
 
 
-class _CockroachPsycopgAsyncSessionConnectionHandler:
-    __slots__ = ("_config", "_ctx")
+class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._ctx: Any = None
 
     async def acquire_connection(self) -> "CockroachAsyncConnection":
@@ -353,7 +353,7 @@ class _CockroachPsycopgAsyncSessionConnectionHandler:
         self._ctx = ctx
         return cast("CockroachAsyncConnection", await ctx.__aenter__())
 
-    async def release_connection(self, _conn: "CockroachAsyncConnection") -> None:
+    async def release_connection(self, _conn: "CockroachAsyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             await self._ctx.__aexit__(None, None, None)
             self._ctx = None

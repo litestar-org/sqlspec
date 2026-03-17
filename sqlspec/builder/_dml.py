@@ -38,8 +38,8 @@ class DeleteFromClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def from_(self, table: str) -> Self:
         current_expr = self.get_expression()
@@ -65,8 +65,8 @@ class DeleteFromClauseMixin:
 class InsertIntoClauseMixin:
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def into(self, table: str) -> Self:
         current_expr = self.get_expression()
@@ -87,12 +87,12 @@ class InsertIntoClauseMixin:
 class InsertValuesMixin:
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     _columns: list[str]
 
-    def columns(self, *columns: str | exp.Expression) -> Self:
+    def columns(self, *columns: str | exp.Expr) -> Self:
         current_expr = self.get_expression()
         if current_expr is None:
             self.set_expression(exp.Insert())
@@ -152,7 +152,7 @@ class InsertValuesMixin:
             msg = "Cannot mix positional values with keyword values."
             raise SQLBuilderError(msg)
 
-        row_expressions: list[exp.Expression] = []
+        row_expressions: list[exp.Expr] = []
         column_defs: list[str] = list(self._columns or [])
 
         if kwargs:
@@ -160,7 +160,7 @@ class InsertValuesMixin:
                 self.columns(*kwargs.keys())
                 column_defs = list(self._columns or [])
             for col, val in kwargs.items():
-                if isinstance(val, exp.Expression):
+                if isinstance(val, exp.Expr):
                     row_expressions.append(val)
                     continue
                 if has_expression_and_sql(val):
@@ -178,7 +178,7 @@ class InsertValuesMixin:
                 raise SQLBuilderError(msg)
 
             for index, raw_value in enumerate(positional_values):
-                if isinstance(raw_value, exp.Expression):
+                if isinstance(raw_value, exp.Expr):
                     row_expressions.append(raw_value)
                 elif has_expression_and_sql(raw_value):
                     row_expressions.append(extract_sql_object_expression(raw_value, builder=self))
@@ -207,8 +207,8 @@ class InsertValuesMixin:
 class InsertFromSelectMixin:
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def from_select(self, select_builder: SQLBuilderProtocol) -> Self:
         current_expr = self.get_expression()
@@ -248,8 +248,8 @@ class InsertFromSelectMixin:
 class UpdateTableClauseMixin:
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def table(self, table_name: str, alias: str | None = None) -> Self:
         current_expr = self.get_expression()
@@ -259,7 +259,7 @@ class UpdateTableClauseMixin:
 
         assert current_expr is not None
 
-        table_expr: exp.Expression = exp.to_table(table_name, alias=alias)
+        table_expr: exp.Expr = exp.to_table(table_name, alias=alias)
         current_expr.set("this", table_expr)
         return self
 
@@ -268,11 +268,11 @@ class UpdateTableClauseMixin:
 class UpdateSetClauseMixin:
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
-    def _process_update_value(self, val: Any, col: Any) -> exp.Expression:
-        if isinstance(val, exp.Expression):
+    def _process_update_value(self, val: Any, col: Any) -> exp.Expr:
+        if isinstance(val, exp.Expr):
             return val
         if has_parameter_builder(val):
             subquery = val.build()
@@ -305,7 +305,7 @@ class UpdateSetClauseMixin:
 
         assert current_expr is not None
 
-        assignments: list[exp.Expression] = []
+        assignments: list[exp.Expr] = []
         if len(args) == ARG_PAIR_COUNT and not kwargs:
             col, val = args
             col_expr = col if isinstance(col, exp.Column) else exp.column(col)
@@ -327,17 +327,17 @@ class UpdateSetClauseMixin:
 class UpdateFromClauseMixin:
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
-    def from_(self, table: str | exp.Expression | Any, alias: str | None = None) -> Self:
+    def from_(self, table: str | exp.Expr | Any, alias: str | None = None) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Update):
             msg = "Cannot add FROM clause to non-UPDATE expression. Set the main table first."
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        table_expr: exp.Expression
+        table_expr: exp.Expr
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
         elif isinstance(table, SQLBuilderProtocol):
@@ -347,10 +347,10 @@ class UpdateFromClauseMixin:
                 for param_name, param_value in subquery_params.items():
                     builder_with_params.add_parameter(param_value, name=param_name)
             raw_expression = table.get_expression()
-            subquery_source = raw_expression if isinstance(raw_expression, exp.Expression) else exp.select()
+            subquery_source = raw_expression if isinstance(raw_expression, exp.Expr) else exp.select()
             subquery_exp = exp.paren(subquery_source)
             table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
-        elif isinstance(table, exp.Expression):
+        elif isinstance(table, exp.Expr):
             table_expr = exp.alias_(table, alias) if alias else table
         else:
             msg = f"Unsupported table type for FROM clause: {type(table)}"

@@ -9,6 +9,7 @@ from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.observability import ObservabilityConfig
@@ -98,18 +99,18 @@ class BigQueryDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class BigQueryConnectionContext:
+class BigQueryConnectionContext(SyncPoolConnectionContext):
     """Context manager for BigQuery connections."""
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "BigQueryConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: BigQueryConnection | None = None
 
     def __enter__(self) -> BigQueryConnection:
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("BigQueryConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -130,16 +131,16 @@ class _BigQueryConnectionHook:
         self._hook(connection)
 
 
-class _BigQuerySessionConnectionHandler:
-    __slots__ = ("_config",)
+class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ()
 
     def __init__(self, config: "BigQueryConfig") -> None:
-        self._config = config
+        super().__init__(config)
 
     def acquire_connection(self) -> "BigQueryConnection":
-        return self._config.create_connection()
+        return cast("BigQueryConnection", self._config.create_connection())
 
-    def release_connection(self, _conn: "BigQueryConnection") -> None:
+    def release_connection(self, _conn: "BigQueryConnection", **kwargs: Any) -> None:
         return None
 
 

@@ -70,7 +70,7 @@ class _MergeAssignmentMixin:
 
         builder = cast("QueryBuilder", self)
         with contextlib.suppress(ParseError):
-            parsed: exp.Expression | None = exp.maybe_parse(value.strip(), dialect=builder.dialect)
+            parsed: exp.Expr | None = exp.maybe_parse(value.strip(), dialect=builder.dialect)
             if parsed is None:
                 return False
 
@@ -98,17 +98,17 @@ class _MergeAssignmentMixin:
             )
         return False
 
-    def _process_assignment(self, target_column: str, value: Any) -> exp.Expression:
+    def _process_assignment(self, target_column: str, value: Any) -> exp.Expr:
         column_identifier = exp.column(target_column) if isinstance(target_column, str) else target_column
 
         if has_expression_and_sql(value):
             value_expr = extract_sql_object_expression(value, builder=self)
             return exp.EQ(this=column_identifier, expression=value_expr)
-        if isinstance(value, exp.Expression):
+        if isinstance(value, exp.Expr):
             return exp.EQ(this=column_identifier, expression=value)
         if isinstance(value, str) and self._is_column_reference(value):
             builder = cast("QueryBuilder", self)
-            parsed_expression: exp.Expression | None = exp.maybe_parse(value, dialect=builder.dialect)
+            parsed_expression: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
             if parsed_expression is None:
                 msg = f"Could not parse assignment expression: {value}"
                 raise SQLBuilderError(msg)
@@ -126,10 +126,10 @@ class MergeIntoClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
-    def into(self, table: str | exp.Expression, alias: str | None = None) -> Self:
+    def into(self, table: str | exp.Expr, alias: str | None = None) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
@@ -137,7 +137,7 @@ class MergeIntoClauseMixin:
 
         assert current_expr is not None
 
-        table_expr: exp.Expression
+        table_expr: exp.Expr
         if isinstance(table, str):
             table_expr = exp.to_table(table)
             if is_explicitly_quoted(table):
@@ -162,12 +162,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def _create_dict_source_expression(
         self, source: "dict[str, Any] | list[dict[str, Any]]", alias: "str | None"
-    ) -> "exp.Expression":
+    ) -> "exp.Expr":
         """Create USING clause expression from dict or list of dicts.
 
         Uses JSON-based approach for type-safe bulk operations:
@@ -208,7 +208,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
     def _create_postgres_json_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
-    ) -> "exp.Expression":
+    ) -> "exp.Expr":
         """Create PostgreSQL jsonb_to_recordset source with explicit column definitions.
 
         Uses jsonb_to_recordset(jsonb) AS alias(col1 type1, col2 type2, ...) pattern
@@ -247,7 +247,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
     def _create_oracle_json_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", alias: "str | None"
-    ) -> "exp.Expression":
+    ) -> "exp.Expr":
         """Create Oracle JSON_TABLE source (production-proven pattern from oracledb-vertexai-demo)."""
         json_value = to_json(data)
         _, json_param_name = cast("QueryBuilder", self).create_placeholder(json_value, "json_payload")
@@ -300,11 +300,11 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
     def _create_select_union_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
-    ) -> "exp.Expression":
+    ) -> "exp.Expr":
         """Create fallback SELECT UNION source for other databases."""
-        parameterized_values: list[list[exp.Expression]] = []
+        parameterized_values: list[list[exp.Expr]] = []
         for row in data:
-            row_params: list[exp.Expression] = []
+            row_params: list[exp.Expr] = []
             for column in columns:
                 value = row.get(column)
                 column_name = column if isinstance(column, str) else str(column)
@@ -323,11 +323,11 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 )
                 union_selects.append(select_expr)
 
-            source_expr: exp.Expression
+            source_expr: exp.Expr
             if len(union_selects) == 1:
                 source_expr = union_selects[0]
             else:
-                union_expr: exp.Expression = union_selects[0]
+                union_expr: exp.Expr = union_selects[0]
                 for select in union_selects[1:]:
                     union_expr = exp.Union(this=union_expr, expression=select, distinct=False)
                 source_expr = union_expr
@@ -341,14 +341,14 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
         return exp.paren(select_expr)
 
-    def using(self, source: str | exp.Expression | Any, alias: str | None = None) -> Self:
+    def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
         assert current_expr is not None
-        source_expr: exp.Expression
+        source_expr: exp.Expr
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
         elif isinstance(source, (dict, list)):
@@ -362,14 +362,14 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             for param_name, param_value in source.parameters.items():
                 builder.add_parameter(param_value, name=param_name)
             subquery_expression_source = source.get_expression()
-            if not isinstance(subquery_expression_source, exp.Expression):
+            if not isinstance(subquery_expression_source, exp.Expr):
                 subquery_expression_source = exp.select()
 
             if alias:
                 source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
             else:
                 source_expr = exp.paren(subquery_expression_source)
-        elif isinstance(source, exp.Expression):
+        elif isinstance(source, exp.Expr):
             # Handle different expression types for MERGE USING
             if isinstance(source, exp.Select):
                 # Wrap SELECT in Subquery if alias provided
@@ -399,10 +399,10 @@ class MergeOnClauseMixin:
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
-    def on(self, condition: str | exp.Expression) -> Self:
+    def on(self, condition: str | exp.Expr) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
@@ -411,12 +411,12 @@ class MergeOnClauseMixin:
         assert current_expr is not None
         if isinstance(condition, str):
             builder = cast("QueryBuilder", self)
-            parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=builder.dialect)
+            parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
             if parsed_condition is None:
                 msg = f"Could not parse ON condition: {condition}"
                 raise SQLBuilderError(msg)
             condition_expr = parsed_condition
-        elif isinstance(condition, exp.Expression):
+        elif isinstance(condition, exp.Expr):
             condition_expr = condition
         else:
             msg = f"Unsupported condition type for ON clause: {type(condition)}"
@@ -432,14 +432,11 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def when_matched_then_update(
-        self,
-        set_values: dict[str, Any] | None = None,
-        condition: str | exp.Expression | None = None,
-        **assignments: Any,
+        self, set_values: dict[str, Any] | None = None, condition: str | exp.Expr | None = None, **assignments: Any
     ) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):
@@ -464,12 +461,12 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
         if condition is not None:
             if isinstance(condition, str):
                 builder = cast("QueryBuilder", self)
-                parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=builder.dialect)
+                parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
                 condition_expr = parsed_condition
-            elif isinstance(condition, exp.Expression):
+            elif isinstance(condition, exp.Expr):
                 condition_expr = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
@@ -489,7 +486,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
         whens.append("expressions", exp.When(**when_kwargs))
         return self
 
-    def when_matched_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
+    def when_matched_then_delete(self, condition: str | exp.Expr | None = None) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Merge):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
@@ -500,12 +497,12 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
         if condition is not None:
             if isinstance(condition, str):
                 builder = cast("QueryBuilder", self)
-                parsed_condition: exp.Expression | None = exp.maybe_parse(condition, dialect=builder.dialect)
+                parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
                 if parsed_condition is None:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
                 when_kwargs["condition"] = parsed_condition
-            elif isinstance(condition, exp.Expression):
+            elif isinstance(condition, exp.Expr):
                 when_kwargs["condition"] = condition
             else:
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
@@ -525,8 +522,8 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def when_not_matched_then_insert(
         self,
@@ -577,16 +574,16 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
 
         insert_columns = [exp.column(name) for name in column_names]
 
-        insert_values: list[exp.Expression] = []
+        insert_values: list[exp.Expr] = []
         for column_name, value in zip(column_names, column_values, strict=True):
             if has_expression_and_sql(value):
                 insert_values.append(extract_sql_object_expression(value, builder=self))
-            elif isinstance(value, exp.Expression):
+            elif isinstance(value, exp.Expr):
                 insert_values.append(value)
             elif isinstance(value, str):
                 if self._is_column_reference(value):
                     builder = cast("QueryBuilder", self)
-                    parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=builder.dialect)
+                    parsed_value: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
                     if parsed_value is None:
                         msg = f"Could not parse column reference: {value}"
                         raise SQLBuilderError(msg)
@@ -614,8 +611,8 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
 
     __slots__ = ()
 
-    def get_expression(self) -> exp.Expression | None: ...
-    def set_expression(self, expression: exp.Expression) -> None: ...
+    def get_expression(self) -> exp.Expr | None: ...
+    def set_expression(self, expression: exp.Expr) -> None: ...
 
     def when_not_matched_by_source_then_update(
         self, set_values: dict[str, Any] | None = None, **assignments: Any
@@ -636,16 +633,16 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
             msg = "No update values provided. Use set_values or keyword arguments."
             raise SQLBuilderError(msg)
 
-        set_expressions: list[exp.Expression] = []
+        set_expressions: list[exp.Expr] = []
         for column_name, value in combined_assignments.items():
             column_identifier = exp.column(column_name)
             if has_expression_and_sql(value):
                 value_expr = extract_sql_object_expression(value, builder=self)
-            elif isinstance(value, exp.Expression):
+            elif isinstance(value, exp.Expr):
                 value_expr = value
             elif isinstance(value, str) and self._is_column_reference(value):
                 builder = cast("QueryBuilder", self)
-                parsed_value: exp.Expression | None = exp.maybe_parse(value, dialect=builder.dialect)
+                parsed_value: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
                 if parsed_value is None:
                     msg = f"Could not parse assignment expression: {value}"
                     raise SQLBuilderError(msg)
@@ -695,7 +692,7 @@ class Merge(
     """
 
     __slots__ = ()
-    _expression: exp.Expression | None
+    _expression: exp.Expr | None
     _merge_target_quoted: bool
     _lock_targets_quoted: bool
 

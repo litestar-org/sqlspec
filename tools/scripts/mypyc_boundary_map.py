@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import tomllib
+    import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
@@ -166,10 +166,6 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
         "bucket": "hard_block",
         "reason": "Still carries native_class=False and inline cache patterns to avoid mypyc crashes.",
     },
-    "sqlspec/builder/_vector_expressions.py": {
-        "bucket": "helper_split",
-        "reason": "Current sqlglot Expression no longer has the old metaclass concern, but registration side effects remain.",
-    },
     "sqlspec/data_dictionary/_loader.py": {
         "bucket": "helper_split",
         "reason": "Path discovery is the risky piece; cache/query wrapper logic is otherwise straightforward.",
@@ -190,37 +186,6 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
 
 
 HELPER_SPLIT_DESIGNS: tuple[dict[str, Any], ...] = (
-    {
-        "surface": "sqlspec/builder/_vector_expressions.py",
-        "split_kind": "extract_pure_renderers",
-        "extract_module": "sqlspec/builder/_vector_renderers.py",
-        "compile_target": "sqlspec/builder/_vector_renderers.py",
-        "safe_symbols": (
-            "_normalize_metric_name",
-            "_coerce_oracle_vector_literal",
-            "_maybe_wrap_mysql_vector_literal",
-            "_duckdb_target_type",
-            "render_postgres_vector_distance",
-            "render_mysql_vector_distance",
-            "render_oracle_vector_distance",
-            "render_bigquery_vector_distance",
-            "render_duckdb_vector_distance",
-            "render_generic_vector_distance",
-        ),
-        "keep_interpreted_symbols": (
-            "VectorDistance",
-            "_register_with_sqlglot",
-            "_vector_distance_sql_base",
-            "_vector_distance_sql_postgres",
-            "_vector_distance_sql_mysql",
-            "_vector_distance_sql_oracle",
-            "_vector_distance_sql_bigquery",
-            "_vector_distance_sql_spanner",
-            "_vector_distance_sql_duckdb",
-        ),
-        "reason": "The expression subclass and sqlglot registration side effects remain unsafe, but dialect-specific string rendering and metric normalization are pure helpers.",
-        "feeds_chapter": "adapter-runtime-boundaries",
-    },
     {
         "surface": "sqlspec/data_dictionary/_loader.py",
         "split_kind": "extract_loader_state_and_path_resolution",

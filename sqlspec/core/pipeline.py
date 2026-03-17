@@ -147,7 +147,7 @@ class _StatementPipeline:
         self._metrics = _PipelineMetrics() if record_metrics else None
 
     def compile(
-        self, sql: str, parameters: Any, is_many: bool, record_metrics: bool, expression: "exp.Expression | None" = None
+        self, sql: str, parameters: Any, is_many: bool, record_metrics: bool, expression: "exp.Expr | None" = None
     ) -> "CompiledSQL":
         result = self._processor.compile(sql, parameters, is_many=is_many, expression=expression)
         if record_metrics and self._metrics is not None:
@@ -188,7 +188,7 @@ class StatementPipelineRegistry:
         sql: str,
         parameters: Any,
         is_many: bool = False,
-        expression: "exp.Expression | None" = None,
+        expression: "exp.Expr | None" = None,
     ) -> "CompiledSQL":
         key = self._fingerprint_config(config)
         pipeline = self._pipelines.get(key)
@@ -308,7 +308,7 @@ _PIPELINE_REGISTRY: "StatementPipelineRegistry" = StatementPipelineRegistry()
 
 
 def compile_with_pipeline(
-    config: "Any", sql: str, parameters: Any, is_many: bool = False, expression: "exp.Expression | None" = None
+    config: "Any", sql: str, parameters: Any, is_many: bool = False, expression: "exp.Expr | None" = None
 ) -> "CompiledSQL":
     return _PIPELINE_REGISTRY.compile(config, sql, parameters, is_many=is_many, expression=expression)
 

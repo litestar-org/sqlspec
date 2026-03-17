@@ -13,7 +13,7 @@ classifiers = [
 ]
 dependencies = [
   "typing-extensions",
-  "sqlglot>=19.9.0",
+  "sqlglot>=30.0.0",
   "mypy-extensions",
   "rich-click>=1.9.0",
   "tomli>=2.0.0; python_version < '3.11'",
@@ -49,7 +49,7 @@ flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
-mypyc = ["sqlglot[c]"]
+mypyc = ["sqlglot[c]>=30.0.0"]
 mysql-connector = ["mysql-connector-python"]
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
@@ -157,8 +157,8 @@ exclude-newer-package = { mysql-connector-python = "2026-01-20" }
 sqlspec = "sqlspec.__main__:run_cli"
 
 [project.entry-points."pygments.styles"]
-sqlspec-light = "tools.sphinx_ext.pygments_styles:SQLSpecLightStyle"
 sqlspec-dark = "tools.sphinx_ext.pygments_styles:SQLSpecDarkStyle"
+sqlspec-light = "tools.sphinx_ext.pygments_styles:SQLSpecLightStyle"
 
 [build-system]
 build-backend = "hatchling.build"
@@ -192,14 +192,16 @@ exclude = [
   "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
   "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
-  "sqlspec/dialects/**",                       # Inherits from sqlglot dialect metaclasses
-  "sqlspec/builder/_vector_expressions.py",   # Inherits from sqlglot.exp.Expression which has a metaclass
+  "sqlspec/dialects/postgres/_pgvector.py",   # Dialect shell patches compiled sqlglot parser/generator registries
+  "sqlspec/dialects/postgres/_paradedb.py",   # Dialect shell patches compiled sqlglot parser/generator registries
+  "sqlspec/dialects/spanner/_spanner.py",     # Dialect shell patches compiled sqlglot parser hooks and post-processes DDL
+  "sqlspec/dialects/spanner/_spangres.py",    # Dialect shell patches compiled sqlglot parser hooks
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
   "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
   "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
-  "sqlspec/storage/backends/_iterators.py",  # Async __anext__ + asyncio.to_thread causes mypyc segfault
+  "sqlspec/storage/backends/_iterators.py",   # Async __anext__ + asyncio.to_thread causes mypyc segfault
 ]
 include = [
   "sqlspec/core/**/*.py",                  # Core module
@@ -442,8 +444,8 @@ exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp",
 include = ["sqlspec", "tests"]
 pythonVersion = "3.10"
 reportMissingTypeStubs = false
-reportPrivateImportUsage = true
-reportPrivateUsage = true
+reportPrivateImportUsage = false
+reportPrivateUsage = false
 reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
 reportUnnecessaryCast = false

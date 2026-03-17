@@ -208,7 +208,7 @@ def test_raw_without_parameters_backward_compatibility() -> None:
     """Test that raw() without parameters maintains backward compatibility."""
     expr = sql.raw("COALESCE(name, 'Unknown')")
 
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
     assert not isinstance(expr, SQL)
 
 
@@ -271,7 +271,7 @@ def test_raw_empty_parameters_returns_expression() -> None:
     """Test that raw() with empty kwargs returns expression."""
     expr = sql.raw("SELECT 1")
 
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, exp.Expr)
     assert not isinstance(expr, SQL)
 
 
@@ -441,13 +441,13 @@ def test_count_function() -> None:
     assert isinstance(expr, AggregateExpression)
     assert hasattr(expr, "as_")
     assert hasattr(expr, "expression")
-    assert isinstance(expr.expression, exp.Expression)
+    assert isinstance(expr.expression, exp.Expr)
 
     count_column = sql.count("user_id")
     assert isinstance(count_column, AggregateExpression)
     assert hasattr(count_column, "as_")
     assert hasattr(count_column, "expression")
-    assert isinstance(count_column.expression, exp.Expression)
+    assert isinstance(count_column.expression, exp.Expr)
 
 
 def test_sum_function() -> None:
@@ -457,7 +457,7 @@ def test_sum_function() -> None:
     assert isinstance(expr, AggregateExpression)
     assert hasattr(expr, "as_")
     assert hasattr(expr, "expression")
-    assert isinstance(expr.expression, exp.Expression)
+    assert isinstance(expr.expression, exp.Expr)
 
 
 def test_avg_function() -> None:
@@ -467,7 +467,7 @@ def test_avg_function() -> None:
     assert isinstance(expr, AggregateExpression)
     assert hasattr(expr, "as_")
     assert hasattr(expr, "expression")
-    assert isinstance(expr.expression, exp.Expression)
+    assert isinstance(expr.expression, exp.Expr)
 
 
 def test_max_function() -> None:
@@ -477,7 +477,7 @@ def test_max_function() -> None:
     assert isinstance(expr, AggregateExpression)
     assert hasattr(expr, "as_")
     assert hasattr(expr, "expression")
-    assert isinstance(expr.expression, exp.Expression)
+    assert isinstance(expr.expression, exp.Expr)
 
 
 def test_min_function() -> None:
@@ -487,7 +487,7 @@ def test_min_function() -> None:
     assert isinstance(expr, AggregateExpression)
     assert hasattr(expr, "as_")
     assert hasattr(expr, "expression")
-    assert isinstance(expr.expression, exp.Expression)
+    assert isinstance(expr.expression, exp.Expr)
 
 
 def test_column_method() -> None:

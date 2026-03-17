@@ -57,12 +57,72 @@ if TYPE_CHECKING:
     )
 
 
-__all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase")
+__all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncPoolConnectionContext", "AsyncPoolSessionFactory")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class AsyncPoolConnectionContext:
+    """Base async connection context using pool acquire/release pattern.
+
+    Subclass per adapter and override ``__aenter__``/``__aexit__`` for
+    adapter-specific pool acquisition and release logic.
+    """
+
+    __slots__ = ("_config", "_connection")
+
+    def __init__(self, config: Any) -> None:
+        self._config = config
+        self._connection: Any = None
+
+    async def __aenter__(self) -> Any:
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        self._connection = await pool.acquire()
+        return self._connection
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> "bool | None":
+        if self._connection is not None:
+            if self._config.connection_instance:
+                await self._config.connection_instance.release(self._connection)
+            self._connection = None
+        return None
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class AsyncPoolSessionFactory:
+    """Base async session factory using pool acquire/release pattern.
+
+    Subclass per adapter and override ``acquire_connection``/``release_connection``
+    for adapter-specific pool acquisition and release logic.
+    """
+
+    __slots__ = ("_config", "_connection")
+
+    def __init__(self, config: Any) -> None:
+        self._config = config
+        self._connection: Any = None
+
+    async def acquire_connection(self) -> Any:
+        pool = self._config.connection_instance
+        if pool is None:
+            pool = await self._config.create_pool()
+            self._config.connection_instance = pool
+        self._connection = await pool.acquire()
+        return self._connection
+
+    async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._connection is not None and self._config.connection_instance is not None:
+            await self._config.connection_instance.release(self._connection)
+            self._connection = None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

@@ -20,6 +20,7 @@ from sqlspec.adapters.adbc.core import (
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, AdbcSessionContext
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
+from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -122,18 +123,18 @@ class AdbcDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
 
 
-class AdbcConnectionContext:
+class AdbcConnectionContext(SyncPoolConnectionContext):
     """Context manager for ADBC connections."""
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "AdbcConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: AdbcConnection | None = None
 
     def __enter__(self) -> "AdbcConnection":
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("AdbcConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -144,18 +145,18 @@ class AdbcConnectionContext:
         return None
 
 
-class _AdbcSessionConnectionHandler:
-    __slots__ = ("_config", "_connection")
+class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
+    __slots__ = ("_connection",)
 
     def __init__(self, config: "AdbcConfig") -> None:
-        self._config = config
+        super().__init__(config)
         self._connection: AdbcConnection | None = None
 
     def acquire_connection(self) -> "AdbcConnection":
         self._connection = self._config.create_connection()
-        return self._connection
+        return cast("AdbcConnection", self._connection)
 
-    def release_connection(self, _conn: "AdbcConnection") -> None:
+    def release_connection(self, _conn: "AdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
         self._connection.close()

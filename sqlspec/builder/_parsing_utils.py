@@ -32,7 +32,7 @@ def extract_column_name(column: str | exp.Column) -> str:
         Column name as string for use as parameter name
     """
     if isinstance(column, str):
-        col_expr: exp.Expression | None = exp.maybe_parse(column)
+        col_expr: exp.Expr | None = exp.maybe_parse(column)
         if isinstance(col_expr, exp.Column):
             return col_expr.name
         return column.split(".")[-1] if "." in column else column
@@ -55,7 +55,7 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
         builder.add_parameter(param_value, name=param_name)
 
 
-def parse_column_expression(column_input: str | exp.Expression | Any, builder: Any | None = None) -> exp.Expression:
+def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | None = None) -> exp.Expr:
     """Parse a column input that might be a complex expression.
 
     Handles cases like:
@@ -72,30 +72,30 @@ def parse_column_expression(column_input: str | exp.Expression | Any, builder: A
         builder: Optional builder instance for parameter merging
 
     Returns:
-        exp.Expression: Parsed SQLGlot expression
+        exp.Expr: Parsed SQLGlot expression
     """
-    if isinstance(column_input, exp.Expression):
+    if isinstance(column_input, exp.Expr):
         return column_input
 
     if isinstance(column_input, str):
         return exp.maybe_parse(column_input) or exp.column(column_input)
 
     if has_expression_and_sql(column_input):
-        if column_input.expression is not None and isinstance(column_input.expression, exp.Expression):
+        if column_input.expression is not None and isinstance(column_input.expression, exp.Expr):
             _merge_sql_parameters(column_input, builder)
-            return cast("exp.Expression", column_input.expression)
+            return cast("exp.Expr", column_input.expression)
 
         _merge_sql_parameters(column_input, builder)
         sql_str = column_input.sql
         return exp.maybe_parse(sql_str) or exp.column(sql_str)
 
-    if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expression):  # pyright: ignore[reportPrivateUsage]
+    if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
         return column_input._expression  # pyright: ignore[reportPrivateUsage]
 
     return exp.maybe_parse(column_input) or exp.column(str(column_input))  # pyright: ignore[reportArgumentType]
 
 
-def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expression:
+def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expr:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     if explicit_alias is None and " " in table_input.strip():
         parts = table_input.strip().split(None, 1)
@@ -104,19 +104,19 @@ def parse_table_expression(table_input: str, explicit_alias: str | None = None) 
             return exp.to_table(base_table, alias=alias)
 
     with contextlib.suppress(Exception):
-        parsed: exp.Expression | None = exp.maybe_parse(f"SELECT * FROM {table_input}")
+        parsed: exp.Expr | None = exp.maybe_parse(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):
             from_clause = cast("exp.From", parsed.args.get("from"))
             table_expr = from_clause.this
 
             if explicit_alias:
-                return exp.alias_(table_expr, explicit_alias)  # type:ignore[no-any-return]
-            return table_expr  # type:ignore[no-any-return]
+                return exp.alias_(table_expr, explicit_alias)
+            return table_expr  # type: ignore[no-any-return]
 
     return exp.to_table(table_input, alias=explicit_alias)
 
 
-def parse_order_expression(order_input: str | exp.Expression) -> exp.Expression:
+def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:
     """Parse an ORDER BY expression that might include direction.
 
     Handles cases like:
@@ -129,9 +129,9 @@ def parse_order_expression(order_input: str | exp.Expression) -> exp.Expression:
         order_input: String or SQLGlot expression for ORDER BY
 
     Returns:
-        exp.Expression: Parsed SQLGlot expression (usually Ordered or Column)
+        exp.Expr: Parsed SQLGlot expression (usually Ordered or Column)
     """
-    if isinstance(order_input, exp.Expression):
+    if isinstance(order_input, exp.Expr):
         return order_input
 
     parsed = maybe_parse(str(order_input), into=exp.Ordered)
@@ -141,9 +141,7 @@ def parse_order_expression(order_input: str | exp.Expression) -> exp.Expression:
     return parse_column_expression(order_input)
 
 
-def parse_condition_expression(
-    condition_input: str | exp.Expression | tuple[str, Any], builder: "Any" = None
-) -> exp.Expression:
+def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any], builder: "Any" = None) -> exp.Expr:
     """Parse a condition that might be complex SQL.
 
     Handles cases like:
@@ -157,13 +155,13 @@ def parse_condition_expression(
         builder: Optional builder instance for parameter binding
 
     Returns:
-        exp.Expression: Parsed SQLGlot expression (usually a comparison or logical op)
+        exp.Expr: Parsed SQLGlot expression (usually a comparison or logical op)
 
     Notes:
         Database-specific parameter placeholders such as $1, %s, and :1 are rewritten to :param_N format
         so SQLGlot can parse them consistently.
     """
-    if isinstance(condition_input, exp.Expression):
+    if isinstance(condition_input, exp.Expr):
         return condition_input
 
     tuple_condition_parts: Final[int] = 2
@@ -205,13 +203,13 @@ def parse_condition_expression(
                 )
         condition_input = converted_condition
 
-    parsed: exp.Expression | None = exp.maybe_parse(condition_input)
+    parsed: exp.Expr | None = exp.maybe_parse(condition_input)
     if parsed:
         return parsed
     return exp.condition(condition_input)
 
 
-def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp.Expression:
+def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp.Expr:
     """Extract SQLGlot expression from SQL object value with parameter merging.
 
     Handles the common pattern of:
@@ -238,9 +236,9 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
         msg = f"Value does not have both expression and sql attributes: {type(value)}"
         raise ValueError(msg)
 
-    if value.expression is not None and isinstance(value.expression, exp.Expression):
+    if value.expression is not None and isinstance(value.expression, exp.Expr):
         _merge_sql_parameters(value, builder)
-        return cast("exp.Expression", value.expression)
+        return cast("exp.Expr", value.expression)
 
     _merge_sql_parameters(value, builder)
     sql_text = value.sql if not callable(value.sql) else str(value)
@@ -248,7 +246,7 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
     return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
 
 
-def extract_expression(value: Any) -> exp.Expression:
+def extract_expression(value: Any) -> exp.Expr:
     """Extract SQLGlot expression from value, handling wrapper types.
 
     Args:
@@ -267,12 +265,12 @@ def extract_expression(value: Any) -> exp.Expression:
         return value.expression
     if isinstance(value, Case):
         return exp.Case(ifs=value.conditions, default=value.default)
-    if isinstance(value, exp.Expression):
+    if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
 
 
-def to_expression(value: Any) -> exp.Expression:
+def to_expression(value: Any) -> exp.Expr:
     """Convert a Python value to a raw SQLGlot expression.
 
     Args:
@@ -281,7 +279,7 @@ def to_expression(value: Any) -> exp.Expression:
     Returns:
         Raw SQLGlot expression.
     """
-    if isinstance(value, exp.Expression):
+    if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
 
