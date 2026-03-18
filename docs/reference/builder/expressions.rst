@@ -52,9 +52,7 @@ Expression Wrappers
 Vector Expressions
 ==================
 
-.. autoclass:: VectorDistance
-   :members:
-   :show-inheritance:
+.. autofunction:: VectorDistance
 
 Base Classes
 ============

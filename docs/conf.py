@@ -155,6 +155,7 @@ autodoc_mock_imports = [
     "adbc_driver_sqlite",
     "adbc_driver_flightsql",
     "google.cloud.bigquery",
+    "flask",
 ]
 
 autosummary_generate = False
