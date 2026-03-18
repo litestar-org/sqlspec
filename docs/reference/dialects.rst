@@ -88,8 +88,7 @@ Spanner
 Expression Types
 ================
 
-.. autoclass:: sqlspec.dialects.postgres.pgvector.VectorDistance
-   :members:
+.. autofunction:: sqlspec.builder.VectorDistance
    :no-index:
 
 .. autoclass:: sqlspec.dialects.postgres.paradedb.SearchOperator
