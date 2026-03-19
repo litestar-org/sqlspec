@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from sqlspec import SQLSpec
+from sqlspec.storage.backends.obstore import ObStoreBackend
 
 
 class TestStorageRegistryFilePathResolution:
@@ -76,4 +77,6 @@ class TestStorageRegistryFilePathResolution:
             backend_from_file = loader.storage_registry.get(str(sql_file))
             backend_from_dir = loader.storage_registry.get(tmpdir)
 
+            assert isinstance(backend_from_file, ObStoreBackend)
+            assert isinstance(backend_from_dir, ObStoreBackend)
             assert backend_from_file._local_store_root == backend_from_dir._local_store_root
