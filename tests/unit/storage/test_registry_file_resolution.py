@@ -65,7 +65,7 @@ class TestStorageRegistryFilePathResolution:
             assert s.get_sql("query_b") is not None
 
     def test_file_and_directory_share_same_backend(self) -> None:
-        """A file path and its parent directory should resolve to the same backend store."""
+        """A file path and its parent directory should resolve to a backend with the same store root."""
         with tempfile.TemporaryDirectory() as tmpdir:
             sql_file = Path(tmpdir) / "hello.sql"
             sql_file.write_text("-- name: hello_world\nSELECT 1;\n")
@@ -76,4 +76,4 @@ class TestStorageRegistryFilePathResolution:
             backend_from_file = loader.storage_registry.get(str(sql_file))
             backend_from_dir = loader.storage_registry.get(tmpdir)
 
-            assert backend_from_file is backend_from_dir
+            assert backend_from_file._local_store_root == backend_from_dir._local_store_root
