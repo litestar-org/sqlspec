@@ -113,7 +113,10 @@ class StorageRegistry:
             raise ImproperConfigurationError(msg)
 
         if isinstance(uri_or_alias, Path):
-            uri_or_alias = f"file://{uri_or_alias.resolve()}"
+            if uri_or_alias.is_file():
+                uri_or_alias = f"file://{uri_or_alias.parent}"
+            else:
+                uri_or_alias = f"file://{uri_or_alias}"
 
         cache_params = dict(kwargs)
         if backend:
@@ -125,8 +128,12 @@ class StorageRegistry:
         scheme = self._get_scheme(uri_or_alias)
         if not scheme and is_local_path(uri_or_alias):
             scheme = "file"
-            uri_or_alias = f"file://{uri_or_alias}"
-
+            local_path = Path(uri_or_alias)
+            if local_path.is_file():
+                uri_or_alias = f"file://{local_path.parent}"
+            else:
+                uri_or_alias = f"file://{uri_or_alias}"
+                
         if scheme:
             instance = self._resolve_from_uri(uri_or_alias, backend_override=backend, **kwargs)
         elif uri_or_alias in self._alias_configs:
