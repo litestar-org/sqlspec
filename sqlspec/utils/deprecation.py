@@ -139,7 +139,7 @@ class _DeprecatedFactory(Generic[P, T]):
         alternative = self._alternative
         info = self._info
         pending = self._pending
-        kind = cast("DeprecatedKind", self._kind or _infer_deprecated_kind(func))
+        kind: DeprecatedKind = self._kind or _infer_deprecated_kind(func)
 
         @wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:

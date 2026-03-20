@@ -1,6 +1,5 @@
 """Private JSON serialization engine for ``sqlspec.utils.serializers``."""
 
-# ruff: noqa: PLC2801
 import contextlib
 import datetime
 import enum
@@ -21,6 +20,19 @@ from sqlspec.typing import (
 )
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
 from sqlspec.utils.uuids import UUID_UTILS_INSTALLED, _load_uuid_utils
+
+__all__ = (
+    "BaseJSONSerializer",
+    "JSONSerializer",
+    "MsgspecSerializer",
+    "OrjsonSerializer",
+    "StandardLibSerializer",
+    "convert_date_to_iso",
+    "convert_datetime_to_gmt_iso",
+    "decode_json",
+    "encode_json",
+    "get_default_serializer",
+)
 
 
 def _get_uuid_utils_type() -> "type[Any] | None":

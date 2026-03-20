@@ -20,6 +20,15 @@ from sqlspec.utils.type_guards import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+__all__ = (
+    "SchemaSerializer",
+    "get_collection_serializer",
+    "get_serializer_metrics",
+    "reset_serializer_cache",
+    "schema_dump",
+    "serialize_collection",
+)
+
 
 DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
 _PRIMITIVE_TYPES: Final[tuple[type[Any], ...]] = (str, bytes, int, float, bool)

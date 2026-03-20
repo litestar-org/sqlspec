@@ -497,9 +497,12 @@ def test_error_messages_are_helpful() -> None:
 def test_to_json_embeds_pydantic_models_as_objects() -> None:
     """Pydantic models should normalize to plain objects, not JSON strings."""
 
-    pydantic = pytest.importorskip("pydantic")
+    try:
+        from pydantic import BaseModel
+    except ImportError:
+        pytest.skip("pydantic not installed")
 
-    class Payload(pydantic.BaseModel):
+    class Payload(BaseModel):
         identifier: int
         label: str
 
