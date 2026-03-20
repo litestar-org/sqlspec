@@ -40,8 +40,6 @@ Supported Backends
      - Production
    * - duckdb
      - Production (analytics)
-   * - bigquery
-     - Production
    * - adbc
      - Production
 
