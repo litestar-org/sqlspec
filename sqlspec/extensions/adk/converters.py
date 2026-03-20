@@ -1,20 +1,37 @@
-"""Conversion functions between ADK models and database records."""
+"""Conversion functions between ADK models and database records.
 
-import json
-import pickle
+Implements full-event JSON storage: the entire Event is serialized via
+``Event.model_dump_json(exclude_none=True)`` into a single ``event_json``
+column, with a small set of indexed scalar columns extracted alongside for
+query performance.  Reconstruction uses ``Event.model_validate_json()``.
+
+Also provides scoped-state helpers that normalise ADK state prefixes
+(``app:``, ``user:``, ``temp:``) so the shared service layer can split,
+filter, and merge state before handing it to backend stores.
+"""
+
 from datetime import datetime, timezone
 from typing import Any
 
 from google.adk.events.event import Event
 from google.adk.sessions import Session
-from google.genai import types
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
-from sqlspec.utils.logging import get_logger
 
-logger = get_logger("sqlspec.extensions.adk.converters")
+__all__ = (
+    "event_to_record",
+    "filter_temp_state",
+    "merge_scoped_state",
+    "record_to_event",
+    "record_to_session",
+    "session_to_record",
+    "split_scoped_state",
+)
 
-__all__ = ("event_to_record", "record_to_event", "record_to_session", "session_to_record")
+
+# ---------------------------------------------------------------------------
+# Session converters
+# ---------------------------------------------------------------------------
 
 
 def session_to_record(session: "Session") -> SessionRecord:
@@ -58,58 +75,39 @@ def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Se
     )
 
 
-def event_to_record(event: "Event", session_id: str, app_name: str, user_id: str) -> EventRecord:
-    """Convert ADK Event to database record.
+# ---------------------------------------------------------------------------
+# Event converters  (full-event JSON storage)
+# ---------------------------------------------------------------------------
+
+
+def event_to_record(event: "Event", session_id: str) -> EventRecord:
+    """Convert ADK Event to database record using full-event JSON storage.
+
+    The entire Event is serialized into ``event_json`` via Pydantic's
+    ``model_dump_json(exclude_none=True)``.  A small number of indexed scalar
+    columns are extracted alongside for query performance.
 
     Args:
         event: ADK Event object.
         session_id: ID of the parent session.
-        app_name: Name of the application.
-        user_id: ID of the user.
 
     Returns:
         EventRecord for database storage.
     """
-    actions_bytes = pickle.dumps(event.actions)
-
-    long_running_tool_ids_json = None
-    if event.long_running_tool_ids:
-        long_running_tool_ids_json = json.dumps(list(event.long_running_tool_ids))
-
-    content_dict = None
-    if event.content:
-        content_dict = event.content.model_dump(exclude_none=True, mode="json")
-
-    grounding_metadata_dict = None
-    if event.grounding_metadata:
-        grounding_metadata_dict = event.grounding_metadata.model_dump(exclude_none=True, mode="json")
-
-    custom_metadata_dict = event.custom_metadata
-
     return EventRecord(
-        id=event.id,
-        app_name=app_name,
-        user_id=user_id,
         session_id=session_id,
         invocation_id=event.invocation_id,
         author=event.author,
-        branch=event.branch,
-        actions=actions_bytes,
-        long_running_tool_ids_json=long_running_tool_ids_json,
         timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
-        content=content_dict,
-        grounding_metadata=grounding_metadata_dict,
-        custom_metadata=custom_metadata_dict,
-        partial=event.partial,
-        turn_complete=event.turn_complete,
-        interrupted=event.interrupted,
-        error_code=event.error_code,
-        error_message=event.error_message,
+        event_json=event.model_dump_json(exclude_none=True),
     )
 
 
 def record_to_event(record: "EventRecord") -> "Event":
     """Convert database record to ADK Event.
+
+    Reconstruction is lossless: the full Event is restored from
+    ``event_json`` via ``Event.model_validate_json()``.
 
     Args:
         record: Event database record.
@@ -117,56 +115,82 @@ def record_to_event(record: "EventRecord") -> "Event":
     Returns:
         ADK Event object.
     """
-    actions = pickle.loads(record["actions"])  # noqa: S301
-
-    long_running_tool_ids = None
-    if record["long_running_tool_ids_json"]:
-        long_running_tool_ids = set(json.loads(record["long_running_tool_ids_json"]))
-
-    return Event(
-        id=record["id"],
-        invocation_id=record["invocation_id"],
-        author=record["author"],
-        branch=record["branch"],
-        actions=actions,
-        timestamp=record["timestamp"].timestamp(),
-        content=_decode_content(record["content"]),
-        long_running_tool_ids=long_running_tool_ids,
-        partial=record["partial"],
-        turn_complete=record["turn_complete"],
-        error_code=record["error_code"],
-        error_message=record["error_message"],
-        interrupted=record["interrupted"],
-        grounding_metadata=_decode_grounding_metadata(record["grounding_metadata"]),
-        custom_metadata=record["custom_metadata"],
-    )
+    return Event.model_validate_json(record["event_json"])
 
 
-def _decode_content(content_dict: "dict[str, Any] | None") -> Any:
-    """Decode content dictionary from database to ADK Content object.
+# ---------------------------------------------------------------------------
+# Scoped-state helpers
+# ---------------------------------------------------------------------------
+
+
+def filter_temp_state(state: "dict[str, Any]") -> "dict[str, Any]":
+    """Return a copy of *state* with all ``temp:`` keys removed.
+
+    ``temp:`` keys are process-local/session-runtime state and must never be
+    written to persistent storage.
 
     Args:
-        content_dict: Content dictionary from database.
+        state: ADK state dictionary (may contain ``temp:`` prefixed keys).
 
     Returns:
-        ADK Content object or None.
+        A new dict without any ``temp:``-prefixed keys.
     """
-    if not content_dict:
-        return None
-
-    return types.Content.model_validate(content_dict)
+    return {k: v for k, v in state.items() if not k.startswith("temp:")}
 
 
-def _decode_grounding_metadata(grounding_dict: "dict[str, Any] | None") -> Any:
-    """Decode grounding metadata dictionary from database to ADK object.
+def split_scoped_state(
+    state: "dict[str, Any]",
+) -> "tuple[dict[str, Any], dict[str, Any], dict[str, Any]]":
+    """Split ADK state into ``(session_local, app_scoped, user_scoped)`` dicts.
+
+    Keys without a recognised scope prefix are session-local.  ``temp:`` keys
+    are silently dropped (they must not be persisted).
 
     Args:
-        grounding_dict: Grounding metadata dictionary from database.
+        state: ADK state dictionary.
 
     Returns:
-        ADK GroundingMetadata object or None.
+        A 3-tuple of ``(session_local, app_scoped, user_scoped)`` dicts.
+        Scoped dicts retain their prefix in the key (e.g. ``"app:foo"``).
     """
-    if not grounding_dict:
-        return None
+    session_local: dict[str, Any] = {}
+    app_scoped: dict[str, Any] = {}
+    user_scoped: dict[str, Any] = {}
 
-    return types.GroundingMetadata.model_validate(grounding_dict)
+    for k, v in state.items():
+        if k.startswith("temp:"):
+            continue
+        elif k.startswith("app:"):
+            app_scoped[k] = v
+        elif k.startswith("user:"):
+            user_scoped[k] = v
+        else:
+            session_local[k] = v
+
+    return session_local, app_scoped, user_scoped
+
+
+def merge_scoped_state(
+    session_local: "dict[str, Any]",
+    app_scoped: "dict[str, Any]",
+    user_scoped: "dict[str, Any]",
+) -> "dict[str, Any]":
+    """Merge scoped state dicts back into a single ADK-compatible state dict.
+
+    The merge order is ``session_local | app_scoped | user_scoped`` so that
+    broader scopes can shadow narrower ones if keys collide (which they
+    normally should not, since prefixes differ).
+
+    Args:
+        session_local: Session-local state (no prefix).
+        app_scoped: App-scoped state (``app:`` prefix).
+        user_scoped: User-scoped state (``user:`` prefix).
+
+    Returns:
+        A single merged state dict suitable for ``Session.state``.
+    """
+    merged: dict[str, Any] = {}
+    merged.update(session_local)
+    merged.update(app_scoped)
+    merged.update(user_scoped)
+    return merged

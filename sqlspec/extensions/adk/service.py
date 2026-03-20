@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
 
-from sqlspec.extensions.adk.converters import event_to_record, record_to_session
+from sqlspec.extensions.adk.converters import event_to_record, filter_temp_state, record_to_session
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -192,6 +192,11 @@ class SQLSpecSessionService(BaseSessionService):
     async def append_event(self, session: "Session", event: "Event") -> "Event":
         """Append an event to a session.
 
+        Persists the event record and the post-append durable state
+        atomically via ``store.append_event_and_update_state()``.  ``temp:``
+        keys are stripped from the persisted state snapshot so they never
+        survive a reload.
+
         Args:
             session: Session to append to.
             event: Event to append.
@@ -204,11 +209,12 @@ class SQLSpecSessionService(BaseSessionService):
         if event.partial:
             return event
 
-        event_record = event_to_record(
-            event=event, session_id=session.id, app_name=session.app_name, user_id=session.user_id
-        )
+        event_record = event_to_record(event=event, session_id=session.id)
 
-        await self._store.append_event(event_record)
+        # Strip temp: keys before persisting state
+        durable_state = filter_temp_state(session.state)
+
+        await self._store.append_event_and_update_state(event_record=event_record, session_id=session.id, state=durable_state)
         log_with_context(
             logger,
             logging.DEBUG,

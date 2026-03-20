@@ -251,6 +251,24 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
+    async def append_event_and_update_state(
+        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        This is the authoritative durable write boundary for post-creation
+        session mutations.  The event insert and state update must succeed
+        together or fail together.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (``temp:`` keys already
+                stripped by the service layer).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -502,6 +520,24 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
 
         Returns:
             Created event record.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def create_event_and_update_state(
+        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically create an event and update the session's durable state.
+
+        This is the authoritative durable write boundary for post-creation
+        session mutations.  The event insert and state update must succeed
+        together or fail together.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (``temp:`` keys already
+                stripped by the service layer).
         """
         raise NotImplementedError
 
