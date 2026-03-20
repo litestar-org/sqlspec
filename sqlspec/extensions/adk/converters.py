@@ -47,7 +47,7 @@ def session_to_record(session: "Session") -> SessionRecord:
         id=session.id,
         app_name=session.app_name,
         user_id=session.user_id,
-        state=session.state,
+        state=filter_temp_state(session.state),
         create_time=datetime.now(timezone.utc),
         update_time=datetime.fromtimestamp(session.last_update_time, tz=timezone.utc),
     )
@@ -99,7 +99,7 @@ def event_to_record(event: "Event", session_id: str) -> EventRecord:
         invocation_id=event.invocation_id,
         author=event.author,
         timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
-        event_json=event.model_dump_json(exclude_none=True),
+        event_json=event.model_dump(exclude_none=True, mode="json"),
     )
 
 
@@ -115,7 +115,7 @@ def record_to_event(record: "EventRecord") -> "Event":
     Returns:
         ADK Event object.
     """
-    return Event.model_validate_json(record["event_json"])
+    return Event.model_validate(record["event_json"])
 
 
 # ---------------------------------------------------------------------------
@@ -138,59 +138,52 @@ def filter_temp_state(state: "dict[str, Any]") -> "dict[str, Any]":
     return {k: v for k, v in state.items() if not k.startswith("temp:")}
 
 
-def split_scoped_state(
-    state: "dict[str, Any]",
-) -> "tuple[dict[str, Any], dict[str, Any], dict[str, Any]]":
-    """Split ADK state into ``(session_local, app_scoped, user_scoped)`` dicts.
-
-    Keys without a recognised scope prefix are session-local.  ``temp:`` keys
-    are silently dropped (they must not be persisted).
+def split_scoped_state(state: "dict[str, Any]") -> "tuple[dict[str, Any], dict[str, Any], dict[str, Any]]":
+    """Split state into app-scoped, user-scoped, and session-scoped buckets.
 
     Args:
-        state: ADK state dictionary.
+        state: Full session state dict (temp: already stripped).
 
     Returns:
-        A 3-tuple of ``(session_local, app_scoped, user_scoped)`` dicts.
-        Scoped dicts retain their prefix in the key (e.g. ``"app:foo"``).
+        Tuple of (app_state, user_state, session_state).
+        app_state: keys starting with "app:"
+        user_state: keys starting with "user:"
+        session_state: all other keys
     """
-    session_local: dict[str, Any] = {}
-    app_scoped: dict[str, Any] = {}
-    user_scoped: dict[str, Any] = {}
-
+    app_state: dict[str, Any] = {}
+    user_state: dict[str, Any] = {}
+    session_state: dict[str, Any] = {}
     for k, v in state.items():
-        if k.startswith("temp:"):
-            continue
-        elif k.startswith("app:"):
-            app_scoped[k] = v
+        if k.startswith("app:"):
+            app_state[k] = v
         elif k.startswith("user:"):
-            user_scoped[k] = v
+            user_state[k] = v
         else:
-            session_local[k] = v
-
-    return session_local, app_scoped, user_scoped
+            session_state[k] = v
+    return app_state, user_state, session_state
 
 
 def merge_scoped_state(
-    session_local: "dict[str, Any]",
-    app_scoped: "dict[str, Any]",
-    user_scoped: "dict[str, Any]",
+    session_state: "dict[str, Any]",
+    app_state: "dict[str, Any] | None" = None,
+    user_state: "dict[str, Any] | None" = None,
 ) -> "dict[str, Any]":
-    """Merge scoped state dicts back into a single ADK-compatible state dict.
+    """Merge scoped state buckets into a single state dict.
 
-    The merge order is ``session_local | app_scoped | user_scoped`` so that
-    broader scopes can shadow narrower ones if keys collide (which they
-    normally should not, since prefixes differ).
+    Priority: session_state is base, app_state and user_state overlay.
+    This matches ADK's documented merge semantics on session load.
 
     Args:
-        session_local: Session-local state (no prefix).
-        app_scoped: App-scoped state (``app:`` prefix).
-        user_scoped: User-scoped state (``user:`` prefix).
+        session_state: Per-session state.
+        app_state: App-scoped state (shared across sessions for same app).
+        user_state: User-scoped state (shared across sessions for same app+user).
 
     Returns:
-        A single merged state dict suitable for ``Session.state``.
+        Merged state dict.
     """
-    merged: dict[str, Any] = {}
-    merged.update(session_local)
-    merged.update(app_scoped)
-    merged.update(user_scoped)
+    merged = dict(session_state)
+    if app_state:
+        merged.update(app_state)
+    if user_state:
+        merged.update(user_state)
     return merged

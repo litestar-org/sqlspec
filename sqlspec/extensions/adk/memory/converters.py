@@ -51,9 +51,9 @@ def extract_content_text(content: "types.Content") -> str:
         if part.text:
             parts_text.append(part.text)
         elif part.function_call is not None:
-            parts_text.append(f"{part.function_call.name}: {part.function_call.args}")
+            parts_text.append(f"function:{part.function_call.name}")
         elif part.function_response is not None:
-            parts_text.append(f"{part.function_response.name}: {part.function_response.response}")
+            parts_text.append(f"response:{part.function_response.name}")
 
     return " ".join(parts_text)
 

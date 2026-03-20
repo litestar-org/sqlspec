@@ -80,8 +80,10 @@ class SQLSpecSessionService(BaseSessionService):
         if state is None:
             state = {}
 
+        persisted_state = filter_temp_state(state)
+
         record = await self._store.create_session(
-            session_id=session_id, app_name=app_name, user_id=user_id, state=state
+            session_id=session_id, app_name=app_name, user_id=user_id, state=persisted_state
         )
         log_with_context(
             logger, logging.DEBUG, "adk.session.create", app_name=app_name, session_id=session_id, has_state=bool(state)
