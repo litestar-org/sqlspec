@@ -6,7 +6,7 @@ Used to communicate API changes and migration paths to users.
 
 import inspect
 from collections.abc import Callable
-from functools import WRAPPER_ASSIGNMENTS, WRAPPER_UPDATES
+from functools import wraps
 from typing import Generic, Literal, cast
 from warnings import warn
 
@@ -104,40 +104,13 @@ def deprecated(
     )
 
 
-class _DeprecatedWrapper(Generic[P, T]):
-    __slots__ = ("__dict__", "_alternative", "_func", "_info", "_kind", "_pending", "_removal_in", "_version")
-
-    def __init__(
-        self,
-        func: Callable[P, T],
-        *,
-        version: str,
-        removal_in: str | None,
-        alternative: str | None,
-        info: str | None,
-        pending: bool,
-        kind: Literal["function", "method", "classmethod", "property"] | None,
-    ) -> None:
-        self._func = func
-        self._version = version
-        self._removal_in = removal_in
-        self._alternative = alternative
-        self._info = info
-        self._pending = pending
-        self._kind = kind
-
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
-        kind = cast("DeprecatedKind", self._kind or ("method" if inspect.ismethod(self._func) else "function"))
-        warn_deprecation(
-            version=self._version,
-            deprecated_name=self._func.__name__,
-            info=self._info,
-            alternative=self._alternative,
-            pending=self._pending,
-            removal_in=self._removal_in,
-            kind=kind,
-        )
-        return self._func(*args, **kwargs)
+def _infer_deprecated_kind(func: Callable[P, T]) -> DeprecatedKind:
+    if inspect.ismethod(func):
+        return "method"
+    qualname = getattr(func, "__qualname__", "")
+    if inspect.isfunction(func) and "." in qualname and "<locals>" not in qualname:
+        return "method"
+    return "function"
 
 
 class _DeprecatedFactory(Generic[P, T]):
@@ -161,30 +134,24 @@ class _DeprecatedFactory(Generic[P, T]):
         self._kind: Literal["function", "method", "classmethod", "property"] | None = kind
 
     def __call__(self, func: Callable[P, T]) -> Callable[P, T]:
-        wrapper = _DeprecatedWrapper(
-            func,
-            version=self._version,
-            removal_in=self._removal_in,
-            alternative=self._alternative,
-            info=self._info,
-            pending=self._pending,
-            kind=self._kind,
-        )
-        return cast("Callable[P, T]", _copy_wrapper_metadata(wrapper, func))
+        version = self._version
+        removal_in = self._removal_in
+        alternative = self._alternative
+        info = self._info
+        pending = self._pending
+        kind = cast("DeprecatedKind", self._kind or _infer_deprecated_kind(func))
 
+        @wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+            warn_deprecation(
+                version=version,
+                deprecated_name=func.__name__,
+                info=info,
+                alternative=alternative,
+                pending=pending,
+                removal_in=removal_in,
+                kind=kind,
+            )
+            return func(*args, **kwargs)
 
-def _copy_wrapper_metadata(wrapper: "_DeprecatedWrapper[P, T]", func: "Callable[P, T]") -> "_DeprecatedWrapper[P, T]":
-    assignments: tuple[str, ...] = tuple(WRAPPER_ASSIGNMENTS)
-    updates: tuple[str, ...] = tuple(WRAPPER_UPDATES)
-    wrapper_dict = wrapper.__dict__
-    wrapper_dict.update(getattr(func, "__dict__", {}))
-    for attr in assignments:
-        if hasattr(func, attr):
-            wrapper_dict[attr] = getattr(func, attr)
-    wrapper_dict["__wrapped__"] = func
-    for attr in updates:
-        if attr == "__dict__":
-            continue
-        if hasattr(func, attr):
-            wrapper_dict[attr] = getattr(func, attr)
-    return wrapper
+        return wrapper

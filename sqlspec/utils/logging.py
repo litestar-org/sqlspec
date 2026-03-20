@@ -117,17 +117,16 @@ class StructuredFormatter(logging.Formatter):
         Returns:
             JSON formatted log entry
         """
+        record_dict = record.__dict__
         log_entry = {
             "timestamp": self.formatTime(record, self.datefmt),
             "level": record.levelname,
-            "logger": record.name,
+            "logger": cast("str | None", record_dict.get("name")),
             "message": record.getMessage(),
-            "module": record.module,
-            "function": record.funcName,
-            "line": record.lineno,
+            "module": cast("str | None", record_dict.get("module")),
+            "function": cast("str | None", record_dict.get("funcName")),
+            "line": cast("int | None", record_dict.get("lineno")),
         }
-
-        record_dict = record.__dict__
         correlation_id = cast("str | None", record_dict.get("correlation_id")) or get_correlation_id()
         if correlation_id:
             log_entry["correlation_id"] = correlation_id

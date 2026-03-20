@@ -16,9 +16,10 @@ TTL-based expiration, and statistics tracking for monitoring
 across the entire SQLSpec system.
 """
 
+import logging
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -590,16 +591,21 @@ def test_reset_cache_stats_function() -> None:
     assert multi_stats.misses == 0
 
 
-def test_log_cache_stats_function() -> None:
+def test_log_cache_stats_function(caplog: pytest.LogCaptureFixture) -> None:
     """Test logging cache statistics."""
-    with patch("sqlspec.core.cache.get_logger") as mock_get_logger:
-        mock_logger = MagicMock()
-        mock_get_logger.return_value = mock_logger
+    reset_cache_stats()
+    caplog.set_level(logging.DEBUG, logger="sqlspec.cache")
 
-        log_cache_stats()
+    log_cache_stats()
 
-        mock_get_logger.assert_called_once_with("sqlspec.cache")
-        mock_logger.log.assert_called_once()
+    records = [record for record in caplog.records if record.name == "sqlspec.cache" and record.msg == "cache.stats"]
+    assert len(records) == 1
+    extra_fields = getattr(records[0], "extra_fields", {})
+    assert isinstance(extra_fields, dict)
+    stats = extra_fields.get("stats")
+    assert isinstance(stats, dict)
+    assert "default" in stats
+    assert "namespaced" in stats
 
 
 def test_namespaced_cache_interface() -> None:

@@ -220,6 +220,10 @@ include = [
   "sqlspec/utils/sync_tools.py",           # Synchronous utility functions
   "sqlspec/utils/type_guards.py",          # Type guard utilities
   "sqlspec/utils/fixtures.py",             # File fixture loading
+  "sqlspec/utils/config_tools.py",         # Configuration utilities
+  "sqlspec/utils/deprecation.py",          # Deprecation helpers
+  "sqlspec/utils/dispatch.py",             # Dispatch helpers
+  "sqlspec/utils/logging.py",              # Logging helpers
   "sqlspec/utils/serializers/**/*.py",     # Serialization helpers package
   "sqlspec/utils/type_converters.py",      # Adapter type converters
   "sqlspec/utils/correlation.py",          # Correlation context helpers
