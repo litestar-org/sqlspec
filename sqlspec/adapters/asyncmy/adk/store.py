@@ -27,36 +27,16 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     Implements session and event storage for Google Agent Development Kit
     using MySQL/MariaDB via the AsyncMy driver. Provides:
     - Session state management with JSON storage
-    - Event history tracking with BLOB-serialized actions
+    - Full-event JSON storage (single ``event_json`` column)
+    - Atomic event-append + state-update in one transaction
     - Microsecond-precision timestamps
     - Foreign key constraints with cascade delete
     - Efficient upserts using ON DUPLICATE KEY UPDATE
-
-    Args:
-        config: AsyncmyConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.asyncmy import AsyncmyConfig
-        from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
-
-        config = AsyncmyConfig(
-            connection_config={"host": "localhost", ...},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-                }
-            }
-        )
-        store = AsyncmyADKStore(config)
-        await store.ensure_tables()
 
     Notes:
         - MySQL JSON type used (not JSONB) - requires MySQL 5.7.8+
         - TIMESTAMP(6) provides microsecond precision
         - InnoDB engine required for foreign key support
-        - State merging handled at application level
         - Configuration is read from config.extension_config["adk"]
     """
 
@@ -67,12 +47,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Args:
             config: AsyncmyConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
         """
         super().__init__(config)
 
@@ -88,10 +62,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             Tuple of (column_definition, foreign_key_constraint)
-
-        Example:
-            Input: "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-            Output: ("tenant_id BIGINT NOT NULL", "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE")
         """
         references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
 
@@ -110,16 +80,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR(128) for IDs and names (sufficient for UUIDs and app names)
-            - JSON type for state storage (MySQL 5.7.8+)
-            - TIMESTAMP(6) with microsecond precision
-            - AUTO-UPDATE on update_time
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
-            - Optional owner ID column for multi-tenancy
-            - MySQL requires explicit FOREIGN KEY syntax (inline REFERENCES is ignored)
         """
         owner_id_col = ""
         fk_constraint = ""
@@ -151,34 +111,18 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             SQL statement to create adk_events table with indexes.
 
         Notes:
-            - VARCHAR sizes: id(128), session_id(128), invocation_id(256), author(256),
-              branch(256), error_code(256), error_message(1024)
-            - BLOB for pickled actions (up to 64KB)
-            - JSON for content, grounding_metadata, custom_metadata, long_running_tool_ids_json
-            - BOOLEAN for partial, turn_complete, interrupted
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
+            Post clean-break schema: 5 columns only.
+            - session_id, invocation_id, author: indexed scalars
+            - timestamp: microsecond-precision TIMESTAMP
+            - event_json: full Event as native JSON
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json JSON,
-            branch VARCHAR(256),
+            author VARCHAR(128) NOT NULL,
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content JSON,
-            grounding_metadata JSON,
-            custom_metadata JSON,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
+            event_json JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
             INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -189,10 +133,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            MySQL automatically drops indexes when dropping tables.
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
@@ -216,11 +156,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses INSERT with UTC_TIMESTAMP(6) for create_time and update_time.
-            State is JSON-serialized before insertion.
-            If owner_id_column is configured, owner_id must be provided.
         """
         state_json = to_json(state)
 
@@ -252,10 +187,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            MySQL returns datetime objects for TIMESTAMP columns.
-            JSON is parsed from database storage.
         """
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -292,10 +223,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Uses update_time auto-update trigger.
         """
         state_json = to_json(state)
 
@@ -314,9 +241,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = %s"
 
@@ -333,9 +257,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
         """
         if user_id is None:
             sql = f"""
@@ -379,55 +300,72 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """Append an event to a session.
 
         Args:
-            event_record: Event record to store.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for timestamp if not provided.
-            JSON fields are serialized before insertion.
+            event_record: Event record with 5 keys (session_id, invocation_id,
+                author, timestamp, event_json).
         """
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """
 
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute(
                 sql,
                 (
-                    event_record["id"],
                     event_record["session_id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
                     event_record["invocation_id"],
                     event_record["author"],
-                    event_record["actions"],
-                    event_record.get("long_running_tool_ids_json"),
-                    event_record.get("branch"),
                     event_record["timestamp"],
-                    content_json,
-                    grounding_metadata_json,
-                    custom_metadata_json,
-                    event_record.get("partial"),
-                    event_record.get("turn_complete"),
-                    event_record.get("interrupted"),
-                    event_record.get("error_code"),
-                    event_record.get("error_message"),
+                    event_json_str,
                 ),
             )
+            await conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        The event insert and state update succeed together or fail together
+        within a single transaction.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot.
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        state_json = to_json(state)
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s
+        WHERE id = %s
+        """
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute(
+                insert_sql,
+                (
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    event_json_str,
+                ),
+            )
+            await cursor.execute(update_sql, (state_json, session_id))
             await conn.commit()
 
     async def get_events(
@@ -442,10 +380,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         Returns:
             List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            Parses JSON fields and converts BLOB actions to bytes.
         """
         where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
@@ -458,10 +392,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -474,24 +405,11 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
                 return [
                     EventRecord(
-                        id=row[0],
-                        session_id=row[1],
-                        app_name=row[2],
-                        user_id=row[3],
-                        invocation_id=row[4],
-                        author=row[5],
-                        actions=bytes(row[6]),
-                        long_running_tool_ids_json=row[7],
-                        branch=row[8],
-                        timestamp=row[9],
-                        content=from_json(row[10]) if row[10] and isinstance(row[10], str) else row[10],
-                        grounding_metadata=from_json(row[11]) if row[11] and isinstance(row[11], str) else row[11],
-                        custom_metadata=from_json(row[12]) if row[12] and isinstance(row[12], str) else row[12],
-                        partial=row[13],
-                        turn_complete=row[14],
-                        interrupted=row[15],
-                        error_code=row[16],
-                        error_message=row[17],
+                        session_id=row[0],
+                        invocation_id=row[1],
+                        author=row[2],
+                        timestamp=row[3],
+                        event_json=from_json(row[4]) if isinstance(row[4], str) else row[4],
                     )
                     for row in rows
                 ]

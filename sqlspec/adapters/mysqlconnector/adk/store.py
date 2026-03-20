@@ -38,8 +38,61 @@ def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
     return (col_def, fk_constraint)
 
 
+def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -> str:
+    """Generate shared MySQL sessions CREATE TABLE DDL."""
+    owner_id_col = ""
+    fk_constraint = ""
+
+    if owner_id_column_ddl:
+        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
+        owner_id_col = f"{col_def},"
+        if fk_def:
+            fk_constraint = f",\n            {fk_def}"
+
+    return f"""
+    CREATE TABLE IF NOT EXISTS {session_table} (
+        id VARCHAR(128) PRIMARY KEY,
+        app_name VARCHAR(128) NOT NULL,
+        user_id VARCHAR(128) NOT NULL,
+        {owner_id_col}
+        state JSON NOT NULL,
+        create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+        INDEX idx_{session_table}_app_user (app_name, user_id),
+        INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
+def _mysql_events_ddl(events_table: str, session_table: str) -> str:
+    """Generate shared MySQL events CREATE TABLE DDL (post clean-break, 5 columns)."""
+    return f"""
+    CREATE TABLE IF NOT EXISTS {events_table} (
+        session_id VARCHAR(128) NOT NULL,
+        invocation_id VARCHAR(256) NOT NULL,
+        author VARCHAR(128) NOT NULL,
+        timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        event_json JSON NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
+        INDEX idx_{events_table}_session (session_id, timestamp ASC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
 class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]):
-    """MySQL/MariaDB ADK store using mysql-connector async driver."""
+    """MySQL/MariaDB ADK store using mysql-connector async driver.
+
+    Provides:
+    - Session state management with JSON storage
+    - Full-event JSON storage (single ``event_json`` column)
+    - Atomic event-append + state-update in one transaction
+    - Microsecond-precision timestamps
+    - Foreign key constraints with cascade delete
+
+    Notes:
+        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
+        - Configuration is read from config.extension_config["adk"]
+    """
 
     __slots__ = ()
 
@@ -50,54 +103,10 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         return _parse_owner_id_column_for_mysql(column_ddl)
 
     async def _get_create_sessions_table_sql(self) -> str:
-        owner_id_col = ""
-        fk_constraint = ""
-
-        if self._owner_id_column_ddl:
-            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_col = f"{col_def},"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            {owner_id_col}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
 
     async def _get_create_events_table_sql(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json JSON,
-            branch VARCHAR(256),
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content JSON,
-            grounding_metadata JSON,
-            custom_metadata JSON,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+        return _mysql_events_ddl(self._events_table, self._session_table)
 
     def _get_drop_tables_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
@@ -242,23 +251,19 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def append_event(self, event_record: EventRecord) -> None:
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
+        """Append an event to a session.
+
+        Args:
+            event_record: Event record with 5 keys (session_id, invocation_id,
+                author, timestamp, event_json).
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """
 
         async with self._config.provide_connection() as conn:
@@ -267,26 +272,60 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 await cursor.execute(
                     sql,
                     (
-                        event_record["id"],
                         event_record["session_id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
                         event_record["invocation_id"],
                         event_record["author"],
-                        event_record["actions"],
-                        event_record.get("long_running_tool_ids_json"),
-                        event_record.get("branch"),
                         event_record["timestamp"],
-                        content_json,
-                        grounding_metadata_json,
-                        custom_metadata_json,
-                        event_record.get("partial"),
-                        event_record.get("turn_complete"),
-                        event_record.get("interrupted"),
-                        event_record.get("error_code"),
-                        event_record.get("error_message"),
+                        event_json_str,
                     ),
                 )
+            finally:
+                await cursor.close()
+            await conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        The event insert and state update succeed together or fail together
+        within a single transaction.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot.
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        state_json = to_json(state)
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s
+        WHERE id = %s
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.cursor()
+            try:
+                await cursor.execute(
+                    insert_sql,
+                    (
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["author"],
+                        event_record["timestamp"],
+                        event_json_str,
+                    ),
+                )
+                await cursor.execute(update_sql, (state_json, session_id))
             finally:
                 await cursor.close()
             await conn.commit()
@@ -294,6 +333,16 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
+        """Get events for a session.
+
+        Args:
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
         where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
 
@@ -305,10 +354,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -325,30 +371,11 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
                 return [
                     EventRecord(
-                        id=cast("str", row[0]),
-                        session_id=cast("str", row[1]),
-                        app_name=cast("str", row[2]),
-                        user_id=cast("str", row[3]),
-                        invocation_id=cast("str", row[4]),
-                        author=cast("str", row[5]),
-                        actions=bytes(cast("bytes", row[6])),
-                        long_running_tool_ids_json=cast("str | None", row[7]),
-                        branch=cast("str | None", row[8]),
-                        timestamp=cast("datetime", row[9]),
-                        content=from_json(row[10])
-                        if row[10] and isinstance(row[10], str)
-                        else cast("dict[str, Any] | None", row[10]),
-                        grounding_metadata=from_json(row[11])
-                        if row[11] and isinstance(row[11], str)
-                        else cast("dict[str, Any] | None", row[11]),
-                        custom_metadata=from_json(row[12])
-                        if row[12] and isinstance(row[12], str)
-                        else cast("dict[str, Any] | None", row[12]),
-                        partial=cast("bool | None", row[13]),
-                        turn_complete=cast("bool | None", row[14]),
-                        interrupted=cast("bool | None", row[15]),
-                        error_code=cast("str | None", row[16]),
-                        error_message=cast("str | None", row[17]),
+                        session_id=cast("str", row[0]),
+                        invocation_id=cast("str", row[1]),
+                        author=cast("str", row[2]),
+                        timestamp=cast("datetime", row[3]),
+                        event_json=from_json(row[4]) if isinstance(row[4], str) else cast("dict[str, Any]", row[4]),
                     )
                     for row in rows
                 ]
@@ -359,7 +386,19 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
 
 class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
-    """MySQL/MariaDB ADK store using mysql-connector sync driver."""
+    """MySQL/MariaDB ADK store using mysql-connector sync driver.
+
+    Provides:
+    - Session state management with JSON storage
+    - Full-event JSON storage (single ``event_json`` column)
+    - Atomic event-create + state-update in one transaction
+    - Microsecond-precision timestamps
+    - Foreign key constraints with cascade delete
+
+    Notes:
+        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
+        - Configuration is read from config.extension_config["adk"]
+    """
 
     __slots__ = ()
 
@@ -370,54 +409,10 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         return _parse_owner_id_column_for_mysql(column_ddl)
 
     def _get_create_sessions_table_sql(self) -> str:
-        owner_id_col = ""
-        fk_constraint = ""
-
-        if self._owner_id_column_ddl:
-            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_col = f"{col_def},"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            {owner_id_col}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
 
     def _get_create_events_table_sql(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json JSON,
-            branch VARCHAR(256),
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content JSON,
-            grounding_metadata JSON,
-            custom_metadata JSON,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+        return _mysql_events_ddl(self._events_table, self._session_table)
 
     def _get_drop_tables_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
@@ -565,24 +560,43 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 return []
             raise
 
-    def append_event(self, event_record: EventRecord) -> None:
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
+    def create_event(
+        self,
+        event_id: str,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        author: "str | None" = None,
+        actions: "bytes | None" = None,
+        content: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> EventRecord:
+        """Create a new event.
+
+        Args:
+            event_id: Unique event identifier (unused in new schema, kept for contract).
+            session_id: Session identifier.
+            app_name: Application name (unused in new schema, kept for contract).
+            user_id: User identifier (unused in new schema, kept for contract).
+            author: Event author.
+            actions: Unused in new contract (kept for interface compatibility).
+            content: Event content dictionary.
+            **kwargs: Additional fields including invocation_id, timestamp, event_json.
+
+        Returns:
+            Created event record.
+        """
+        from datetime import datetime, timezone
+
+        invocation_id = kwargs.get("invocation_id", "")
+        timestamp = kwargs.get("timestamp", datetime.now(tz=timezone.utc))
+        event_json = kwargs.get("event_json", content or {})
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """
 
         with self._config.provide_connection() as conn:
@@ -590,89 +604,99 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             try:
                 cursor.execute(
                     sql,
-                    (
-                        event_record["id"],
-                        event_record["session_id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["invocation_id"],
-                        event_record["author"],
-                        event_record["actions"],
-                        event_record.get("long_running_tool_ids_json"),
-                        event_record.get("branch"),
-                        event_record["timestamp"],
-                        content_json,
-                        grounding_metadata_json,
-                        custom_metadata_json,
-                        event_record.get("partial"),
-                        event_record.get("turn_complete"),
-                        event_record.get("interrupted"),
-                        event_record.get("error_code"),
-                        event_record.get("error_message"),
-                    ),
+                    (session_id, invocation_id, author or "", timestamp, event_json_str),
                 )
             finally:
                 cursor.close()
             conn.commit()
 
-    def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
+        return EventRecord(
+            session_id=session_id,
+            invocation_id=invocation_id,
+            author=author or "",
+            timestamp=timestamp,
+            event_json=event_json,
+        )
 
-        if after_timestamp is not None:
-            where_clauses.append("timestamp > %s")
-            params.append(after_timestamp)
+    def create_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically create an event and update the session's durable state.
 
-        where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit else ""
+        The event insert and state update succeed together or fail together
+        within a single transaction.
 
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot.
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        state_json = to_json(state)
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s
+        WHERE id = %s
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    insert_sql,
+                    (
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["author"],
+                        event_record["timestamp"],
+                        event_json_str,
+                    ),
+                )
+                cursor.execute(update_sql, (state_json, session_id))
+            finally:
+                cursor.close()
+            conn.commit()
+
+    def list_events(self, session_id: str) -> "list[EventRecord]":
+        """List events for a session ordered by timestamp.
+
+        Args:
+            session_id: Session identifier.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
-        WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        WHERE session_id = %s
+        ORDER BY timestamp ASC
         """
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, params)
+                    cursor.execute(sql, (session_id,))
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
 
                 return [
                     EventRecord(
-                        id=cast("str", row[0]),
-                        session_id=cast("str", row[1]),
-                        app_name=cast("str", row[2]),
-                        user_id=cast("str", row[3]),
-                        invocation_id=cast("str", row[4]),
-                        author=cast("str", row[5]),
-                        actions=bytes(cast("bytes", row[6])),
-                        long_running_tool_ids_json=cast("str | None", row[7]),
-                        branch=cast("str | None", row[8]),
-                        timestamp=cast("datetime", row[9]),
-                        content=from_json(row[10])
-                        if row[10] and isinstance(row[10], str)
-                        else cast("dict[str, Any] | None", row[10]),
-                        grounding_metadata=from_json(row[11])
-                        if row[11] and isinstance(row[11], str)
-                        else cast("dict[str, Any] | None", row[11]),
-                        custom_metadata=from_json(row[12])
-                        if row[12] and isinstance(row[12], str)
-                        else cast("dict[str, Any] | None", row[12]),
-                        partial=cast("bool | None", row[13]),
-                        turn_complete=cast("bool | None", row[14]),
-                        interrupted=cast("bool | None", row[15]),
-                        error_code=cast("str | None", row[16]),
-                        error_message=cast("str | None", row[17]),
+                        session_id=cast("str", row[0]),
+                        invocation_id=cast("str", row[1]),
+                        author=cast("str", row[2]),
+                        timestamp=cast("datetime", row[3]),
+                        event_json=from_json(row[4]) if isinstance(row[4], str) else cast("dict[str, Any]", row[4]),
                     )
                     for row in rows
                 ]
