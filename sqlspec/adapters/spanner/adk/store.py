@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
-from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
@@ -80,30 +79,15 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             types["owner_id"] = SPANNER_PARAM_TYPES.STRING
         return types
 
-    def _event_param_types(self, has_branch: bool) -> "dict[str, Any]":
+    def _event_param_types(self) -> "dict[str, Any]":
         json_type = _json_param_type()
-        types: dict[str, Any] = {
-            "id": SPANNER_PARAM_TYPES.STRING,
+        return {
             "session_id": SPANNER_PARAM_TYPES.STRING,
-            "app_name": SPANNER_PARAM_TYPES.STRING,
-            "user_id": SPANNER_PARAM_TYPES.STRING,
-            "author": SPANNER_PARAM_TYPES.STRING,
-            "actions": SPANNER_PARAM_TYPES.BYTES,
-            "long_running_tool_ids_json": json_type,
             "invocation_id": SPANNER_PARAM_TYPES.STRING,
+            "author": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
-            "content": json_type,
-            "grounding_metadata": json_type,
-            "custom_metadata": json_type,
-            "partial": SPANNER_PARAM_TYPES.BOOL,
-            "turn_complete": SPANNER_PARAM_TYPES.BOOL,
-            "interrupted": SPANNER_PARAM_TYPES.BOOL,
-            "error_code": SPANNER_PARAM_TYPES.STRING,
-            "error_message": SPANNER_PARAM_TYPES.STRING,
+            "event_json": json_type,
         }
-        if has_branch:
-            types["branch"] = SPANNER_PARAM_TYPES.STRING
-        return types
 
     def _decode_state(self, raw: Any) -> Any:
         if isinstance(raw, str):
@@ -198,6 +182,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             types["user_id"] = SPANNER_PARAM_TYPES.STRING
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
+        sql = f"{sql} ORDER BY update_time DESC"
 
         rows = self._run_read(sql, params, types)
         records: list[SessionRecord] = []
@@ -235,116 +220,81 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         content: "dict[str, Any] | None" = None,
         **kwargs: Any,
     ) -> EventRecord:
-        branch = kwargs.get("branch")
-        long_running_serialized = (
-            to_json(kwargs.get("long_running_tool_ids_json"))
-            if kwargs.get("long_running_tool_ids_json") is not None
-            else None
-        )
-        content_serialized = to_json(content) if content is not None else None
-        grounding_serialized = (
-            to_json(kwargs.get("grounding_metadata")) if kwargs.get("grounding_metadata") is not None else None
-        )
-        custom_serialized = (
-            to_json(kwargs.get("custom_metadata")) if kwargs.get("custom_metadata") is not None else None
-        )
-        params: dict[str, Any] = {
+        invocation_id = kwargs.get("invocation_id", "")
+        event_json = to_json({
             "id": event_id,
-            "session_id": session_id,
             "app_name": app_name,
             "user_id": user_id,
             "author": author,
-            "actions": bytes_to_spanner(actions),
-            "long_running_tool_ids_json": long_running_serialized,
-            "timestamp": datetime.now(timezone.utc),
-            "content": content_serialized,
-            "grounding_metadata": grounding_serialized,
-            "custom_metadata": custom_serialized,
-            "invocation_id": kwargs.get("invocation_id"),
-            "partial": kwargs.get("partial"),
-            "turn_complete": kwargs.get("turn_complete"),
-            "interrupted": kwargs.get("interrupted"),
-            "error_code": kwargs.get("error_code"),
-            "error_message": kwargs.get("error_message"),
+            "content": content,
+            **{k: v for k, v in kwargs.items() if v is not None},
+        })
+        now = datetime.now(timezone.utc)
+        params: dict[str, Any] = {
+            "session_id": session_id,
+            "invocation_id": invocation_id,
+            "author": author or "",
+            "timestamp": now,
+            "event_json": event_json,
         }
-        branch = kwargs.get("branch")
-        columns = [
-            "id",
-            "session_id",
-            "app_name",
-            "user_id",
-            "author",
-            "actions",
-            "long_running_tool_ids_json",
-            "timestamp",
-            "content",
-            "grounding_metadata",
-            "custom_metadata",
-            "invocation_id",
-            "partial",
-            "turn_complete",
-            "interrupted",
-            "error_code",
-            "error_message",
-        ]
-        values = [
-            "@id",
-            "@session_id",
-            "@app_name",
-            "@user_id",
-            "@author",
-            "@actions",
-            "@long_running_tool_ids_json",
-            "PENDING_COMMIT_TIMESTAMP()",
-            "@content",
-            "@grounding_metadata",
-            "@custom_metadata",
-            "@invocation_id",
-            "@partial",
-            "@turn_complete",
-            "@interrupted",
-            "@error_code",
-            "@error_message",
-        ]
-        has_branch = branch is not None
-        if has_branch:
-            params["branch"] = branch
-            columns.append("branch")
-            values.append("@branch")
 
         sql = f"""
-            INSERT INTO {self._events_table} ({", ".join(columns)})
-            VALUES ({", ".join(values)})
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
+            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
         """
-        self._run_write([(sql, params, self._event_param_types(has_branch))])
+        self._run_write([(sql, params, self._event_param_types())])
 
-        record: EventRecord = {
-            "id": event_id,
+        return {
             "session_id": session_id,
-            "app_name": app_name,
-            "user_id": user_id,
+            "invocation_id": invocation_id,
             "author": author or "",
-            "actions": actions or b"",
-            "long_running_tool_ids_json": long_running_serialized,
-            "branch": branch,
-            "timestamp": params["timestamp"],
-            "content": from_json(content_serialized) if content_serialized else None,
-            "grounding_metadata": from_json(grounding_serialized) if grounding_serialized else None,
-            "custom_metadata": from_json(custom_serialized) if custom_serialized else None,
-            "invocation_id": kwargs.get("invocation_id", ""),
-            "partial": kwargs.get("partial"),
-            "turn_complete": kwargs.get("turn_complete"),
-            "interrupted": kwargs.get("interrupted"),
-            "error_code": kwargs.get("error_code"),
-            "error_message": kwargs.get("error_message"),
+            "timestamp": now,
+            "event_json": event_json,
         }
-        return record
+
+    def create_event_and_update_state(
+        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically insert an event and update session state in one transaction.
+
+        Both the event INSERT and the session state UPDATE execute within a single
+        Spanner transaction so they succeed or fail together.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session whose state should be updated.
+            state: Post-append durable state snapshot.
+        """
+        event_params: dict[str, Any] = {
+            "session_id": event_record["session_id"],
+            "invocation_id": event_record["invocation_id"],
+            "author": event_record["author"],
+            "timestamp": event_record["timestamp"],
+            "event_json": event_record["event_json"],
+        }
+        insert_sql = f"""
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
+            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
+        """
+
+        json_type = _json_param_type()
+        state_params: dict[str, Any] = {"id": session_id, "state": to_json(state)}
+        update_sql = f"""
+            UPDATE {self._session_table}
+            SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
+            WHERE id = @id
+        """
+        if self._shard_count > 1:
+            update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
+
+        self._run_write([
+            (insert_sql, event_params, self._event_param_types()),
+            (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
+        ])
 
     def list_events(self, session_id: str) -> "list[EventRecord]":
         sql = f"""
-            SELECT id, session_id, app_name, user_id, author, actions, long_running_tool_ids_json, branch,
-                   timestamp, content, grounding_metadata, custom_metadata, invocation_id, partial,
-                   turn_complete, interrupted, error_code, error_message
+            SELECT session_id, invocation_id, author, timestamp, event_json
             FROM {self._events_table}
             WHERE session_id = @session_id
         """
@@ -356,24 +306,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         rows = self._run_read(sql, params, types)
         return [
             {
-                "id": row[0],
-                "session_id": row[1],
-                "app_name": row[2],
-                "user_id": row[3],
-                "invocation_id": row[12] or "",
-                "author": row[4] or "",
-                "actions": spanner_to_bytes(row[5]) or b"",
-                "long_running_tool_ids_json": row[6],
-                "branch": row[7],
-                "timestamp": row[8],
-                "content": self._decode_json(row[9]),
-                "grounding_metadata": self._decode_json(row[10]),
-                "custom_metadata": self._decode_json(row[11]),
-                "partial": row[13],
-                "turn_complete": row[14],
-                "interrupted": row[15],
-                "error_code": row[16],
-                "error_message": row[17],
+                "session_id": row[0],
+                "invocation_id": row[1] or "",
+                "author": row[2] or "",
+                "timestamp": row[3],
+                "event_json": row[4],
             }
             for row in rows
         ]
@@ -416,33 +353,20 @@ CREATE TABLE {self._session_table} (
 
     def _get_create_events_table_sql(self) -> str:
         shard_column = ""
-        pk = "PRIMARY KEY (session_id, timestamp, id)"
+        pk = "PRIMARY KEY (session_id, timestamp)"
         if self._shard_count > 1:
             shard_column = f",\n  shard_id INT64 AS (MOD(FARM_FINGERPRINT(session_id), {self._shard_count})) STORED"
-            pk = "PRIMARY KEY (shard_id, session_id, timestamp, id)"
+            pk = "PRIMARY KEY (shard_id, session_id, timestamp)"
         options = ""
         if self._events_table_options:
             options = f"\nOPTIONS ({self._events_table_options})"
         return f"""
 CREATE TABLE {self._events_table} (
-  id STRING(128) NOT NULL,
   session_id STRING(128) NOT NULL,
-  app_name STRING(128) NOT NULL,
-  user_id STRING(128) NOT NULL,
-  invocation_id STRING(128),
-  author STRING(64),
-  actions BYTES(MAX),
-  long_running_tool_ids_json JSON,
-  branch STRING(64),
+  invocation_id STRING(256) NOT NULL,
+  author STRING(128) NOT NULL,
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
-  content JSON,
-  grounding_metadata JSON,
-  custom_metadata JSON,
-  partial BOOL,
-  turn_complete BOOL,
-  interrupted BOOL,
-  error_code STRING(64),
-  error_message STRING(255){shard_column}
+  event_json JSON NOT NULL{shard_column}
 ) {pk}{options}
 """
 
@@ -588,6 +512,22 @@ CREATE TABLE {self._memory_table} (
         statements = [table_sql, app_user_idx, session_idx]
         if fts_index:
             statements.append(fts_index)
+        return statements
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get SQL to drop the memory table and its indexes.
+
+        Returns:
+            List of SQL statements to drop the memory table and associated indexes.
+        """
+        statements: list[str] = []
+        if self._use_fts:
+            statements.append(f"DROP SEARCH INDEX idx_{self._memory_table}_fts")
+        statements.extend([
+            f"DROP INDEX idx_{self._memory_table}_session",
+            f"DROP INDEX idx_{self._memory_table}_app_user_time",
+            f"DROP TABLE {self._memory_table}",
+        ])
         return statements
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
