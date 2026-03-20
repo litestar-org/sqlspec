@@ -52,34 +52,6 @@ def _julian_to_datetime(julian: float) -> datetime:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
-def _to_sqlite_bool(value: "bool | None") -> "int | None":
-    """Convert Python bool to SQLite INTEGER.
-
-    Args:
-        value: Boolean value or None.
-
-    Returns:
-        1 for True, 0 for False, None for None.
-    """
-    if value is None:
-        return None
-    return 1 if value else 0
-
-
-def _from_sqlite_bool(value: "int | None") -> "bool | None":
-    """Convert SQLite INTEGER to Python bool.
-
-    Args:
-        value: Integer value (0/1) or None.
-
-    Returns:
-        True for 1, False for 0, None for None.
-    """
-    if value is None:
-        return None
-    return bool(value)
-
-
 class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     """Aiosqlite ADK store using asynchronous SQLite driver.
 
@@ -88,10 +60,11 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     Provides:
     - Session state management with JSON storage (as TEXT)
-    - Event history tracking with BLOB-serialized actions
+    - Event history tracking with full-event JSON storage
     - Julian Day timestamps (REAL) for efficient date operations
     - Foreign key constraints with cascade delete
-    - Efficient upserts using INSERT OR REPLACE
+    - Atomic event+state writes via append_event_and_update_state
+    - PRAGMA optimization profile for file-based databases
 
     Args:
         config: AiosqliteConfig with extension_config["adk"] settings.
@@ -114,9 +87,8 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     Notes:
         - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
-        - BOOLEAN as INTEGER (0/1, with None for NULL)
         - Timestamps as REAL (Julian day: julianday('now'))
-        - BLOB for pre-serialized actions from Google ADK
+        - Full event stored as JSON TEXT in event_data column
         - PRAGMA foreign_keys = ON (enable per connection)
         - Configuration is read from config.extension_config["adk"]
     """
@@ -135,6 +107,22 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             - events_table: Events table name (default: "adk_events")
         """
         super().__init__(config)
+
+    async def _apply_pragmas(self, connection: Any) -> None:
+        """Apply PRAGMA optimization profile for this connection.
+
+        Args:
+            connection: Aiosqlite connection.
+
+        Notes:
+            Enables foreign keys and applies performance PRAGMAs.
+            For file-based databases, adds cache_size, mmap_size,
+            and journal_size_limit optimizations.
+        """
+        await connection.execute("PRAGMA foreign_keys = ON")
+        await connection.execute("PRAGMA cache_size = -64000")
+        await connection.execute("PRAGMA mmap_size = 30000000")
+        await connection.execute("PRAGMA journal_size_limit = 67108864")
 
     async def _get_create_sessions_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
@@ -170,9 +158,8 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             SQL statement to create adk_events table with indexes.
 
         Notes:
-            - TEXT for IDs, strings, and JSON content
-            - BLOB for pickled actions
-            - INTEGER for booleans (0/1/NULL)
+            - TEXT for IDs and indexed scalars
+            - TEXT for full event JSON (event_data)
             - REAL for Julian Day timestamps
             - Foreign key to sessions with CASCADE delete
             - Index on (session_id, timestamp ASC)
@@ -181,22 +168,10 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            invocation_id TEXT NOT NULL,
-            author TEXT NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json TEXT,
-            branch TEXT,
+            invocation_id TEXT,
+            author TEXT,
             timestamp REAL NOT NULL,
-            content TEXT,
-            grounding_metadata TEXT,
-            custom_metadata TEXT,
-            partial INTEGER,
-            turn_complete INTEGER,
-            interrupted INTEGER,
-            error_code TEXT,
-            error_message TEXT,
+            event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
@@ -215,21 +190,10 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    async def _enable_foreign_keys(self, connection: Any) -> None:
-        """Enable foreign key constraints for this connection.
-
-        Args:
-            connection: Aiosqlite connection.
-
-        Notes:
-            SQLite requires PRAGMA foreign_keys = ON per connection.
-        """
-        await connection.execute("PRAGMA foreign_keys = ON")
-
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         async with self._config.provide_session() as driver:
-            await self._enable_foreign_keys(driver.connection)
+            await self._apply_pragmas(driver.connection)
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
 
@@ -250,11 +214,11 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Notes:
             Uses Julian Day for create_time and update_time.
-            State is JSON-serialized before insertion.
+            State is always JSON-serialized (empty dict becomes '{}', never NULL).
         """
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
-        state_json = to_json(state) if state else None
+        state_json = to_json(state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -272,7 +236,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             params = (session_id, app_name, user_id, state_json, now_julian, now_julian)
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             await conn.execute(sql, params)
             await conn.commit()
 
@@ -300,7 +264,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             cursor = await conn.execute(sql, (session_id,))
             row = await cursor.fetchone()
 
@@ -326,9 +290,10 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Notes:
             This replaces the entire state dictionary.
             Updates update_time to current Julian Day.
+            Empty dict is serialized as '{}', never NULL.
         """
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
-        state_json = to_json(state) if state else None
+        state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
@@ -337,7 +302,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             await conn.execute(sql, (state_json, now_julian, session_id))
             await conn.commit()
 
@@ -372,7 +337,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             params = (app_name, user_id)
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
 
@@ -400,7 +365,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         sql = f"DELETE FROM {self._session_table} WHERE id = ?"
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             await conn.execute(sql, (session_id,))
             await conn.commit()
 
@@ -408,63 +373,88 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """Append an event to a session.
 
         Args:
-            event_record: Event record to store.
+            event_record: Event record with 5 keys: session_id, invocation_id,
+                author, timestamp, event_json.
 
         Notes:
             Uses Julian Day for timestamp.
-            JSON fields are serialized to TEXT.
-            Boolean fields converted to INTEGER (0/1/NULL).
+            event_json dict is serialized to TEXT as event_data column.
         """
+        import uuid
+
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
-
-        partial_int = _to_sqlite_bool(event_record.get("partial"))
-        turn_complete_int = _to_sqlite_bool(event_record.get("turn_complete"))
-        interrupted_int = _to_sqlite_bool(event_record.get("interrupted"))
+        event_data_json = to_json(event_record["event_json"])
+        event_id = str(uuid.uuid4())
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
+            id, session_id, invocation_id, author, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             await conn.execute(
                 sql,
                 (
-                    event_record["id"],
+                    event_id,
                     event_record["session_id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
                     event_record["invocation_id"],
                     event_record["author"],
-                    event_record["actions"],
-                    event_record.get("long_running_tool_ids_json"),
-                    event_record.get("branch"),
                     timestamp_julian,
-                    content_json,
-                    grounding_metadata_json,
-                    custom_metadata_json,
-                    partial_int,
-                    turn_complete_int,
-                    interrupted_int,
-                    event_record.get("error_code"),
-                    event_record.get("error_message"),
+                    event_data_json,
                 ),
             )
+            await conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        Inserts the event and updates the session state + update_time in a
+        single transaction. Both operations succeed or fail together.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (temp: keys already
+                stripped by the service layer).
+        """
+        import uuid
+
+        timestamp_julian = _datetime_to_julian(event_record["timestamp"])
+        event_data_json = to_json(event_record["event_json"])
+        now_julian = _datetime_to_julian(datetime.now(timezone.utc))
+        state_json = to_json(state)
+        event_id = str(uuid.uuid4())
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            id, session_id, invocation_id, author, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = ?, update_time = ?
+        WHERE id = ?
+        """
+
+        async with self._config.provide_connection() as conn:
+            await self._apply_pragmas(conn)
+            await conn.execute(
+                insert_sql,
+                (
+                    event_id,
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    timestamp_julian,
+                    event_data_json,
+                ),
+            )
+            await conn.execute(update_sql, (state_json, now_julian, session_id))
             await conn.commit()
 
     async def get_events(
@@ -482,8 +472,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Notes:
             Uses index on (session_id, timestamp ASC).
-            Parses JSON fields and converts BLOB actions to bytes.
-            Converts INTEGER booleans back to bool/None.
+            Parses event_data TEXT back to dict for event_json field.
         """
         where_clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
@@ -496,40 +485,24 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT id, session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
         """
 
         async with self._config.provide_connection() as conn:
-            await self._enable_foreign_keys(conn)
+            await self._apply_pragmas(conn)
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
 
             return [
                 EventRecord(
-                    id=row[0],
                     session_id=row[1],
-                    app_name=row[2],
-                    user_id=row[3],
-                    invocation_id=row[4],
-                    author=row[5],
-                    actions=bytes(row[6]),
-                    long_running_tool_ids_json=row[7],
-                    branch=row[8],
-                    timestamp=_julian_to_datetime(row[9]),
-                    content=from_json(row[10]) if row[10] else None,
-                    grounding_metadata=from_json(row[11]) if row[11] else None,
-                    custom_metadata=from_json(row[12]) if row[12] else None,
-                    partial=_from_sqlite_bool(row[13]),
-                    turn_complete=_from_sqlite_bool(row[14]),
-                    interrupted=_from_sqlite_bool(row[15]),
-                    error_code=row[16],
-                    error_message=row[17],
+                    invocation_id=row[2],
+                    author=row[3],
+                    timestamp=_julian_to_datetime(row[4]),
+                    event_json=from_json(row[5]) if row[5] else {},
                 )
                 for row in rows
             ]
