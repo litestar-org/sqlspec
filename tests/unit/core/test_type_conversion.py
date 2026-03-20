@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-import sqlspec._serialization
+import sqlspec.utils.serializers._json as json_serialization
 from sqlspec.core import (
     BaseTypeConverter,
     convert_decimal,
@@ -240,7 +240,7 @@ def test_convert_json_avoids_serializer_dispatch(monkeypatch: pytest.MonkeyPatch
     def fail_get_default_serializer() -> None:
         raise AssertionError("convert_json should not call serializer selection")
 
-    monkeypatch.setattr(sqlspec._serialization, "get_default_serializer", fail_get_default_serializer)
+    monkeypatch.setattr(json_serialization, "get_default_serializer", fail_get_default_serializer)
 
     result = convert_json('{"key": "value"}')
 

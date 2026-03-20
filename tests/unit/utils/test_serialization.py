@@ -1,7 +1,7 @@
-"""Tests for enhanced serialization functionality.
+"""Tests for public JSON serialization functionality.
 
-Tests for the byte-aware serialization system, including performance
-improvements and compatibility with msgspec/orjson fallback patterns.
+Tests for the byte-aware serialization system through the canonical
+``sqlspec.utils.serializers`` surface.
 """
 
 import json
@@ -10,7 +10,8 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec._serialization import decode_json, encode_json
+from sqlspec.utils.serializers import from_json as decode_json
+from sqlspec.utils.serializers import to_json as encode_json
 
 
 def test_encode_json_as_string() -> None:
