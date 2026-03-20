@@ -424,10 +424,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 app_config.type_encoders = encoders_dict
 
             if app_config.type_decoders is None:
-                app_config.type_decoders = [(numpy_array_predicate, numpy_array_dec_hook)]  # type: ignore[list-item]
+                app_config.type_decoders = [(numpy_array_predicate, numpy_array_dec_hook)]
             else:
                 decoders_list = list(app_config.type_decoders)
-                decoders_list.append((numpy_array_predicate, numpy_array_dec_hook))  # type: ignore[arg-type]
+                decoders_list.append((numpy_array_predicate, numpy_array_dec_hook))
                 app_config.type_decoders = decoders_list
 
         if self._correlation_headers:

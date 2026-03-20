@@ -1,7 +1,6 @@
 """Tests for sqlspec.utils.serializers module.
 
-Tests for JSON serialization utilities that are re-exported from sqlspec._serialization.
-Covers all serialization scenarios including edge cases and type handling.
+Tests for the canonical JSON serialization surface and contract-level regressions.
 """
 
 import json
@@ -455,7 +454,7 @@ def test_parametrized_round_trip(test_input: Any) -> None:
 
 
 def test_imports_work_correctly() -> None:
-    """Test that the imports from _serialization module work correctly."""
+    """Test that the canonical serializer imports round-trip correctly."""
 
     assert callable(to_json)
     assert callable(from_json)
@@ -493,6 +492,30 @@ def test_error_messages_are_helpful() -> None:
         error_msg = str(e).lower()
 
         assert any(word in error_msg for word in ["json", "decode", "parse", "invalid", "expect", "malformed"])
+
+
+def test_to_json_embeds_pydantic_models_as_objects() -> None:
+    """Pydantic models should normalize to plain objects, not JSON strings."""
+
+    try:
+        from pydantic import BaseModel
+    except ImportError:
+        pytest.skip("pydantic not installed")
+
+    class Payload(BaseModel):
+        identifier: int
+        label: str
+
+    result = to_json({"payload": Payload(identifier=1, label="alpha")})
+
+    assert json.loads(result) == {"payload": {"identifier": 1, "label": "alpha"}}
+
+
+def test_to_json_raises_type_error_for_unsupported_objects() -> None:
+    """Unsupported objects should fail explicitly instead of stringifying."""
+
+    with pytest.raises(TypeError, match="unsupported"):
+        to_json({"payload": object()})
 
 
 numpy_available = pytest.importorskip("numpy", reason="NumPy not installed")
@@ -609,12 +632,25 @@ def test_numpy_array_dec_hook_non_list() -> None:
 
 
 @pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
+def test_numpy_array_dec_hook_supports_litestar_decoder_signature() -> None:
+    """The decoder hook should accept Litestar's ``(target_type, value)`` contract."""
+
+    import numpy as np
+
+    decoded = numpy_array_dec_hook(np.ndarray, [1.0, 2.0, 3.0])
+
+    assert isinstance(decoded, np.ndarray)
+    assert np.array_equal(decoded, np.array([1.0, 2.0, 3.0]))
+
+
+@pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
 def test_numpy_array_predicate_basic() -> None:
     """Test NumPy array predicate for type checking."""
     import numpy as np
 
     arr = np.array([1, 2, 3])
     assert numpy_array_predicate(arr) is True
+    assert numpy_array_predicate(np.ndarray) is True
 
     assert numpy_array_predicate([1, 2, 3]) is False
     assert numpy_array_predicate("string") is False
