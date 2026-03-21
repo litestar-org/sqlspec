@@ -805,22 +805,6 @@ class ADKConfig(TypedDict):
         specified language will fall back to 'simple' or 'english'.
     """
 
-    """Base URI for artifact content storage. Default: None (store inline in database).
-
-    When set, large artifact payloads are stored externally and only metadata
-    is kept in the database. The URI scheme determines the storage backend:
-    - ``file:///path/to/artifacts`` — local filesystem
-    - ``s3://bucket/prefix`` — AWS S3 or S3-compatible storage
-    - ``gs://bucket/prefix`` — Google Cloud Storage
-    - ``az://container/prefix`` — Azure Blob Storage
-
-    When None, artifact content is stored inline in the database tables,
-    which is suitable for small payloads but may cause performance issues
-    with large binary artifacts.
-
-    Integrates with the ``StorageRegistry`` for pluggable storage backends.
-    """
-
     schema_version: NotRequired[int]
     """Explicit schema version for ADK tables. Default: None (auto-detect).
 
