@@ -1,7 +1,8 @@
 """Tests for ADBC ADK store event operations."""
 
+import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -208,8 +209,6 @@ async def test_event_json_fields(adbc_store: Any, session_fixture: Any) -> None:
 
 async def test_event_ordering(adbc_store: Any, session_fixture: Any) -> None:
     """Test that events are ordered by timestamp ASC."""
-    import time
-
     ev1: EventRecord = {
         "session_id": session_fixture["session_id"],
         "invocation_id": "",
@@ -219,7 +218,7 @@ async def test_event_ordering(adbc_store: Any, session_fixture: Any) -> None:
     }
     await adbc_store.append_event(ev1)
 
-    time.sleep(0.01)
+    await asyncio.sleep(0.01)
 
     ev2: EventRecord = {
         "session_id": session_fixture["session_id"],
@@ -230,7 +229,7 @@ async def test_event_ordering(adbc_store: Any, session_fixture: Any) -> None:
     }
     await adbc_store.append_event(ev2)
 
-    time.sleep(0.01)
+    await asyncio.sleep(0.01)
 
     ev3: EventRecord = {
         "session_id": session_fixture["session_id"],
@@ -324,3 +323,74 @@ async def test_event_with_large_content(adbc_store: Any, session_fixture: Any) -
         json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
     )
     assert event_data["content"] == large_content
+
+
+async def test_append_event_preserves_existing_session_state(adbc_store: Any, session_fixture: Any) -> None:
+    """append_event must not overwrite the durable session state."""
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "append-only",
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "append-only-event",
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+
+    await adbc_store.append_event(event_record)
+
+    session = await adbc_store.get_session(session_fixture["session_id"])
+    assert session is not None
+    assert session["state"] == {"test": True}
+
+
+async def test_get_events_applies_after_timestamp_and_limit(adbc_store: Any, session_fixture: Any) -> None:
+    """get_events must respect both after_timestamp and limit."""
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    event_records = [
+        {
+            "session_id": session_fixture["session_id"],
+            "invocation_id": "",
+            "author": "user",
+            "timestamp": base_time,
+            "event_json": {
+                "id": "event-1",
+                "app_name": session_fixture["app_name"],
+                "user_id": session_fixture["user_id"],
+            },
+        },
+        {
+            "session_id": session_fixture["session_id"],
+            "invocation_id": "",
+            "author": "assistant",
+            "timestamp": base_time + timedelta(seconds=1),
+            "event_json": {
+                "id": "event-2",
+                "app_name": session_fixture["app_name"],
+                "user_id": session_fixture["user_id"],
+            },
+        },
+        {
+            "session_id": session_fixture["session_id"],
+            "invocation_id": "",
+            "author": "assistant",
+            "timestamp": base_time + timedelta(seconds=2),
+            "event_json": {
+                "id": "event-3",
+                "app_name": session_fixture["app_name"],
+                "user_id": session_fixture["user_id"],
+            },
+        },
+    ]
+
+    for event_record in event_records:
+        await adbc_store.append_event(event_record)
+
+    filtered_events = await adbc_store.get_events(session_fixture["session_id"], after_timestamp=base_time, limit=1)
+
+    assert len(filtered_events) == 1
+    filtered_event = filtered_events[0]["event_json"]
+    filtered_data = json.loads(filtered_event) if isinstance(filtered_event, str) else filtered_event
+    assert filtered_data["id"] == "event-2"

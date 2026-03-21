@@ -416,7 +416,7 @@ async def test_json_storage_type_detection(oracle_async_store: "OracleAsyncADKSt
     detector = cast("Any", oracle_async_store)
     storage_type = await detector._detect_json_storage_type()
 
-    assert storage_type in ["json", "blob_json", "clob_json", "blob_plain"]
+    assert storage_type in ["json", "blob_json", "blob_plain"]
 
 
 async def test_json_fields_stored_and_retrieved(oracle_async_store: "OracleAsyncADKStore") -> None:

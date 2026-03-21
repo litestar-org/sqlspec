@@ -508,7 +508,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-        return self.get_session(session_id)  # type: ignore[return-value]
+        return self._get_session(session_id)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -684,6 +684,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Args:
             event_record: Event record to store.
         """
+        event_json = self._serialize_json_field(event_record["event_json"])
         sql = f"""
         INSERT INTO {self._events_table} (
             session_id, invocation_id, author, timestamp, event_json
@@ -700,7 +701,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         event_record["invocation_id"],
                         event_record["author"],
                         event_record["timestamp"],
-                        event_record["event_json"],
+                        event_json,
                     ),
                 )
                 conn.commit()
@@ -733,6 +734,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         WHERE id = ?
         """
         state_json = self._serialize_state(state)
+        event_json = self._serialize_json_field(event_record["event_json"])
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -744,7 +746,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         event_record["invocation_id"],
                         event_record["author"],
                         event_record["timestamp"],
-                        event_record["event_json"],
+                        event_json,
                     ),
                 )
                 cursor.execute(update_sql, (state_json, session_id))
@@ -769,6 +771,8 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Args:
             session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
 
         Returns:
             List of event records ordered by timestamp ASC.
@@ -778,18 +782,27 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             Returns the 5-column EventRecord (session_id, invocation_id,
             author, timestamp, event_json).
         """
+        where_clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > ?")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = f" LIMIT {limit}" if limit else ""
         sql = f"""
         SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
-        WHERE session_id = ?
-        ORDER BY timestamp ASC
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
         """
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, (session_id,))
+                    cursor.execute(sql, params)
                     rows = cursor.fetchall()
 
                     return [
@@ -818,7 +831,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+        self._insert_event(event_record)
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""

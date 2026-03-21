@@ -640,6 +640,33 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
         """Atomically append an event and update the session's durable state."""
         await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
+    def _insert_event(self, event_record: EventRecord) -> None:
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+
+        sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    sql,
+                    (
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["author"],
+                        event_record["timestamp"],
+                        event_json_str,
+                    ),
+                )
+            finally:
+                cursor.close()
+            conn.commit()
+
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -647,22 +674,35 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
 
         Args:
             session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
 
         Returns:
             List of event records ordered by timestamp ASC.
         """
+        where_clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > %s")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = " LIMIT %s" if limit else ""
         sql = f"""
         SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
-        WHERE session_id = %s
-        ORDER BY timestamp ASC
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
         """
+        if limit:
+            params.append(limit)
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, (session_id,))
+                    cursor.execute(sql, tuple(params))
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
@@ -690,7 +730,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+        self._insert_event(event_record)
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""

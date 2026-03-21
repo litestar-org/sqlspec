@@ -542,6 +542,29 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         """List sessions for an app."""
         return await async_(self._list_sessions)(app_name, user_id)
 
+    def _insert_event(self, event_record: EventRecord) -> None:
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """).format(table=pg_sql.Identifier(self._events_table))
+
+        event_json_value = event_record["event_json"]
+        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                insert_query,
+                (
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            conn.commit()
+
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
     ) -> None:
@@ -583,16 +606,33 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
-        query = pg_sql.SQL("""
+        where_clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > %s")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        if limit:
+            params.append(limit)
+
+        query = pg_sql.SQL(
+            """
         SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {table}
-        WHERE session_id = %s
-        ORDER BY timestamp ASC
-        """).format(table=pg_sql.Identifier(self._events_table))
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
+        """
+        ).format(
+            table=pg_sql.Identifier(self._events_table),
+            where_clause=pg_sql.SQL(where_clause),  # pyright: ignore[reportArgumentType]
+            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),  # pyright: ignore[reportArgumentType]
+        )
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(query, (session_id,))
+                cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
                 return [
@@ -616,7 +656,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+        self._insert_event(event_record)
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""

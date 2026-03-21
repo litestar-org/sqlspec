@@ -278,6 +278,20 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         """Atomically append an event and update the session's durable state."""
         await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
+    def _insert_event(self, event_record: "EventRecord") -> None:
+        event_params: dict[str, Any] = {
+            "session_id": event_record["session_id"],
+            "invocation_id": event_record["invocation_id"],
+            "author": event_record["author"],
+            "timestamp": event_record["timestamp"],
+            "event_json": event_record["event_json"],
+        }
+        insert_sql = f"""
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
+            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
+        """
+        self._run_write([(insert_sql, event_params, self._event_param_types())])
+
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -288,9 +302,17 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
+        params: dict[str, Any] = {"session_id": session_id}
+        types: dict[str, Any] = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        if after_timestamp is not None:
+            sql = f"{sql} AND timestamp > @after_timestamp"
+            params["after_timestamp"] = after_timestamp
+            types["after_timestamp"] = SPANNER_PARAM_TYPES.TIMESTAMP
         sql = f"{sql} ORDER BY timestamp ASC"
-        params = {"session_id": session_id}
-        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        if limit is not None:
+            sql = f"{sql} LIMIT @limit"
+            params["limit"] = limit
+            types["limit"] = SPANNER_PARAM_TYPES.INT64
         rows = self._run_read(sql, params, types)
         return [
             {
@@ -311,7 +333,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+        self._insert_event(event_record)
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""

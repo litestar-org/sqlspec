@@ -582,19 +582,53 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         """Atomically append an event and update the session's durable state."""
         await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
+    def _insert_event(self, event_record: EventRecord) -> None:
+        sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        event_json_value = event_record["event_json"]
+        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.encode(),
+                (
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            conn.commit()
+
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
+        where_clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > %s")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = " LIMIT %s" if limit else ""
         sql = f"""
         SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
-        WHERE session_id = %s
-        ORDER BY timestamp ASC
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
         """
+        if limit:
+            params.append(limit)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(sql.encode(), (session_id,))
+                cur.execute(sql.encode(), tuple(params))
                 rows = cur.fetchall()
 
             return [
@@ -618,7 +652,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+        self._insert_event(event_record)
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
