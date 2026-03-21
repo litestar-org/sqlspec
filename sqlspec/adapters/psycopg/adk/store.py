@@ -6,9 +6,10 @@ from psycopg import errors
 from psycopg import sql as pg_sql
 from psycopg.types.json import Jsonb
 
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -333,7 +334,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             return []
 
 
-class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
+class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     """PostgreSQL synchronous ADK store using Psycopg3 driver.
 
     Implements session and event storage for Google Agent Development Kit
@@ -359,7 +360,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
     def __init__(self, config: "PsycopgSyncConfig") -> None:
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -385,7 +386,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             session_id VARCHAR(128) NOT NULL,
@@ -403,12 +404,17 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
     def _get_drop_tables_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
             driver.execute_script(self._get_create_sessions_table_sql())
             driver.execute_script(self._get_create_events_table_sql())
 
-    def create_session(
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         params: tuple[Any, ...]
@@ -432,7 +438,14 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
         return self.get_session(session_id)  # type: ignore[return-value]
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {table}
@@ -458,7 +471,12 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
@@ -468,13 +486,23 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (Jsonb(state), session_id))
 
-    def delete_session(self, session_id: str) -> None:
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    def _delete_session(self, session_id: str) -> None:
         query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (session_id,))
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -511,70 +539,12 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> EventRecord:
-        """Create a new event using the legacy positional API.
 
-        This method is required by the BaseSyncADKStore contract. For new code,
-        prefer ``create_event_and_update_state`` which atomically persists the
-        event and updates session state.
-        """
-        from datetime import datetime, timezone
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
 
-        event_json: dict[str, Any] = {}
-        if author is not None:
-            event_json["author"] = author
-        if actions is not None:
-            event_json["actions"] = actions.hex()
-        if content is not None:
-            event_json["content"] = content
-        event_json.update({k: v for k, v in kwargs.items() if v is not None})
-
-        invocation_id = kwargs.get("invocation_id", "")
-        ts = kwargs.get("timestamp") or datetime.now(timezone.utc)
-
-        query = pg_sql.SQL("""
-        INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_json
-        ) VALUES (%s, %s, %s, %s, %s)
-        RETURNING session_id, invocation_id, author, timestamp, event_json
-        """).format(table=pg_sql.Identifier(self._events_table))
-
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                query,
-                (
-                    session_id,
-                    invocation_id,
-                    author or "",
-                    ts,
-                    Jsonb(event_json),
-                ),
-            )
-            row = cur.fetchone()
-
-            if row is None:
-                msg = f"Failed to create event {event_id}"
-                raise RuntimeError(msg)
-
-            return EventRecord(
-                session_id=row["session_id"],
-                invocation_id=row["invocation_id"],
-                author=row["author"],
-                timestamp=row["timestamp"],
-                event_json=row["event_json"],
-            )
-
-    def create_event_and_update_state(
+    def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
     ) -> None:
         insert_query = pg_sql.SQL("""
@@ -606,7 +576,16 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             cur.execute(update_query, (Jsonb(state), session_id))
             conn.commit()
 
-    def list_events(self, session_id: str) -> "list[EventRecord]":
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
         query = pg_sql.SQL("""
         SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {table}
@@ -632,6 +611,21 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
+
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
 
 class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
     """PostgreSQL ADK memory store using Psycopg3 async driver."""
@@ -819,7 +813,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
-class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
+class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
     """PostgreSQL ADK memory store using Psycopg3 sync driver."""
 
     __slots__ = ()
@@ -828,7 +822,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """Initialize Psycopg sync memory store."""
         super().__init__(config)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for memory entries."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -868,7 +862,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
         if not self._enabled:
             return
@@ -876,7 +870,12 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(self._get_create_memory_table_sql())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -921,7 +920,12 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         return inserted_count
 
-    def search_entries(
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query."""
@@ -940,6 +944,13 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
+
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
@@ -981,7 +992,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             rows = cur.fetchall()
         return _rows_to_records(rows)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
             table=pg_sql.Identifier(self._memory_table)
@@ -991,7 +1002,12 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql, (session_id,))
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
-    def delete_entries_older_than(self, days: int) -> int:
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         sql = pg_sql.SQL(
             """
@@ -1004,6 +1020,11 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql)
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
+
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
 def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":
     return [

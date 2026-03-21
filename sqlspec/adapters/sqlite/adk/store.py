@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import async_, run_
@@ -566,7 +566,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
 
-class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
+class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
     """SQLite ADK memory store using synchronous SQLite driver.
 
     Implements memory entry storage for Google Agent Development Kit
@@ -625,7 +625,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -717,7 +717,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         """
         connection.execute("PRAGMA foreign_keys = ON")
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
 
         Skips table creation if memory store is disabled.
@@ -729,7 +729,12 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             self._enable_foreign_keys(driver.connection)
             driver.execute_script(self._get_create_memory_table_sql())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id
@@ -813,7 +818,12 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return inserted_count
 
-    def search_entries(
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query.
@@ -842,6 +852,13 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             except Exception as exc:  # pragma: no cover - defensive fallback
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
+
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -895,7 +912,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             for row in rows
         ]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session.
 
         Args:
@@ -914,7 +931,12 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return deleted_count
 
-    def delete_entries_older_than(self, days: int) -> int:
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days.
 
         Used for TTL cleanup operations.
@@ -936,3 +958,8 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             conn.commit()
 
         return deleted_count
+
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)

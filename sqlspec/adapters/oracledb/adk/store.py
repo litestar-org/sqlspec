@@ -12,10 +12,11 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbSyncDataDictionary,
     OracleVersionInfo,
 )
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
@@ -785,7 +786,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             raise
 
 
-class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
+class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     """Oracle synchronous ADK store using oracledb sync driver.
 
     Implements session and event storage for Google Agent Development Kit
@@ -832,7 +833,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         adk_config = config.extension_config.get("adk", {})
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
@@ -841,7 +842,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         storage_type = self._detect_json_storage_type()
         return self._get_create_sessions_table_sql_for_type(storage_type)
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL for events table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
@@ -1114,7 +1115,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             """,
         ]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist.
 
         Notes:
@@ -1131,7 +1132,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             events_sql = SQL(self._get_create_events_table_sql_for_type(storage_type))
             driver.execute_script(events_sql)
 
-    def create_session(
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
@@ -1179,7 +1185,14 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         return self.get_session(session_id)  # type: ignore[return-value]
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
@@ -1226,7 +1239,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return None
             raise
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -1251,7 +1269,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"state": state_data, "id": session_id})
             conn.commit()
 
-    def delete_session(self, session_id: str) -> None:
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    def _delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
@@ -1267,7 +1290,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"id": session_id})
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -1326,68 +1354,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return []
             raise
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> "EventRecord":
-        """Create a new event.
 
-        Args:
-            event_id: Unused (kept for base class compatibility).
-            session_id: Session identifier.
-            app_name: Unused (kept for base class compatibility).
-            user_id: Unused (kept for base class compatibility).
-            author: Event author.
-            actions: Unused (no longer stored).
-            content: Unused (no longer stored separately).
-            **kwargs: Must include ``invocation_id``, ``timestamp``, and
-                ``event_json``.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
 
-        Returns:
-            Created event record.
-        """
-        event_json: str = kwargs["event_json"]
-        invocation_id: str = kwargs.get("invocation_id", "")
-        timestamp = kwargs.get("timestamp")
-
-        sql = f"""
-        INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
-        ) VALUES (
-            :session_id, :invocation_id, :author, :timestamp, :event_json
-        )
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                sql,
-                {
-                    "session_id": session_id,
-                    "invocation_id": invocation_id,
-                    "author": author or "",
-                    "timestamp": timestamp,
-                    "event_json": event_json,
-                },
-            )
-            conn.commit()
-
-        return EventRecord(
-            session_id=session_id,
-            invocation_id=invocation_id,
-            author=author or "",
-            timestamp=timestamp,
-            event_json=event_json,
-        )
-
-    def create_event_and_update_state(
+    def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
     ) -> None:
         """Atomically create an event and update the session's durable state.
@@ -1432,7 +1404,16 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(update_sql, {"state": state_data, "id": session_id})
             conn.commit()
 
-    def list_events(self, session_id: str) -> "list[EventRecord]":
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
         """List events for a session ordered by timestamp.
 
         Args:
@@ -1475,6 +1456,21 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return []
             raise
 
+
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
 
 ORACLE_DUPLICATE_KEY_ERROR: Final = 1
 
@@ -1842,7 +1838,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return records
 
 
-class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
+class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
     """Oracle ADK memory store using sync oracledb driver."""
 
     __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
@@ -1893,7 +1889,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         return _extract_json_value(data)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         storage_type = self._detect_json_storage_type()
         return self._get_create_memory_table_sql_for_type(storage_type)
 
@@ -2008,12 +2004,17 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             """,
         ]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
             driver.execute_script(self._get_create_memory_table_sql())
+
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
 
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
@@ -2026,7 +2027,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             raise
         return True
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -2073,7 +2074,12 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         return inserted_count
 
-    def search_entries(
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         if not self._enabled:
@@ -2091,6 +2097,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
+
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -2138,7 +2151,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             rows = cursor.fetchall()
         return self._rows_to_records(rows)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -2146,7 +2159,12 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    def delete_entries_older_than(self, days: int) -> int:
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         sql = f"""
         DELETE FROM {self._memory_table}
         WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
@@ -2156,6 +2174,11 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             cursor.execute(sql, {"days": days})
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []

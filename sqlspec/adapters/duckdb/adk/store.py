@@ -16,10 +16,11 @@ import contextlib
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
@@ -33,11 +34,12 @@ logger = get_logger("sqlspec.adapters.duckdb.adk.store")
 DUCKDB_TABLE_NOT_FOUND_ERROR: Final = "does not exist"
 
 
-class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
+class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
     """DuckDB ADK store for Google Agent Development Kit.
 
     Implements session and event storage for Google Agent Development Kit
-    using DuckDB's synchronous driver. Provides:
+    using DuckDB's synchronous driver with async wrappers via ``async_()``.
+    Provides:
     - Session state management with native JSON type
     - Event history with single JSON blob (event_json) plus indexed scalars
     - Native TIMESTAMPTZ type support
@@ -62,7 +64,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             }
         )
         store = DuckdbADKStore(config)
-        store.ensure_tables()
+        await store.ensure_tables()
 
     Notes:
         - Uses DuckDB native JSON type for event_json and state
@@ -90,7 +92,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for sessions.
 
         Returns:
@@ -122,7 +124,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC);
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for events.
 
         Returns:
@@ -160,31 +162,53 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist."""
+    def _create_tables(self) -> None:
+        """Synchronous implementation of create_tables."""
         with self._config.provide_connection() as conn:
-            conn.execute(self._get_create_sessions_table_sql())
-            conn.execute(self._get_create_events_table_sql())
+            conn.execute(self.__get_create_sessions_table_sql_sync())
+            conn.execute(self.__get_create_events_table_sql_sync())
 
-    def create_session(
+    def __get_create_sessions_table_sql_sync(self) -> str:
+        """Synchronous version of DDL generation for use in _create_tables."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR PRIMARY KEY,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL{owner_id_line},
+            state JSON NOT NULL,
+            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id);
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC);
+        """
+
+    def __get_create_events_table_sql_sync(self) -> str:
+        """Synchronous version of DDL generation for use in _create_tables."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            session_id VARCHAR NOT NULL,
+            invocation_id VARCHAR NOT NULL,
+            author VARCHAR NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            event_json JSON NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
+        """
+
+    async def create_tables(self) -> None:
+        """Create both sessions and events tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner_id_column (if configured).
-
-        Returns:
-            Created session record.
-
-        Notes:
-            Uses current UTC timestamp for create_time and update_time.
-            State is JSON-serialized using SQLSpec serializers.
-        """
+        """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
 
@@ -211,19 +235,29 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID.
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session.
 
         Args:
-            session_id: Session identifier.
+            session_id: Unique session identifier.
+            app_name: Application name.
+            user_id: User identifier.
+            state: Initial session state.
+            owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
-            Session record or None if not found.
+            Created session record.
 
         Notes:
-            DuckDB returns datetime objects for TIMESTAMPTZ columns.
-            JSON is parsed from database storage.
+            Uses current UTC timestamp for create_time and update_time.
+            State is JSON-serialized using SQLSpec serializers.
         """
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
+        """Synchronous implementation of get_session."""
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -255,17 +289,23 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 return None
             raise
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID.
 
         Args:
             session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
+
+        Returns:
+            Session record or None if not found.
 
         Notes:
-            This replaces the entire state dictionary.
-            Update time is automatically set to current UTC timestamp.
+            DuckDB returns datetime objects for TIMESTAMPTZ columns.
+            JSON is parsed from database storage.
         """
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of update_session_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
 
@@ -279,15 +319,21 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(sql, (state_json, now, session_id))
             conn.commit()
 
-    def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events.
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state.
 
         Args:
             session_id: Session identifier.
+            state: New state dictionary (replaces existing state).
 
         Notes:
-            DuckDB doesn't support CASCADE in foreign keys, so we manually delete events first.
+            This replaces the entire state dictionary.
+            Update time is automatically set to current UTC timestamp.
         """
+        await async_(self._update_session_state)(session_id, state)
+
+    def _delete_session(self, session_id: str) -> None:
+        """Synchronous implementation of delete_session."""
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = ?"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE id = ?"
 
@@ -296,19 +342,19 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(delete_session_sql, (session_id,))
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and all associated events.
 
         Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
+            session_id: Session identifier.
 
         Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
+            DuckDB doesn't support CASCADE in foreign keys, so we manually delete events first.
         """
+        await async_(self._delete_session)(session_id)
+
+    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+        """Synchronous implementation of list_sessions."""
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -347,63 +393,26 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 return []
             raise
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> EventRecord:
-        """Create a new event using the legacy decomposed-parameter signature.
-
-        This method satisfies the abstract base class contract. It builds an
-        ``EventRecord`` from the provided arguments and delegates to the new
-        5-column schema.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
 
         Args:
-            event_id: Unique event identifier (unused in new schema, kept for API compat).
-            session_id: Session identifier.
-            app_name: Application name (stored inside event_json).
-            user_id: User identifier (stored inside event_json).
-            author: Event author (user/assistant/system).
-            actions: Legacy actions bytes (ignored in new schema).
-            content: Event content dict (stored inside event_json).
-            **kwargs: Additional optional fields folded into event_json.
+            app_name: Application name.
+            user_id: User identifier. If None, lists all sessions for the app.
 
         Returns:
-            Created event record with the new 5-key shape.
+            List of session records ordered by update_time DESC.
+
+        Notes:
+            Uses composite index on (app_name, user_id) when user_id is provided.
         """
-        timestamp = kwargs.get("timestamp", datetime.now(timezone.utc))
+        return await async_(self._list_sessions)(app_name, user_id)
 
-        # Build the event_json blob from all provided fields
-        event_data: dict[str, Any] = {
-            "id": event_id,
-            "app_name": app_name,
-            "user_id": user_id,
-        }
-        if content is not None:
-            event_data["content"] = content
-        for key in (
-            "invocation_id",
-            "branch",
-            "grounding_metadata",
-            "custom_metadata",
-            "long_running_tool_ids_json",
-            "partial",
-            "turn_complete",
-            "interrupted",
-            "error_code",
-            "error_message",
-        ):
-            val = kwargs.get(key)
-            if val is not None:
-                event_data[key] = val
-
-        event_json_str = to_json(event_data)
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        event_json_value = event_record["event_json"]
+        if not isinstance(event_json_value, str):
+            event_json_value = to_json(event_json_value)
 
         sql = f"""
         INSERT INTO {self._events_table}
@@ -415,37 +424,28 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(
                 sql,
                 (
-                    session_id,
-                    kwargs.get("invocation_id", ""),
-                    author or "",
-                    timestamp,
-                    event_json_str,
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    event_json_value,
                 ),
             )
             conn.commit()
 
-        return EventRecord(
-            session_id=session_id,
-            invocation_id=kwargs.get("invocation_id", ""),
-            author=author or "",
-            timestamp=timestamp,
-            event_json=event_json_str,
-        )
-
-    def create_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
-        """Atomically create an event and update the session's durable state.
-
-        The event insert and state update succeed together or fail together
-        within a single DuckDB transaction.
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session.
 
         Args:
-            event_record: Event record to store (5-key shape).
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
+            event_record: Event record with 5 keys (session_id, invocation_id,
+                author, timestamp, event_json).
         """
+        await async_(self._append_event)(event_record)
+
+    def _append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Synchronous implementation of append_event_and_update_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
         event_json_value = event_record["event_json"]
@@ -478,25 +478,46 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(update_sql, (state_json, now, session_id))
             conn.commit()
 
-    def list_events(self, session_id: str) -> "list[EventRecord]":
-        """List events for a session ordered by timestamp.
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        The event insert and state update succeed together or fail together
+        within a single DuckDB transaction.
 
         Args:
-            session_id: Session identifier.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
+            event_record: Event record to store (5-key shape).
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (``temp:`` keys already
+                stripped by the service layer).
         """
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Synchronous implementation of get_events."""
+        where_clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > ?")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = f" LIMIT {limit}" if limit else ""
+
         sql = f"""
         SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
-        WHERE session_id = ?
-        ORDER BY timestamp ASC
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
         """
 
         try:
             with self._config.provide_connection() as conn:
-                cursor = conn.execute(sql, (session_id,))
+                cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
                 return [
@@ -514,12 +535,28 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 return []
             raise
 
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session.
 
-class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
-    """DuckDB ADK memory store using synchronous DuckDB driver.
+        Args:
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+
+class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
+    """DuckDB ADK memory store using synchronous DuckDB driver with async wrappers.
 
     Implements memory entry storage for Google Agent Development Kit
-    using DuckDB's synchronous driver. Provides:
+    using DuckDB's synchronous driver with async wrappers via ``async_()``.
+    Provides:
     - Session memory storage with native JSON type
     - Simple ILIKE search or BM25 full-text search via FTS extension
     - Native TIMESTAMP type support
@@ -544,7 +581,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             }
         )
         store = DuckdbADKMemoryStore(config)
-        store.ensure_tables()
+        await store.ensure_tables()
 
     Notes:
         - Uses DuckDB native JSON type (not JSONB)
@@ -622,7 +659,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         except Exception as exc:
             logger.debug("Failed to refresh DuckDB FTS index: %s", exc)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -658,21 +695,51 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         """Get DuckDB DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
-    def create_tables(self) -> None:
-        """Create the memory table and indexes if they don't exist."""
+    def _create_tables(self) -> None:
+        """Synchronous implementation of create_tables."""
         if not self._enabled:
             return
 
+        ddl = self.__get_create_memory_table_sql_sync()
         with self._config.provide_connection() as conn:
-            conn.execute(self._get_create_memory_table_sql())
+            conn.execute(ddl)
             if self._use_fts:
                 self._create_fts_index(conn)
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication.
+    def __get_create_memory_table_sql_sync(self) -> str:
+        """Synchronous version of DDL generation for use in _create_tables."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        After successful inserts, refreshes the FTS index if FTS is enabled.
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMP NOT NULL,
+            content_json JSON NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSON,
+            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
         """
+
+    async def create_tables(self) -> None:
+        """Create the memory table and indexes if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Synchronous implementation of insert_memory_entries."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -741,14 +808,17 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
         return inserted_count
 
-    def search_entries(
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication.
+
+        After successful inserts, refreshes the FTS index if FTS is enabled.
+        """
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
-        """Search memory entries by text query.
-
-        When FTS is enabled, uses ``match_bm25()`` for BM25-ranked results.
-        Falls back to ILIKE for simple substring matching.
-        """
+        """Synchronous implementation of search_entries."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -795,8 +865,18 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             records.append(record)
         return records
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query.
+
+        When FTS is enabled, uses ``match_bm25()`` for BM25-ranked results.
+        Falls back to ILIKE for simple substring matching.
+        """
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    def _delete_entries_by_session(self, session_id: str) -> int:
+        """Synchronous implementation of delete_entries_by_session."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -810,8 +890,12 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 self._refresh_fts_index(conn)
             return deleted_count
 
-    def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
+        """Synchronous implementation of delete_entries_older_than."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -828,3 +912,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             if self._use_fts and deleted_count > 0:
                 self._refresh_fts_index(conn)
             return deleted_count
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)

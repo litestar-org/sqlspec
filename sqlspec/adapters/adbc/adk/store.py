@@ -4,10 +4,11 @@ import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
@@ -26,7 +27,7 @@ DIALECT_GENERIC: Final = "generic"
 ADBC_TABLE_NOT_FOUND_PATTERNS: Final = ("no such table", "table or view does not exist", "relation does not exist")
 
 
-class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
+class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
     """ADBC synchronous ADK store for Arrow Database Connectivity.
 
     Implements session and event storage for Google Agent Development Kit
@@ -176,7 +177,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return None
         return from_json(str(data))  # type: ignore[no-any-return]
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get CREATE TABLE SQL for sessions with dialect dispatch.
 
         Returns:
@@ -282,7 +283,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get CREATE TABLE SQL for events with dialect dispatch.
 
         Returns:
@@ -410,7 +411,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -446,6 +447,11 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
     def _enable_foreign_keys(self, cursor: Any, conn: Any) -> None:
         """Enable foreign key constraints for SQLite.
 
@@ -463,7 +469,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         except Exception:
             logger.debug("Foreign key enforcement not supported or already enabled")
 
-    def create_session(
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
@@ -505,7 +511,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
         return self.get_session(session_id)  # type: ignore[return-value]
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
@@ -549,7 +562,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 return None
             raise
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -575,7 +593,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def delete_session(self, session_id: str) -> None:
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    def _delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
@@ -595,7 +618,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -651,69 +679,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 return []
             raise
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> "EventRecord":
-        """Create a new event using the new 5-column EventRecord contract.
 
-        Args:
-            event_id: Unique event identifier (unused in new schema, kept for API compat).
-            session_id: Session identifier.
-            app_name: Application name (stored inside event_json).
-            user_id: User identifier (stored inside event_json).
-            author: Event author (user/assistant/system).
-            actions: Pickled actions object (stored inside event_json if provided).
-            content: Event content (stored inside event_json).
-            **kwargs: Additional optional fields (stored inside event_json).
-
-        Returns:
-            Created event record.
-
-        Notes:
-            Builds an event_json blob from all provided fields and stores it
-            alongside the indexed scalar columns (session_id, invocation_id,
-            author, timestamp).
-        """
-        timestamp = kwargs.pop("timestamp", None)
-        if timestamp is None:
-            timestamp = datetime.now(timezone.utc)
-
-        invocation_id = kwargs.pop("invocation_id", "") or ""
-
-        # Build event_json from all provided data
-        event_data: dict[str, Any] = {
-            "id": event_id,
-            "app_name": app_name,
-            "user_id": user_id,
-        }
-        if content is not None:
-            event_data["content"] = content
-        if actions is not None:
-            event_data["actions"] = actions.hex()
-        if author is not None:
-            event_data["author"] = author
-        # Include remaining kwargs in event_json
-        event_data.update({k: v for k, v in kwargs.items() if v is not None})
-
-        event_json_str = to_json(event_data)
-
-        event_record = EventRecord(
-            session_id=session_id,
-            invocation_id=invocation_id,
-            author=author or "",
-            timestamp=timestamp,
-            event_json=event_json_str,
-        )
-        self._insert_event(event_record)
-        return event_record
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
 
     def _insert_event(self, event_record: "EventRecord") -> None:
         """Insert an event record into the events table.
@@ -744,7 +713,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def create_event_and_update_state(
+    def _append_event_and_update_state(
         self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
     ) -> None:
         """Atomically insert an event and update the session's durable state.
@@ -793,7 +762,16 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def list_events(self, session_id: str) -> "list[EventRecord]":
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
         """List events for a session ordered by timestamp.
 
         Args:
@@ -840,7 +818,22 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
 
-class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        self._append_event_and_update_state(event_record, event_record["session_id"], {})
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
+
+class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
     """ADBC synchronous ADK memory store for Arrow Database Connectivity."""
 
     __slots__ = ("_dialect",)
@@ -885,7 +878,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return datetime.fromisoformat(value)
         return datetime.fromisoformat(str(value))
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         if self._dialect == DIALECT_POSTGRESQL:
             return self._get_memory_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
@@ -989,7 +982,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def _get_drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         if not self._enabled:
             return
 
@@ -1014,7 +1007,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1120,7 +1118,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
         return inserted_count
 
-    def search_entries(
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         if not self._enabled:
@@ -1160,7 +1163,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
         return self._rows_to_records(rows)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    def _delete_entries_by_session(self, session_id: str) -> int:
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         if use_returning:
             sql = f"DELETE FROM {self._memory_table} WHERE session_id = ? RETURNING 1"
@@ -1179,7 +1189,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def delete_entries_older_than(self, days: int) -> int:
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         cutoff = self._encode_timestamp(datetime.now(timezone.utc) - timedelta(days=days))
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         if use_returning:
@@ -1198,6 +1213,11 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
+
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []
