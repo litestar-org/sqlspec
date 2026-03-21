@@ -636,6 +636,27 @@ class ADKConfig(TypedDict):
         "tenant_acme_memories"
     """
 
+    artifact_table: NotRequired[str]
+    """Name of the artifact versions table. Default: 'adk_artifact_versions'
+
+    Examples:
+        "agent_artifacts"
+        "my_app_artifact_versions"
+    """
+
+    artifact_storage_uri: NotRequired[str]
+    """Base URI for artifact content storage.
+
+    Points to a ``sqlspec/storage/`` backend where artifact binary content
+    is stored.  Can be a direct URI (``s3://bucket/path``, ``file:///path``)
+    or a registered alias in the storage registry.
+
+    Examples:
+        "s3://my-bucket/adk-artifacts/"
+        "file:///var/data/artifacts/"
+        "gcs://my-gcs-bucket/artifacts/"
+    """
+
     memory_use_fts: NotRequired[bool]
     """Enable full-text search when supported. Default: False.
 
