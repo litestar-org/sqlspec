@@ -2,8 +2,23 @@
 Google ADK Extension
 ====================
 
-SQLSpec provides an ADK extension for session, event, and memory storage with
-SQL-backed persistence.
+SQLSpec provides a full-featured backend for
+`Google Agent Development Kit <https://google.github.io/adk-docs/>`_,
+covering session, event, memory, and artifact storage with SQL-backed
+persistence across 14 database adapters.
+
+Key capabilities:
+
+- **Session and event storage** with atomic ``append_event_and_update_state()``
+  ensuring events and state are always consistent.
+- **Full-event JSON storage** (EventRecord) that captures the entire ADK Event
+  in a single column, eliminating schema drift with upstream ADK releases.
+- **Scoped state semantics** (``app:``, ``user:``, ``temp:``) for controlling
+  state visibility and persistence across sessions.
+- **Memory service** with database-native full-text search (tsvector, FTS5,
+  InnoDB FT) for long-term agent context.
+- **Artifact service** with append-only versioning, SQL metadata, and pluggable
+  object storage backends.
 
 Choose a guide
 ==============
@@ -22,25 +37,31 @@ Choose a guide
       :link: quickstart
       :link-type: doc
 
-      Persist memory and sessions with minimal setup.
+      Persist sessions, memory, and artifacts with minimal setup.
 
-   .. grid-item-card:: API Reference
-      :link: api
+   .. grid-item-card:: Support Matrix
+      :link: backends
       :link-type: doc
 
-      Interfaces, stores, and configuration helpers.
+      See which backends are recommended, supported, or reduced-scope.
 
    .. grid-item-card:: Adapters
       :link: adapters
       :link-type: doc
 
-      Configure supported SQLSpec adapters.
+      Configure supported SQLSpec adapters for ADK.
 
-   .. grid-item-card:: Backends
-      :link: backends
+   .. grid-item-card:: Schema
+      :link: schema
       :link-type: doc
 
-      Storage backends and connection profiles.
+      Table layouts, EventRecord, scoped state, and artifact metadata.
+
+   .. grid-item-card:: API Reference
+      :link: api
+      :link-type: doc
+
+      Services, stores, and record types.
 
    .. grid-item-card:: Migrations
       :link: migrations
@@ -48,19 +69,13 @@ Choose a guide
 
       Apply schema changes safely over time.
 
-   .. grid-item-card:: Schema
-      :link: schema
-      :link-type: doc
-
-      Table layouts for sessions and memory records.
-
 .. toctree::
    :hidden:
 
    installation
    quickstart
-   api
-   adapters
    backends
-   migrations
+   adapters
    schema
+   api
+   migrations

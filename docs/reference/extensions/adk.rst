@@ -2,7 +2,7 @@
 Google ADK
 ==========
 
-Session, event, and memory storage backends for
+Session, event, memory, and artifact storage backends for
 `Google Agent Development Kit <https://google.github.io/adk-docs/>`_.
 
 Session Service
@@ -20,6 +20,13 @@ Memory Services
    :show-inheritance:
 
 .. autoclass:: sqlspec.extensions.adk.SQLSpecSyncMemoryService
+   :members:
+   :show-inheritance:
+
+Artifact Service
+================
+
+.. autoclass:: sqlspec.extensions.adk.SQLSpecArtifactService
    :members:
    :show-inheritance:
 
@@ -45,6 +52,17 @@ Memory Store Base Classes
    :members:
    :show-inheritance:
 
+Artifact Store Base Classes
+===========================
+
+.. autoclass:: sqlspec.extensions.adk.BaseAsyncADKArtifactStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.extensions.adk.BaseSyncADKArtifactStore
+   :members:
+   :show-inheritance:
+
 Record Types
 ============
 
@@ -57,5 +75,16 @@ Record Types
    :show-inheritance:
 
 .. autoclass:: sqlspec.extensions.adk.MemoryRecord
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.extensions.adk.ArtifactRecord
+   :members:
+   :show-inheritance:
+
+Configuration
+=============
+
+.. autoclass:: sqlspec.extensions.adk.ADKConfig
    :members:
    :show-inheritance:
