@@ -5,7 +5,9 @@ Schema
 ADK stores create tables for sessions, events, memory entries, and artifact
 metadata. Table names are configurable via ``extension_config["adk"]``.
 
-Use ``create_tables()`` or ``ensure_tables()`` on a store to apply the schema.
+You can programmatically create the schema with ``create_tables()`` or
+``ensure_tables()`` on a store. For managed deployments, configure SQLSpec
+migrations for the target database and run ``sqlspec upgrade`` instead.
 
 .. contents:: On this page
    :local:

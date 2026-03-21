@@ -124,14 +124,21 @@ automatic versioning. Metadata lives in SQL; content lives in object storage.
 Schema Setup
 ============
 
-Stores create their tables on first use via ``ensure_tables()``. For
-production, run table creation ahead of deployment:
+You can programmatically create ADK tables ahead of first use with
+``ensure_tables()`` / ``ensure_table()``:
 
 .. code-block:: python
 
    await session_store.ensure_tables()
    await memory_store.ensure_tables()
    await artifact_store.ensure_table()
+
+Alternatively, configure SQLSpec migrations for your database and run the
+migration CLI as part of deployment:
+
+.. code-block:: console
+
+   sqlspec upgrade
 
 Next Steps
 ==========

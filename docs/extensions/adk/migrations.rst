@@ -8,7 +8,8 @@ used by your ADK backend, then run them with the SQLSpec migration CLI.
 Schema Bootstrapping
 ====================
 
-For development, use ``ensure_tables()`` to create tables on first use:
+You can programmatically create ADK tables with ``create_tables()`` /
+``ensure_tables()``:
 
 .. code-block:: python
 
@@ -16,7 +17,37 @@ For development, use ``ensure_tables()`` to create tables on first use:
    await memory_store.ensure_tables()
    await artifact_store.ensure_table()
 
-For production, run migrations ahead of deployment to avoid runtime DDL.
+Alternatively, configure SQLSpec migrations on the database config and run the
+migration CLI ahead of deployment:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       connection_config={"dsn": "postgresql://localhost/app"},
+       migration_config={"script_location": "migrations/postgres"},
+   )
+
+.. code-block:: console
+
+   sqlspec upgrade
+
+Use the programmatic table-creation path when you want the store to bootstrap
+its own schema. Use migrations when you want schema changes tracked and applied
+through your deployment workflow.
+
+.. note::
+
+   The migration CLI resolves configuration from ``--config``,
+   ``SQLSPEC_CONFIG``, or ``[tool.sqlspec]`` in ``pyproject.toml``.
+
+   When ``extension_config["adk"]`` is present, ADK extension migrations are
+   auto-included. Use ``migration_config={"exclude_extensions": ["adk"]}``
+   to skip only ADK extension migrations, or
+   ``migration_config={"include_extensions": ["adk"]}`` to opt in explicitly
+   by extension name. Use ``migration_config={"enabled": False}`` to disable
+   migrations entirely for a given database config.
 
 Clean-Break Migration Notes
 ============================
