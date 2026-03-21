@@ -131,15 +131,15 @@ def test_snowflake_events_ddl_uses_variant() -> None:
     assert "event_json" in ddl
 
 
-def test_ddl_dispatch_uses_correct_dialect() -> None:
+async def test_ddl_dispatch_uses_correct_dialect() -> None:
     """Test that DDL dispatch selects correct dialect method."""
     config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
     store = AdbcADKStore(config)
 
-    sessions_ddl = store._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
+    sessions_ddl = await store._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in sessions_ddl
 
-    events_ddl = store._get_create_events_table_sql()  # pyright: ignore[reportPrivateUsage]
+    events_ddl = await store._get_create_events_table_sql()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in events_ddl
     assert "event_json" in events_ddl
 

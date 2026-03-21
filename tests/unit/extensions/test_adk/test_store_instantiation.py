@@ -83,5 +83,5 @@ def test_store_has_no_abstract_methods(class_path: str) -> None:
     except ImportError:
         pytest.skip(f"Module {module_path} not importable (missing optional dependency)")
     cls = getattr(module, class_name)
-    abstract = getattr(cls, "__abstractmethods__", set())
+    abstract: set[str] = getattr(cls, "__abstractmethods__", set())
     assert not abstract, f"{class_path} has unsatisfied abstract methods: {abstract}"

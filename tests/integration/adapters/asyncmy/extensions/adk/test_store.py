@@ -148,7 +148,7 @@ async def test_delete_session_cascade(asyncmy_adk_store: AsyncmyADKStore) -> Non
         "invocation_id": "inv-001",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps({"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id}),
+        "event_json": {"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id},
     }
     await asyncmy_adk_store.append_event(event_record)
 
@@ -177,7 +177,7 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
         "invocation_id": "inv-001",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps({"content": {"text": "Hello", "role": "user"}, "app_name": app_name}),
+        "event_json": {"content": {"text": "Hello", "role": "user"}, "app_name": app_name},
     }
 
     event2: EventRecord = {
@@ -185,7 +185,7 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
         "invocation_id": "inv-002",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps({"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name}),
+        "event_json": {"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name},
     }
 
     await asyncmy_adk_store.append_event(event1)
@@ -224,7 +224,7 @@ async def test_timestamp_precision(asyncmy_adk_store: AsyncmyADKStore) -> None:
         "invocation_id": "inv-micro",
         "author": "system",
         "timestamp": event_time,
-        "event_json": json.dumps({"app_name": app_name}),
+        "event_json": {"app_name": app_name},
     }
     await asyncmy_adk_store.append_event(event)
 

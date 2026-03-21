@@ -1,7 +1,7 @@
 """Oracle-specific ADK store tests for LOB handling, JSON types, and FK columns."""
 
 import json
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import uuid4
@@ -63,10 +63,10 @@ async def oracle_async_store(oracle_async_config: "OracleAsyncConfig") -> "Async
 
 
 @pytest.fixture(scope="module")
-def oracle_sync_store(oracle_sync_config: "OracleSyncConfig") -> "Generator[OracleSyncADKStore, None, None]":
+async def oracle_sync_store(oracle_sync_config: "OracleSyncConfig") -> "AsyncGenerator[OracleSyncADKStore, None]":
     """Create a sync Oracle ADK store with tables created once per module."""
     store = OracleSyncADKStore(oracle_sync_config)
-    store.create_tables()
+    await store.create_tables()
     try:
         yield store
     finally:
@@ -140,7 +140,9 @@ async def oracle_store_with_fk(
 
 
 @pytest.fixture
-def oracle_config_with_users_table(oracle_sync_config: "OracleSyncConfig") -> "Generator[OracleSyncConfig, None, None]":
+async def oracle_config_with_users_table(
+    oracle_sync_config: "OracleSyncConfig",
+) -> "AsyncGenerator[OracleSyncConfig, None]":
     """Create a users table for FK testing."""
     with oracle_sync_config.provide_connection() as conn:
         cursor = conn.cursor()
@@ -187,9 +189,9 @@ def oracle_config_with_users_table(oracle_sync_config: "OracleSyncConfig") -> "G
 
 
 @pytest.fixture
-def oracle_store_sync_with_fk(
+async def oracle_store_sync_with_fk(
     oracle_config_with_users_table: "OracleSyncConfig",
-) -> "Generator[OracleSyncADKStore, None, None]":
+) -> "AsyncGenerator[OracleSyncADKStore, None]":
     """Create a sync Oracle ADK store with owner_id FK column."""
     config_with_extension = OracleSyncConfig(
         connection_config=oracle_config_with_users_table.connection_config,
@@ -197,7 +199,7 @@ def oracle_store_sync_with_fk(
     )
     store = OracleSyncADKStore(config_with_extension)
     _cleanup_sync_store(store, config_with_extension)
-    store.create_tables()
+    await store.create_tables()
     try:
         yield store
     finally:
@@ -242,7 +244,7 @@ async def test_event_json_lob_deserialization(oracle_async_store: "OracleAsyncAD
         "invocation_id": "",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps(event_data),
+        "event_json": event_data,
     }
 
     await oracle_async_store.append_event(event_record)
@@ -273,7 +275,7 @@ async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> 
         "invocation_id": "",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps(event_data),
+        "event_json": event_data,
     }
 
     await oracle_async_store.append_event(event_record)
@@ -286,17 +288,17 @@ async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> 
     assert retrieved_data == event_data
 
 
-def test_state_lob_deserialization_sync(oracle_sync_store: "OracleSyncADKStore") -> None:
+async def test_state_lob_deserialization_sync(oracle_sync_store: "OracleSyncADKStore") -> None:
     """Test state CLOB/BLOB is correctly deserialized in sync mode."""
     session_id = _unique_session_id("lob-session-sync")
     app_name = "test-app"
     user_id = "user-123"
     state = {"large_field": "y" * 10000, "nested": {"data": [4, 5, 6]}}
 
-    session = oracle_sync_store.create_session(session_id, app_name, user_id, state)
+    session = await oracle_sync_store.create_session(session_id, app_name, user_id, state)
     assert session["state"] == state
 
-    retrieved = oracle_sync_store.get_session(session_id)
+    retrieved = await oracle_sync_store.get_session(session_id)
     assert retrieved is not None
     assert retrieved["state"] == state
 
@@ -314,12 +316,7 @@ async def test_event_record_5_column_contract(oracle_async_store: "OracleAsyncAD
         "invocation_id": "inv-001",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps({
-            "content": {"text": "Hello"},
-            "partial": True,
-            "turn_complete": False,
-            "interrupted": True,
-        }),
+        "event_json": {"content": {"text": "Hello"}, "partial": True, "turn_complete": False, "interrupted": True},
     }
 
     await oracle_async_store.append_event(event_record)
@@ -351,7 +348,7 @@ async def test_event_with_none_values(oracle_async_store: "OracleAsyncADKStore")
         "invocation_id": "",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": json.dumps({"app_name": app_name}),
+        "event_json": {"app_name": app_name},
     }
 
     await oracle_async_store.append_event(event_record)
@@ -431,7 +428,7 @@ async def test_json_fields_stored_and_retrieved(oracle_async_store: "OracleAsync
         "complex": {
             "nested": {"deep": {"structure": "value"}},
             "array": [1, 2, 3, {"key": "value"}],
-            "unicode": "日本語テスト",
+            "unicode": "\u65e5\u672c\u8a9e\u30c6\u30b9\u30c8",
             "special_chars": "test@example.com | value > 100",
         }
     }
@@ -442,10 +439,10 @@ async def test_json_fields_stored_and_retrieved(oracle_async_store: "OracleAsync
     retrieved = await oracle_async_store.get_session(session_id)
     assert retrieved is not None
     assert retrieved["state"] == state
-    assert retrieved["state"]["complex"]["unicode"] == "日本語テスト"
+    assert retrieved["state"]["complex"]["unicode"] == "\u65e5\u672c\u8a9e\u30c6\u30b9\u30c8"
 
 
-def test_create_session_with_owner_id_sync(oracle_store_sync_with_fk: "OracleSyncADKStore") -> None:
+async def test_create_session_with_owner_id_sync(oracle_store_sync_with_fk: "OracleSyncADKStore") -> None:
     """Test creating session with owner_id in sync mode."""
     session_id = _unique_session_id("sync-fk")
     app_name = "test-app"
@@ -453,10 +450,10 @@ def test_create_session_with_owner_id_sync(oracle_store_sync_with_fk: "OracleSyn
     state = {"data": "sync test"}
     owner_id = 100
 
-    session = oracle_store_sync_with_fk.create_session(session_id, app_name, user_id, state, owner_id=owner_id)
+    session = await oracle_store_sync_with_fk.create_session(session_id, app_name, user_id, state, owner_id=owner_id)
     assert session["id"] == session_id
     assert session["state"] == state
 
-    retrieved = oracle_store_sync_with_fk.get_session(session_id)
+    retrieved = await oracle_store_sync_with_fk.get_session(session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
