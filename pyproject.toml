@@ -43,7 +43,7 @@ attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-storage"]
 cloud-sql = ["cloud-sql-python-connector"]
 cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
-duckdb = ["duckdb"]
+duckdb = ["duckdb", "pytz"]
 fastapi = ["fastapi"]
 flask = ["flask"]
 fsspec = ["fsspec"]
@@ -296,7 +296,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT,SELCT,froms,ccompiler"
+ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN"
 skip = 'uv.lock'
 
 [tool.coverage.run]

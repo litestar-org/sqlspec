@@ -250,7 +250,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "invocation_id": event_record["invocation_id"],
             "author": event_record["author"],
             "timestamp": event_record["timestamp"],
-            "event_json": event_record["event_json"],
+            "event_json": to_json(event_record["event_json"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
@@ -284,7 +284,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "invocation_id": event_record["invocation_id"],
             "author": event_record["author"],
             "timestamp": event_record["timestamp"],
-            "event_json": event_record["event_json"],
+            "event_json": to_json(event_record["event_json"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)

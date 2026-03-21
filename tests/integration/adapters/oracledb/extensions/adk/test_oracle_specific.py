@@ -62,9 +62,9 @@ async def oracle_async_store(oracle_async_config: "OracleAsyncConfig") -> "Async
         await _cleanup_async_store(store, oracle_async_config)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def oracle_sync_store(oracle_sync_config: "OracleSyncConfig") -> "AsyncGenerator[OracleSyncADKStore, None]":
-    """Create a sync Oracle ADK store with tables created once per module."""
+    """Create a sync Oracle ADK store with tables created per test."""
     store = OracleSyncADKStore(oracle_sync_config)
     await store.create_tables()
     try:
@@ -223,7 +223,7 @@ async def test_state_lob_deserialization(oracle_async_store: "OracleAsyncADKStor
 
 
 async def test_event_json_lob_deserialization(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test event_json CLOB is correctly deserialized."""
+    """Test event_json LOB data is correctly deserialized."""
     session_id = _unique_session_id("event-lob")
     app_name = "test-app"
     user_id = "user-123"

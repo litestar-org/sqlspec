@@ -108,6 +108,16 @@ def _event_json_column_ddl(storage_type: JSONStorageType) -> str:
     return "event_json BLOB NOT NULL"
 
 
+def _oracle_text_value(value: Any) -> str:
+    """Normalize Oracle VARCHAR2 values back to Python strings.
+
+    Oracle stores empty strings as ``NULL``. The ADK event contract allows
+    empty strings for fields like ``invocation_id``, so reads coerce ``NULL``
+    back to ``""``.
+    """
+    return "" if value is None else str(value)
+
+
 class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     """Oracle async ADK store using oracledb async driver.
 
@@ -254,6 +264,12 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         return from_json(str(data))  # type: ignore[no-any-return]
 
+    async def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
+        """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
+        if data is None:
+            return None
+        return await self._deserialize_state(data)
+
     async def _serialize_event_json(self, event_json: Any) -> "str | bytes":
         """Serialize event_json to the configured Oracle JSON storage format."""
         storage_type = await self._detect_json_storage_type()
@@ -360,8 +376,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
                 session_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256) NOT NULL,
-                author VARCHAR2(256) NOT NULL,
+                invocation_id VARCHAR2(256),
+                author VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 {event_json_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
@@ -772,20 +788,16 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    event_json_str = await self._read_event_json(row[4])
-
-                    results.append(
-                        EventRecord(
-                            session_id=row[0],
-                            invocation_id=row[1],
-                            author=row[2],
-                            timestamp=row[3],
-                            event_json=from_json(event_json_str) if isinstance(event_json_str, str) else event_json_str,
-                        )
+                return [
+                    EventRecord(
+                        session_id=row[0],
+                        invocation_id=_oracle_text_value(row[1]),
+                        author=_oracle_text_value(row[2]),
+                        timestamp=row[3],
+                        event_json=await self._deserialize_json_field(row[4]) or {},
                     )
-                return results
+                    for row in rows
+                ]
         except oracledb.DatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -937,6 +949,12 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         return from_json(str(data))  # type: ignore[no-any-return]
 
+    def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
+        """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
+        if data is None:
+            return None
+        return self._deserialize_state(data)
+
     def _serialize_event_json(self, event_json: Any) -> "str | bytes":
         """Serialize event_json to the configured Oracle JSON storage format."""
         storage_type = self._detect_json_storage_type()
@@ -1041,8 +1059,8 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
                 session_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256) NOT NULL,
-                author VARCHAR2(256) NOT NULL,
+                invocation_id VARCHAR2(256),
+                author VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 {event_json_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
@@ -1196,7 +1214,11 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, params)
             conn.commit()
 
-        return self._get_session(session_id)
+        result = self._get_session(session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1454,20 +1476,16 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    event_json_str = self._read_event_json(row[4])
-
-                    results.append(
-                        EventRecord(
-                            session_id=row[0],
-                            invocation_id=row[1],
-                            author=row[2],
-                            timestamp=row[3],
-                            event_json=from_json(event_json_str) if isinstance(event_json_str, str) else event_json_str,
-                        )
+                return [
+                    EventRecord(
+                        session_id=row[0],
+                        invocation_id=_oracle_text_value(row[1]),
+                        author=_oracle_text_value(row[2]),
+                        timestamp=row[3],
+                        event_json=self._deserialize_json_field(row[4]) or {},
                     )
-                return results
+                    for row in rows
+                ]
         except oracledb.DatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:

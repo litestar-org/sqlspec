@@ -508,7 +508,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()  # type: ignore[no-untyped-call]
 
-        return self._get_session(session_id)
+        result = self._get_session(session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
