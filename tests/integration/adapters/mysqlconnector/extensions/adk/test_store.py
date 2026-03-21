@@ -1,12 +1,13 @@
 """Integration tests for MysqlConnector ADK session store."""
 
-import pickle
+import json
 from datetime import datetime, timezone
 from typing import cast
 
 import pytest
 
 from sqlspec.adapters.mysqlconnector.adk.store import MysqlConnectorAsyncADKStore
+from sqlspec.extensions.adk import EventRecord
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.integration]
 
@@ -50,13 +51,14 @@ async def test_storage_types_verification(mysqlconnector_adk_store: MysqlConnect
                 ORDER BY ORDINAL_POSITION
             """)
             event_columns = await cursor.fetchall()
+            event_col_names = [col[0] for col in event_columns]
 
-            actions_col = next(col for col in event_columns if col[0] == "actions")
-            assert actions_col[1] == "blob"
-
-            content_col = next((col for col in event_columns if col[0] == "content"), None)
-            if content_col:
-                assert content_col[1] == "json"
+            # New 5-column schema: session_id, invocation_id, author, timestamp, event_json
+            assert "session_id" in event_col_names
+            assert "invocation_id" in event_col_names
+            assert "author" in event_col_names
+            assert "timestamp" in event_col_names
+            assert "event_json" in event_col_names
 
             timestamp_col = next(col for col in event_columns if col[0] == "timestamp")
             assert "timestamp(6)" in cast("str", timestamp_col[2]).lower()
@@ -142,18 +144,14 @@ async def test_delete_session_cascade(mysqlconnector_adk_store: MysqlConnectorAs
 
     await mysqlconnector_adk_store.create_session(session_id, app_name, user_id, {"status": "active"})
 
-    event_record = {
-        "id": "event-001",
+    event_record: EventRecord = {
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
         "invocation_id": "inv-001",
         "author": "user",
-        "actions": pickle.dumps([{"type": "test_action"}]),
         "timestamp": datetime.now(timezone.utc),
-        "content": {"text": "Hello"},
+        "event_json": json.dumps({"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id}),
     }
-    await mysqlconnector_adk_store.append_event(event_record)  # type: ignore[arg-type]
+    await mysqlconnector_adk_store.append_event(event_record)
 
     events_before = await mysqlconnector_adk_store.get_events(session_id)
     assert len(events_before) == 1
@@ -175,48 +173,35 @@ async def test_append_and_get_events(mysqlconnector_adk_store: MysqlConnectorAsy
 
     await mysqlconnector_adk_store.create_session(session_id, app_name, user_id, {"status": "active"})
 
-    event1 = {
-        "id": "event-001",
+    event1: EventRecord = {
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
         "invocation_id": "inv-001",
         "author": "user",
-        "actions": pickle.dumps([{"type": "message", "content": "Hello"}]),
         "timestamp": datetime.now(timezone.utc),
-        "content": {"text": "Hello", "role": "user"},
-        "partial": False,
-        "turn_complete": True,
+        "event_json": json.dumps({"content": {"text": "Hello", "role": "user"}, "app_name": app_name}),
     }
 
-    event2 = {
-        "id": "event-002",
+    event2: EventRecord = {
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
         "invocation_id": "inv-002",
         "author": "assistant",
-        "actions": pickle.dumps([{"type": "response", "content": "Hi there"}]),
         "timestamp": datetime.now(timezone.utc),
-        "content": {"text": "Hi there", "role": "assistant"},
-        "partial": False,
-        "turn_complete": True,
+        "event_json": json.dumps({"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name}),
     }
 
-    await mysqlconnector_adk_store.append_event(event1)  # type: ignore[arg-type]
-    await mysqlconnector_adk_store.append_event(event2)  # type: ignore[arg-type]
+    await mysqlconnector_adk_store.append_event(event1)
+    await mysqlconnector_adk_store.append_event(event2)
 
     events = await mysqlconnector_adk_store.get_events(session_id)
 
     assert len(events) == 2
-    assert events[0]["id"] == "event-001"
-    assert events[1]["id"] == "event-002"
-    content0 = events[0]["content"]
-    content1 = events[1]["content"]
-    assert content0 is not None and content0["text"] == "Hello"
-    assert content1 is not None and content1["text"] == "Hi there"
-    assert isinstance(events[0]["actions"], bytes)
-    assert pickle.loads(events[0]["actions"])[0]["type"] == "message"
+    assert events[0]["author"] == "user"
+    assert events[1]["author"] == "assistant"
+    # Content is inside event_json
+    event0_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    event1_data = json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+    assert event0_data["content"]["text"] == "Hello"
+    assert event1_data["content"]["text"] == "Hi there"
 
 
 async def test_timestamp_precision(mysqlconnector_adk_store: MysqlConnectorAsyncADKStore) -> None:
@@ -230,17 +215,14 @@ async def test_timestamp_precision(mysqlconnector_adk_store: MysqlConnectorAsync
     assert hasattr(created["create_time"], "microsecond")
 
     event_time = datetime.now(timezone.utc)
-    event = {
-        "id": "event-micro",
+    event: EventRecord = {
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
         "invocation_id": "inv-micro",
         "author": "system",
-        "actions": b"",
         "timestamp": event_time,
+        "event_json": json.dumps({"app_name": app_name}),
     }
-    await mysqlconnector_adk_store.append_event(event)  # type: ignore[arg-type]
+    await mysqlconnector_adk_store.append_event(event)
 
     events = await mysqlconnector_adk_store.get_events(session_id)
     assert len(events) == 1

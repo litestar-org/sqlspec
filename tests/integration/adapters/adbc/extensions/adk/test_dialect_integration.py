@@ -10,6 +10,7 @@ Tests are marked with dialect-specific markers and will be skipped
 if the driver is not installed.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -74,20 +75,20 @@ def test_sqlite_dialect_event_operations(sqlite_store: Any) -> None:
 
     sqlite_store.create_session(session_id, app_name, user_id, {})
 
-    event_id = "event-1"
-    actions = b"pickled_actions_data"
     content = {"message": "Hello"}
 
     event = sqlite_store.create_event(
-        event_id=event_id, session_id=session_id, app_name=app_name, user_id=user_id, actions=actions, content=content
+        event_id="event-1", session_id=session_id, app_name=app_name, user_id=user_id, content=content
     )
 
-    assert event["id"] == event_id
-    assert event["content"] == content
+    assert event["session_id"] == session_id
+    event_data = json.loads(event["event_json"]) if isinstance(event["event_json"], str) else event["event_json"]
+    assert event_data["content"] == content
 
     events = sqlite_store.list_events(session_id)
     assert len(events) == 1
-    assert events[0]["content"] == content
+    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    assert retrieved_data["content"] == content
 
 
 @pytest.mark.postgres

@@ -1,5 +1,6 @@
 """Integration tests for DuckDB ADK session store."""
 
+import json
 from collections.abc import Generator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,11 +146,10 @@ def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -> None
         app_name="test-app",
         user_id="user-005",
         author="user",
-        actions=b"test-actions",
         content={"message": "Hello"},
     )
 
-    assert event["id"] == "event-001"
+    assert event["session_id"] == session_id
     events = duckdb_adk_store.list_events(session_id)
     assert len(events) == 1
 
@@ -160,44 +160,33 @@ def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -> None
     assert len(events_after) == 0
 
 
-def test_create_and_get_event(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating and retrieving an event."""
+def test_create_event(duckdb_adk_store: DuckdbADKStore) -> None:
+    """Test creating an event and verifying the returned 5-key EventRecord."""
     session_id = "session-006"
     duckdb_adk_store.create_session(session_id, "test-app", "user-006", {})
 
-    event_id = "event-002"
     timestamp = datetime.now(timezone.utc)
     content = {"text": "Test message", "role": "user"}
-    custom_metadata = {"source": "test"}
 
     created_event = duckdb_adk_store.create_event(
-        event_id=event_id,
+        event_id="event-002",
         session_id=session_id,
         app_name="test-app",
         user_id="user-006",
         author="user",
-        actions=b"pickled-actions",
         content=content,
         timestamp=timestamp,
-        custom_metadata=custom_metadata,
     )
 
-    assert created_event["id"] == event_id
+    # Returned record has the 5-key shape
     assert created_event["session_id"] == session_id
     assert created_event["author"] == "user"
-    assert created_event["content"] == content
-    assert created_event["custom_metadata"] == custom_metadata
+    assert created_event["timestamp"] == timestamp
+    assert "event_json" in created_event
 
-    retrieved_event = duckdb_adk_store.get_event(event_id)
-    assert retrieved_event is not None
-    assert retrieved_event["id"] == event_id
-    assert retrieved_event["content"] == content
-
-
-def test_get_nonexistent_event(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test getting a non-existent event returns None."""
-    result = duckdb_adk_store.get_event("nonexistent-event")
-    assert result is None
+    # Content is stored inside event_json
+    event_data = json.loads(created_event["event_json"]) if isinstance(created_event["event_json"], str) else created_event["event_json"]
+    assert event_data["content"] == content
 
 
 def test_list_events(duckdb_adk_store: DuckdbADKStore) -> None:
@@ -225,8 +214,8 @@ def test_list_events(duckdb_adk_store: DuckdbADKStore) -> None:
     events = duckdb_adk_store.list_events(session_id)
 
     assert len(events) == 2
-    assert events[0]["id"] == "event-1"
-    assert events[1]["id"] == "event-2"
+    assert events[0]["author"] == "user"
+    assert events[1]["author"] == "assistant"
     assert events[0]["timestamp"] <= events[1]["timestamp"]
 
 
@@ -240,7 +229,7 @@ def test_list_events_empty(duckdb_adk_store: DuckdbADKStore) -> None:
 
 
 def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating events with all optional fields."""
+    """Test creating events with optional fields stored in event_json."""
     session_id = "session-008"
     duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
 
@@ -250,7 +239,6 @@ def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
         app_name="test-app",
         user_id="user-008",
         author="assistant",
-        actions=b"actions-data",
         content={"text": "Response"},
         invocation_id="inv-123",
         branch="main",
@@ -263,15 +251,15 @@ def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
         error_message=None,
     )
 
+    # The 5-key record has invocation_id as a top-level indexed column
     assert event["invocation_id"] == "inv-123"
-    assert event["branch"] == "main"
-    assert event["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
-    assert event["partial"] is True
-    assert event["turn_complete"] is False
 
-    retrieved = duckdb_adk_store.get_event("event-full")
-    assert retrieved is not None
-    assert retrieved["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
+    # Other fields are inside event_json
+    event_data = json.loads(event["event_json"]) if isinstance(event["event_json"], str) else event["event_json"]
+    assert event_data["branch"] == "main"
+    assert event_data["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
+    assert event_data["partial"] is True
+    assert event_data["turn_complete"] is False
 
 
 def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
@@ -296,9 +284,12 @@ def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
     events = duckdb_adk_store.list_events(session_id)
 
     assert len(events) == 3
-    assert events[0]["id"] == "event-first"
-    assert events[1]["id"] == "event-middle"
-    assert events[2]["id"] == "event-last"
+    # Events should be ordered by timestamp ASC
+    event_ids = []
+    for e in events:
+        data = json.loads(e["event_json"]) if isinstance(e["event_json"], str) else e["event_json"]
+        event_ids.append(data["id"])
+    assert event_ids == ["event-first", "event-middle", "event-last"]
 
 
 def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore) -> None:
@@ -353,28 +344,26 @@ def test_table_not_found_handling(tmp_path: Path, worker_id: str) -> None:
             db_path.unlink()
 
 
-def test_binary_actions_data(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test storing and retrieving binary actions data."""
-    session_id = "session-binary"
+def test_event_json_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
+    """Test storing and retrieving event data via event_json."""
+    session_id = "session-json-rt"
     duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
 
-    binary_data = bytes(range(256))
-
     event = duckdb_adk_store.create_event(
-        event_id="event-binary",
+        event_id="event-json",
         session_id=session_id,
         app_name="test-app",
         user_id="user-012",
         author="system",
-        actions=binary_data,
+        content={"data": "value"},
     )
 
-    assert event["actions"] == binary_data
+    assert "event_json" in event
 
-    retrieved = duckdb_adk_store.get_event("event-binary")
-    assert retrieved is not None
-    assert retrieved["actions"] == binary_data
-    assert len(retrieved["actions"]) == 256
+    events = duckdb_adk_store.list_events(session_id)
+    assert len(events) == 1
+    event_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    assert event_data["content"] == {"data": "value"}
 
 
 def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> None:

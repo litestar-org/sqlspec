@@ -1,5 +1,6 @@
 """Integration tests for Spanner ADK store (sync)."""
 
+import json
 from typing import Any
 
 import pytest
@@ -65,11 +66,15 @@ def test_create_and_list_events(spanner_adk_store: Any) -> None:
         "user",
         author="assistant",
         content={"msg": "ok"},
-        partial=False,
-        turn_complete=True,
     )
 
     events = spanner_adk_store.list_events(session_id)
-    ids = [e["id"] for e in events]
-    assert ids == ["event-1", "event-2"]
-    assert events[0]["content"] == {"msg": "hi"}
+    assert len(events) == 2
+    assert events[0]["author"] == "user"
+    assert events[1]["author"] == "assistant"
+
+    # Content is inside event_json in the new 5-column schema
+    event0_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    event1_data = json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+    assert event0_data["content"] == {"msg": "hi"}
+    assert event1_data["content"] == {"msg": "ok"}

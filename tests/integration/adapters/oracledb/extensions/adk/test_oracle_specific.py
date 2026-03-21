@@ -1,6 +1,6 @@
 """Oracle-specific ADK store tests for LOB handling, JSON types, and FK columns."""
 
-import pickle
+import json
 from collections.abc import AsyncGenerator, Generator
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -220,8 +220,8 @@ async def test_state_lob_deserialization(oracle_async_store: "OracleAsyncADKStor
     assert retrieved["state"]["large_field"] == "x" * 10000
 
 
-async def test_event_content_lob_deserialization(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test event content CLOB is correctly deserialized."""
+async def test_event_json_lob_deserialization(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Test event_json CLOB is correctly deserialized."""
     session_id = _unique_session_id("event-lob")
     app_name = "test-app"
     user_id = "user-123"
@@ -229,78 +229,57 @@ async def test_event_content_lob_deserialization(oracle_async_store: "OracleAsyn
     await oracle_async_store.create_session(session_id, app_name, user_id, {})
 
     content = {"message": "x" * 5000, "data": {"nested": True}}
-    grounding_metadata = {"sources": ["a" * 1000, "b" * 1000]}
-    custom_metadata = {"tags": ["tag1", "tag2"], "priority": "high"}
-
-    event_record: EventRecord = {
-        "id": "event-1",
-        "session_id": session_id,
+    event_data = {
+        "content": content,
         "app_name": app_name,
         "user_id": user_id,
-        "author": "assistant",
-        "actions": pickle.dumps([{"name": "test", "args": {}}]),
-        "content": content,
-        "grounding_metadata": grounding_metadata,
-        "custom_metadata": custom_metadata,
-        "timestamp": datetime.now(timezone.utc),
-        "partial": False,
-        "turn_complete": True,
-        "interrupted": False,
-        "error_code": None,
-        "error_message": None,
+        "grounding_metadata": {"sources": ["a" * 1000, "b" * 1000]},
+        "custom_metadata": {"tags": ["tag1", "tag2"], "priority": "high"},
+    }
+
+    event_record: EventRecord = {
+        "session_id": session_id,
         "invocation_id": "",
-        "branch": None,
-        "long_running_tool_ids_json": None,
+        "author": "assistant",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": json.dumps(event_data),
     }
 
     await oracle_async_store.append_event(event_record)
 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
-    assert events[0]["content"] == content
-    assert events[0]["grounding_metadata"] == grounding_metadata
-    assert events[0]["custom_metadata"] == custom_metadata
+    # event_json contains all the data
+    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    assert retrieved_data["content"] == content
+    assert retrieved_data["grounding_metadata"] == {"sources": ["a" * 1000, "b" * 1000]}
+    assert retrieved_data["custom_metadata"] == {"tags": ["tag1", "tag2"], "priority": "high"}
 
 
-async def test_actions_blob_handling(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test actions BLOB is correctly read and unpickled."""
-    session_id = _unique_session_id("actions-blob")
+async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Test event_json blob is correctly stored and retrieved."""
+    session_id = _unique_session_id("event-json")
     app_name = "test-app"
     user_id = "user-123"
 
     await oracle_async_store.create_session(session_id, app_name, user_id, {})
 
-    test_actions = [{"function": "test_func", "args": {"param": "value"}, "result": 42}]
-    actions_bytes = pickle.dumps(test_actions)
+    event_data = {"function": "test_func", "args": {"param": "value"}, "result": 42}
 
     event_record: EventRecord = {
-        "id": "event-actions",
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
-        "author": "user",
-        "actions": actions_bytes,
-        "content": None,
-        "grounding_metadata": None,
-        "custom_metadata": None,
-        "timestamp": datetime.now(timezone.utc),
-        "partial": None,
-        "turn_complete": None,
-        "interrupted": None,
-        "error_code": None,
-        "error_message": None,
         "invocation_id": "",
-        "branch": None,
-        "long_running_tool_ids_json": None,
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": json.dumps(event_data),
     }
 
     await oracle_async_store.append_event(event_record)
 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
-    assert events[0]["actions"] == actions_bytes
-    unpickled = pickle.loads(events[0]["actions"])
-    assert unpickled == test_actions
+    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    assert retrieved_data == event_data
 
 
 def test_state_lob_deserialization_sync(oracle_sync_store: "OracleSyncADKStore") -> None:
@@ -318,80 +297,61 @@ def test_state_lob_deserialization_sync(oracle_sync_store: "OracleSyncADKStore")
     assert retrieved["state"] == state
 
 
-async def test_boolean_fields_conversion(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test partial, turn_complete, interrupted converted to NUMBER(1)."""
-    session_id = _unique_session_id("bool-session")
+async def test_event_record_5_column_contract(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Test the new 5-column EventRecord contract with append_event."""
+    session_id = _unique_session_id("5col-session")
     app_name = "test-app"
     user_id = "user-123"
 
     await oracle_async_store.create_session(session_id, app_name, user_id, {})
 
     event_record: EventRecord = {
-        "id": "bool-event-1",
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
+        "invocation_id": "inv-001",
         "author": "assistant",
-        "actions": b"",
-        "content": None,
-        "grounding_metadata": None,
-        "custom_metadata": None,
         "timestamp": datetime.now(timezone.utc),
-        "partial": True,
-        "turn_complete": False,
-        "interrupted": True,
-        "error_code": None,
-        "error_message": None,
-        "invocation_id": "",
-        "branch": None,
-        "long_running_tool_ids_json": None,
+        "event_json": json.dumps({
+            "content": {"text": "Hello"},
+            "partial": True,
+            "turn_complete": False,
+            "interrupted": True,
+        }),
     }
 
     await oracle_async_store.append_event(event_record)
 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
-    assert events[0]["partial"] is True
-    assert events[0]["turn_complete"] is False
-    assert events[0]["interrupted"] is True
+    assert events[0]["session_id"] == session_id
+    assert events[0]["invocation_id"] == "inv-001"
+    assert events[0]["author"] == "assistant"
+
+    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    assert retrieved_data["partial"] is True
+    assert retrieved_data["turn_complete"] is False
+    assert retrieved_data["interrupted"] is True
 
 
-async def test_boolean_fields_none_values(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test None values for boolean fields."""
-    session_id = _unique_session_id("bool-none-session")
+async def test_event_with_none_values(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Test event with minimal event_json content."""
+    session_id = _unique_session_id("none-session")
     app_name = "test-app"
     user_id = "user-123"
 
     await oracle_async_store.create_session(session_id, app_name, user_id, {})
 
     event_record: EventRecord = {
-        "id": "bool-event-none",
         "session_id": session_id,
-        "app_name": app_name,
-        "user_id": user_id,
-        "author": "user",
-        "actions": b"",
-        "content": None,
-        "grounding_metadata": None,
-        "custom_metadata": None,
-        "timestamp": datetime.now(timezone.utc),
-        "partial": None,
-        "turn_complete": None,
-        "interrupted": None,
-        "error_code": None,
-        "error_message": None,
         "invocation_id": "",
-        "branch": None,
-        "long_running_tool_ids_json": None,
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": json.dumps({"app_name": app_name}),
     }
 
     await oracle_async_store.append_event(event_record)
 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
-    assert events[0]["partial"] is None
-    assert events[0]["turn_complete"] is None
-    assert events[0]["interrupted"] is None
 
 
 async def test_create_session_with_owner_id(oracle_store_with_fk: "OracleAsyncADKStore") -> None:
@@ -465,7 +425,7 @@ async def test_json_fields_stored_and_retrieved(oracle_async_store: "OracleAsync
         "complex": {
             "nested": {"deep": {"structure": "value"}},
             "array": [1, 2, 3, {"key": "value"}],
-            "unicode": "こんにちは世界",
+            "unicode": "日本語テスト",
             "special_chars": "test@example.com | value > 100",
         }
     }
@@ -476,7 +436,7 @@ async def test_json_fields_stored_and_retrieved(oracle_async_store: "OracleAsync
     retrieved = await oracle_async_store.get_session(session_id)
     assert retrieved is not None
     assert retrieved["state"] == state
-    assert retrieved["state"]["complex"]["unicode"] == "こんにちは世界"
+    assert retrieved["state"]["complex"]["unicode"] == "日本語テスト"
 
 
 def test_create_session_with_owner_id_sync(oracle_store_sync_with_fk: "OracleSyncADKStore") -> None:
