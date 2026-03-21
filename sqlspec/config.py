@@ -35,7 +35,11 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "ADKCompressionConfig",
     "ADKConfig",
+    "ADKPartitionConfig",
+    "ADKRetentionConfig",
+    "ADKSqliteOptimizationConfig",
     "AsyncConfigT",
     "AsyncDatabaseConfig",
     "ConfigT",
@@ -374,6 +378,178 @@ class FastAPIConfig(StarletteConfig):
     """
 
 
+class ADKPartitionConfig(TypedDict):
+    """Configuration for table partitioning and sharding strategies.
+
+    Controls how ADK tables are partitioned across backends that support it.
+    Backends without native partitioning support ignore these settings.
+
+    Example:
+        extension_config={
+            "adk": {
+                "partitioning": {
+                    "strategy": "range",
+                    "partition_key": "created_at",
+                    "interval": "month",
+                }
+            }
+        }
+    """
+
+    strategy: NotRequired[Literal["range", "list", "hash"]]
+    """Partitioning strategy. Default: None (no partitioning).
+
+    - range: Partition by range of values (e.g., time-based)
+    - list: Partition by discrete value lists
+    - hash: Partition by hash of the partition key
+
+    Supported by: PostgreSQL, MySQL 8+, Oracle, BigQuery, Spanner.
+    Ignored by: SQLite, DuckDB.
+    """
+
+    partition_key: NotRequired[str]
+    """Column name used as the partition key.
+
+    For range partitioning with time-based data, this is typically a timestamp column
+    like 'created_at'. For hash partitioning, this is typically the primary key.
+    """
+
+    interval: NotRequired[str]
+    """Partition interval for range partitioning.
+
+    Examples: 'day', 'week', 'month', 'year'.
+    Only meaningful when strategy is 'range'.
+    """
+
+
+class ADKRetentionConfig(TypedDict):
+    """Configuration for data retention and TTL policies.
+
+    Controls automatic cleanup of expired data. Backends with native TTL support
+    (CockroachDB Row-Level TTL, Spanner Row Deletion Policy) use database-level
+    enforcement. Others fall back to application-level sweep queries.
+
+    Example:
+        extension_config={
+            "adk": {
+                "retention": {
+                    "session_ttl_seconds": 86400,
+                    "event_ttl_seconds": 604800,
+                    "memory_ttl_seconds": 0,
+                }
+            }
+        }
+    """
+
+    session_ttl_seconds: NotRequired[int]
+    """TTL for session records in seconds. Default: 0 (no expiry).
+
+    When set, sessions older than this threshold are eligible for cleanup.
+    Backends with native TTL (CockroachDB, Spanner) enforce this at the database level.
+    Others require application-level cleanup via periodic sweep.
+    """
+
+    event_ttl_seconds: NotRequired[int]
+    """TTL for event records in seconds. Default: 0 (no expiry).
+
+    When set, events older than this threshold are eligible for cleanup.
+    """
+
+    memory_ttl_seconds: NotRequired[int]
+    """TTL for memory entries in seconds. Default: 0 (no expiry).
+
+    When set, memory entries older than this threshold are eligible for cleanup.
+    """
+
+    sweep_interval_seconds: NotRequired[int]
+    """Interval between application-level cleanup sweeps in seconds. Default: 3600 (1 hour).
+
+    Only used when the backend does not support native TTL enforcement.
+    Set to 0 to disable automatic sweeps (manual cleanup only).
+    """
+
+
+class ADKCompressionConfig(TypedDict):
+    """Configuration for table-level compression.
+
+    Controls compression of ADK table storage. Support and algorithms vary by backend.
+
+    Example:
+        extension_config={
+            "adk": {
+                "compression": {
+                    "enabled": True,
+                    "algorithm": "zstd",
+                }
+            }
+        }
+    """
+
+    enabled: NotRequired[bool]
+    """Enable table compression. Default: False.
+
+    When True, adapters that support table-level compression will apply it
+    during table creation.
+    """
+
+    algorithm: NotRequired[str]
+    """Compression algorithm name. Backend-specific.
+
+    Examples:
+        - PostgreSQL (with TOAST): 'pglz', 'lz4' (PG14+)
+        - MySQL/InnoDB: 'zlib'
+        - Oracle: 'basic', 'oltp', 'query_high', 'archive_high'
+        - DuckDB: 'zstd', 'snappy'
+
+    When omitted, the backend default is used.
+    """
+
+    level: NotRequired[int]
+    """Compression level (where supported). Higher levels trade CPU for space savings.
+
+    Valid ranges depend on the algorithm and backend.
+    """
+
+
+class ADKSqliteOptimizationConfig(TypedDict):
+    """SQLite-specific PRAGMA optimization settings.
+
+    Controls SQLite performance tuning parameters applied at connection time.
+    These settings are ignored by non-SQLite adapters.
+
+    Example:
+        extension_config={
+            "adk": {
+                "sqlite_optimization": {
+                    "cache_size": -64000,
+                    "mmap_size": 31457280,
+                    "journal_size_limit": 67108864,
+                }
+            }
+        }
+    """
+
+    cache_size: NotRequired[int]
+    """SQLite page cache size. Default: -64000 (64 MB, negative means KiB).
+
+    Larger caches reduce disk I/O for read-heavy workloads.
+    Negative values specify size in KiB; positive values specify page count.
+    """
+
+    mmap_size: NotRequired[int]
+    """SQLite memory-mapped I/O size in bytes. Default: 31457280 (30 MB).
+
+    Enables memory-mapped I/O for faster reads. Set to 0 to disable.
+    """
+
+    journal_size_limit: NotRequired[int]
+    """SQLite journal file size limit in bytes. Default: 67108864 (64 MB).
+
+    Limits the size of the WAL or rollback journal file.
+    Prevents unbounded journal growth in write-heavy workloads.
+    """
+
+
 class ADKConfig(TypedDict):
     """Configuration options for ADK session and memory store extension.
 
@@ -584,6 +760,98 @@ class ADKConfig(TypedDict):
 
     expires_index_options: NotRequired[str]
     """Adapter-specific options for the expires/index used in ADK stores."""
+
+    # --- Capability-based configuration (Chapter 2: schema-capability-config) ---
+
+    fts_language: NotRequired[str]
+    """Language configuration for full-text search indexing. Default: 'english'.
+
+    Controls the language dictionary/stemmer used by FTS implementations:
+    - PostgreSQL: to_tsvector/to_tsquery language parameter
+    - SQLite FTS5: tokenizer language for unicode61/porter
+    - MySQL: FULLTEXT parser language (with ngram for CJK on 5.7.6+)
+    - Oracle: CTXSYS.CONTEXT lexer language
+    - Spanner: TOKENIZE_FULLTEXT language parameter
+    - DuckDB: FTS stemmer language
+
+    Only takes effect when ``memory_use_fts`` is True.
+
+    Common values: 'english', 'simple', 'german', 'french', 'spanish',
+    'portuguese', 'italian', 'dutch', 'russian', 'chinese', 'japanese', 'korean'.
+
+    Notes:
+        Available languages vary by backend. Backends that do not support the
+        specified language will fall back to 'simple' or 'english'.
+    """
+
+    artifact_storage_uri: NotRequired[str]
+    """Base URI for artifact content storage. Default: None (store inline in database).
+
+    When set, large artifact payloads are stored externally and only metadata
+    is kept in the database. The URI scheme determines the storage backend:
+    - ``file:///path/to/artifacts`` — local filesystem
+    - ``s3://bucket/prefix`` — AWS S3 or S3-compatible storage
+    - ``gs://bucket/prefix`` — Google Cloud Storage
+    - ``az://container/prefix`` — Azure Blob Storage
+
+    When None, artifact content is stored inline in the database tables,
+    which is suitable for small payloads but may cause performance issues
+    with large binary artifacts.
+
+    Integrates with the ``StorageRegistry`` for pluggable storage backends.
+    """
+
+    schema_version: NotRequired[int]
+    """Explicit schema version for ADK tables. Default: None (auto-detect).
+
+    When set, locks the ADK schema to a specific version. This is useful for:
+    - Preventing automatic schema upgrades in production
+    - Pinning to a known-good schema during testing
+    - Coordinating schema changes across multiple application instances
+
+    When None, the ADK extension auto-detects the current schema version
+    and applies any pending upgrades during initialization.
+
+    Notes:
+        Schema versions are monotonically increasing integers managed by
+        the ADK extension migration system. Setting this to a version
+        lower than the current database schema will raise a configuration
+        error at startup.
+    """
+
+    partitioning: NotRequired[ADKPartitionConfig]
+    """Table partitioning configuration. Default: None (no partitioning).
+
+    Controls how ADK tables are partitioned for improved query performance
+    and data management at scale. See ``ADKPartitionConfig`` for options.
+
+    Supported by: PostgreSQL, MySQL 8+, Oracle, BigQuery, Spanner.
+    Ignored by: SQLite, DuckDB.
+    """
+
+    retention: NotRequired[ADKRetentionConfig]
+    """Data retention and TTL configuration. Default: None (no automatic cleanup).
+
+    Controls automatic expiry and cleanup of old session, event, and memory data.
+    See ``ADKRetentionConfig`` for options.
+
+    Backends with native TTL (CockroachDB, Spanner) use database-level enforcement.
+    Others fall back to application-level sweep queries.
+    """
+
+    compression: NotRequired[ADKCompressionConfig]
+    """Table compression configuration. Default: None (no compression).
+
+    Controls table-level compression for ADK tables.
+    See ``ADKCompressionConfig`` for options.
+    """
+
+    sqlite_optimization: NotRequired[ADKSqliteOptimizationConfig]
+    """SQLite-specific PRAGMA optimization settings. Default: None (SQLite defaults).
+
+    Controls SQLite performance tuning parameters. Ignored by non-SQLite adapters.
+    See ``ADKSqliteOptimizationConfig`` for options.
+    """
 
 
 class EventsConfig(TypedDict):
