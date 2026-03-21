@@ -38,4 +38,4 @@ class EventRecord(TypedDict):
     invocation_id: str
     author: str
     timestamp: datetime
-    event_json: str
+    event_json: "dict[str, Any]"

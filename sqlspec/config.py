@@ -805,7 +805,6 @@ class ADKConfig(TypedDict):
         specified language will fall back to 'simple' or 'english'.
     """
 
-    artifact_storage_uri: NotRequired[str]
     """Base URI for artifact content storage. Default: None (store inline in database).
 
     When set, large artifact payloads are stored externally and only metadata

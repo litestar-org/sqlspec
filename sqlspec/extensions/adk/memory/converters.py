@@ -99,10 +99,7 @@ def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_
 
 
 def memory_entry_to_record(
-    entry: "MemoryEntry",
-    app_name: str,
-    user_id: str,
-    extra_metadata: "dict[str, Any] | None" = None,
+    entry: "MemoryEntry", app_name: str, user_id: str, extra_metadata: "dict[str, Any] | None" = None
 ) -> "MemoryRecord | None":
     """Convert an ADK MemoryEntry to a database record.
 

@@ -87,7 +87,9 @@ def test_sqlite_dialect_event_operations(sqlite_store: Any) -> None:
 
     events = sqlite_store.list_events(session_id)
     assert len(events) == 1
-    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    retrieved_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
     assert retrieved_data["content"] == content
 
 

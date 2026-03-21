@@ -8,9 +8,11 @@ import pymysql
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlspec.adapters.pymysql.config import PyMysqlConfig
     from sqlspec.extensions.adk import MemoryRecord
 
@@ -104,9 +106,8 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
 
     def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_sessions_table_sql())
-            driver.execute_script(self._get_create_events_table_sql())
-
+            driver.execute_script(run_(self._get_create_sessions_table_sql)())
+            driver.execute_script(run_(self._get_create_events_table_sql)())
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -139,12 +140,11 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.close()
             conn.commit()
 
-        result = self.get_session(session_id)
+        result = self._get_session(session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
-
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -186,7 +186,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 return None
             raise
 
-
     async def get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID."""
         return await async_(self._get_session)(session_id)
@@ -208,7 +207,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.close()
             conn.commit()
 
-
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
         await async_(self._update_session_state)(session_id, state)
@@ -223,7 +221,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
             finally:
                 cursor.close()
             conn.commit()
-
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and associated events."""
@@ -271,7 +268,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
-
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
@@ -324,7 +320,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.close()
             conn.commit()
 
-
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
     ) -> None:
@@ -373,8 +368,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 return []
             raise
 
-
-
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -388,6 +381,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
         await async_(self._append_event)(event_record)
+
 
 class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
     """MySQL/MariaDB ADK memory store using PyMySQL."""
@@ -436,8 +430,7 @@ class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
-
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -509,7 +502,6 @@ class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
             conn.commit()
         return inserted_count
 
-
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         return await async_(self._insert_memory_entries)(entries, owner_id)
@@ -554,7 +546,6 @@ class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
 
         return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
 
-
     async def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -575,7 +566,6 @@ class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -598,7 +588,6 @@ class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-
 
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""

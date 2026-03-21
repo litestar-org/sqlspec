@@ -1,6 +1,5 @@
 """SQLSpec-backed memory service for Google ADK."""
 
-from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
@@ -13,6 +12,8 @@ from sqlspec.extensions.adk.memory.converters import (
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from google.adk.events.event import Event
     from google.adk.memory.memory_entry import MemoryEntry
     from google.adk.sessions import Session
@@ -138,10 +139,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         records = []
         for event in events:
             record = event_to_memory_record(
-                event=event,
-                session_id=session_id or "",
-                app_name=app_name,
-                user_id=user_id,
+                event=event, session_id=session_id or "", app_name=app_name, user_id=user_id
             )
             if record is not None:
                 if metadata_dict:
@@ -150,20 +148,13 @@ class SQLSpecMemoryService(BaseMemoryService):
 
         if not records:
             logger.debug(
-                "No content to store for events (app=%s, user=%s, count=%d)",
-                app_name,
-                user_id,
-                len(list(events)),
+                "No content to store for events (app=%s, user=%s, count=%d)", app_name, user_id, len(list(events))
             )
             return
 
         inserted_count = await self._store.insert_memory_entries(records)
         logger.debug(
-            "Stored %d memory entries from %d events (app=%s, user=%s)",
-            inserted_count,
-            len(records),
-            app_name,
-            user_id,
+            "Stored %d memory entries from %d events (app=%s, user=%s)", inserted_count, len(records), app_name, user_id
         )
 
     async def add_memory(
@@ -192,10 +183,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         records = []
         for entry in memories:
             record = memory_entry_to_record(
-                entry=entry,
-                app_name=app_name,
-                user_id=user_id,
-                extra_metadata=call_metadata,
+                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata
             )
             if record is not None:
                 records.append(record)

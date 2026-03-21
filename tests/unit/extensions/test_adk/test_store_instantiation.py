@@ -18,7 +18,7 @@ ASYNC_SESSION_STORES = [
     "sqlspec.adapters.asyncpg.adk.store.AsyncpgADKStore",
     "sqlspec.adapters.aiosqlite.adk.store.AiosqliteADKStore",
     "sqlspec.adapters.asyncmy.adk.store.AsyncmyADKStore",
-"sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKStore",
+    "sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKStore",
     "sqlspec.adapters.cockroach_psycopg.adk.store.CockroachPsycopgAsyncADKStore",
     "sqlspec.adapters.mysqlconnector.adk.store.MysqlConnectorAsyncADKStore",
     "sqlspec.adapters.oracledb.adk.store.OracleAsyncADKStore",
@@ -45,7 +45,7 @@ ASYNC_MEMORY_STORES = [
     "sqlspec.adapters.asyncpg.adk.store.AsyncpgADKMemoryStore",
     "sqlspec.adapters.aiosqlite.adk.store.AiosqliteADKMemoryStore",
     "sqlspec.adapters.asyncmy.adk.store.AsyncmyADKMemoryStore",
-"sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKMemoryStore",
+    "sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKMemoryStore",
     "sqlspec.adapters.cockroach_psycopg.adk.store.CockroachPsycopgAsyncADKMemoryStore",
     "sqlspec.adapters.mysqlconnector.adk.store.MysqlConnectorAsyncADKMemoryStore",
     "sqlspec.adapters.oracledb.adk.store.OracleAsyncADKMemoryStore",
@@ -66,12 +66,7 @@ SYNC_MEMORY_STORES = [
     "sqlspec.adapters.sqlite.adk.store.SqliteADKMemoryStore",
 ]
 
-ALL_STORE_CLASSES = (
-    ASYNC_SESSION_STORES
-    + SYNC_SESSION_STORES
-    + ASYNC_MEMORY_STORES
-    + SYNC_MEMORY_STORES
-)
+ALL_STORE_CLASSES = ASYNC_SESSION_STORES + SYNC_SESSION_STORES + ASYNC_MEMORY_STORES + SYNC_MEMORY_STORES
 
 
 @pytest.mark.parametrize("class_path", ALL_STORE_CLASSES)

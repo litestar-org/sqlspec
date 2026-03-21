@@ -12,7 +12,6 @@ The store is mocked — no database required.
 import importlib.util
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -24,7 +23,6 @@ from google.adk.events.event_actions import EventActions
 from google.adk.sessions.session import Session
 
 from sqlspec.extensions.adk.service import SQLSpecSessionService
-
 
 # ---------------------------------------------------------------------------
 # Mock store
@@ -56,13 +54,13 @@ class MockStore:
             "update_time": datetime.now(timezone.utc),
         }
 
-    async def append_event_and_update_state(
-        self, event_record: Any, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    async def append_event_and_update_state(self, event_record: Any, session_id: str, state: "dict[str, Any]") -> None:
         self.append_event_and_update_state_called = True
-        self.append_event_and_update_state_calls.append(
-            {"event_record": event_record, "session_id": session_id, "state": state}
-        )
+        self.append_event_and_update_state_calls.append({
+            "event_record": event_record,
+            "session_id": session_id,
+            "state": state,
+        })
 
     async def get_session(self, session_id: str) -> "dict[str, Any] | None":
         return self._session_record
@@ -70,9 +68,12 @@ class MockStore:
     async def create_session(
         self, *, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        self.create_session_calls.append(
-            {"session_id": session_id, "app_name": app_name, "user_id": user_id, "state": state}
-        )
+        self.create_session_calls.append({
+            "session_id": session_id,
+            "app_name": app_name,
+            "user_id": user_id,
+            "state": state,
+        })
         return {
             "id": session_id,
             "app_name": app_name,
@@ -102,11 +103,7 @@ class MockStore:
 
 
 def _make_session(
-    *,
-    session_id: str = "s1",
-    app_name: str = "app",
-    user_id: str = "u1",
-    state: "dict | None" = None,
+    *, session_id: str = "s1", app_name: str = "app", user_id: str = "u1", state: "dict | None" = None
 ) -> Session:
     return Session(
         id=session_id,
@@ -118,11 +115,7 @@ def _make_session(
 
 
 def _make_event(
-    *,
-    invocation_id: str = "inv-1",
-    author: str = "model",
-    state_delta: "dict | None" = None,
-    partial: bool = False,
+    *, invocation_id: str = "inv-1", author: str = "model", state_delta: "dict | None" = None, partial: bool = False
 ) -> Event:
     actions = EventActions(state_delta=state_delta or {})
     return Event(
@@ -274,9 +267,7 @@ async def test_create_session_strips_temp_keys_from_initial_state() -> None:
     store = MockStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
 
-    await service.create_session(
-        app_name="app", user_id="u1", state={"x": 1, "temp:y": 2, "app:z": 3}
-    )
+    await service.create_session(app_name="app", user_id="u1", state={"x": 1, "temp:y": 2, "app:z": 3})
 
     assert len(store.create_session_calls) == 1
     persisted_state = store.create_session_calls[0]["state"]

@@ -59,14 +59,7 @@ def test_create_and_list_events(spanner_adk_store: Any) -> None:
     spanner_adk_store.create_session(session_id, "app", "user", {"x": 1})
 
     spanner_adk_store.create_event("event-1", session_id, "app", "user", author="user", content={"msg": "hi"})
-    spanner_adk_store.create_event(
-        "event-2",
-        session_id,
-        "app",
-        "user",
-        author="assistant",
-        content={"msg": "ok"},
-    )
+    spanner_adk_store.create_event("event-2", session_id, "app", "user", author="assistant", content={"msg": "ok"})
 
     events = spanner_adk_store.list_events(session_id)
     assert len(events) == 2
@@ -74,7 +67,11 @@ def test_create_and_list_events(spanner_adk_store: Any) -> None:
     assert events[1]["author"] == "assistant"
 
     # Content is inside event_json in the new 5-column schema
-    event0_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
-    event1_data = json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+    event0_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
+    event1_data = (
+        json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+    )
     assert event0_data["content"] == {"msg": "hi"}
     assert event1_data["content"] == {"msg": "ok"}

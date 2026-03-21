@@ -727,8 +727,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         with self._config.provide_session() as driver:
             self._enable_foreign_keys(driver.connection)
-            driver.execute_script(self._get_create_memory_table_sql())
-
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -818,7 +817,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         return inserted_count
 
-
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         return await async_(self._insert_memory_entries)(entries, owner_id)
@@ -852,7 +850,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             except Exception as exc:  # pragma: no cover - defensive fallback
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
-
 
     async def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
@@ -931,7 +928,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         return deleted_count
 
-
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return await async_(self._delete_entries_by_session)(session_id)
@@ -958,7 +954,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             conn.commit()
 
         return deleted_count
-
 
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""

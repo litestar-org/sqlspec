@@ -185,7 +185,11 @@ def test_create_event(duckdb_adk_store: DuckdbADKStore) -> None:
     assert "event_json" in created_event
 
     # Content is stored inside event_json
-    event_data = json.loads(created_event["event_json"]) if isinstance(created_event["event_json"], str) else created_event["event_json"]
+    event_data = (
+        json.loads(created_event["event_json"])
+        if isinstance(created_event["event_json"], str)
+        else created_event["event_json"]
+    )
     assert event_data["content"] == content
 
 
@@ -362,7 +366,9 @@ def test_event_json_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
 
     events = duckdb_adk_store.list_events(session_id)
     assert len(events) == 1
-    event_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    event_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
     assert event_data["content"] == {"data": "value"}
 
 

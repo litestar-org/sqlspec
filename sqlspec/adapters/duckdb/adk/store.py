@@ -410,9 +410,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        event_json_value = event_record["event_json"]
-        if not isinstance(event_json_value, str):
-            event_json_value = to_json(event_json_value)
+        event_json_str = to_json(event_record["event_json"])
 
         sql = f"""
         INSERT INTO {self._events_table}
@@ -428,7 +426,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                     event_record["invocation_id"],
                     event_record["author"],
                     event_record["timestamp"],
-                    event_json_value,
+                    event_json_str,
                 ),
             )
             conn.commit()
@@ -448,9 +446,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         """Synchronous implementation of append_event_and_update_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
-        event_json_value = event_record["event_json"]
-        if not isinstance(event_json_value, str):
-            event_json_value = to_json(event_json_value)
+        event_json_str = to_json(event_record["event_json"])
 
         insert_sql = f"""
         INSERT INTO {self._events_table}
@@ -472,7 +468,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                     event_record["invocation_id"],
                     event_record["author"],
                     event_record["timestamp"],
-                    event_json_value,
+                    event_json_str,
                 ),
             )
             conn.execute(update_sql, (state_json, now, session_id))
@@ -526,7 +522,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                         invocation_id=row[1],
                         author=row[2],
                         timestamp=row[3],
-                        event_json=row[4] if isinstance(row[4], str) else to_json(row[4]),
+                        event_json=from_json(row[4]) if isinstance(row[4], str) else row[4],
                     )
                     for row in rows
                 ]

@@ -159,7 +159,9 @@ def test_event_json_fields(adbc_store: Any, session_fixture: Any) -> None:
     assert event_data["custom_metadata"] == complex_custom
 
     events = adbc_store.list_events(session_fixture["session_id"])
-    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    retrieved_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
     assert retrieved_data["content"] == complex_content
     assert retrieved_data["grounding_metadata"] == complex_grounding
     assert retrieved_data["custom_metadata"] == complex_custom

@@ -31,7 +31,6 @@ from sqlspec.extensions.adk.converters import (
     split_scoped_state,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -66,11 +65,7 @@ def _make_event(
 
 
 def _make_session(
-    *,
-    session_id: str = "session-1",
-    app_name: str = "test-app",
-    user_id: str = "user-1",
-    state: "dict | None" = None,
+    *, session_id: str = "session-1", app_name: str = "test-app", user_id: str = "user-1", state: "dict | None" = None
 ) -> Session:
     return Session(
         id=session_id,
@@ -183,29 +178,19 @@ def test_split_scoped_state_preserves_full_key_names() -> None:
 
 def test_merge_scoped_state_combines_all_buckets() -> None:
     """All three buckets appear in the merged result."""
-    merged = merge_scoped_state(
-        session_state={"key": "s"},
-        app_state={"app:x": "a"},
-        user_state={"user:y": "u"},
-    )
+    merged = merge_scoped_state(session_state={"key": "s"}, app_state={"app:x": "a"}, user_state={"user:y": "u"})
     assert merged == {"key": "s", "app:x": "a", "user:y": "u"}
 
 
 def test_merge_scoped_state_overlay_priority_app_over_session() -> None:
     """app_state overlays session_state for the same key."""
-    merged = merge_scoped_state(
-        session_state={"app:x": "old"},
-        app_state={"app:x": "new"},
-    )
+    merged = merge_scoped_state(session_state={"app:x": "old"}, app_state={"app:x": "new"})
     assert merged["app:x"] == "new"
 
 
 def test_merge_scoped_state_overlay_priority_user_over_session() -> None:
     """user_state overlays session_state for the same key."""
-    merged = merge_scoped_state(
-        session_state={"user:y": "session_val"},
-        user_state={"user:y": "user_val"},
-    )
+    merged = merge_scoped_state(session_state={"user:y": "session_val"}, user_state={"user:y": "user_val"})
     assert merged["user:y"] == "user_val"
 
 
@@ -218,11 +203,7 @@ def test_merge_scoped_state_no_app_no_user() -> None:
 
 def test_merge_scoped_state_empty_session_state() -> None:
     """Empty session_state with app/user state returns combined app+user keys."""
-    merged = merge_scoped_state(
-        session_state={},
-        app_state={"app:a": 1},
-        user_state={"user:b": 2},
-    )
+    merged = merge_scoped_state(session_state={}, app_state={"app:a": 1}, user_state={"user:b": 2})
     assert merged == {"app:a": 1, "user:b": 2}
 
 
@@ -378,13 +359,7 @@ def test_record_to_event_roundtrip_preserves_turn_complete() -> None:
 def test_record_to_event_roundtrip_preserves_timestamp() -> None:
     """timestamp survives the round-trip within float precision."""
     fixed_ts = datetime(2024, 6, 1, 10, 30, 0, tzinfo=timezone.utc).timestamp()
-    event = Event(
-        id="ts-evt",
-        invocation_id="inv-1",
-        author="user",
-        actions=EventActions(),
-        timestamp=fixed_ts,
-    )
+    event = Event(id="ts-evt", invocation_id="inv-1", author="user", actions=EventActions(), timestamp=fixed_ts)
     record = event_to_record(event, "s1")
     restored = record_to_event(record)
 

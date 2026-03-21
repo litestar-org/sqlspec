@@ -250,7 +250,9 @@ async def test_event_json_lob_deserialization(oracle_async_store: "OracleAsyncAD
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
     # event_json contains all the data
-    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    retrieved_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
     assert retrieved_data["content"] == content
     assert retrieved_data["grounding_metadata"] == {"sources": ["a" * 1000, "b" * 1000]}
     assert retrieved_data["custom_metadata"] == {"tags": ["tag1", "tag2"], "priority": "high"}
@@ -278,7 +280,9 @@ async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> 
 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
-    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    retrieved_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
     assert retrieved_data == event_data
 
 
@@ -326,7 +330,9 @@ async def test_event_record_5_column_contract(oracle_async_store: "OracleAsyncAD
     assert events[0]["invocation_id"] == "inv-001"
     assert events[0]["author"] == "assistant"
 
-    retrieved_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    retrieved_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
     assert retrieved_data["partial"] is True
     assert retrieved_data["turn_complete"] is False
     assert retrieved_data["interrupted"] is True

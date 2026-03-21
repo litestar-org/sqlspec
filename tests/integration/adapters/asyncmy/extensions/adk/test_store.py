@@ -197,8 +197,12 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
     assert events[0]["author"] == "user"
     assert events[1]["author"] == "assistant"
     # Content is inside event_json
-    event0_data = json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
-    event1_data = json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+    event0_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+    )
+    event1_data = (
+        json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+    )
     assert event0_data["content"]["text"] == "Hello"
     assert event1_data["content"]["text"] == "Hi there"
 

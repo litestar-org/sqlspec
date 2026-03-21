@@ -224,15 +224,15 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         async with self.config.provide_connection() as conn, conn.transaction():
-                await conn.execute(
-                    insert_sql,
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["author"],
-                    event_record["timestamp"],
-                    event_record["event_json"],
-                )
-                await conn.execute(update_sql, state, session_id)
+            await conn.execute(
+                insert_sql,
+                event_record["session_id"],
+                event_record["invocation_id"],
+                event_record["author"],
+                event_record["timestamp"],
+                event_record["event_json"],
+            )
+            await conn.execute(update_sql, state, session_id)
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None

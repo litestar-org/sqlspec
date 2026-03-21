@@ -216,7 +216,9 @@ class SQLSpecSessionService(BaseSessionService):
         # Strip temp: keys before persisting state
         durable_state = filter_temp_state(session.state)
 
-        await self._store.append_event_and_update_state(event_record=event_record, session_id=session.id, state=durable_state)
+        await self._store.append_event_and_update_state(
+            event_record=event_record, session_id=session.id, state=durable_state
+        )
         log_with_context(
             logger,
             logging.DEBUG,

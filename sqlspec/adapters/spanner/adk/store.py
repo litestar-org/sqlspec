@@ -11,7 +11,7 @@ from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
@@ -131,7 +131,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "update_time": datetime.now(timezone.utc),
         }
 
-
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
@@ -164,7 +163,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         }
         return record
 
-
     async def get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID."""
         return await async_(self._get_session)(session_id)
@@ -180,7 +178,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
         self._run_write([(sql, params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type})])
-
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
@@ -217,7 +214,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             records.append(record)
         return records
 
-
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
         return await async_(self._list_sessions)(app_name, user_id)
@@ -231,7 +227,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         params = {"session_id": session_id}
         types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
-
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and associated events."""
@@ -277,7 +272,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
         ])
 
-
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
     ) -> None:
@@ -309,7 +303,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             for row in rows
         ]
 
-
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -330,13 +323,12 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._session_table not in existing_tables:
-            ddl_statements.append(self._get_create_sessions_table_sql())
+            ddl_statements.append(run_(self._get_create_sessions_table_sql)())
         if self._events_table not in existing_tables:
-            ddl_statements.append(self._get_create_events_table_sql())
+            ddl_statements.append(run_(self._get_create_events_table_sql)())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
-
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -479,11 +471,10 @@ class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._memory_table not in existing_tables:
-            ddl_statements.extend(self._get_create_memory_table_sql())
+            ddl_statements.extend(run_(self._get_create_memory_table_sql)())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
-
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -598,7 +589,6 @@ CREATE TABLE {self._memory_table} (
             self._run_write(statements)
         return inserted_count
 
-
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         return await async_(self._insert_memory_entries)(entries, owner_id)
@@ -620,7 +610,6 @@ CREATE TABLE {self._memory_table} (
         if self._use_fts:
             return self._search_entries_fts(query, app_name, user_id, effective_limit)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
-
 
     async def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
@@ -677,7 +666,6 @@ CREATE TABLE {self._memory_table} (
         types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         return self._execute_update(sql, params, types)
 
-
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return await async_(self._delete_entries_by_session)(session_id)
@@ -688,7 +676,6 @@ CREATE TABLE {self._memory_table} (
         params = {"cutoff": cutoff}
         types = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}
         return self._execute_update(sql, params, types)
-
 
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""

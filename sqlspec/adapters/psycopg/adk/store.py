@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -406,9 +406,8 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
     def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_sessions_table_sql())
-            driver.execute_script(self._get_create_events_table_sql())
-
+            driver.execute_script(run_(self._get_create_sessions_table_sql)())
+            driver.execute_script(run_(self._get_create_events_table_sql)())
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -436,8 +435,11 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, params)
 
-        return self.get_session(session_id)  # type: ignore[return-value]
-
+        result = self._get_session(session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -471,7 +473,6 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-
     async def get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID."""
         return await async_(self._get_session)(session_id)
@@ -486,7 +487,6 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (Jsonb(state), session_id))
 
-
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
         await async_(self._update_session_state)(session_id, state)
@@ -496,7 +496,6 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (session_id,))
-
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and associated events."""
@@ -539,7 +538,6 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
         return await async_(self._list_sessions)(app_name, user_id)
@@ -576,7 +574,6 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             cur.execute(update_query, (Jsonb(state), session_id))
             conn.commit()
 
-
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
     ) -> None:
@@ -611,8 +608,6 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-
-
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -626,6 +621,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
         await async_(self._append_event)(event_record)
+
 
 class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
     """PostgreSQL ADK memory store using Psycopg3 async driver."""
@@ -868,8 +864,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
-
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -920,7 +915,6 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
 
         return inserted_count
 
-
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         return await async_(self._insert_memory_entries)(entries, owner_id)
@@ -944,7 +938,6 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
-
 
     async def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
@@ -1002,7 +995,6 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql, (session_id,))
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
-
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return await async_(self._delete_entries_by_session)(session_id)
@@ -1020,11 +1012,10 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql)
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
-
-
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         return await async_(self._delete_entries_older_than)(days)
+
 
 def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":
     return [
