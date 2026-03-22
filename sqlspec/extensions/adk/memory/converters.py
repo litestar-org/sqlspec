@@ -19,15 +19,22 @@ if TYPE_CHECKING:
 
 logger = get_logger("sqlspec.extensions.adk.memory.converters")
 
-__all__ = ("event_to_memory_record", "extract_content_text", "record_to_memory_entry", "session_to_memory_records")
+__all__ = (
+    "event_to_memory_record",
+    "extract_content_text",
+    "memory_entry_to_record",
+    "record_to_memory_entry",
+    "records_to_memory_entries",
+    "session_to_memory_records",
+)
 
 
 def extract_content_text(content: "types.Content") -> str:
     """Extract plain text from ADK Content for search indexing.
 
     Handles multi-modal Content.parts including text, function calls,
-    and other part types. Non-text parts are indexed by their type
-    for discoverability.
+    function responses, and other part types. Non-text parts are indexed
+    by their type for discoverability.
 
     Args:
         content: ADK Content object with parts list.
@@ -91,6 +98,66 @@ def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_
     )
 
 
+def memory_entry_to_record(
+    entry: "MemoryEntry", app_name: str, user_id: str, extra_metadata: "dict[str, Any] | None" = None
+) -> "MemoryRecord | None":
+    """Convert an ADK MemoryEntry to a database record.
+
+    Serializes the entry's ``content`` to ``content_json``, extracts text
+    from ``content.parts`` for ``content_text``, and merges entry-level
+    ``custom_metadata`` with the optional ``extra_metadata`` parameter.
+
+    Args:
+        entry: ADK MemoryEntry object.
+        app_name: Name of the application.
+        user_id: ID of the user.
+        extra_metadata: Optional call-level metadata to merge with the
+            entry's own ``custom_metadata``.
+
+    Returns:
+        MemoryRecord for database storage, or None if entry has no
+        indexable content.
+    """
+    content_text = extract_content_text(entry.content)
+    if not content_text.strip():
+        return None
+
+    content_dict = entry.content.model_dump(exclude_none=True, mode="json")
+
+    # Merge entry-level and call-level metadata
+    merged_metadata: dict[str, Any] | None = None
+    if entry.custom_metadata or extra_metadata:
+        merged_metadata = {}
+        if extra_metadata:
+            merged_metadata.update(extra_metadata)
+        if entry.custom_metadata:
+            merged_metadata.update(entry.custom_metadata)
+
+    now = datetime.now(timezone.utc)
+
+    # Parse timestamp from entry if available
+    timestamp = now
+    if entry.timestamp:
+        try:
+            timestamp = datetime.fromisoformat(entry.timestamp)
+        except (ValueError, TypeError):
+            timestamp = now
+
+    return MemoryRecord(
+        id=entry.id or str(uuid.uuid4()),
+        session_id="",
+        app_name=app_name,
+        user_id=user_id,
+        event_id="",
+        author=entry.author or "",
+        timestamp=timestamp,
+        content_json=content_dict,
+        content_text=content_text,
+        metadata_json=merged_metadata,
+        inserted_at=now,
+    )
+
+
 def session_to_memory_records(session: "Session") -> list["MemoryRecord"]:
     """Convert a completed ADK Session to a list of memory records.
 
@@ -121,11 +188,14 @@ def session_to_memory_records(session: "Session") -> list["MemoryRecord"]:
 def record_to_memory_entry(record: "MemoryRecord") -> "MemoryEntry":
     """Convert a database record to an ADK MemoryEntry.
 
+    Preserves ``id`` and ``custom_metadata`` fields that were previously
+    dropped on readback.
+
     Args:
         record: Memory database record.
 
     Returns:
-        ADK MemoryEntry object.
+        ADK MemoryEntry object with all available fields populated.
     """
     from google.adk.memory.memory_entry import MemoryEntry
     from google.genai import types
@@ -134,7 +204,13 @@ def record_to_memory_entry(record: "MemoryRecord") -> "MemoryEntry":
 
     timestamp_str = record["timestamp"].isoformat() if record["timestamp"] else None
 
-    return MemoryEntry(content=content, author=record["author"], timestamp=timestamp_str)
+    return MemoryEntry(
+        id=record["id"],
+        content=content,
+        author=record["author"],
+        timestamp=timestamp_str,
+        custom_metadata=record["metadata_json"] or {},
+    )
 
 
 def records_to_memory_entries(records: list["MemoryRecord"]) -> list["Any"]:

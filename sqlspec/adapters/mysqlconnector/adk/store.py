@@ -5,9 +5,10 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import mysql.connector
 
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -38,8 +39,61 @@ def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
     return (col_def, fk_constraint)
 
 
+def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -> str:
+    """Generate shared MySQL sessions CREATE TABLE DDL."""
+    owner_id_col = ""
+    fk_constraint = ""
+
+    if owner_id_column_ddl:
+        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
+        owner_id_col = f"{col_def},"
+        if fk_def:
+            fk_constraint = f",\n            {fk_def}"
+
+    return f"""
+    CREATE TABLE IF NOT EXISTS {session_table} (
+        id VARCHAR(128) PRIMARY KEY,
+        app_name VARCHAR(128) NOT NULL,
+        user_id VARCHAR(128) NOT NULL,
+        {owner_id_col}
+        state JSON NOT NULL,
+        create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+        INDEX idx_{session_table}_app_user (app_name, user_id),
+        INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
+def _mysql_events_ddl(events_table: str, session_table: str) -> str:
+    """Generate shared MySQL events CREATE TABLE DDL (post clean-break, 5 columns)."""
+    return f"""
+    CREATE TABLE IF NOT EXISTS {events_table} (
+        session_id VARCHAR(128) NOT NULL,
+        invocation_id VARCHAR(256) NOT NULL,
+        author VARCHAR(128) NOT NULL,
+        timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        event_json JSON NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
+        INDEX idx_{events_table}_session (session_id, timestamp ASC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
 class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]):
-    """MySQL/MariaDB ADK store using mysql-connector async driver."""
+    """MySQL/MariaDB ADK store using mysql-connector async driver.
+
+    Provides:
+    - Session state management with JSON storage
+    - Full-event JSON storage (single ``event_json`` column)
+    - Atomic event-append + state-update in one transaction
+    - Microsecond-precision timestamps
+    - Foreign key constraints with cascade delete
+
+    Notes:
+        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
+        - Configuration is read from config.extension_config["adk"]
+    """
 
     __slots__ = ()
 
@@ -50,54 +104,10 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         return _parse_owner_id_column_for_mysql(column_ddl)
 
     async def _get_create_sessions_table_sql(self) -> str:
-        owner_id_col = ""
-        fk_constraint = ""
-
-        if self._owner_id_column_ddl:
-            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_col = f"{col_def},"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            {owner_id_col}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
 
     async def _get_create_events_table_sql(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json JSON,
-            branch VARCHAR(256),
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content JSON,
-            grounding_metadata JSON,
-            custom_metadata JSON,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+        return _mysql_events_ddl(self._events_table, self._session_table)
 
     def _get_drop_tables_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
@@ -242,23 +252,19 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def append_event(self, event_record: EventRecord) -> None:
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
+        """Append an event to a session.
+
+        Args:
+            event_record: Event record with 5 keys (session_id, invocation_id,
+                author, timestamp, event_json).
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """
 
         async with self._config.provide_connection() as conn:
@@ -267,26 +273,60 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 await cursor.execute(
                     sql,
                     (
-                        event_record["id"],
                         event_record["session_id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
                         event_record["invocation_id"],
                         event_record["author"],
-                        event_record["actions"],
-                        event_record.get("long_running_tool_ids_json"),
-                        event_record.get("branch"),
                         event_record["timestamp"],
-                        content_json,
-                        grounding_metadata_json,
-                        custom_metadata_json,
-                        event_record.get("partial"),
-                        event_record.get("turn_complete"),
-                        event_record.get("interrupted"),
-                        event_record.get("error_code"),
-                        event_record.get("error_message"),
+                        event_json_str,
                     ),
                 )
+            finally:
+                await cursor.close()
+            await conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        The event insert and state update succeed together or fail together
+        within a single transaction.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot.
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        state_json = to_json(state)
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s
+        WHERE id = %s
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.cursor()
+            try:
+                await cursor.execute(
+                    insert_sql,
+                    (
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["author"],
+                        event_record["timestamp"],
+                        event_json_str,
+                    ),
+                )
+                await cursor.execute(update_sql, (state_json, session_id))
             finally:
                 await cursor.close()
             await conn.commit()
@@ -294,6 +334,16 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
+        """Get events for a session.
+
+        Args:
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
         where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
 
@@ -305,10 +355,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -325,30 +372,11 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
                 return [
                     EventRecord(
-                        id=cast("str", row[0]),
-                        session_id=cast("str", row[1]),
-                        app_name=cast("str", row[2]),
-                        user_id=cast("str", row[3]),
-                        invocation_id=cast("str", row[4]),
-                        author=cast("str", row[5]),
-                        actions=bytes(cast("bytes", row[6])),
-                        long_running_tool_ids_json=cast("str | None", row[7]),
-                        branch=cast("str | None", row[8]),
-                        timestamp=cast("datetime", row[9]),
-                        content=from_json(row[10])
-                        if row[10] and isinstance(row[10], str)
-                        else cast("dict[str, Any] | None", row[10]),
-                        grounding_metadata=from_json(row[11])
-                        if row[11] and isinstance(row[11], str)
-                        else cast("dict[str, Any] | None", row[11]),
-                        custom_metadata=from_json(row[12])
-                        if row[12] and isinstance(row[12], str)
-                        else cast("dict[str, Any] | None", row[12]),
-                        partial=cast("bool | None", row[13]),
-                        turn_complete=cast("bool | None", row[14]),
-                        interrupted=cast("bool | None", row[15]),
-                        error_code=cast("str | None", row[16]),
-                        error_message=cast("str | None", row[17]),
+                        session_id=cast("str", row[0]),
+                        invocation_id=cast("str", row[1]),
+                        author=cast("str", row[2]),
+                        timestamp=cast("datetime", row[3]),
+                        event_json=from_json(row[4]) if isinstance(row[4], str) else cast("dict[str, Any]", row[4]),
                     )
                     for row in rows
                 ]
@@ -358,8 +386,20 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
 
-class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
-    """MySQL/MariaDB ADK store using mysql-connector sync driver."""
+class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
+    """MySQL/MariaDB ADK store using mysql-connector sync driver.
+
+    Provides:
+    - Session state management with JSON storage
+    - Full-event JSON storage (single ``event_json`` column)
+    - Atomic event-create + state-update in one transaction
+    - Microsecond-precision timestamps
+    - Foreign key constraints with cascade delete
+
+    Notes:
+        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
+        - Configuration is read from config.extension_config["adk"]
+    """
 
     __slots__ = ()
 
@@ -369,65 +409,25 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
         return _parse_owner_id_column_for_mysql(column_ddl)
 
-    def _get_create_sessions_table_sql(self) -> str:
-        owner_id_col = ""
-        fk_constraint = ""
+    async def _get_create_sessions_table_sql(self) -> str:
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
 
-        if self._owner_id_column_ddl:
-            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_col = f"{col_def},"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            {owner_id_col}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _get_create_events_table_sql(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json JSON,
-            branch VARCHAR(256),
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content JSON,
-            grounding_metadata JSON,
-            custom_metadata JSON,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+    async def _get_create_events_table_sql(self) -> str:
+        return _mysql_events_ddl(self._events_table, self._session_table)
 
     def _get_drop_tables_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_sessions_table_sql())
-            driver.execute_script(self._get_create_events_table_sql())
+            driver.execute_script(run_(self._get_create_sessions_table_sql)())
+            driver.execute_script(run_(self._get_create_events_table_sql)())
 
-    def create_session(
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         state_json = to_json(state)
@@ -454,13 +454,19 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-        result = self.get_session(session_id)
+        result = self._get_session(session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -494,7 +500,11 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 return None
             raise
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         state_json = to_json(state)
 
         sql = f"""
@@ -511,7 +521,11 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-    def delete_session(self, session_id: str) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    def _delete_session(self, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE id = %s"
 
         with self._config.provide_connection() as conn:
@@ -522,7 +536,11 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -565,24 +583,71 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 return []
             raise
 
-    def append_event(self, event_record: EventRecord) -> None:
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    def _append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically create an event and update the session's durable state.
+
+        The event insert and state update succeed together or fail together
+        within a single transaction.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot.
+        """
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        state_json = to_json(state)
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s
+        WHERE id = %s
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    insert_sql,
+                    (
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["author"],
+                        event_record["timestamp"],
+                        event_json_str,
+                    ),
+                )
+                cursor.execute(update_sql, (state_json, session_id))
+            finally:
+                cursor.close()
+            conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _insert_event(self, event_record: EventRecord) -> None:
+        event_json = event_record["event_json"]
+        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """
 
         with self._config.provide_connection() as conn:
@@ -591,33 +656,30 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.execute(
                     sql,
                     (
-                        event_record["id"],
                         event_record["session_id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
                         event_record["invocation_id"],
                         event_record["author"],
-                        event_record["actions"],
-                        event_record.get("long_running_tool_ids_json"),
-                        event_record.get("branch"),
                         event_record["timestamp"],
-                        content_json,
-                        grounding_metadata_json,
-                        custom_metadata_json,
-                        event_record.get("partial"),
-                        event_record.get("turn_complete"),
-                        event_record.get("interrupted"),
-                        event_record.get("error_code"),
-                        event_record.get("error_message"),
+                        event_json_str,
                     ),
                 )
             finally:
                 cursor.close()
             conn.commit()
 
-    def get_events(
+    def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
+        """List events for a session ordered by timestamp.
+
+        Args:
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
         where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
 
@@ -626,53 +688,32 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit else ""
-
+        limit_clause = " LIMIT %s" if limit else ""
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
         """
+        if limit:
+            params.append(limit)
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, params)
+                    cursor.execute(sql, tuple(params))
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
 
                 return [
                     EventRecord(
-                        id=cast("str", row[0]),
-                        session_id=cast("str", row[1]),
-                        app_name=cast("str", row[2]),
-                        user_id=cast("str", row[3]),
-                        invocation_id=cast("str", row[4]),
-                        author=cast("str", row[5]),
-                        actions=bytes(cast("bytes", row[6])),
-                        long_running_tool_ids_json=cast("str | None", row[7]),
-                        branch=cast("str | None", row[8]),
-                        timestamp=cast("datetime", row[9]),
-                        content=from_json(row[10])
-                        if row[10] and isinstance(row[10], str)
-                        else cast("dict[str, Any] | None", row[10]),
-                        grounding_metadata=from_json(row[11])
-                        if row[11] and isinstance(row[11], str)
-                        else cast("dict[str, Any] | None", row[11]),
-                        custom_metadata=from_json(row[12])
-                        if row[12] and isinstance(row[12], str)
-                        else cast("dict[str, Any] | None", row[12]),
-                        partial=cast("bool | None", row[13]),
-                        turn_complete=cast("bool | None", row[14]),
-                        interrupted=cast("bool | None", row[15]),
-                        error_code=cast("str | None", row[16]),
-                        error_message=cast("str | None", row[17]),
+                        session_id=cast("str", row[0]),
+                        invocation_id=cast("str", row[1]),
+                        author=cast("str", row[2]),
+                        timestamp=cast("datetime", row[3]),
+                        event_json=from_json(row[4]) if isinstance(row[4], str) else cast("dict[str, Any]", row[4]),
                     )
                     for row in rows
                 ]
@@ -680,6 +721,20 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
 
 
 class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorAsyncConfig"]):
@@ -871,7 +926,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                 await cursor.close()
 
 
-class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyncConfig"]):
+class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK memory store using mysql-connector sync driver."""
 
     __slots__ = ()
@@ -879,7 +934,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         owner_id_line = ""
         fk_constraint = ""
         if self._owner_id_column_ddl:
@@ -913,14 +968,18 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
     def _get_drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -986,7 +1045,11 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             conn.commit()
         return inserted_count
 
-    def search_entries(
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         if not self._enabled:
@@ -1026,7 +1089,13 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
 
         return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    def _delete_entries_by_session(self, session_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1041,7 +1110,11 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             finally:
                 cursor.close()
 
-    def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1058,3 +1131,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)

@@ -108,7 +108,7 @@ jobs:
       - name: Test
         env:
           PYTHONFAULTHANDLER: "1"
-          PYTEST_ADDOPTS: "--max-worker-restart=0 -s"
+          PYTEST_ADDOPTS: "--max-worker-restart=0"
         run: timeout 900s uv run pytest -n 2 --dist=loadgroup
 
   # test-linux-freethreaded:

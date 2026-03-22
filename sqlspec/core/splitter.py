@@ -623,6 +623,8 @@ class BigQueryDialectConfig(DialectConfig):
 _pattern_cache: LRUCache | None = None
 _result_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
+_unknown_dialect_warning_lock = threading.Lock()
+_warned_unknown_dialects: set[str] = set()
 
 
 def _get_pattern_cache() -> LRUCache:
@@ -651,6 +653,16 @@ def _get_result_cache() -> LRUCache:
             if _result_cache is None:
                 _result_cache = LRUCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
     return _result_cache
+
+
+def _warn_unknown_dialect_once(dialect: "str | None") -> None:
+    """Emit the generic splitter fallback warning once per dialect."""
+    key = "<none>" if dialect is None else dialect.lower()
+    with _unknown_dialect_warning_lock:
+        if key in _warned_unknown_dialects:
+            return
+        _warned_unknown_dialects.add(key)
+    logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -933,7 +945,7 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
 
     config = dialect_configs.get(dialect.lower())
     if not config:
-        logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
+        _warn_unknown_dialect_once(dialect)
         config = GenericDialectConfig()
 
     splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_terminator)
@@ -949,6 +961,8 @@ def clear_splitter_caches() -> None:
     result_cache = _get_result_cache()
     pattern_cache.clear()
     result_cache.clear()
+    with _unknown_dialect_warning_lock:
+        _warned_unknown_dialects.clear()
 
 
 def get_splitter_cache_stats() -> "dict[str, Any]":

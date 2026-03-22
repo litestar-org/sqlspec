@@ -21,15 +21,18 @@ Common Commands
 
 .. code-block:: console
 
-   sqlspec db init
-   sqlspec db create-migration -m "add users"
-   sqlspec db upgrade
+   sqlspec init
+   sqlspec create-migration -m "add users"
+   sqlspec upgrade
 
 Configuration
 -------------
 
 Set ``migration_config`` on your database configuration to customize script
 locations, version table names, and extension migration behavior.
+
+The migration CLI resolves config from ``--config``, ``SQLSPEC_CONFIG``, or
+``[tool.sqlspec]`` in ``pyproject.toml``.
 
 .. code-block:: python
 
@@ -38,7 +41,7 @@ locations, version table names, and extension migration behavior.
     config = DuckDBConfig(
         connection_config={"database": "/tmp/analytics.db"},
         migration_config={
-            "migration_dir": "migrations/duckdb",
+            "script_location": "migrations/duckdb",
             "version_table": "_schema_versions",
         },
     )
@@ -60,10 +63,16 @@ For async configs, ``migrate_up()`` returns an awaitable:
 
     config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/app"},
-        migration_config={"migration_dir": "migrations/postgres"},
+        migration_config={"script_location": "migrations/postgres"},
     )
 
     await config.migrate_up()
+
+Extension migrations are auto-included when the corresponding entry exists in
+``extension_config``. Use ``migration_config["exclude_extensions"]`` to skip a
+specific extension, ``migration_config["include_extensions"]`` to opt in
+explicitly by extension name, or ``migration_config["enabled"] = False`` to
+disable migrations entirely for a database config.
 
 Logging and Echo Controls
 -------------------------

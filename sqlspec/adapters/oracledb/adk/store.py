@@ -12,10 +12,11 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbSyncDataDictionary,
     OracleVersionInfo,
 )
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_, run_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
@@ -93,43 +94,28 @@ def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONS
     return _storage_type_from_version(version_info)
 
 
-def _to_oracle_bool(value: "bool | None") -> "int | None":
-    """Convert Python boolean to Oracle NUMBER(1).
+def _event_json_column_ddl(storage_type: JSONStorageType) -> str:
+    """Return the DDL fragment for the event_json column.
 
-    Args:
-        value: Python boolean value or None.
-
-    Returns:
-        1 for True, 0 for False, None for None.
+    For JSON_NATIVE (Oracle 21c+) we use the native JSON type.
+    For older versions we use BLOB since Oracle recommends BLOB over CLOB for
+    JSON storage. BLOB_JSON gets a CHECK constraint; BLOB_PLAIN does not.
     """
-    if value is None:
-        return None
-    return 1 if value else 0
+    if storage_type == JSONStorageType.JSON_NATIVE:
+        return "event_json JSON NOT NULL"
+    if storage_type == JSONStorageType.BLOB_JSON:
+        return "event_json BLOB CHECK (event_json IS JSON) NOT NULL"
+    return "event_json BLOB NOT NULL"
 
 
-def _from_oracle_bool(value: "int | None") -> "bool | None":
-    """Convert Oracle NUMBER(1) to Python boolean.
+def _oracle_text_value(value: Any) -> str:
+    """Normalize Oracle VARCHAR2 values back to Python strings.
 
-    Args:
-        value: Oracle NUMBER value (0, 1, or None).
-
-    Returns:
-        Python boolean or None.
+    Oracle stores empty strings as ``NULL``. The ADK event contract allows
+    empty strings for fields like ``invocation_id``, so reads coerce ``NULL``
+    back to ``""``.
     """
-    if value is None:
-        return None
-    return bool(value)
-
-
-def _coerce_bytes_payload(value: Any) -> bytes:
-    """Coerce a LOB payload into bytes."""
-    if value is None:
-        return b""
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, str):
-        return value.encode("utf-8")
-    return str(value).encode("utf-8")
+    return "" if value is None else str(value)
 
 
 class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
@@ -138,7 +124,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     Implements session and event storage for Google Agent Development Kit
     using Oracle Database via the python-oracledb async driver. Provides:
     - Session state management with version-specific JSON storage
-    - Event history tracking with BLOB-serialized actions
+    - Full-fidelity event storage via ``event_json`` column
+    - Atomic ``append_event_and_update_state`` for durable session mutations
     - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
     - Foreign key constraints with cascade delete
     - Efficient upserts using MERGE statement
@@ -146,28 +133,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     Args:
         config: OracleAsyncConfig with extension_config["adk"] settings.
 
-    Example:
-        from sqlspec.adapters.oracledb import OracleAsyncConfig
-        from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore
-
-        config = OracleAsyncConfig(
-            connection_config={"dsn": "oracle://..."},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id NUMBER(10) REFERENCES tenants(id)"
-                }
-            }
-        )
-        store = OracleAsyncADKStore(config)
-        await store.ensure_tables()
-
     Notes:
         - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
-        - BLOB for pre-serialized actions from Google ADK
+        - event_json stored as JSON (21c+) or BLOB (older versions)
         - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
-        - NUMBER(1) for booleans (0/1/NULL)
         - Named parameters using :param_name
         - State merging handled at application level
         - owner_id_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
@@ -223,10 +192,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         Notes:
             Queries product_component_version to determine Oracle version.
             - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint (preferred)
-            - Oracle 11g and earlier: BLOB without constraint
+            - Oracle 12c+: BLOB with IS JSON constraint
+            - Oracle 11g and earlier: plain BLOB
 
-            BLOB is preferred over CLOB for 12c+ as per Oracle recommendations.
             Result is cached in self._json_storage_type.
         """
         if self._json_storage_type is not None:
@@ -296,55 +264,40 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         return from_json(str(data))  # type: ignore[no-any-return]
 
-    async def _serialize_json_field(self, value: Any) -> "str | bytes | None":
-        """Serialize optional JSON field for event storage.
-
-        Args:
-            value: Value to serialize (dict or None).
-
-        Returns:
-            Serialized JSON or None.
-        """
-        if value is None:
-            return None
-
-        storage_type = await self._detect_json_storage_type()
-
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            return to_json(value)
-
-        return to_json(value, as_bytes=True)
-
     async def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
-        """Deserialize optional JSON field from database.
-
-        Args:
-            data: Data from database (may be LOB, str, bytes, dict, or None).
-
-        Returns:
-            Deserialized dictionary or None.
-
-        Notes:
-            Oracle JSON type may return dict directly.
-        """
+        """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
         if data is None:
             return None
+        return await self._deserialize_state(data)
 
+    async def _serialize_event_json(self, event_json: Any) -> "str | bytes":
+        """Serialize event_json to the configured Oracle JSON storage format."""
+        storage_type = await self._detect_json_storage_type()
+        if storage_type == JSONStorageType.JSON_NATIVE:
+            return to_json(event_json)
+        return to_json(event_json, as_bytes=True)
+
+    async def _read_event_json(self, data: Any) -> str:
+        """Read event_json from database, handling LOB types.
+
+        Args:
+            data: Data from database (may be LOB, str, or dict).
+
+        Returns:
+            JSON string.
+        """
         if is_async_readable(data):
             data = await data.read()
         elif is_readable(data):
             data = data.read()
 
         if isinstance(data, dict):
-            return cast("dict[str, Any]", _coerce_decimal_values(data))
+            return to_json(data)
 
         if isinstance(data, bytes):
-            return from_json(data)  # type: ignore[no-any-return]
+            return data.decode("utf-8")
 
-        if isinstance(data, str):
-            return from_json(data)  # type: ignore[no-any-return]
-
-        return from_json(str(data))  # type: ignore[no-any-return]
+        return str(data)
 
     def _get_create_sessions_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for sessions with specified storage type.
@@ -406,54 +359,27 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for events with specified storage type.
 
+        The events table uses the new 5-column contract: session_id, invocation_id,
+        author, timestamp, and event_json. The event_json column stores the full
+        ADK Event as JSON (21c+) or BLOB (older versions).
+
         Args:
             storage_type: JSON storage type to use.
 
         Returns:
             SQL statement to create adk_events table.
         """
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            json_columns = """
-                content JSON,
-                grounding_metadata JSON,
-                custom_metadata JSON,
-                long_running_tool_ids_json JSON
-            """
-        elif storage_type == JSONStorageType.BLOB_JSON:
-            json_columns = """
-                content BLOB CHECK (content IS JSON),
-                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
-                custom_metadata BLOB CHECK (custom_metadata IS JSON),
-                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON)
-            """
-        else:
-            json_columns = """
-                content BLOB,
-                grounding_metadata BLOB,
-                custom_metadata BLOB,
-                long_running_tool_ids_json BLOB
-            """
-
+        event_json_col = _event_json_column_ddl(storage_type)
         inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
 
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                id VARCHAR2(128) PRIMARY KEY,
                 session_id VARCHAR2(128) NOT NULL,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
                 invocation_id VARCHAR2(256),
                 author VARCHAR2(256),
-                actions BLOB,
-                branch VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                {json_columns},
-                partial NUMBER(1),
-                turn_complete NUMBER(1),
-                interrupted NUMBER(1),
-                error_code VARCHAR2(256),
-                error_message VARCHAR2(1024),
+                {event_json_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
             ){inmemory_clause}';
@@ -753,28 +679,14 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """Append an event to a session.
 
         Args:
-            event_record: Event record to store.
-
-        Notes:
-            Uses SYSTIMESTAMP for timestamp if not provided.
-            JSON fields are serialized using version-appropriate format.
-            Boolean fields are converted to NUMBER(1).
+            event_record: Event record with 5 keys: session_id, invocation_id,
+                author, timestamp, event_json.
         """
-        content_data = await self._serialize_json_field(event_record.get("content"))
-        grounding_metadata_data = await self._serialize_json_field(event_record.get("grounding_metadata"))
-        custom_metadata_data = await self._serialize_json_field(event_record.get("custom_metadata"))
-
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
+            session_id, invocation_id, author, timestamp, event_json
         ) VALUES (
-            :id, :session_id, :app_name, :user_id, :invocation_id, :author, :actions,
-            :long_running_tool_ids_json, :branch, :timestamp, :content,
-            :grounding_metadata, :custom_metadata, :partial, :turn_complete,
-            :interrupted, :error_code, :error_message
+            :session_id, :invocation_id, :author, :timestamp, :event_json
         )
         """
 
@@ -783,26 +695,58 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(
                 sql,
                 {
-                    "id": event_record["id"],
                     "session_id": event_record["session_id"],
-                    "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
                     "invocation_id": event_record["invocation_id"],
                     "author": event_record["author"],
-                    "actions": event_record["actions"],
-                    "long_running_tool_ids_json": event_record.get("long_running_tool_ids_json"),
-                    "branch": event_record.get("branch"),
                     "timestamp": event_record["timestamp"],
-                    "content": content_data,
-                    "grounding_metadata": grounding_metadata_data,
-                    "custom_metadata": custom_metadata_data,
-                    "partial": _to_oracle_bool(event_record.get("partial")),
-                    "turn_complete": _to_oracle_bool(event_record.get("turn_complete")),
-                    "interrupted": _to_oracle_bool(event_record.get("interrupted")),
-                    "error_code": event_record.get("error_code"),
-                    "error_message": event_record.get("error_message"),
+                    "event_json": await self._serialize_event_json(event_record["event_json"]),
                 },
             )
+            await conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        Both the event insert and session state update are executed within a
+        single transaction so they succeed or fail together.
+
+        Args:
+            event_record: Event record with 5 keys: session_id, invocation_id,
+                author, timestamp, event_json.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (``temp:`` keys already
+                stripped by the service layer).
+        """
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (
+            :session_id, :invocation_id, :author, :timestamp, :event_json
+        )
+        """
+
+        state_data = await self._serialize_state(state)
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = :state, update_time = SYSTIMESTAMP
+        WHERE id = :id
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            await cursor.execute(
+                insert_sql,
+                {
+                    "session_id": event_record["session_id"],
+                    "invocation_id": event_record["invocation_id"],
+                    "author": event_record["author"],
+                    "timestamp": event_record["timestamp"],
+                    "event_json": await self._serialize_event_json(event_record["event_json"]),
+                },
+            )
+            await cursor.execute(update_sql, {"state": state_data, "id": session_id})
             await conn.commit()
 
     async def get_events(
@@ -817,11 +761,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            JSON fields deserialized using version-appropriate format.
-            Converts BLOB actions to bytes and NUMBER(1) booleans to Python bool.
         """
 
         where_clauses = ["session_id = :session_id"]
@@ -837,10 +776,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             limit_clause = f" FETCH FIRST {limit} ROWS ONLY"
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -852,43 +788,16 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    actions_blob = row[6]
-                    if is_async_readable(actions_blob):
-                        actions_data = await actions_blob.read()
-                    elif is_readable(actions_blob):
-                        actions_data = actions_blob.read()
-                    else:
-                        actions_data = actions_blob
-
-                    content = await self._deserialize_json_field(row[10])
-                    grounding_metadata = await self._deserialize_json_field(row[11])
-                    custom_metadata = await self._deserialize_json_field(row[12])
-
-                    results.append(
-                        EventRecord(
-                            id=row[0],
-                            session_id=row[1],
-                            app_name=row[2],
-                            user_id=row[3],
-                            invocation_id=row[4],
-                            author=row[5],
-                            actions=_coerce_bytes_payload(actions_data),
-                            long_running_tool_ids_json=row[7],
-                            branch=row[8],
-                            timestamp=row[9],
-                            content=content,
-                            grounding_metadata=grounding_metadata,
-                            custom_metadata=custom_metadata,
-                            partial=_from_oracle_bool(row[13]),
-                            turn_complete=_from_oracle_bool(row[14]),
-                            interrupted=_from_oracle_bool(row[15]),
-                            error_code=row[16],
-                            error_message=row[17],
-                        )
+                return [
+                    EventRecord(
+                        session_id=row[0],
+                        invocation_id=_oracle_text_value(row[1]),
+                        author=_oracle_text_value(row[2]),
+                        timestamp=row[3],
+                        event_json=await self._deserialize_json_field(row[4]) or {},
                     )
-                return results
+                    for row in rows
+                ]
         except oracledb.DatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -896,13 +805,14 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             raise
 
 
-class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
+class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     """Oracle synchronous ADK store using oracledb sync driver.
 
     Implements session and event storage for Google Agent Development Kit
     using Oracle Database via the python-oracledb synchronous driver. Provides:
     - Session state management with version-specific JSON storage
-    - Event history tracking with BLOB-serialized actions
+    - Full-fidelity event storage via ``event_json`` column
+    - Atomic ``create_event_and_update_state`` for durable session mutations
     - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
     - Foreign key constraints with cascade delete
     - Efficient upserts using MERGE statement
@@ -910,28 +820,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     Args:
         config: OracleSyncConfig with extension_config["adk"] settings.
 
-    Example:
-        from sqlspec.adapters.oracledb import OracleSyncConfig
-        from sqlspec.adapters.oracledb.adk import OracleSyncADKStore
-
-        config = OracleSyncConfig(
-            connection_config={"dsn": "oracle://..."},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "account_id NUMBER(19) REFERENCES accounts(id)"
-                }
-            }
-        )
-        store = OracleSyncADKStore(config)
-        store.ensure_tables()
-
     Notes:
         - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
-        - BLOB for pre-serialized actions from Google ADK
+        - event_json stored as JSON (21c+) or BLOB (older versions)
         - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
-        - NUMBER(1) for booleans (0/1/NULL)
         - Named parameters using :param_name
         - State merging handled at application level
         - owner_id_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
@@ -960,7 +852,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         adk_config = config.extension_config.get("adk", {})
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def _get_create_sessions_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
@@ -969,7 +861,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         storage_type = self._detect_json_storage_type()
         return self._get_create_sessions_table_sql_for_type(storage_type)
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL for events table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
@@ -987,10 +879,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         Notes:
             Queries product_component_version to determine Oracle version.
             - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint (preferred)
-            - Oracle 11g and earlier: BLOB without constraint
+            - Oracle 12c+: BLOB with IS JSON constraint
+            - Oracle 11g and earlier: plain BLOB
 
-            BLOB is preferred over CLOB for 12c+ as per Oracle recommendations.
             Result is cached in self._json_storage_type.
         """
         if self._json_storage_type is not None:
@@ -1058,53 +949,38 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         return from_json(str(data))  # type: ignore[no-any-return]
 
-    def _serialize_json_field(self, value: Any) -> "str | bytes | None":
-        """Serialize optional JSON field for event storage.
-
-        Args:
-            value: Value to serialize (dict or None).
-
-        Returns:
-            Serialized JSON or None.
-        """
-        if value is None:
-            return None
-
-        storage_type = self._detect_json_storage_type()
-
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            return to_json(value)
-
-        return to_json(value, as_bytes=True)
-
     def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
-        """Deserialize optional JSON field from database.
-
-        Args:
-            data: Data from database (may be LOB, str, bytes, dict, or None).
-
-        Returns:
-            Deserialized dictionary or None.
-
-        Notes:
-            Oracle JSON type may return dict directly.
-        """
+        """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
         if data is None:
             return None
+        return self._deserialize_state(data)
 
+    def _serialize_event_json(self, event_json: Any) -> "str | bytes":
+        """Serialize event_json to the configured Oracle JSON storage format."""
+        storage_type = self._detect_json_storage_type()
+        if storage_type == JSONStorageType.JSON_NATIVE:
+            return to_json(event_json)
+        return to_json(event_json, as_bytes=True)
+
+    def _read_event_json(self, data: Any) -> str:
+        """Read event_json from database, handling LOB types.
+
+        Args:
+            data: Data from database (may be LOB, str, or dict).
+
+        Returns:
+            JSON string.
+        """
         if is_readable(data):
             data = data.read()
 
         if isinstance(data, dict):
-            return cast("dict[str, Any]", _coerce_decimal_values(data))
+            return to_json(data)
 
         if isinstance(data, bytes):
-            return from_json(data)  # type: ignore[no-any-return]
+            return data.decode("utf-8")
 
-        if isinstance(data, str):
-            return from_json(data)  # type: ignore[no-any-return]
-
-        return from_json(str(data))  # type: ignore[no-any-return]
+        return str(data)
 
     def _get_create_sessions_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for sessions with specified storage type.
@@ -1166,54 +1042,27 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for events with specified storage type.
 
+        The events table uses the new 5-column contract: session_id, invocation_id,
+        author, timestamp, and event_json. The event_json column stores the full
+        ADK Event as JSON (21c+) or BLOB (older versions).
+
         Args:
             storage_type: JSON storage type to use.
 
         Returns:
             SQL statement to create adk_events table.
         """
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            json_columns = """
-                content JSON,
-                grounding_metadata JSON,
-                custom_metadata JSON,
-                long_running_tool_ids_json JSON
-            """
-        elif storage_type == JSONStorageType.BLOB_JSON:
-            json_columns = """
-                content BLOB CHECK (content IS JSON),
-                grounding_metadata BLOB CHECK (grounding_metadata IS JSON),
-                custom_metadata BLOB CHECK (custom_metadata IS JSON),
-                long_running_tool_ids_json BLOB CHECK (long_running_tool_ids_json IS JSON)
-            """
-        else:
-            json_columns = """
-                content BLOB,
-                grounding_metadata BLOB,
-                custom_metadata BLOB,
-                long_running_tool_ids_json BLOB
-            """
-
+        event_json_col = _event_json_column_ddl(storage_type)
         inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
 
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                id VARCHAR2(128) PRIMARY KEY,
                 session_id VARCHAR2(128) NOT NULL,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
                 invocation_id VARCHAR2(256),
                 author VARCHAR2(256),
-                actions BLOB,
-                branch VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                {json_columns},
-                partial NUMBER(1),
-                turn_complete NUMBER(1),
-                interrupted NUMBER(1),
-                error_code VARCHAR2(256),
-                error_message VARCHAR2(1024),
+                {event_json_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
             ){inmemory_clause}';
@@ -1298,7 +1147,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             """,
         ]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist.
 
         Notes:
@@ -1315,7 +1164,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             events_sql = SQL(self._get_create_events_table_sql_for_type(storage_type))
             driver.execute_script(events_sql)
 
-    def create_session(
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session.
@@ -1361,9 +1214,19 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, params)
             conn.commit()
 
-        return self.get_session(session_id)  # type: ignore[return-value]
+        result = self._get_session(session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
@@ -1410,7 +1273,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return None
             raise
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
@@ -1435,7 +1302,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"state": state_data, "id": session_id})
             conn.commit()
 
-    def delete_session(self, session_id: str) -> None:
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    def _delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
@@ -1451,7 +1322,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"id": session_id})
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -1510,52 +1385,126 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return []
             raise
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> "EventRecord":
-        """Create a new event.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    def _append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically create an event and update the session's durable state.
+
+        Both the event insert and session state update are executed within a
+        single transaction so they succeed or fail together.
 
         Args:
-            event_id: Unique event identifier.
+            event_record: Event record with 5 keys: session_id, invocation_id,
+                author, timestamp, event_json.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (``temp:`` keys already
+                stripped by the service layer).
+        """
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (
+            :session_id, :invocation_id, :author, :timestamp, :event_json
+        )
+        """
+
+        state_data = self._serialize_state(state)
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = :state, update_time = SYSTIMESTAMP
+        WHERE id = :id
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                insert_sql,
+                {
+                    "session_id": event_record["session_id"],
+                    "invocation_id": event_record["invocation_id"],
+                    "author": event_record["author"],
+                    "timestamp": event_record["timestamp"],
+                    "event_json": self._serialize_event_json(event_record["event_json"]),
+                },
+            )
+            cursor.execute(update_sql, {"state": state_data, "id": session_id})
+            conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """List events for a session ordered by timestamp.
+
+        Args:
             session_id: Session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            author: Event author (user/assistant/system).
-            actions: Pickled actions object.
-            content: Event content (JSONB/JSON).
-            **kwargs: Additional optional fields.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
 
         Returns:
-            Created event record.
-
-        Notes:
-            Uses SYSTIMESTAMP for timestamp if not provided.
-            JSON fields are serialized using version-appropriate format.
-            Boolean fields are converted to NUMBER(1).
+            List of event records ordered by timestamp ASC.
         """
-        content_data = self._serialize_json_field(content)
-        grounding_metadata_data = self._serialize_json_field(kwargs.get("grounding_metadata"))
-        custom_metadata_data = self._serialize_json_field(kwargs.get("custom_metadata"))
 
+        where_clauses = ["session_id = :session_id"]
+        params: dict[str, Any] = {"session_id": session_id}
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > :after_timestamp")
+            params["after_timestamp"] = after_timestamp
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = f" FETCH FIRST {limit} ROWS ONLY" if limit else ""
+        sql = f"""
+        SELECT session_id, invocation_id, author, timestamp, event_json
+        FROM {self._events_table}
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
+        """
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+
+                return [
+                    EventRecord(
+                        session_id=row[0],
+                        invocation_id=_oracle_text_value(row[1]),
+                        author=_oracle_text_value(row[2]),
+                        timestamp=row[3],
+                        event_json=self._deserialize_json_field(row[4]) or {},
+                    )
+                    for row in rows
+                ]
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return []
+            raise
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
+            session_id, invocation_id, author, timestamp, event_json
         ) VALUES (
-            :id, :session_id, :app_name, :user_id, :invocation_id, :author, :actions,
-            :long_running_tool_ids_json, :branch, :timestamp, :content,
-            :grounding_metadata, :custom_metadata, :partial, :turn_complete,
-            :interrupted, :error_code, :error_message
+            :session_id, :invocation_id, :author, :timestamp, :event_json
         )
         """
 
@@ -1564,104 +1513,18 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(
                 sql,
                 {
-                    "id": event_id,
-                    "session_id": session_id,
-                    "app_name": app_name,
-                    "user_id": user_id,
-                    "invocation_id": kwargs.get("invocation_id"),
-                    "author": author,
-                    "actions": actions,
-                    "long_running_tool_ids_json": kwargs.get("long_running_tool_ids_json"),
-                    "branch": kwargs.get("branch"),
-                    "timestamp": kwargs.get("timestamp"),
-                    "content": content_data,
-                    "grounding_metadata": grounding_metadata_data,
-                    "custom_metadata": custom_metadata_data,
-                    "partial": _to_oracle_bool(kwargs.get("partial")),
-                    "turn_complete": _to_oracle_bool(kwargs.get("turn_complete")),
-                    "interrupted": _to_oracle_bool(kwargs.get("interrupted")),
-                    "error_code": kwargs.get("error_code"),
-                    "error_message": kwargs.get("error_message"),
+                    "session_id": event_record["session_id"],
+                    "invocation_id": event_record["invocation_id"],
+                    "author": event_record["author"],
+                    "timestamp": event_record["timestamp"],
+                    "event_json": self._serialize_event_json(event_record["event_json"]),
                 },
             )
             conn.commit()
 
-        events = self.list_events(session_id)
-        for event in events:
-            if event["id"] == event_id:
-                return event
-
-        msg = f"Failed to retrieve created event {event_id}"
-        raise RuntimeError(msg)
-
-    def list_events(self, session_id: str) -> "list[EventRecord]":
-        """List events for a session ordered by timestamp.
-
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            JSON fields deserialized using version-appropriate format.
-            Converts BLOB actions to bytes and NUMBER(1) booleans to Python bool.
-        """
-
-        sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
-        FROM {self._events_table}
-        WHERE session_id = :session_id
-        ORDER BY timestamp ASC
-        """
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, {"session_id": session_id})
-                rows = cursor.fetchall()
-
-                results = []
-                for row in rows:
-                    actions_blob = row[6]
-                    actions_data = actions_blob.read() if is_readable(actions_blob) else actions_blob
-
-                    content = self._deserialize_json_field(row[10])
-                    grounding_metadata = self._deserialize_json_field(row[11])
-                    custom_metadata = self._deserialize_json_field(row[12])
-
-                    results.append(
-                        EventRecord(
-                            id=row[0],
-                            session_id=row[1],
-                            app_name=row[2],
-                            user_id=row[3],
-                            invocation_id=row[4],
-                            author=row[5],
-                            actions=_coerce_bytes_payload(actions_data),
-                            long_running_tool_ids_json=row[7],
-                            branch=row[8],
-                            timestamp=row[9],
-                            content=content,
-                            grounding_metadata=grounding_metadata,
-                            custom_metadata=custom_metadata,
-                            partial=_from_oracle_bool(row[13]),
-                            turn_complete=_from_oracle_bool(row[14]),
-                            interrupted=_from_oracle_bool(row[15]),
-                            error_code=row[16],
-                            error_message=row[17],
-                        )
-                    )
-                return results
-        except oracledb.DatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return []
-            raise
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
 
 
 ORACLE_DUPLICATE_KEY_ERROR: Final = 1
@@ -2030,7 +1893,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return records
 
 
-class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
+class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
     """Oracle ADK memory store using sync oracledb driver."""
 
     __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
@@ -2081,7 +1944,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         return _extract_json_value(data)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         storage_type = self._detect_json_storage_type()
         return self._get_create_memory_table_sql_for_type(storage_type)
 
@@ -2196,12 +2059,16 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             """,
         ]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
 
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
@@ -2214,7 +2081,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             raise
         return True
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -2261,7 +2128,11 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         return inserted_count
 
-    def search_entries(
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         if not self._enabled:
@@ -2279,6 +2150,12 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -2326,7 +2203,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             rows = cursor.fetchall()
         return self._rows_to_records(rows)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -2334,7 +2211,11 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         sql = f"""
         DELETE FROM {self._memory_table}
         WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
@@ -2344,6 +2225,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             cursor.execute(sql, {"days": days})
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []

@@ -1,3 +1,4 @@
+import logging
 import os
 import warnings
 
@@ -61,6 +62,26 @@ def disable_spanner_builtin_metrics() -> "Generator[None, None, None]":
         os.environ.pop("SPANNER_DISABLE_BUILTIN_METRICS", None)
     else:
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def suppress_noisy_test_loggers() -> "Generator[None, None, None]":
+    """Lower especially noisy library loggers during test runs."""
+    overrides = {
+        "httpx": logging.WARNING,
+        "httpcore": logging.WARNING,
+        "mysql.connector": logging.WARNING,
+        "asyncmy": logging.ERROR,
+        "sqlspec.migrations.tracker": logging.WARNING,
+    }
+    original_levels = {name: logging.getLogger(name).level for name in overrides}
+    for name, level in overrides.items():
+        logging.getLogger(name).setLevel(level)
+    try:
+        yield
+    finally:
+        for name, level in original_levels.items():
+            logging.getLogger(name).setLevel(level)
 
 
 @pytest.fixture(scope="session")

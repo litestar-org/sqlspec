@@ -30,64 +30,64 @@ def _build_record(*, session_id: str, event_id: str, content_text: str, inserted
     )
 
 
-def test_sqlite_memory_store_insert_search_dedup() -> None:
+async def test_sqlite_memory_store_insert_search_dedup() -> None:
     """Insert memory entries, search by text, and skip duplicates."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(connection_config={"database": tmp.name})
         store = SqliteADKMemoryStore(config)
-        store.create_tables()
+        await store.create_tables()
 
         now = datetime.now(timezone.utc)
         record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
         record2 = _build_record(session_id="s1", event_id="evt-2", content_text="latte", inserted_at=now)
 
-        inserted = store.insert_memory_entries([record1, record2])
+        inserted = await store.insert_memory_entries([record1, record2])
         assert inserted == 2
 
-        results = store.search_entries(query="espresso", app_name="app", user_id="user")
+        results = await store.search_entries(query="espresso", app_name="app", user_id="user")
         assert len(results) == 1
         assert results[0]["event_id"] == "evt-1"
 
-        deduped = store.insert_memory_entries([record1])
+        deduped = await store.insert_memory_entries([record1])
         assert deduped == 0
 
 
-def test_sqlite_memory_store_delete_by_session() -> None:
+async def test_sqlite_memory_store_delete_by_session() -> None:
     """Delete memory entries by session id."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(connection_config={"database": tmp.name})
         store = SqliteADKMemoryStore(config)
-        store.create_tables()
+        await store.create_tables()
 
         now = datetime.now(timezone.utc)
         record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
         record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
-        store.insert_memory_entries([record1, record2])
+        await store.insert_memory_entries([record1, record2])
 
-        deleted = store.delete_entries_by_session("s1")
+        deleted = await store.delete_entries_by_session("s1")
         assert deleted == 1
 
-        remaining = store.search_entries(query="latte", app_name="app", user_id="user")
+        remaining = await store.search_entries(query="latte", app_name="app", user_id="user")
         assert len(remaining) == 1
         assert remaining[0]["session_id"] == "s2"
 
 
-def test_sqlite_memory_store_delete_older_than() -> None:
+async def test_sqlite_memory_store_delete_older_than() -> None:
     """Delete memory entries older than a cutoff."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(connection_config={"database": tmp.name})
         store = SqliteADKMemoryStore(config)
-        store.create_tables()
+        await store.create_tables()
 
         now = datetime.now(timezone.utc)
         old = now - timedelta(days=40)
         record1 = _build_record(session_id="s1", event_id="evt-1", content_text="old", inserted_at=old)
         record2 = _build_record(session_id="s1", event_id="evt-2", content_text="new", inserted_at=now)
-        store.insert_memory_entries([record1, record2])
+        await store.insert_memory_entries([record1, record2])
 
-        deleted = store.delete_entries_older_than(30)
+        deleted = await store.delete_entries_older_than(30)
         assert deleted == 1
 
-        remaining = store.search_entries(query="new", app_name="app", user_id="user")
+        remaining = await store.search_entries(query="new", app_name="app", user_id="user")
         assert len(remaining) == 1
         assert remaining[0]["event_id"] == "evt-2"

@@ -19,8 +19,20 @@ Services
    :show-inheritance:
    :no-index:
 
-Base Stores
-===========
+.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecSyncMemoryService
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: SQLSpecArtifactService
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+Session Stores
+==============
 
 .. autoclass:: BaseAsyncADKStore
    :members:
@@ -34,6 +46,9 @@ Base Stores
    :show-inheritance:
    :no-index:
 
+Memory Stores
+=============
+
 .. autoclass:: BaseAsyncADKMemoryStore
    :members:
    :undoc-members:
@@ -44,4 +59,58 @@ Base Stores
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
+
+Artifact Stores
+===============
+
+.. autoclass:: BaseAsyncADKArtifactStore
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: BaseSyncADKArtifactStore
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+Record Types
+============
+
+.. autoclass:: SessionRecord
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: EventRecord
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: MemoryRecord
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: ArtifactRecord
+   :members:
+   :show-inheritance:
+   :no-index:
+
+Configuration
+=============
+
+.. autoclass:: ADKConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
+Converters
+==========
+
+.. automodule:: sqlspec.extensions.adk.converters
+   :members:
+   :undoc-members:
    :no-index:

@@ -1,6 +1,8 @@
 """Tests for ADBC ADK store event operations."""
 
-from datetime import datetime, timezone
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -8,313 +10,387 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKStore
+from sqlspec.extensions.adk import EventRecord
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
 
 @pytest.fixture()
-def adbc_store(tmp_path: Path) -> AdbcADKStore:
+async def adbc_store(tmp_path: Path) -> AdbcADKStore:
     """Create ADBC ADK store with SQLite backend."""
     db_path = tmp_path / "test_adk.db"
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
     store = AdbcADKStore(config)
-    store.create_tables()
+    await store.create_tables()
     return store
 
 
 @pytest.fixture()
-def session_fixture(adbc_store: Any) -> dict[str, str]:
+async def session_fixture(adbc_store: Any) -> dict[str, str]:
     """Create a test session."""
     session_id = "test-session"
     app_name = "test-app"
     user_id = "user-123"
     state = {"test": True}
-    adbc_store.create_session(session_id, app_name, user_id, state)
+    await adbc_store.create_session(session_id, app_name, user_id, state)
     return {"session_id": session_id, "app_name": app_name, "user_id": user_id}
 
 
-def test_create_event(adbc_store: Any, session_fixture: Any) -> None:
-    """Test creating a new event."""
-    event_id = "event-1"
-    event = adbc_store.create_event(
-        event_id=event_id,
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        author="user",
-        actions=b"serialized_actions",
-        content={"message": "Hello"},
+async def test_create_event(adbc_store: Any, session_fixture: Any) -> None:
+    """Test creating a new event returns 5-key EventRecord."""
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "event-1",
+            "content": {"message": "Hello"},
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    await adbc_store.append_event(event_record)
+
+    events = await adbc_store.get_events(session_fixture["session_id"])
+    assert len(events) == 1
+    assert events[0]["session_id"] == session_fixture["session_id"]
+    assert events[0]["author"] == "user"
+    assert events[0]["timestamp"] is not None
+    assert "event_json" in events[0]
+
+    # Content is stored inside event_json
+    event_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
     )
-
-    assert event["id"] == event_id
-    assert event["session_id"] == session_fixture["session_id"]
-    assert event["author"] == "user"
-    assert event["actions"] == b"serialized_actions"
-    assert event["content"] == {"message": "Hello"}
-    assert event["timestamp"] is not None
+    assert event_data["content"] == {"message": "Hello"}
 
 
-def test_list_events(adbc_store: Any, session_fixture: Any) -> None:
+async def test_list_events(adbc_store: Any, session_fixture: Any) -> None:
     """Test listing events for a session."""
-    adbc_store.create_event(
-        event_id="event-1",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        author="user",
-        content={"seq": 1},
-    )
-    adbc_store.create_event(
-        event_id="event-2",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        author="assistant",
-        content={"seq": 2},
-    )
+    event1: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "event-1",
+            "content": {"seq": 1},
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    event2: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "assistant",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "event-2",
+            "content": {"seq": 2},
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    await adbc_store.append_event(event1)
+    await adbc_store.append_event(event2)
 
-    events = adbc_store.list_events(session_fixture["session_id"])
+    events = await adbc_store.get_events(session_fixture["session_id"])
 
     assert len(events) == 2
-    assert events[0]["id"] == "event-1"
-    assert events[1]["id"] == "event-2"
+    assert events[0]["author"] == "user"
+    assert events[1]["author"] == "assistant"
 
 
-def test_list_events_empty(adbc_store: Any, session_fixture: Any) -> None:
+async def test_list_events_empty(adbc_store: Any, session_fixture: Any) -> None:
     """Test listing events when none exist."""
-    events = adbc_store.list_events(session_fixture["session_id"])
+    events = await adbc_store.get_events(session_fixture["session_id"])
     assert events == []
 
 
-def test_event_with_all_fields(adbc_store: Any, session_fixture: Any) -> None:
-    """Test creating event with all optional fields."""
-    timestamp = datetime.now(timezone.utc)
-    event = adbc_store.create_event(
-        event_id="full-event",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        invocation_id="invocation-123",
-        author="assistant",
-        actions=b"complex_action_data",
-        long_running_tool_ids_json='["tool1", "tool2"]',
-        branch="main",
-        timestamp=timestamp,
-        content={"text": "Response"},
-        grounding_metadata={"sources": ["doc1", "doc2"]},
-        custom_metadata={"custom": "data"},
-        partial=True,
-        turn_complete=False,
-        interrupted=False,
-        error_code="NONE",
-        error_message="No errors",
+async def test_event_with_all_fields(adbc_store: Any, session_fixture: Any) -> None:
+    """Test creating event with all optional fields stored in event_json."""
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "invocation-123",
+        "author": "assistant",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "full-event",
+            "content": {"text": "Response"},
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+            "branch": "main",
+            "grounding_metadata": {"sources": ["doc1", "doc2"]},
+            "custom_metadata": {"custom": "data"},
+            "partial": True,
+            "turn_complete": False,
+            "interrupted": False,
+            "error_code": "NONE",
+            "error_message": "No errors",
+        },
+    }
+    await adbc_store.append_event(event_record)
+
+    events = await adbc_store.get_events(session_fixture["session_id"])
+    assert len(events) == 1
+
+    # Top-level indexed columns
+    assert events[0]["invocation_id"] == "invocation-123"
+    assert events[0]["author"] == "assistant"
+
+    # Everything else is in event_json
+    event_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
     )
-
-    assert event["invocation_id"] == "invocation-123"
-    assert event["author"] == "assistant"
-    assert event["actions"] == b"complex_action_data"
-    assert event["long_running_tool_ids_json"] == '["tool1", "tool2"]'
-    assert event["branch"] == "main"
-    assert event["content"] == {"text": "Response"}
-    assert event["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
-    assert event["custom_metadata"] == {"custom": "data"}
-    assert event["partial"] is True
-    assert event["turn_complete"] is False
-    assert event["interrupted"] is False
-    assert event["error_code"] == "NONE"
-    assert event["error_message"] == "No errors"
+    assert event_data["content"] == {"text": "Response"}
+    assert event_data["branch"] == "main"
+    assert event_data["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
+    assert event_data["custom_metadata"] == {"custom": "data"}
+    assert event_data["partial"] is True
+    assert event_data["turn_complete"] is False
+    assert event_data["interrupted"] is False
+    assert event_data["error_code"] == "NONE"
+    assert event_data["error_message"] == "No errors"
 
 
-def test_event_with_minimal_fields(adbc_store: Any, session_fixture: Any) -> None:
+async def test_event_with_minimal_fields(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating event with only required fields."""
-    event = adbc_store.create_event(
-        event_id="minimal-event",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "minimal-event",
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    await adbc_store.append_event(event_record)
 
-    assert event["id"] == "minimal-event"
-    assert event["session_id"] == session_fixture["session_id"]
-    assert event["app_name"] == session_fixture["app_name"]
-    assert event["user_id"] == session_fixture["user_id"]
-    assert event["author"] is None
-    assert event["actions"] == b""
-    assert event["content"] is None
-
-
-def test_event_boolean_fields(adbc_store: Any, session_fixture: Any) -> None:
-    """Test event boolean field conversion."""
-    event_true = adbc_store.create_event(
-        event_id="event-true",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        partial=True,
-        turn_complete=True,
-        interrupted=True,
-    )
-
-    assert event_true["partial"] is True
-    assert event_true["turn_complete"] is True
-    assert event_true["interrupted"] is True
-
-    event_false = adbc_store.create_event(
-        event_id="event-false",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        partial=False,
-        turn_complete=False,
-        interrupted=False,
-    )
-
-    assert event_false["partial"] is False
-    assert event_false["turn_complete"] is False
-    assert event_false["interrupted"] is False
-
-    event_none = adbc_store.create_event(
-        event_id="event-none",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
-
-    assert event_none["partial"] is None
-    assert event_none["turn_complete"] is None
-    assert event_none["interrupted"] is None
+    events = await adbc_store.get_events(session_fixture["session_id"])
+    assert len(events) == 1
+    assert events[0]["session_id"] == session_fixture["session_id"]
+    assert "event_json" in events[0]
 
 
-def test_event_json_fields(adbc_store: Any, session_fixture: Any) -> None:
-    """Test event JSON field serialization and deserialization."""
+async def test_event_json_fields(adbc_store: Any, session_fixture: Any) -> None:
+    """Test event JSON field serialization and deserialization via event_json."""
     complex_content = {"nested": {"data": "value"}, "list": [1, 2, 3], "null": None}
     complex_grounding = {"sources": [{"title": "Doc", "url": "http://example.com"}]}
     complex_custom = {"metadata": {"version": 1, "tags": ["tag1", "tag2"]}}
 
-    event = adbc_store.create_event(
-        event_id="json-event",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        content=complex_content,
-        grounding_metadata=complex_grounding,
-        custom_metadata=complex_custom,
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "json-event",
+            "content": complex_content,
+            "grounding_metadata": complex_grounding,
+            "custom_metadata": complex_custom,
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    await adbc_store.append_event(event_record)
+
+    events = await adbc_store.get_events(session_fixture["session_id"])
+    assert len(events) == 1
+    event_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
     )
-
-    assert event["content"] == complex_content
-    assert event["grounding_metadata"] == complex_grounding
-    assert event["custom_metadata"] == complex_custom
-
-    events = adbc_store.list_events(session_fixture["session_id"])
-    retrieved = events[0]
-
-    assert retrieved["content"] == complex_content
-    assert retrieved["grounding_metadata"] == complex_grounding
-    assert retrieved["custom_metadata"] == complex_custom
+    assert event_data["content"] == complex_content
+    assert event_data["grounding_metadata"] == complex_grounding
+    assert event_data["custom_metadata"] == complex_custom
 
 
-def test_event_ordering(adbc_store: Any, session_fixture: Any) -> None:
+async def test_event_ordering(adbc_store: Any, session_fixture: Any) -> None:
     """Test that events are ordered by timestamp ASC."""
-    import time
+    ev1: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {"id": "event-1", "app_name": session_fixture["app_name"], "user_id": session_fixture["user_id"]},
+    }
+    await adbc_store.append_event(ev1)
 
-    adbc_store.create_event(
-        event_id="event-1",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
+    await asyncio.sleep(0.01)
 
-    time.sleep(0.01)
+    ev2: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {"id": "event-2", "app_name": session_fixture["app_name"], "user_id": session_fixture["user_id"]},
+    }
+    await adbc_store.append_event(ev2)
 
-    adbc_store.create_event(
-        event_id="event-2",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
+    await asyncio.sleep(0.01)
 
-    time.sleep(0.01)
+    ev3: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {"id": "event-3", "app_name": session_fixture["app_name"], "user_id": session_fixture["user_id"]},
+    }
+    await adbc_store.append_event(ev3)
 
-    adbc_store.create_event(
-        event_id="event-3",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
-
-    events = adbc_store.list_events(session_fixture["session_id"])
+    events = await adbc_store.get_events(session_fixture["session_id"])
 
     assert len(events) == 3
-    assert events[0]["id"] == "event-1"
-    assert events[1]["id"] == "event-2"
-    assert events[2]["id"] == "event-3"
     assert events[0]["timestamp"] < events[1]["timestamp"]
     assert events[1]["timestamp"] < events[2]["timestamp"]
 
 
-def test_delete_session_cascades_events(adbc_store: Any, session_fixture: Any, tmp_path: Path) -> None:
+async def test_delete_session_cascades_events(adbc_store: Any, session_fixture: Any, tmp_path: Path) -> None:
     """Test that deleting a session cascades to delete events.
 
     Note: SQLite with ADBC requires foreign key enforcement to be explicitly
     enabled for cascade deletes to work. This test manually enables it.
     """
-    adbc_store.create_event(
-        event_id="event-1",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
-    adbc_store.create_event(
-        event_id="event-2",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-    )
+    ev1: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {"id": "event-1", "app_name": session_fixture["app_name"], "user_id": session_fixture["user_id"]},
+    }
+    ev2: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {"id": "event-2", "app_name": session_fixture["app_name"], "user_id": session_fixture["user_id"]},
+    }
+    await adbc_store.append_event(ev1)
+    await adbc_store.append_event(ev2)
 
-    events_before = adbc_store.list_events(session_fixture["session_id"])
+    events_before = await adbc_store.get_events(session_fixture["session_id"])
     assert len(events_before) == 2
 
-    # For SQLite with separate connections per operation, we need to manually delete events
-    # or note that cascade deletes require persistent connections
-    # For this test, just verify the session deletion works
-    adbc_store.delete_session(session_fixture["session_id"])
+    await adbc_store.delete_session(session_fixture["session_id"])
 
-    # Session should be gone
-    session_after = adbc_store.get_session(session_fixture["session_id"])
+    session_after = await adbc_store.get_session(session_fixture["session_id"])
     assert session_after is None
 
-    # Events may still exist with ADBC SQLite due to FK enforcement across connections
-    # This is a known limitation when using ADBC with SQLite in-memory or file-based
-    # with separate connections per operation
 
-
-def test_event_with_empty_actions(adbc_store: Any, session_fixture: Any) -> None:
+async def test_event_with_empty_actions(adbc_store: Any, session_fixture: Any) -> None:
     """Test creating event with empty actions bytes."""
-    event = adbc_store.create_event(
-        event_id="empty-actions",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        actions=b"",
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "empty-actions",
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    await adbc_store.append_event(event_record)
+
+    events = await adbc_store.get_events(session_fixture["session_id"])
+    assert len(events) == 1
+    assert "event_json" in events[0]
+
+
+async def test_event_with_large_content(adbc_store: Any, session_fixture: Any) -> None:
+    """Test creating event with large content in event_json."""
+    large_content = {"data": "x" * 10000}
+
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "",
+        "author": "",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "large-content",
+            "content": large_content,
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
+    await adbc_store.append_event(event_record)
+
+    events = await adbc_store.get_events(session_fixture["session_id"])
+    assert len(events) == 1
+    event_data = (
+        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
     )
-
-    assert event["actions"] == b""
-
-    events = adbc_store.list_events(session_fixture["session_id"])
-    assert events[0]["actions"] == b""
+    assert event_data["content"] == large_content
 
 
-def test_event_with_large_actions(adbc_store: Any, session_fixture: Any) -> None:
-    """Test creating event with large actions BLOB."""
-    large_actions = b"x" * 10000
+async def test_append_event_preserves_existing_session_state(adbc_store: Any, session_fixture: Any) -> None:
+    """append_event must not overwrite the durable session state."""
+    event_record: EventRecord = {
+        "session_id": session_fixture["session_id"],
+        "invocation_id": "append-only",
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "event_json": {
+            "id": "append-only-event",
+            "app_name": session_fixture["app_name"],
+            "user_id": session_fixture["user_id"],
+        },
+    }
 
-    event = adbc_store.create_event(
-        event_id="large-actions",
-        session_id=session_fixture["session_id"],
-        app_name=session_fixture["app_name"],
-        user_id=session_fixture["user_id"],
-        actions=large_actions,
-    )
+    await adbc_store.append_event(event_record)
 
-    assert event["actions"] == large_actions
-    assert len(event["actions"]) == 10000
+    session = await adbc_store.get_session(session_fixture["session_id"])
+    assert session is not None
+    assert session["state"] == {"test": True}
+
+
+async def test_get_events_applies_after_timestamp_and_limit(adbc_store: Any, session_fixture: Any) -> None:
+    """get_events must respect both after_timestamp and limit."""
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    event_records = [
+        {
+            "session_id": session_fixture["session_id"],
+            "invocation_id": "",
+            "author": "user",
+            "timestamp": base_time,
+            "event_json": {
+                "id": "event-1",
+                "app_name": session_fixture["app_name"],
+                "user_id": session_fixture["user_id"],
+            },
+        },
+        {
+            "session_id": session_fixture["session_id"],
+            "invocation_id": "",
+            "author": "assistant",
+            "timestamp": base_time + timedelta(seconds=1),
+            "event_json": {
+                "id": "event-2",
+                "app_name": session_fixture["app_name"],
+                "user_id": session_fixture["user_id"],
+            },
+        },
+        {
+            "session_id": session_fixture["session_id"],
+            "invocation_id": "",
+            "author": "assistant",
+            "timestamp": base_time + timedelta(seconds=2),
+            "event_json": {
+                "id": "event-3",
+                "app_name": session_fixture["app_name"],
+                "user_id": session_fixture["user_id"],
+            },
+        },
+    ]
+
+    for event_record in event_records:
+        await adbc_store.append_event(event_record)
+
+    filtered_events = await adbc_store.get_events(session_fixture["session_id"], after_timestamp=base_time, limit=1)
+
+    assert len(filtered_events) == 1
+    filtered_event = filtered_events[0]["event_json"]
+    filtered_data = json.loads(filtered_event) if isinstance(filtered_event, str) else filtered_event
+    assert filtered_data["id"] == "event-2"

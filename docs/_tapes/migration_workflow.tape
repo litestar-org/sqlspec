@@ -28,7 +28,7 @@ Type "# Initialize the migration environment"
 Enter
 Sleep 500ms
 
-Type "sqlspec db init"
+Type "sqlspec init"
 Enter
 Sleep 3s
 
@@ -36,7 +36,7 @@ Type "# Create a new migration"
 Enter
 Sleep 500ms
 
-Type 'sqlspec db create-migration -m "add users table"'
+Type 'sqlspec create-migration -m "add users table"'
 Enter
 Sleep 3s
 
@@ -44,7 +44,7 @@ Type "# Apply the migration"
 Enter
 Sleep 500ms
 
-Type "sqlspec db upgrade"
+Type "sqlspec upgrade"
 Enter
 Sleep 3s
 
@@ -52,7 +52,7 @@ Type "# Check current revision"
 Enter
 Sleep 500ms
 
-Type "sqlspec db show-current-revision"
+Type "sqlspec show-current-revision"
 Enter
 Sleep 3s
 

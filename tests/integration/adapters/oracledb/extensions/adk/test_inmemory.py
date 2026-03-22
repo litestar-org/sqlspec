@@ -302,14 +302,14 @@ async def test_inmemory_tables_functional_async(oracle_async_config: OracleAsync
 
 
 @pytest.mark.oracledb
-def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
+async def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that in_memory=True works with sync store."""
     config = OracleSyncConfig(
         connection_config=oracle_sync_config.connection_config, extension_config={"adk": {"in_memory": True}}
     )
 
     store = OracleSyncADKStore(config)
-    store.create_tables()
+    await store.create_tables()
 
     try:
         with config.provide_connection() as conn:
@@ -343,14 +343,14 @@ def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
 
 
 @pytest.mark.oracledb
-def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
+async def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that in_memory=False works with sync store."""
     config = OracleSyncConfig(
         connection_config=oracle_sync_config.connection_config, extension_config={"adk": {"in_memory": False}}
     )
 
     store = OracleSyncADKStore(config)
-    store.create_tables()
+    await store.create_tables()
 
     try:
         with config.provide_connection() as conn:
@@ -382,14 +382,14 @@ def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> None:
 
 
 @pytest.mark.oracledb
-def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncConfig) -> None:
+async def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncConfig) -> None:
     """Test that INMEMORY tables work correctly in sync mode."""
     config = OracleSyncConfig(
         connection_config=oracle_sync_config.connection_config, extension_config={"adk": {"in_memory": True}}
     )
 
     store = OracleSyncADKStore(config)
-    store.create_tables()
+    await store.create_tables()
 
     try:
         session_id = "inmemory-sync-session"
@@ -397,11 +397,11 @@ def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncConfig) -
         user_id = "user-456"
         state = {"sync": True, "value": 99}
 
-        session = store.create_session(session_id, app_name, user_id, state)
+        session = await store.create_session(session_id, app_name, user_id, state)
         assert session["id"] == session_id
         assert session["state"] == state
 
-        retrieved = store.get_session(session_id)
+        retrieved = await store.get_session(session_id)
         assert retrieved is not None
         assert retrieved["state"] == state
 

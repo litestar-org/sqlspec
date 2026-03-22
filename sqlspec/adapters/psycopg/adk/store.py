@@ -6,9 +6,10 @@ from psycopg import errors
 from psycopg import sql as pg_sql
 from psycopg.types.json import Jsonb
 
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -56,84 +57,32 @@ def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: "object | N
 
 
 class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
-    """PostgreSQL ADK store using Psycopg3 driver.
+    """PostgreSQL ADK store using Psycopg3 async driver.
 
     Implements session and event storage for Google Agent Development Kit
     using PostgreSQL via psycopg3 with native async/await support.
+    Events are stored as a single JSONB blob (``event_json``) alongside
+    indexed scalar columns for efficient querying.
 
     Provides:
-    - Session state management with JSONB storage and merge operations
-    - Event history tracking with BYTEA-serialized actions
+    - Session state management with JSONB storage
+    - Full-fidelity event storage via ``event_json`` JSONB column
+    - Atomic ``append_event_and_update_state`` for durable session mutations
     - Microsecond-precision timestamps with TIMESTAMPTZ
     - Foreign key constraints with cascade delete
-    - Efficient upserts using ON CONFLICT
     - GIN indexes for JSONB queries
     - HOT updates with FILLFACTOR 80
 
     Args:
         config: PsycopgAsyncConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.psycopg import PsycopgAsyncConfig
-        from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore
-
-        config = PsycopgAsyncConfig(
-            connection_config={"conninfo": "postgresql://..."},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-                }
-            }
-        )
-        store = PsycopgAsyncADKStore(config)
-        await store.ensure_tables()
-
-    Notes:
-        - PostgreSQL JSONB type used for state (more efficient than JSON)
-        - Psycopg requires wrapping dicts with Jsonb() for type safety
-        - TIMESTAMPTZ provides timezone-aware microsecond precision
-        - State merging uses `state || $1::jsonb` operator for efficiency
-        - BYTEA for pre-serialized actions from Google ADK
-        - GIN index on state for JSONB queries (partial index)
-        - FILLFACTOR 80 leaves space for HOT updates
-        - Parameter style: $1, $2, $3 (PostgreSQL numeric placeholders)
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
-        """Initialize Psycopg ADK store.
-
-        Args:
-            config: PsycopgAsyncConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
-        """
         super().__init__(config)
 
     async def _get_create_sessions_table_sql(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR(128) for IDs and names (sufficient for UUIDs and app names)
-            - JSONB type for state storage with default empty object
-            - TIMESTAMPTZ with microsecond precision
-            - FILLFACTOR 80 for HOT updates (reduces table bloat)
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
-            - Partial GIN index on state for JSONB queries (only non-empty)
-            - Optional owner ID column for multi-tenancy or user references
-        """
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -160,61 +109,24 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for events.
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-
-        Notes:
-            - VARCHAR sizes: id(128), session_id(128), invocation_id(256), author(256),
-              branch(256), error_code(256), error_message(1024)
-            - BYTEA for pickled actions (no size limit)
-            - JSONB for content, grounding_metadata, custom_metadata, long_running_tool_ids_json
-            - BOOLEAN for partial, turn_complete, interrupted
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
-        """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            author VARCHAR(256),
-            actions BYTEA,
-            long_running_tool_ids_json JSONB,
-            branch VARCHAR(256),
+            invocation_id VARCHAR(256) NOT NULL,
+            author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            content JSONB,
-            grounding_metadata JSONB,
-            custom_metadata JSONB,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
+            event_json JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
+        ) WITH (fillfactor = 80);
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC);
         """
 
     def _get_drop_tables_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            PostgreSQL automatically drops indexes when dropping tables.
-        """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
     async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist."""
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
@@ -222,23 +134,6 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner_id_column (if configured).
-
-        Returns:
-            Created session record.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for create_time and update_time.
-            State is wrapped with Jsonb() for PostgreSQL type safety.
-            If owner_id_column is configured, owner_id value must be provided.
-        """
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -261,18 +156,6 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         return await self.get_session(session_id)  # type: ignore[return-value]
 
     async def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID.
-
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            Session record or None if not found.
-
-        Notes:
-            PostgreSQL returns datetime objects for TIMESTAMPTZ columns.
-            JSONB is automatically deserialized by psycopg to Python dict.
-        """
         query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {table}
@@ -299,17 +182,6 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             return None
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
-
-        Args:
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Uses CURRENT_TIMESTAMP for update_time.
-            State is wrapped with Jsonb() for PostgreSQL type safety.
-        """
         query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
@@ -320,32 +192,12 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             await cur.execute(query, (Jsonb(state), session_id))
 
     async def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
-
-        Args:
-            session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
-        """
         query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(query, (session_id,))
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
-        """
         if user_id is None:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -383,73 +235,62 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             return []
 
     async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session.
-
-        Args:
-            event_record: Event record to store.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for timestamp if not provided.
-            JSONB fields are wrapped with Jsonb() for PostgreSQL type safety.
-        """
-        content_json = event_record.get("content")
-        grounding_metadata_json = event_record.get("grounding_metadata")
-        custom_metadata_json = event_record.get("custom_metadata")
-
         query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
+
+        event_json_value = event_record["event_json"]
+        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(
                 query,
                 (
-                    event_record["id"],
                     event_record["session_id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
-                    event_record.get("invocation_id"),
-                    event_record.get("author"),
-                    event_record.get("actions"),
-                    event_record.get("long_running_tool_ids_json"),
-                    event_record.get("branch"),
+                    event_record["invocation_id"],
+                    event_record["author"],
                     event_record["timestamp"],
-                    Jsonb(content_json) if content_json is not None else None,
-                    Jsonb(grounding_metadata_json) if grounding_metadata_json is not None else None,
-                    Jsonb(custom_metadata_json) if custom_metadata_json is not None else None,
-                    event_record.get("partial"),
-                    event_record.get("turn_complete"),
-                    event_record.get("interrupted"),
-                    event_record.get("error_code"),
-                    event_record.get("error_message"),
+                    jsonb_value,
                 ),
             )
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """).format(table=pg_sql.Identifier(self._events_table))
+
+        update_query = pg_sql.SQL("""
+        UPDATE {table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
+
+        event_json_value = event_record["event_json"]
+        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                insert_query,
+                (
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            await cur.execute(update_query, (Jsonb(state), session_id))
+            await conn.commit()
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
-        """Get events for a session.
-
-        Args:
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            JSONB fields are automatically deserialized by psycopg.
-            BYTEA actions are converted to bytes.
-        """
         where_clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
 
@@ -463,10 +304,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
         query = pg_sql.SQL(
             """
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT session_id, invocation_id, author, timestamp, event_json
         FROM {table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -484,24 +322,11 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
                 return [
                     EventRecord(
-                        id=row["id"],
                         session_id=row["session_id"],
-                        app_name=row["app_name"],
-                        user_id=row["user_id"],
                         invocation_id=row["invocation_id"],
                         author=row["author"],
-                        actions=bytes(row["actions"]) if row["actions"] else b"",
-                        long_running_tool_ids_json=row["long_running_tool_ids_json"],
-                        branch=row["branch"],
                         timestamp=row["timestamp"],
-                        content=row["content"],
-                        grounding_metadata=row["grounding_metadata"],
-                        custom_metadata=row["custom_metadata"],
-                        partial=row["partial"],
-                        turn_complete=row["turn_complete"],
-                        interrupted=row["interrupted"],
-                        error_code=row["error_code"],
-                        error_message=row["error_message"],
+                        event_json=row["event_json"],
                     )
                     for row in rows
                 ]
@@ -509,85 +334,33 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             return []
 
 
-class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
+class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     """PostgreSQL synchronous ADK store using Psycopg3 driver.
 
     Implements session and event storage for Google Agent Development Kit
     using PostgreSQL via psycopg3 with synchronous execution.
+    Events are stored as a single JSONB blob (``event_json``) alongside
+    indexed scalar columns for efficient querying.
 
     Provides:
-    - Session state management with JSONB storage and merge operations
-    - Event history tracking with BYTEA-serialized actions
+    - Session state management with JSONB storage
+    - Full-fidelity event storage via ``event_json`` JSONB column
+    - Atomic ``create_event_and_update_state`` for durable session mutations
     - Microsecond-precision timestamps with TIMESTAMPTZ
     - Foreign key constraints with cascade delete
-    - Efficient upserts using ON CONFLICT
     - GIN indexes for JSONB queries
     - HOT updates with FILLFACTOR 80
 
     Args:
         config: PsycopgSyncConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.psycopg import PsycopgSyncConfig
-        from sqlspec.adapters.psycopg.adk import PsycopgSyncADKStore
-
-        config = PsycopgSyncConfig(
-            connection_config={"conninfo": "postgresql://..."},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-                }
-            }
-        )
-        store = PsycopgSyncADKStore(config)
-        store.ensure_tables()
-
-    Notes:
-        - PostgreSQL JSONB type used for state (more efficient than JSON)
-        - Psycopg requires wrapping dicts with Jsonb() for type safety
-        - TIMESTAMPTZ provides timezone-aware microsecond precision
-        - State merging uses `state || $1::jsonb` operator for efficiency
-        - BYTEA for pre-serialized actions from Google ADK
-        - GIN index on state for JSONB queries (partial index)
-        - FILLFACTOR 80 leaves space for HOT updates
-        - Parameter style: $1, $2, $3 (PostgreSQL numeric placeholders)
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
 
     def __init__(self, config: "PsycopgSyncConfig") -> None:
-        """Initialize Psycopg synchronous ADK store.
-
-        Args:
-            config: PsycopgSyncConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
-        """
         super().__init__(config)
 
-    def _get_create_sessions_table_sql(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR(128) for IDs and names (sufficient for UUIDs and app names)
-            - JSONB type for state storage with default empty object
-            - TIMESTAMPTZ with microsecond precision
-            - FILLFACTOR 80 for HOT updates (reduces table bloat)
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
-            - Partial GIN index on state for JSONB queries (only non-empty)
-            - Optional owner ID column for multi-tenancy or user references
-        """
+    async def _get_create_sessions_table_sql(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -613,86 +386,36 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    def _get_create_events_table_sql(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for events.
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-
-        Notes:
-            - VARCHAR sizes: id(128), session_id(128), invocation_id(256), author(256),
-              branch(256), error_code(256), error_message(1024)
-            - BYTEA for pickled actions (no size limit)
-            - JSONB for content, grounding_metadata, custom_metadata, long_running_tool_ids_json
-            - BOOLEAN for partial, turn_complete, interrupted
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
-        """
+    async def _get_create_events_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            author VARCHAR(256),
-            actions BYTEA,
-            long_running_tool_ids_json JSONB,
-            branch VARCHAR(256),
+            invocation_id VARCHAR(256) NOT NULL,
+            author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            content JSONB,
-            grounding_metadata JSONB,
-            custom_metadata JSONB,
-            partial BOOLEAN,
-            turn_complete BOOLEAN,
-            interrupted BOOLEAN,
-            error_code VARCHAR(256),
-            error_message VARCHAR(1024),
+            event_json JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
+        ) WITH (fillfactor = 80);
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC);
         """
 
     def _get_drop_tables_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            PostgreSQL automatically drops indexes when dropping tables.
-        """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist."""
+    def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_sessions_table_sql())
-            driver.execute_script(self._get_create_events_table_sql())
+            driver.execute_script(run_(self._get_create_sessions_table_sql)())
+            driver.execute_script(run_(self._get_create_events_table_sql)())
 
-    def create_session(
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner_id_column (if configured).
-
-        Returns:
-            Created session record.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for create_time and update_time.
-            State is wrapped with Jsonb() for PostgreSQL type safety.
-            If owner_id_column is configured, owner_id value must be provided.
-        """
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -712,21 +435,19 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, params)
 
-        return self.get_session(session_id)  # type: ignore[return-value]
+        result = self._get_session(session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID.
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            Session record or None if not found.
-
-        Notes:
-            PostgreSQL returns datetime objects for TIMESTAMPTZ columns.
-            JSONB is automatically deserialized by psycopg to Python dict.
-        """
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         query = pg_sql.SQL("""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {table}
@@ -752,18 +473,11 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
 
-        Args:
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Uses CURRENT_TIMESTAMP for update_time.
-            State is wrapped with Jsonb() for PostgreSQL type safety.
-        """
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
@@ -773,33 +487,21 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (Jsonb(state), session_id))
 
-    def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
 
-        Args:
-            session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
-        """
+    def _delete_session(self, session_id: str) -> None:
         query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, (session_id,))
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
 
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
-        """
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -836,164 +538,129 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> EventRecord:
-        """Create a new event.
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
 
-        Args:
-            event_id: Unique event identifier.
-            session_id: Session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            author: Event author (user/assistant/system).
-            actions: Pickled actions object.
-            content: Event content (JSONB).
-            **kwargs: Additional optional fields (invocation_id, branch, timestamp,
-                     grounding_metadata, custom_metadata, partial, turn_complete,
-                     interrupted, error_code, error_message, long_running_tool_ids_json).
-
-        Returns:
-            Created event record.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for timestamp if not provided in kwargs.
-            JSONB fields are wrapped with Jsonb() for PostgreSQL type safety.
-        """
-        content_json = Jsonb(content) if content is not None else None
-        grounding_metadata = kwargs.get("grounding_metadata")
-        grounding_metadata_json = Jsonb(grounding_metadata) if grounding_metadata is not None else None
-        custom_metadata = kwargs.get("custom_metadata")
-        custom_metadata_json = Jsonb(custom_metadata) if custom_metadata is not None else None
-
-        query = pg_sql.SQL("""
+    def _insert_event(self, event_record: EventRecord) -> None:
+        insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), %s, %s, %s, %s, %s, %s, %s, %s
-        )
-        RETURNING id, session_id, app_name, user_id, invocation_id, author, actions,
-                  long_running_tool_ids_json, branch, timestamp, content,
-                  grounding_metadata, custom_metadata, partial, turn_complete,
-                  interrupted, error_code, error_message
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
+
+        event_json_value = event_record["event_json"]
+        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(
-                query,
+                insert_query,
                 (
-                    event_id,
-                    session_id,
-                    app_name,
-                    user_id,
-                    kwargs.get("invocation_id"),
-                    author,
-                    actions,
-                    kwargs.get("long_running_tool_ids_json"),
-                    kwargs.get("branch"),
-                    kwargs.get("timestamp"),
-                    content_json,
-                    grounding_metadata_json,
-                    custom_metadata_json,
-                    kwargs.get("partial"),
-                    kwargs.get("turn_complete"),
-                    kwargs.get("interrupted"),
-                    kwargs.get("error_code"),
-                    kwargs.get("error_message"),
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    jsonb_value,
                 ),
             )
-            row = cur.fetchone()
+            conn.commit()
 
-            if row is None:
-                msg = f"Failed to create event {event_id}"
-                raise RuntimeError(msg)
-
-            return EventRecord(
-                id=row["id"],
-                session_id=row["session_id"],
-                app_name=row["app_name"],
-                user_id=row["user_id"],
-                invocation_id=row["invocation_id"],
-                author=row["author"],
-                actions=bytes(row["actions"]) if row["actions"] else b"",
-                long_running_tool_ids_json=row["long_running_tool_ids_json"],
-                branch=row["branch"],
-                timestamp=row["timestamp"],
-                content=row["content"],
-                grounding_metadata=row["grounding_metadata"],
-                custom_metadata=row["custom_metadata"],
-                partial=row["partial"],
-                turn_complete=row["turn_complete"],
-                interrupted=row["interrupted"],
-                error_code=row["error_code"],
-                error_message=row["error_message"],
-            )
-
-    def list_events(self, session_id: str) -> "list[EventRecord]":
-        """List events for a session ordered by timestamp.
-
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            JSONB fields are automatically deserialized by psycopg.
-            BYTEA actions are converted to bytes.
-        """
-        query = pg_sql.SQL("""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
-        FROM {table}
-        WHERE session_id = %s
-        ORDER BY timestamp ASC
+    def _append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
+            session_id, invocation_id, author, timestamp, event_json
+        ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
+
+        update_query = pg_sql.SQL("""
+        UPDATE {table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
+
+        event_json_value = event_record["event_json"]
+        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                insert_query,
+                (
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            cur.execute(update_query, (Jsonb(state), session_id))
+            conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        where_clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("timestamp > %s")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        if limit:
+            params.append(limit)
+
+        query = pg_sql.SQL(
+            """
+        SELECT session_id, invocation_id, author, timestamp, event_json
+        FROM {table}
+        WHERE {where_clause}
+        ORDER BY timestamp ASC{limit_clause}
+        """
+        ).format(
+            table=pg_sql.Identifier(self._events_table),
+            where_clause=pg_sql.SQL(where_clause),  # pyright: ignore[reportArgumentType]
+            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),  # pyright: ignore[reportArgumentType]
+        )
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(query, (session_id,))
+                cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
                 return [
                     EventRecord(
-                        id=row["id"],
                         session_id=row["session_id"],
-                        app_name=row["app_name"],
-                        user_id=row["user_id"],
                         invocation_id=row["invocation_id"],
                         author=row["author"],
-                        actions=bytes(row["actions"]) if row["actions"] else b"",
-                        long_running_tool_ids_json=row["long_running_tool_ids_json"],
-                        branch=row["branch"],
                         timestamp=row["timestamp"],
-                        content=row["content"],
-                        grounding_metadata=row["grounding_metadata"],
-                        custom_metadata=row["custom_metadata"],
-                        partial=row["partial"],
-                        turn_complete=row["turn_complete"],
-                        interrupted=row["interrupted"],
-                        error_code=row["error_code"],
-                        error_message=row["error_message"],
+                        event_json=row["event_json"],
                     )
                     for row in rows
                 ]
         except errors.UndefinedTable:
             return []
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
 
 
 class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
@@ -1182,7 +849,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
-class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
+class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
     """PostgreSQL ADK memory store using Psycopg3 sync driver."""
 
     __slots__ = ()
@@ -1191,7 +858,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """Initialize Psycopg sync memory store."""
         super().__init__(config)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for memory entries."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -1231,15 +898,19 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1284,7 +955,11 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         return inserted_count
 
-    def search_entries(
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query."""
@@ -1303,6 +978,12 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
@@ -1344,7 +1025,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             rows = cur.fetchall()
         return _rows_to_records(rows)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
             table=pg_sql.Identifier(self._memory_table)
@@ -1354,7 +1035,11 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql, (session_id,))
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
-    def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         sql = pg_sql.SQL(
             """
@@ -1366,6 +1051,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql)
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
 
 def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":

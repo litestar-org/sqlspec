@@ -4,10 +4,17 @@ from typing import TYPE_CHECKING
 
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
 
-from sqlspec.extensions.adk.memory.converters import records_to_memory_entries, session_to_memory_records
+from sqlspec.extensions.adk.memory.converters import (
+    memory_entry_to_record,
+    records_to_memory_entries,
+    session_to_memory_records,
+)
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from google.adk.events.event import Event
     from google.adk.memory.memory_entry import MemoryEntry
     from google.adk.sessions import Session
 
@@ -100,6 +107,98 @@ class SQLSpecMemoryService(BaseMemoryService):
         inserted_count = await self._store.insert_memory_entries(records)
         logger.debug(
             "Stored %d memory entries for session %s (total events: %d)", inserted_count, session.id, len(records)
+        )
+
+    async def add_events_to_memory(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        events: "Sequence[Event]",
+        session_id: "str | None" = None,
+        custom_metadata: "Mapping[str, object] | None" = None,
+    ) -> None:
+        """Add an explicit list of events to the memory service.
+
+        Same Event-to-MemoryRecord extraction logic as
+        ``add_session_to_memory``, but operates on a sequence of Events
+        directly (no Session wrapper needed).
+
+        Args:
+            app_name: The application name for memory scope.
+            user_id: The user ID for memory scope.
+            events: The events to add to memory.
+            session_id: Optional session ID for memory scope/partitioning.
+                If None, memory entries are user-scoped only.
+            custom_metadata: Optional portable metadata stored in
+                ``MemoryRecord.metadata_json``.
+        """
+        from sqlspec.extensions.adk.memory.converters import event_to_memory_record
+
+        metadata_dict = dict(custom_metadata) if custom_metadata else None
+        records = []
+        for event in events:
+            record = event_to_memory_record(
+                event=event, session_id=session_id or "", app_name=app_name, user_id=user_id
+            )
+            if record is not None:
+                if metadata_dict:
+                    record["metadata_json"] = metadata_dict
+                records.append(record)
+
+        if not records:
+            logger.debug(
+                "No content to store for events (app=%s, user=%s, count=%d)", app_name, user_id, len(list(events))
+            )
+            return
+
+        inserted_count = await self._store.insert_memory_entries(records)
+        logger.debug(
+            "Stored %d memory entries from %d events (app=%s, user=%s)", inserted_count, len(records), app_name, user_id
+        )
+
+    async def add_memory(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        memories: "Sequence[MemoryEntry]",
+        custom_metadata: "Mapping[str, object] | None" = None,
+    ) -> None:
+        """Add explicit memory items directly to the memory service.
+
+        Each entry's ``content`` is serialized to ``content_json``, text is
+        extracted from ``content.parts`` for ``content_text``, and
+        ``custom_metadata`` merges the entry-level ``entry.custom_metadata``
+        with the call-level ``custom_metadata`` parameter.
+
+        Args:
+            app_name: The application name for memory scope.
+            user_id: The user ID for memory scope.
+            memories: Explicit memory items to add.
+            custom_metadata: Optional portable metadata for memory writes.
+                Merged with each entry's ``custom_metadata``.
+        """
+        call_metadata = dict(custom_metadata) if custom_metadata else {}
+        records = []
+        for entry in memories:
+            record = memory_entry_to_record(
+                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata
+            )
+            if record is not None:
+                records.append(record)
+
+        if not records:
+            logger.debug("No content to store for memories (app=%s, user=%s)", app_name, user_id)
+            return
+
+        inserted_count = await self._store.insert_memory_entries(records)
+        logger.debug(
+            "Stored %d memory entries from %d memories (app=%s, user=%s)",
+            inserted_count,
+            len(records),
+            app_name,
+            user_id,
         )
 
     async def search_memory(self, *, app_name: str, user_id: str, query: str) -> "SearchMemoryResponse":

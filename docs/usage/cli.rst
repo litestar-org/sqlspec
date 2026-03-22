@@ -4,15 +4,18 @@ Command Line Interface
 SQLSpec includes a CLI for managing migrations and inspecting configuration. Use it
 when you want a fast, explicit workflow without additional tooling.
 
+Configuration can come from ``--config``, ``SQLSPEC_CONFIG``, or
+``[tool.sqlspec]`` in ``pyproject.toml``.
+
 Core Commands
 -------------
 
 .. code-block:: console
 
-   sqlspec db init
-   sqlspec db create-migration -m "add users"
-   sqlspec db upgrade
-   sqlspec db downgrade
+   sqlspec init
+   sqlspec create-migration -m "add users"
+   sqlspec upgrade
+   sqlspec downgrade
 
 Common Options
 --------------
@@ -28,7 +31,7 @@ Tips
 ----
 
 - Run ``sqlspec --help`` to see global options.
-- Run ``sqlspec db --help`` to see migration command details.
+- Run ``sqlspec upgrade --help`` to see command-specific migration options.
 
 Related Guides
 --------------

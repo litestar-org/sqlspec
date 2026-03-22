@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import async_, run_
@@ -58,34 +58,6 @@ def _julian_to_datetime(julian: float) -> datetime:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
-def _to_sqlite_bool(value: "bool | None") -> "int | None":
-    """Convert Python bool to SQLite INTEGER.
-
-    Args:
-        value: Boolean value or None.
-
-    Returns:
-        1 for True, 0 for False, None for None.
-    """
-    if value is None:
-        return None
-    return 1 if value else 0
-
-
-def _from_sqlite_bool(value: "int | None") -> "bool | None":
-    """Convert SQLite INTEGER to Python bool.
-
-    Args:
-        value: Integer value (0/1) or None.
-
-    Returns:
-        True for 1, False for 0, None for None.
-    """
-    if value is None:
-        return None
-    return bool(value)
-
-
 class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     """SQLite ADK store using synchronous SQLite driver.
 
@@ -95,10 +67,11 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
     Provides:
     - Session state management with JSON storage (as TEXT)
-    - Event history tracking with BLOB-serialized actions
+    - Event history tracking with full-event JSON storage
     - Julian Day timestamps (REAL) for efficient date operations
     - Foreign key constraints with cascade delete
-    - Efficient upserts using INSERT OR REPLACE
+    - Atomic event+state writes via append_event_and_update_state
+    - PRAGMA optimization profile for file-based databases
 
     Args:
         config: SqliteConfig instance with extension_config["adk"] settings.
@@ -122,9 +95,8 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
     Notes:
         - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
-        - BOOLEAN as INTEGER (0/1, with None for NULL)
         - Timestamps as REAL (Julian day: julianday('now'))
-        - BLOB for pre-serialized actions from Google ADK
+        - Full event stored as JSON TEXT in event_data column
         - PRAGMA foreign_keys = ON (enable per connection)
         - Configuration is read from config.extension_config["adk"]
     """
@@ -144,6 +116,22 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         super().__init__(config)
+
+    def _apply_pragmas(self, connection: Any) -> None:
+        """Apply PRAGMA optimization profile for this connection.
+
+        Args:
+            connection: SQLite connection.
+
+        Notes:
+            Enables foreign keys and applies performance PRAGMAs.
+            For file-based databases, adds cache_size, mmap_size,
+            and journal_size_limit optimizations.
+        """
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA cache_size = -64000")
+        connection.execute("PRAGMA mmap_size = 30000000")
+        connection.execute("PRAGMA journal_size_limit = 67108864")
 
     async def _get_create_sessions_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
@@ -184,9 +172,8 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             SQL statement to create adk_events table with indexes.
 
         Notes:
-            - TEXT for IDs, strings, and JSON content
-            - BLOB for pickled actions
-            - INTEGER for booleans (0/1/NULL)
+            - TEXT for IDs and indexed scalars
+            - TEXT for full event JSON (event_data)
             - REAL for Julian Day timestamps
             - Foreign key to sessions with CASCADE delete
             - Index on (session_id, timestamp ASC)
@@ -195,22 +182,10 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            invocation_id TEXT NOT NULL,
-            author TEXT NOT NULL,
-            actions BLOB NOT NULL,
-            long_running_tool_ids_json TEXT,
-            branch TEXT,
+            invocation_id TEXT,
+            author TEXT,
             timestamp REAL NOT NULL,
-            content TEXT,
-            grounding_metadata TEXT,
-            custom_metadata TEXT,
-            partial INTEGER,
-            turn_complete INTEGER,
-            interrupted INTEGER,
-            error_code TEXT,
-            error_message TEXT,
+            event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
@@ -229,21 +204,10 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
-    def _enable_foreign_keys(self, connection: Any) -> None:
-        """Enable foreign key constraints for this connection.
-
-        Args:
-            connection: SQLite connection.
-
-        Notes:
-            SQLite requires PRAGMA foreign_keys = ON per connection.
-        """
-        connection.execute("PRAGMA foreign_keys = ON")
-
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
         with self._config.provide_session() as driver:
-            driver.connection.execute("PRAGMA foreign_keys = ON")
+            self._apply_pragmas(driver.connection)
             driver.execute_script(run_(self._get_create_sessions_table_sql)())
             driver.execute_script(run_(self._get_create_events_table_sql)())
 
@@ -257,7 +221,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
-        state_json = to_json(state) if state else None
+        state_json = to_json(state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -275,7 +239,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             params = (session_id, app_name, user_id, state_json, now_julian, now_julian)
 
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             conn.execute(sql, params)
             conn.commit()
 
@@ -300,7 +264,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Notes:
             Uses Julian Day for create_time and update_time.
-            State is JSON-serialized before insertion.
+            State is always JSON-serialized (empty dict becomes '{}', never NULL).
             If owner_id_column is configured, owner_id is inserted into that column.
         """
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
@@ -314,7 +278,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             cursor = conn.execute(sql, (session_id,))
             row = cursor.fetchone()
 
@@ -348,7 +312,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Synchronous implementation of update_session_state."""
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
-        state_json = to_json(state) if state else None
+        state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
@@ -357,7 +321,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             conn.execute(sql, (state_json, now_julian, session_id))
             conn.commit()
 
@@ -371,6 +335,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         Notes:
             This replaces the entire state dictionary.
             Updates update_time to current Julian Day.
+            Empty dict is serialized as '{}', never NULL.
         """
         await async_(self._update_session_state)(session_id, state)
 
@@ -394,7 +359,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             params = (app_name, user_id)
 
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
 
@@ -430,7 +395,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         sql = f"DELETE FROM {self._session_table} WHERE id = ?"
 
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             conn.execute(sql, (session_id,))
             conn.commit()
 
@@ -448,53 +413,29 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-
-        content_json = to_json(event_record.get("content")) if event_record.get("content") else None
-        grounding_metadata_json = (
-            to_json(event_record.get("grounding_metadata")) if event_record.get("grounding_metadata") else None
-        )
-        custom_metadata_json = (
-            to_json(event_record.get("custom_metadata")) if event_record.get("custom_metadata") else None
-        )
-
-        partial_int = _to_sqlite_bool(event_record.get("partial"))
-        turn_complete_int = _to_sqlite_bool(event_record.get("turn_complete"))
-        interrupted_int = _to_sqlite_bool(event_record.get("interrupted"))
+        event_data_json = to_json(event_record["event_json"])
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, app_name, user_id, invocation_id, author, actions,
-            long_running_tool_ids_json, branch, timestamp, content,
-            grounding_metadata, custom_metadata, partial, turn_complete,
-            interrupted, error_code, error_message
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
+            id, session_id, invocation_id, author, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """
 
+        import uuid
+
+        event_id = str(uuid.uuid4())
+
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             conn.execute(
                 sql,
                 (
-                    event_record["id"],
+                    event_id,
                     event_record["session_id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
                     event_record["invocation_id"],
                     event_record["author"],
-                    event_record["actions"],
-                    event_record.get("long_running_tool_ids_json"),
-                    event_record.get("branch"),
                     timestamp_julian,
-                    content_json,
-                    grounding_metadata_json,
-                    custom_metadata_json,
-                    partial_int,
-                    turn_complete_int,
-                    interrupted_int,
-                    event_record.get("error_code"),
-                    event_record.get("error_message"),
+                    event_data_json,
                 ),
             )
             conn.commit()
@@ -503,14 +444,70 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """Append an event to a session.
 
         Args:
-            event_record: Event record to store.
+            event_record: Event record with 5 keys: session_id, invocation_id,
+                author, timestamp, event_json.
 
         Notes:
             Uses Julian Day for timestamp.
-            JSON fields are serialized to TEXT.
-            Boolean fields converted to INTEGER (0/1/NULL).
+            event_json dict is serialized to TEXT as event_data column.
         """
         await async_(self._append_event)(event_record)
+
+    def _append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Synchronous implementation of append_event_and_update_state."""
+        import uuid
+
+        timestamp_julian = _datetime_to_julian(event_record["timestamp"])
+        event_data_json = to_json(event_record["event_json"])
+        now_julian = _datetime_to_julian(datetime.now(timezone.utc))
+        state_json = to_json(state)
+        event_id = str(uuid.uuid4())
+
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            id, session_id, invocation_id, author, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """
+
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = ?, update_time = ?
+        WHERE id = ?
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(
+                insert_sql,
+                (
+                    event_id,
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["author"],
+                    timestamp_julian,
+                    event_data_json,
+                ),
+            )
+            conn.execute(update_sql, (state_json, now_julian, session_id))
+            conn.commit()
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state.
+
+        Inserts the event and updates the session state + update_time in a
+        single transaction. Both operations succeed or fail together.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (temp: keys already
+                stripped by the service layer).
+        """
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -527,40 +524,24 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, invocation_id, author, actions,
-               long_running_tool_ids_json, branch, timestamp, content,
-               grounding_metadata, custom_metadata, partial, turn_complete,
-               interrupted, error_code, error_message
+        SELECT id, session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
         """
 
         with self._config.provide_connection() as conn:
-            self._enable_foreign_keys(conn)
+            self._apply_pragmas(conn)
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
 
             return [
                 EventRecord(
-                    id=row[0],
                     session_id=row[1],
-                    app_name=row[2],
-                    user_id=row[3],
-                    invocation_id=row[4],
-                    author=row[5],
-                    actions=bytes(row[6]),
-                    long_running_tool_ids_json=row[7],
-                    branch=row[8],
-                    timestamp=_julian_to_datetime(row[9]),
-                    content=from_json(row[10]) if row[10] else None,
-                    grounding_metadata=from_json(row[11]) if row[11] else None,
-                    custom_metadata=from_json(row[12]) if row[12] else None,
-                    partial=_from_sqlite_bool(row[13]),
-                    turn_complete=_from_sqlite_bool(row[14]),
-                    interrupted=_from_sqlite_bool(row[15]),
-                    error_code=row[16],
-                    error_message=row[17],
+                    invocation_id=row[2],
+                    author=row[3],
+                    timestamp=_julian_to_datetime(row[4]),
+                    event_json=from_json(row[5]) if row[5] else {},
                 )
                 for row in rows
             ]
@@ -580,13 +561,12 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Notes:
             Uses index on (session_id, timestamp ASC).
-            Parses JSON fields and converts BLOB actions to bytes.
-            Converts INTEGER booleans back to bool/None.
+            Parses event_data TEXT back to dict for event_json field.
         """
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
 
-class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
+class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
     """SQLite ADK memory store using synchronous SQLite driver.
 
     Implements memory entry storage for Google Agent Development Kit
@@ -645,7 +625,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_memory_table_sql(self) -> str:
+    async def _get_create_memory_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -737,7 +717,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         """
         connection.execute("PRAGMA foreign_keys = ON")
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
 
         Skips table creation if memory store is disabled.
@@ -747,9 +727,13 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         with self._config.provide_session() as driver:
             self._enable_foreign_keys(driver.connection)
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(run_(self._get_create_memory_table_sql)())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id
@@ -833,7 +817,11 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return inserted_count
 
-    def search_entries(
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query.
@@ -862,6 +850,12 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             except Exception as exc:  # pragma: no cover - defensive fallback
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -915,7 +909,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             for row in rows
         ]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session.
 
         Args:
@@ -934,7 +928,11 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return deleted_count
 
-    def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days.
 
         Used for TTL cleanup operations.
@@ -956,3 +954,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             conn.commit()
 
         return deleted_count
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)

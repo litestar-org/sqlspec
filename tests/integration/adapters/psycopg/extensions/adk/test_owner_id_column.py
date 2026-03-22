@@ -1,6 +1,6 @@
 """Integration tests for Psycopg ADK store owner_id_column feature."""
 
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -42,7 +42,7 @@ async def psycopg_async_store_with_fk(postgres_service: "PostgresService") -> "A
 
 
 @pytest.fixture
-def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "Generator[Any, None, None]":
+async def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "AsyncGenerator[Any, None]":
     """Create Psycopg sync ADK store with owner_id_column configured."""
     config = PsycopgSyncConfig(
         connection_config={
@@ -57,7 +57,7 @@ def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "Generato
         },
     )
     store = PsycopgSyncADKStore(config)
-    store.create_tables()
+    await store.create_tables()
     yield store
 
     with config.provide_connection() as conn, conn.cursor() as cur:
@@ -74,7 +74,7 @@ async def test_async_store_owner_id_column_initialization(psycopg_async_store_wi
     assert psycopg_async_store_with_fk.owner_id_column_name == "tenant_id"
 
 
-def test_sync_store_owner_id_column_initialization(psycopg_sync_store_with_fk: PsycopgSyncADKStore) -> None:
+async def test_sync_store_owner_id_column_initialization(psycopg_sync_store_with_fk: PsycopgSyncADKStore) -> None:
     """Test that owner_id_column is properly initialized in sync store."""
     assert psycopg_sync_store_with_fk.owner_id_column_ddl == "account_id VARCHAR(64) NOT NULL"
     assert psycopg_sync_store_with_fk.owner_id_column_name == "account_id"
@@ -105,7 +105,7 @@ async def test_async_store_inherits_owner_id_column(postgres_service: "PostgresS
         await config.close_pool()
 
 
-def test_sync_store_inherits_owner_id_column(postgres_service: "PostgresService") -> None:
+async def test_sync_store_inherits_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that sync store correctly inherits owner_id_column from base class."""
     config = PsycopgSyncConfig(
         connection_config={
@@ -147,7 +147,7 @@ async def test_async_store_without_owner_id_column(postgres_service: "PostgresSe
         await config.close_pool()
 
 
-def test_sync_store_without_owner_id_column(postgres_service: "PostgresService") -> None:
+async def test_sync_store_without_owner_id_column(postgres_service: "PostgresService") -> None:
     """Test that sync store works without owner_id_column (default behavior)."""
     config = PsycopgSyncConfig(
         connection_config={
@@ -172,9 +172,9 @@ async def test_async_ddl_includes_owner_id_column(psycopg_async_store_with_fk: P
     assert "test_sessions_fk" in ddl
 
 
-def test_sync_ddl_includes_owner_id_column(psycopg_sync_store_with_fk: PsycopgSyncADKStore) -> None:
+async def test_sync_ddl_includes_owner_id_column(psycopg_sync_store_with_fk: PsycopgSyncADKStore) -> None:
     """Test that the DDL generation includes the owner_id_column."""
-    ddl = psycopg_sync_store_with_fk._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
+    ddl = await psycopg_sync_store_with_fk._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
 
     assert "account_id VARCHAR(64) NOT NULL" in ddl
     assert "test_sessions_sync_fk" in ddl

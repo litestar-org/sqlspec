@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
-from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
@@ -42,7 +42,7 @@ class _SpannerWriteJob:
             transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
 
 
-class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
+class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
     """Spanner ADK store backed by synchronous Spanner client."""
 
     connector_name: ClassVar[str] = "spanner"
@@ -80,30 +80,15 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             types["owner_id"] = SPANNER_PARAM_TYPES.STRING
         return types
 
-    def _event_param_types(self, has_branch: bool) -> "dict[str, Any]":
+    def _event_param_types(self) -> "dict[str, Any]":
         json_type = _json_param_type()
-        types: dict[str, Any] = {
-            "id": SPANNER_PARAM_TYPES.STRING,
+        return {
             "session_id": SPANNER_PARAM_TYPES.STRING,
-            "app_name": SPANNER_PARAM_TYPES.STRING,
-            "user_id": SPANNER_PARAM_TYPES.STRING,
-            "author": SPANNER_PARAM_TYPES.STRING,
-            "actions": SPANNER_PARAM_TYPES.BYTES,
-            "long_running_tool_ids_json": json_type,
             "invocation_id": SPANNER_PARAM_TYPES.STRING,
+            "author": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
-            "content": json_type,
-            "grounding_metadata": json_type,
-            "custom_metadata": json_type,
-            "partial": SPANNER_PARAM_TYPES.BOOL,
-            "turn_complete": SPANNER_PARAM_TYPES.BOOL,
-            "interrupted": SPANNER_PARAM_TYPES.BOOL,
-            "error_code": SPANNER_PARAM_TYPES.STRING,
-            "error_message": SPANNER_PARAM_TYPES.STRING,
+            "event_json": json_type,
         }
-        if has_branch:
-            types["branch"] = SPANNER_PARAM_TYPES.STRING
-        return types
 
     def _decode_state(self, raw: Any) -> Any:
         if isinstance(raw, str):
@@ -117,7 +102,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             return from_json(raw)
         return raw
 
-    def create_session(
+    def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         state_json = to_json(state)
@@ -146,7 +131,13 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "update_time": datetime.now(timezone.utc),
         }
 
-    def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    def _get_session(self, session_id: str) -> "SessionRecord | None":
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
@@ -172,7 +163,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         }
         return record
 
-    def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def get_session(self, session_id: str) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id)
+
+    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         params = {"id": session_id, "state": to_json(state)}
         json_type = _json_param_type()
         sql = f"""
@@ -184,7 +179,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
         self._run_write([(sql, params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type})])
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
@@ -198,6 +197,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             types["user_id"] = SPANNER_PARAM_TYPES.STRING
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
+        sql = f"{sql} ORDER BY update_time DESC"
 
         rows = self._run_read(sql, params, types)
         records: list[SessionRecord] = []
@@ -214,7 +214,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             records.append(record)
         return records
 
-    def delete_session(self, session_id: str) -> None:
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    def _delete_session(self, session_id: str) -> None:
         shard_clause = (
             f" AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})" if self._shard_count > 1 else ""
         )
@@ -224,174 +228,135 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
 
-    def create_event(
-        self,
-        event_id: str,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        author: "str | None" = None,
-        actions: "bytes | None" = None,
-        content: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> EventRecord:
-        branch = kwargs.get("branch")
-        long_running_serialized = (
-            to_json(kwargs.get("long_running_tool_ids_json"))
-            if kwargs.get("long_running_tool_ids_json") is not None
-            else None
-        )
-        content_serialized = to_json(content) if content is not None else None
-        grounding_serialized = (
-            to_json(kwargs.get("grounding_metadata")) if kwargs.get("grounding_metadata") is not None else None
-        )
-        custom_serialized = (
-            to_json(kwargs.get("custom_metadata")) if kwargs.get("custom_metadata") is not None else None
-        )
-        params: dict[str, Any] = {
-            "id": event_id,
-            "session_id": session_id,
-            "app_name": app_name,
-            "user_id": user_id,
-            "author": author,
-            "actions": bytes_to_spanner(actions),
-            "long_running_tool_ids_json": long_running_serialized,
-            "timestamp": datetime.now(timezone.utc),
-            "content": content_serialized,
-            "grounding_metadata": grounding_serialized,
-            "custom_metadata": custom_serialized,
-            "invocation_id": kwargs.get("invocation_id"),
-            "partial": kwargs.get("partial"),
-            "turn_complete": kwargs.get("turn_complete"),
-            "interrupted": kwargs.get("interrupted"),
-            "error_code": kwargs.get("error_code"),
-            "error_message": kwargs.get("error_message"),
-        }
-        branch = kwargs.get("branch")
-        columns = [
-            "id",
-            "session_id",
-            "app_name",
-            "user_id",
-            "author",
-            "actions",
-            "long_running_tool_ids_json",
-            "timestamp",
-            "content",
-            "grounding_metadata",
-            "custom_metadata",
-            "invocation_id",
-            "partial",
-            "turn_complete",
-            "interrupted",
-            "error_code",
-            "error_message",
-        ]
-        values = [
-            "@id",
-            "@session_id",
-            "@app_name",
-            "@user_id",
-            "@author",
-            "@actions",
-            "@long_running_tool_ids_json",
-            "PENDING_COMMIT_TIMESTAMP()",
-            "@content",
-            "@grounding_metadata",
-            "@custom_metadata",
-            "@invocation_id",
-            "@partial",
-            "@turn_complete",
-            "@interrupted",
-            "@error_code",
-            "@error_message",
-        ]
-        has_branch = branch is not None
-        if has_branch:
-            params["branch"] = branch
-            columns.append("branch")
-            values.append("@branch")
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
 
-        sql = f"""
-            INSERT INTO {self._events_table} ({", ".join(columns)})
-            VALUES ({", ".join(values)})
+    def _append_event_and_update_state(
+        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically insert an event and update session state in one transaction.
+
+        Both the event INSERT and the session state UPDATE execute within a single
+        Spanner transaction so they succeed or fail together.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session whose state should be updated.
+            state: Post-append durable state snapshot.
         """
-        self._run_write([(sql, params, self._event_param_types(has_branch))])
-
-        record: EventRecord = {
-            "id": event_id,
-            "session_id": session_id,
-            "app_name": app_name,
-            "user_id": user_id,
-            "author": author or "",
-            "actions": actions or b"",
-            "long_running_tool_ids_json": long_running_serialized,
-            "branch": branch,
-            "timestamp": params["timestamp"],
-            "content": from_json(content_serialized) if content_serialized else None,
-            "grounding_metadata": from_json(grounding_serialized) if grounding_serialized else None,
-            "custom_metadata": from_json(custom_serialized) if custom_serialized else None,
-            "invocation_id": kwargs.get("invocation_id", ""),
-            "partial": kwargs.get("partial"),
-            "turn_complete": kwargs.get("turn_complete"),
-            "interrupted": kwargs.get("interrupted"),
-            "error_code": kwargs.get("error_code"),
-            "error_message": kwargs.get("error_message"),
+        event_params: dict[str, Any] = {
+            "session_id": event_record["session_id"],
+            "invocation_id": event_record["invocation_id"],
+            "author": event_record["author"],
+            "timestamp": event_record["timestamp"],
+            "event_json": to_json(event_record["event_json"]),
         }
-        return record
+        insert_sql = f"""
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
+            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
+        """
 
-    def list_events(self, session_id: str) -> "list[EventRecord]":
+        json_type = _json_param_type()
+        state_params: dict[str, Any] = {"id": session_id, "state": to_json(state)}
+        update_sql = f"""
+            UPDATE {self._session_table}
+            SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
+            WHERE id = @id
+        """
+        if self._shard_count > 1:
+            update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
+
+        self._run_write([
+            (insert_sql, event_params, self._event_param_types()),
+            (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
+        ])
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> None:
+        """Atomically append an event and update the session's durable state."""
+        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    def _insert_event(self, event_record: "EventRecord") -> None:
+        event_params: dict[str, Any] = {
+            "session_id": event_record["session_id"],
+            "invocation_id": event_record["invocation_id"],
+            "author": event_record["author"],
+            "timestamp": event_record["timestamp"],
+            "event_json": to_json(event_record["event_json"]),
+        }
+        insert_sql = f"""
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
+            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
+        """
+        self._run_write([(insert_sql, event_params, self._event_param_types())])
+
+    def _get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
         sql = f"""
-            SELECT id, session_id, app_name, user_id, author, actions, long_running_tool_ids_json, branch,
-                   timestamp, content, grounding_metadata, custom_metadata, invocation_id, partial,
-                   turn_complete, interrupted, error_code, error_message
+            SELECT session_id, invocation_id, author, timestamp, event_json
             FROM {self._events_table}
             WHERE session_id = @session_id
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
+        params: dict[str, Any] = {"session_id": session_id}
+        types: dict[str, Any] = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        if after_timestamp is not None:
+            sql = f"{sql} AND timestamp > @after_timestamp"
+            params["after_timestamp"] = after_timestamp
+            types["after_timestamp"] = SPANNER_PARAM_TYPES.TIMESTAMP
         sql = f"{sql} ORDER BY timestamp ASC"
-        params = {"session_id": session_id}
-        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        if limit is not None:
+            sql = f"{sql} LIMIT @limit"
+            params["limit"] = limit
+            types["limit"] = SPANNER_PARAM_TYPES.INT64
         rows = self._run_read(sql, params, types)
         return [
             {
-                "id": row[0],
-                "session_id": row[1],
-                "app_name": row[2],
-                "user_id": row[3],
-                "invocation_id": row[12] or "",
-                "author": row[4] or "",
-                "actions": spanner_to_bytes(row[5]) or b"",
-                "long_running_tool_ids_json": row[6],
-                "branch": row[7],
-                "timestamp": row[8],
-                "content": self._decode_json(row[9]),
-                "grounding_metadata": self._decode_json(row[10]),
-                "custom_metadata": self._decode_json(row[11]),
-                "partial": row[13],
-                "turn_complete": row[14],
-                "interrupted": row[15],
-                "error_code": row[16],
-                "error_message": row[17],
+                "session_id": row[0],
+                "invocation_id": row[1] or "",
+                "author": row[2] or "",
+                "timestamp": row[3],
+                "event_json": row[4],
             }
             for row in rows
         ]
 
-    def create_tables(self) -> None:
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _append_event(self, event_record: EventRecord) -> None:
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
+
+    def _create_tables(self) -> None:
         database = self._database()
         existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
 
         ddl_statements: list[str] = []
         if self._session_table not in existing_tables:
-            ddl_statements.append(self._get_create_sessions_table_sql())
+            ddl_statements.append(run_(self._get_create_sessions_table_sql)())
         if self._events_table not in existing_tables:
-            ddl_statements.append(self._get_create_events_table_sql())
+            ddl_statements.append(run_(self._get_create_events_table_sql)())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
-    def _get_create_sessions_table_sql(self) -> str:
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def _get_create_sessions_table_sql(self) -> str:
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
@@ -414,35 +379,22 @@ CREATE TABLE {self._session_table} (
 ) {pk}{options}
 """
 
-    def _get_create_events_table_sql(self) -> str:
+    async def _get_create_events_table_sql(self) -> str:
         shard_column = ""
-        pk = "PRIMARY KEY (session_id, timestamp, id)"
+        pk = "PRIMARY KEY (session_id, timestamp)"
         if self._shard_count > 1:
             shard_column = f",\n  shard_id INT64 AS (MOD(FARM_FINGERPRINT(session_id), {self._shard_count})) STORED"
-            pk = "PRIMARY KEY (shard_id, session_id, timestamp, id)"
+            pk = "PRIMARY KEY (shard_id, session_id, timestamp)"
         options = ""
         if self._events_table_options:
             options = f"\nOPTIONS ({self._events_table_options})"
         return f"""
 CREATE TABLE {self._events_table} (
-  id STRING(128) NOT NULL,
   session_id STRING(128) NOT NULL,
-  app_name STRING(128) NOT NULL,
-  user_id STRING(128) NOT NULL,
-  invocation_id STRING(128),
-  author STRING(64),
-  actions BYTES(MAX),
-  long_running_tool_ids_json JSON,
-  branch STRING(64),
+  invocation_id STRING(256) NOT NULL,
+  author STRING(128) NOT NULL,
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
-  content JSON,
-  grounding_metadata JSON,
-  custom_metadata JSON,
-  partial BOOL,
-  turn_complete BOOL,
-  interrupted BOOL,
-  error_code STRING(64),
-  error_message STRING(255){shard_column}
+  event_json JSON NOT NULL{shard_column}
 ) {pk}{options}
 """
 
@@ -479,7 +431,7 @@ class _SpannerReadProtocol(Protocol):
     ) -> Iterable[Any]: ...
 
 
-class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
+class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
     """Spanner ADK memory store backed by synchronous Spanner client."""
 
     connector_name: ClassVar[str] = "spanner"
@@ -532,7 +484,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             return from_json(raw)
         return raw
 
-    def create_tables(self) -> None:
+    def _create_tables(self) -> None:
         if not self._enabled:
             return
 
@@ -541,12 +493,16 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._memory_table not in existing_tables:
-            ddl_statements.extend(self._get_create_memory_table_sql())
+            ddl_statements.extend(run_(self._get_create_memory_table_sql)())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
-    def _get_create_memory_table_sql(self) -> "list[str]":
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def _get_create_memory_table_sql(self) -> "list[str]":
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
@@ -590,7 +546,23 @@ CREATE TABLE {self._memory_table} (
             statements.append(fts_index)
         return statements
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get SQL to drop the memory table and its indexes.
+
+        Returns:
+            List of SQL statements to drop the memory table and associated indexes.
+        """
+        statements: list[str] = []
+        if self._use_fts:
+            statements.append(f"DROP SEARCH INDEX idx_{self._memory_table}_fts")
+        statements.extend([
+            f"DROP INDEX idx_{self._memory_table}_session",
+            f"DROP INDEX idx_{self._memory_table}_app_user_time",
+            f"DROP TABLE {self._memory_table}",
+        ])
+        return statements
+
+    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -639,12 +611,16 @@ CREATE TABLE {self._memory_table} (
             self._run_write(statements)
         return inserted_count
 
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
     def _event_exists(self, event_id: str) -> bool:
         sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id = @event_id LIMIT 1"
         rows = self._run_read(sql, {"event_id": event_id}, {"event_id": SPANNER_PARAM_TYPES.STRING})
         return bool(rows)
 
-    def search_entries(
+    def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         if not self._enabled:
@@ -656,6 +632,12 @@ CREATE TABLE {self._memory_table} (
         if self._use_fts:
             return self._search_entries_fts(query, app_name, user_id, effective_limit)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -700,18 +682,26 @@ CREATE TABLE {self._memory_table} (
         rows = self._run_read(sql, params, types)
         return self._rows_to_records(rows)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str) -> int:
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = @session_id"
         params = {"session_id": session_id}
         types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         return self._execute_update(sql, params, types)
 
-    def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    def _delete_entries_older_than(self, days: int) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < @cutoff"
         params = {"cutoff": cutoff}
         types = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}
         return self._execute_update(sql, params, types)
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         return [
