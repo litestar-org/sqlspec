@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
-from sqlspec.storage.backends._iterators import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec
@@ -425,7 +425,11 @@ class FSSpecBackend:
         raise NotImplementedError(msg)
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
-        """Stream bytes from storage synchronously."""
+        """Stream bytes from storage synchronously.
+
+        Yields:
+            Chunks of bytes from the file, with size determined by chunk_size (default: 65536 bytes).
+        """
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
 
@@ -476,7 +480,7 @@ class FSSpecBackend:
     ) -> AsyncIterator[bytes]:
         """Stream bytes from storage asynchronously.
 
-        Uses asyncio.to_thread() to read chunks of the file in a thread pool,
+        Uses AsyncThreadedBytesIterator to read chunks of the file in a thread pool,
         ensuring the event loop is not blocked while avoiding buffering the
         entire file into memory.
 

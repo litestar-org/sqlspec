@@ -159,6 +159,7 @@ autodoc_mock_imports = [
 ]
 
 autosummary_generate = False
+smartquotes = False
 
 
 autosectionlabel_prefix_document = True

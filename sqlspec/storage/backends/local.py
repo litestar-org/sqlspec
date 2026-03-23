@@ -15,7 +15,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.storage._utils import import_pyarrow_parquet
-from sqlspec.storage.backends._iterators import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
@@ -152,7 +152,11 @@ class LocalStore:
         self.write_bytes_sync(path, encoded, **kwargs)
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
-        """Stream bytes from file synchronously."""
+        """Stream bytes from file synchronously.
+
+        Yields:
+            Chunks of bytes from the file, with size determined by chunk_size (default: 65536 bytes).
+        """
         resolved = self._resolve_path(path)
         chunk_size = chunk_size or 65536
         try:

@@ -13,6 +13,7 @@ from sqlspec.core.parameters import ParameterInfo, ParameterProfile
 from sqlspec.core.statement import ProcessedState
 from sqlspec.driver._common import CachedQuery, CommonDriverAttributesMixin
 from sqlspec.driver._query_cache import QueryCache
+from sqlspec.exceptions import SQLSpecError
 
 _EMPTY_PS = ProcessedState("", [], None, "COMMAND")
 
@@ -342,6 +343,41 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async
     assert cached.param_count == 1
     assert cached.operation_type == "SELECT"
     assert result.operation_type == "SELECT"
+
+
+@pytest.mark.anyio
+async def test_async_stmt_cache_execute_re_raises_mapped_exception(mock_async_driver, monkeypatch) -> None:
+    async def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
+        _ = (cursor, statement)
+        raise ValueError("boom")
+
+    monkeypatch.setattr(mock_async_driver, "dispatch_execute", _fake_dispatch_execute)
+    statement = SQL("SELECT ?", (1,), statement_config=mock_async_driver.statement_config)
+    statement.compile()
+
+    with pytest.raises(SQLSpecError, match="Mock async database error: boom"):
+        await mock_async_driver._stmt_cache_execute(statement)
+
+
+@pytest.mark.anyio
+async def test_async_stmt_cache_execute_direct_re_raises_mapped_exception(mock_async_driver, monkeypatch) -> None:
+    async def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
+        _ = (cursor, statement)
+        raise ValueError("boom")
+
+    monkeypatch.setattr(mock_async_driver, "dispatch_execute", _fake_dispatch_execute)
+    cached = _make_cached(
+        compiled_sql="INSERT INTO t (id) VALUES (?)",
+        param_count=1,
+        operation_type="INSERT",
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+        processed_state=ProcessedState(
+            compiled_sql="INSERT INTO t (id) VALUES (?)", execution_parameters=[1], operation_type="INSERT"
+        ),
+    )
+
+    with pytest.raises(SQLSpecError, match="Mock async database error: boom"):
+        await mock_async_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
 def test_stmt_cache_thread_safety() -> None:

@@ -106,6 +106,8 @@ def resolve_storage_path(
                 base_obj = Path(base_path)
                 try:
                     relative = path_obj.relative_to(base_obj)
+                    if str(relative) == ".":
+                        return base_path
                     return f"{base_path.rstrip('/')}/{relative}"
                 except ValueError:
                     return path_str.lstrip("/")

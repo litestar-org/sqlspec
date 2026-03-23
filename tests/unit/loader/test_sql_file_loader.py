@@ -316,6 +316,27 @@ CREATE TABLE users (
     assert len(loader.list_queries()) == 1
 
 
+def test_load_sql_reads_relative_file_without_duplicate_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Relative file paths should resolve against their parent directory only once."""
+    project_dir = tmp_path / "project"
+    migrations_dir = project_dir / "migrations"
+    migrations_dir.mkdir(parents=True)
+    sql_file = migrations_dir / "0001_init.sql"
+    sql_file.write_text(
+        """
+-- name: migrate-0001-up
+SELECT 1;
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project_dir)
+
+    loader = SQLFileLoader()
+    loader.load_sql(Path("migrations/0001_init.sql"))
+
+    assert loader.has_query("migrate_0001_up")
+
+
 def test_skipped_file_logging(tmp_path: Path, caplog) -> None:
     """Test that skipped files are logged at DEBUG level."""
     import logging

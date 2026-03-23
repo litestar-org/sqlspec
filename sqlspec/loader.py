@@ -27,6 +27,7 @@ from sqlspec.storage.registry import storage_registry as default_storage_registr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import slugify
+from sqlspec.utils.type_guards import is_local_path
 
 if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
@@ -279,6 +280,8 @@ class SQLFileLoader:
                     file_path = file_path[1:]
                 filename = Path(file_path).name
                 return backend.read_text_sync(filename, encoding=self.encoding)
+            if isinstance(path, Path) or is_local_path(path_str):
+                return backend.read_text_sync(Path(path_str).name, encoding=self.encoding)
             return backend.read_text_sync(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e

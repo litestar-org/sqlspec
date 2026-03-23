@@ -5,13 +5,14 @@ from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
-from psycopg import sql as psycopg_sql
 from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
     PsycopgAsyncCursor,
     PsycopgAsyncSessionContext,
+    PsycopgComposed,
+    PsycopgSQL,
     PsycopgSyncConnection,
     PsycopgSyncCursor,
     PsycopgSyncSessionContext,
@@ -111,7 +112,7 @@ class PsycopgPipelineMixin:
                     operation_index=index,
                     operation=operation,
                     statement=sql_statement,
-                    sql=cast("LiteralString | psycopg_sql.SQL", sql_text),
+                    sql=cast("LiteralString | PsycopgSQL | PsycopgComposed", sql_text),
                     parameters=prepared_parameters,
                 )
             )
@@ -396,7 +397,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         cursor = resource_stack.enter_context(self.with_cursor(self.connection))
 
                         try:
-                            sql = cast("LiteralString | psycopg_sql.SQL", prepared.sql)  # type: ignore[redundant-cast]
+                            sql = cast("LiteralString | PsycopgSQL | PsycopgComposed", prepared.sql)  # type: ignore[redundant-cast]
                             if prepared.parameters:
                                 cursor.execute(sql, prepared.parameters)
                             else:
@@ -855,7 +856,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
 
                         try:
-                            sql = cast("LiteralString | psycopg_sql.SQL", prepared.sql)  # type: ignore[redundant-cast]
+                            sql = cast("LiteralString | PsycopgSQL | PsycopgComposed", prepared.sql)  # type: ignore[redundant-cast]
                             if prepared.parameters:
                                 await cursor.execute(sql, prepared.parameters)
                             else:
