@@ -542,21 +542,33 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
-        if (
-            self._stmt_cache_enabled
-            and (statement_config is None or statement_config is self.statement_config)
-            and isinstance(statement, str)
-            and len(parameters) == 1
-            and isinstance(parameters[0], (tuple, list))
-            and not kwargs
-        ):
-            fast_result = self._stmt_cache_lookup(statement, parameters[0])
-            if fast_result is not None:
-                return fast_result  # type: ignore[return-value]
-        sql_statement = self.prepare_statement(
-            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-        )
-        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler:
+                    if (
+                        self._stmt_cache_enabled
+                        and (statement_config is None or statement_config is self.statement_config)
+                        and isinstance(statement, str)
+                        and len(parameters) == 1
+                        and isinstance(parameters[0], (tuple, list))
+                        and not kwargs
+                    ):
+                        fast_result = self._stmt_cache_lookup(statement, parameters[0])
+                        if fast_result is not None:
+                            return fast_result  # type: ignore[return-value]
+                    sql_statement = self.prepare_statement(
+                        statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+                    )
+                    return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+            except Exception as exc:
+                self._raise_sync_database_exception(exc_handler, exc)
+            finally:
+                self._raise_sync_database_exception(exc_handler, None)
+        finally:
+            pass
+        msg = "unreachable"
+        raise AssertionError(msg)
 
     def execute_many(
         self,
@@ -571,19 +583,31 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Parameters passed will be used as the batch execution sequence.
         """
-        config = statement_config or self.statement_config
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler:
+                    config = statement_config or self.statement_config
 
-        if isinstance(statement, str) and not filters and not kwargs:
-            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-        elif isinstance(statement, SQL):
-            statement_seed = statement.raw_expression or statement.raw_sql
-            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-        else:
-            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-            statement_seed = base_statement.raw_expression or base_statement.raw_sql
-            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+                    if isinstance(statement, str) and not filters and not kwargs:
+                        sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+                    elif isinstance(statement, SQL):
+                        statement_seed = statement.raw_expression or statement.raw_sql
+                        sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+                    else:
+                        base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+                        statement_seed = base_statement.raw_expression or base_statement.raw_sql
+                        sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
-        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+                    return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+            except Exception as exc:
+                self._raise_sync_database_exception(exc_handler, exc)
+            finally:
+                self._raise_sync_database_exception(exc_handler, None)
+        finally:
+            pass
+        msg = "unreachable"
+        raise AssertionError(msg)
 
     def execute_script(
         self,
@@ -598,10 +622,24 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        exc_handler = self.handle_database_exceptions()
+        try:
+            try:
+                with exc_handler:
+                    config = statement_config or self.statement_config
+                    sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
-        return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
+                    return self.dispatch_statement_execution(
+                        statement=sql_statement.as_script(), connection=self.connection
+                    )
+            except Exception as exc:
+                self._raise_sync_database_exception(exc_handler, exc)
+            finally:
+                self._raise_sync_database_exception(exc_handler, None)
+        finally:
+            pass
+        msg = "unreachable"
+        raise AssertionError(msg)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PUBLIC API - Query Methods (select/fetch variants)
