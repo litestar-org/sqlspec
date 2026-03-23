@@ -1,9 +1,11 @@
 """Shared exception handler bases for driver adapters."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
+
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -29,6 +31,11 @@ class BaseAsyncExceptionHandler:
         _ = exc_tb
         if exc_val is None:
             return False
+
+        # Do not re-map if already a SQLSpecError
+        if isinstance(exc_val, SQLSpecError):
+            return False
+
         return self._handle_exception(exc_type, exc_val)
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
@@ -58,6 +65,11 @@ class BaseSyncExceptionHandler:
         _ = exc_tb
         if exc_val is None:
             return False
+
+        # Do not re-map if already a SQLSpecError
+        if isinstance(exc_val, SQLSpecError):
+            return False
+
         return self._handle_exception(exc_type, exc_val)
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
