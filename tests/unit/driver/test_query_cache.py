@@ -293,8 +293,41 @@ def test_execute_populates_fast_path_cache_on_normal_path(mock_sync_driver) -> N
     assert result.operation_type == "SELECT"
 
 
+def test_sync_stmt_cache_execute_re_raises_mapped_exception(mock_sync_driver: Any, monkeypatch: Any) -> None:
+    def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
+        _ = (cursor, statement)
+        raise ValueError("boom")
+
+    monkeypatch.setattr(mock_sync_driver, "dispatch_execute", _fake_dispatch_execute)
+    statement = SQL("SELECT ?", (1,), statement_config=mock_sync_driver.statement_config)
+    statement.compile()
+
+    with pytest.raises(SQLSpecError, match="Mock database error: boom"):
+        mock_sync_driver._stmt_cache_execute(statement)
+
+
+def test_sync_stmt_cache_execute_direct_re_raises_mapped_exception(mock_sync_driver: Any, monkeypatch: Any) -> None:
+    def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
+        _ = (cursor, statement)
+        raise ValueError("boom")
+
+    monkeypatch.setattr(mock_sync_driver, "dispatch_execute", _fake_dispatch_execute)
+    cached = _make_cached(
+        compiled_sql="INSERT INTO t (id) VALUES (?)",
+        param_count=1,
+        operation_type="INSERT",
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+        processed_state=ProcessedState(
+            compiled_sql="INSERT INTO t (id) VALUES (?)", execution_parameters=[1], operation_type="INSERT"
+        ),
+    )
+
+    with pytest.raises(SQLSpecError, match="Mock database error: boom"):
+        mock_sync_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+
+
 @pytest.mark.anyio
-async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, monkeypatch) -> None:
+async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver: Any, monkeypatch: Any) -> None:
     sentinel = object()
     called: dict[str, object] = {}
 
@@ -312,7 +345,9 @@ async def test_async_execute_uses_fast_path_when_eligible(mock_async_driver, mon
 
 
 @pytest.mark.anyio
-async def test_async_execute_skips_fast_path_with_statement_config_override(mock_async_driver, monkeypatch) -> None:
+async def test_async_execute_skips_fast_path_with_statement_config_override(
+    mock_async_driver: Any, monkeypatch: Any
+) -> None:
     called = False
 
     async def _fake_try(statement: str, params: tuple[Any, ...] | list[Any]) -> object:
@@ -331,7 +366,7 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(mock
 
 
 @pytest.mark.anyio
-async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async_driver) -> None:
+async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async_driver: Any) -> None:
     mock_async_driver._stmt_cache_enabled = True
 
     assert mock_async_driver._stmt_cache.get("SELECT ?") is None
@@ -346,7 +381,7 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(mock_async
 
 
 @pytest.mark.anyio
-async def test_async_stmt_cache_execute_re_raises_mapped_exception(mock_async_driver, monkeypatch) -> None:
+async def test_async_stmt_cache_execute_re_raises_mapped_exception(mock_async_driver: Any, monkeypatch: Any) -> None:
     async def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
         _ = (cursor, statement)
         raise ValueError("boom")
@@ -360,7 +395,9 @@ async def test_async_stmt_cache_execute_re_raises_mapped_exception(mock_async_dr
 
 
 @pytest.mark.anyio
-async def test_async_stmt_cache_execute_direct_re_raises_mapped_exception(mock_async_driver, monkeypatch) -> None:
+async def test_async_stmt_cache_execute_direct_re_raises_mapped_exception(
+    mock_async_driver: Any, monkeypatch: Any
+) -> None:
     async def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
         _ = (cursor, statement)
         raise ValueError("boom")

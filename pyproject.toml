@@ -70,7 +70,7 @@ uuid = ["uuid-utils"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]
-build = ["bump-my-version", "hatch-mypyc", "pydantic-settings"]
+build = ["bump-my-version", "hatch-mypyc", "mypy>=1.19.1", "pydantic-settings"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -115,7 +115,7 @@ extras = [
   "dishka",
 ]
 lint = [
-  "mypy>=1.13.0",
+  "mypy>=1.19.1",
   "pre-commit>=3.5.0",
   "pyright>=1.1.386",
   "ruff>=0.7.1",
@@ -176,7 +176,7 @@ packages = ["sqlspec"]
 
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
-dependencies = ["hatch-mypyc", "hatch-cython"]
+dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=1.19.1"]
 enable-by-default = false
 exclude = [
   "tests/**",                                 # Test files

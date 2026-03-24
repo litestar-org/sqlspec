@@ -184,31 +184,31 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             # via the fast path in _get_compiled_statement(). This ensures compile()
             # is called exactly once per statement execution.
             compiled_sql, execution_parameters = statement.compile()
+            result: SQLResult | None = None
 
             # FAST PATH: Skip all instrumentation if runtime is idle
             if runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                try:
-                    with exc_handler, self.with_cursor(connection) as cursor:
-                        # Logic mirrors the instrumentation path below but without telemetry
-                        if statement.is_script:
-                            execution_result = self.dispatch_execute_script(cursor, statement)
-                            return self.build_statement_result(statement, execution_result)
-                        if statement.is_many:
-                            execution_result = self.dispatch_execute_many(cursor, statement)
-                            return self.build_statement_result(statement, execution_result)
-
-                        # check special handling first
+                with exc_handler, self.with_cursor(connection) as cursor:
+                    # Logic mirrors the instrumentation path below but without telemetry
+                    if statement.is_script:
+                        execution_result = self.dispatch_execute_script(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    elif statement.is_many:
+                        execution_result = self.dispatch_execute_many(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    else:
                         special_result = self.dispatch_special_handling(cursor, statement)
                         if special_result is not None:
-                            return special_result
-
-                        execution_result = self.dispatch_execute(cursor, statement)
-                        return self.build_statement_result(statement, execution_result)
-                except Exception as exc:
-                    self._raise_sync_database_exception(exc_handler, exc)
-                finally:
-                    self._raise_sync_database_exception(exc_handler, None)
+                            result = special_result
+                        else:
+                            execution_result = self.dispatch_execute(cursor, statement)
+                            result = self.build_statement_result(statement, execution_result)
+                pending_exception = exc_handler.pending_exception
+                if pending_exception is not None:
+                    raise pending_exception from None
+                assert result is not None
+                return result
 
             operation = statement.operation_type
             query_context = {
@@ -222,8 +222,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.emit_query_start(**query_context)
             span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
             started = perf_counter()
-
-            result: SQLResult | None = None
             exc_handler = self.handle_database_exceptions()
             try:
                 with exc_handler, self.with_cursor(connection) as cursor:
@@ -416,62 +414,59 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         direct_statement: SQL | None = None
         exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
         try:
-            try:
-                with exc_handler, self.with_cursor(self.connection) as cursor:
-                    if hasattr(cursor, "execute"):
-                        try:
-                            cursor.execute(cached.compiled_sql, params)
-                            if cached.operation_profile.returns_rows:
-                                fetched_data = cursor.fetchall()
-                                data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-                                execution_result = self.create_execution_result(
-                                    cursor,
-                                    selected_data=data,
-                                    column_names=column_names,
-                                    data_row_count=row_count,
-                                    is_select_result=True,
-                                    row_format="tuple",
-                                )
-                                direct_statement = self._stmt_cache_build_direct(
-                                    sql,
-                                    params,
-                                    cached,
-                                    params,
-                                    params_are_simple=True,
-                                    compiled_sql=cached.compiled_sql,
-                                )
-                                return self.build_statement_result(direct_statement, execution_result)
-
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                if hasattr(cursor, "execute"):
+                    try:
+                        cursor.execute(cached.compiled_sql, params)
+                        if cached.operation_profile.returns_rows:
+                            fetched_data = cursor.fetchall()
+                            data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                            execution_result = self.create_execution_result(
+                                cursor,
+                                selected_data=data,
+                                column_names=column_names,
+                                data_row_count=row_count,
+                                is_select_result=True,
+                                row_format="tuple",
+                            )
+                            direct_statement = self._stmt_cache_build_direct(
+                                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                            )
+                            result = self.build_statement_result(direct_statement, execution_result)
+                        else:
                             affected_rows = self.resolve_rowcount(cursor)
-                            return DMLResult(cached.operation_type, affected_rows)
-                        except (AttributeError, NotImplementedError):
-                            # Cursor is not DB-API compatible for direct execution.
-                            # Fall back to adapter dispatch path.
-                            pass
+                            result = DMLResult(cached.operation_type, affected_rows)
+                    except (AttributeError, NotImplementedError):
+                        # Cursor is not DB-API compatible for direct execution.
+                        # Fall back to adapter dispatch path.
+                        pass
 
+                if result is None:
                     direct_statement = self._stmt_cache_build_direct(
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
                     if cached.operation_profile.returns_rows:
-                        return self.build_statement_result(direct_statement, execution_result)
+                        result = self.build_statement_result(direct_statement, execution_result)
+                    else:
+                        affected_rows = (
+                            execution_result.rowcount_override
+                            if execution_result.rowcount_override is not None
+                            and execution_result.rowcount_override >= 0
+                            else 0
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows)
 
-                    affected_rows = (
-                        execution_result.rowcount_override
-                        if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
-                        else 0
-                    )
-                    return DMLResult(cached.operation_type, affected_rows)
-            except Exception as exc:
-                self._raise_sync_database_exception(exc_handler, exc)
-            finally:
-                self._raise_sync_database_exception(exc_handler, None)
+            pending_exception = exc_handler.pending_exception
+            if pending_exception is not None:
+                raise pending_exception from None
+            assert result is not None
+            return result
         finally:
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
-        msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
     def _stmt_cache_execute(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path.
@@ -480,19 +475,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         will hit the fast path in _get_compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
         try:
-            try:
-                with exc_handler, self.with_cursor(self.connection) as cursor:
-                    execution_result = self.dispatch_execute(cursor, statement)
-                    return self.build_statement_result(statement, execution_result)
-            except Exception as exc:
-                self._raise_sync_database_exception(exc_handler, exc)
-            finally:
-                self._raise_sync_database_exception(exc_handler, None)
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                execution_result = self.dispatch_execute(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+            pending_exception = exc_handler.pending_exception
+            if pending_exception is not None:
+                raise pending_exception from None
+            assert result is not None
+            return result
         finally:
             self._release_pooled_statement(statement)
-        msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT - Required Abstract Methods
@@ -543,32 +537,29 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         exc_handler = self.handle_database_exceptions()
-        try:
-            try:
-                with exc_handler:
-                    if (
-                        self._stmt_cache_enabled
-                        and (statement_config is None or statement_config is self.statement_config)
-                        and isinstance(statement, str)
-                        and len(parameters) == 1
-                        and isinstance(parameters[0], (tuple, list))
-                        and not kwargs
-                    ):
-                        fast_result = self._stmt_cache_lookup(statement, parameters[0])
-                        if fast_result is not None:
-                            return fast_result  # type: ignore[return-value]
-                    sql_statement = self.prepare_statement(
-                        statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-                    )
-                    return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-            except Exception as exc:
-                self._raise_sync_database_exception(exc_handler, exc)
-            finally:
-                self._raise_sync_database_exception(exc_handler, None)
-        finally:
-            pass
-        msg = "unreachable"
-        raise AssertionError(msg)
+        result: SQLResult | None = None
+        with exc_handler:
+            if (
+                self._stmt_cache_enabled
+                and (statement_config is None or statement_config is self.statement_config)
+                and isinstance(statement, str)
+                and len(parameters) == 1
+                and isinstance(parameters[0], (tuple, list))
+                and not kwargs
+            ):
+                fast_result = self._stmt_cache_lookup(statement, parameters[0])
+                if fast_result is not None:
+                    result = cast("SQLResult", fast_result)
+            if result is None:
+                sql_statement = self.prepare_statement(
+                    statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+                )
+                result = self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            raise pending_exception from None
+        assert result is not None
+        return result
 
     def execute_many(
         self,
@@ -584,30 +575,26 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Parameters passed will be used as the batch execution sequence.
         """
         exc_handler = self.handle_database_exceptions()
-        try:
-            try:
-                with exc_handler:
-                    config = statement_config or self.statement_config
+        result: SQLResult | None = None
+        with exc_handler:
+            config = statement_config or self.statement_config
 
-                    if isinstance(statement, str) and not filters and not kwargs:
-                        sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-                    elif isinstance(statement, SQL):
-                        statement_seed = statement.raw_expression or statement.raw_sql
-                        sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-                    else:
-                        base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-                        statement_seed = base_statement.raw_expression or base_statement.raw_sql
-                        sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+            if isinstance(statement, str) and not filters and not kwargs:
+                sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+            elif isinstance(statement, SQL):
+                statement_seed = statement.raw_expression or statement.raw_sql
+                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+            else:
+                base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+                statement_seed = base_statement.raw_expression or base_statement.raw_sql
+                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
-                    return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-            except Exception as exc:
-                self._raise_sync_database_exception(exc_handler, exc)
-            finally:
-                self._raise_sync_database_exception(exc_handler, None)
-        finally:
-            pass
-        msg = "unreachable"
-        raise AssertionError(msg)
+            result = self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            raise pending_exception from None
+        assert result is not None
+        return result
 
     def execute_script(
         self,
@@ -623,23 +610,16 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
         exc_handler = self.handle_database_exceptions()
-        try:
-            try:
-                with exc_handler:
-                    config = statement_config or self.statement_config
-                    sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-
-                    return self.dispatch_statement_execution(
-                        statement=sql_statement.as_script(), connection=self.connection
-                    )
-            except Exception as exc:
-                self._raise_sync_database_exception(exc_handler, exc)
-            finally:
-                self._raise_sync_database_exception(exc_handler, None)
-        finally:
-            pass
-        msg = "unreachable"
-        raise AssertionError(msg)
+        result: SQLResult | None = None
+        with exc_handler:
+            config = statement_config or self.statement_config
+            sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+            result = self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            raise pending_exception from None
+        assert result is not None
+        return result
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PUBLIC API - Query Methods (select/fetch variants)
@@ -945,10 +925,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             The scalar value, optionally converted to the specified type.
 
-        Raises:
-            ValueError: If no rows or more than one row/column is returned.
-            TypeError: If value_type is provided and conversion fails.
-
         Examples:
             Basic usage (returns Any):
 
@@ -1074,10 +1050,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Returns:
             The scalar value (optionally converted), or None if no rows found.
-
-        Raises:
-            ValueError: If more than one row is returned.
-            TypeError: If value_type is provided and conversion fails.
 
         Examples:
             Basic usage:
@@ -1553,9 +1525,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             StorageBridgeJob with execution telemetry.
 
-        Raises:
-            StorageCapabilityError: If not implemented.
-
         """
         self._raise_storage_not_implemented("load_from_arrow")
         raise NotImplementedError
@@ -1581,9 +1550,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             StorageBridgeJob with execution telemetry.
 
-        Raises:
-            StorageCapabilityError: If not implemented.
-
         """
         self._raise_storage_not_implemented("load_from_storage")
         raise NotImplementedError
@@ -1596,9 +1562,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Returns:
             Staging metadata dict.
-
-        Raises:
-            StorageCapabilityError: If not implemented.
 
         """
         self._raise_storage_not_implemented("stage_artifact")

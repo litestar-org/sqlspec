@@ -409,29 +409,29 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
 
         exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
         try:
-            try:
-                async with exc_handler, self.with_cursor(self.connection) as cursor:
-                    execution_result = await self.dispatch_execute(cursor, direct_statement)
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                execution_result = await self.dispatch_execute(cursor, direct_statement)
 
-                    if cached.operation_profile.returns_rows:
-                        return self.build_statement_result(direct_statement, execution_result)
-
+                if cached.operation_profile.returns_rows:
+                    result = self.build_statement_result(direct_statement, execution_result)
+                else:
                     # DML path: use DMLResult to bypass full SQLResult construction
                     affected_rows = (
                         execution_result.rowcount_override
                         if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
                         else 0
                     )
-                    return DMLResult(cached.operation_type, affected_rows)
-            except Exception as exc:
-                self._raise_async_database_exception(exc_handler, exc)
-            finally:
-                self._raise_async_database_exception(exc_handler, None)
+                    result = DMLResult(cached.operation_type, affected_rows)
+
+            pending_exception = exc_handler.pending_exception
+            if pending_exception is not None:
+                raise pending_exception from None
+            assert result is not None
+            return result
         finally:
             self._release_pooled_statement(direct_statement)
-        msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
     async def _stmt_cache_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
@@ -455,19 +455,19 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         will hit the fast path in _get_compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
         try:
-            try:
-                async with exc_handler, self.with_cursor(self.connection) as cursor:
-                    execution_result = await self.dispatch_execute(cursor, statement)
-                    return self.build_statement_result(statement, execution_result)
-            except Exception as exc:
-                self._raise_async_database_exception(exc_handler, exc)
-            finally:
-                self._raise_async_database_exception(exc_handler, None)
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                execution_result = await self.dispatch_execute(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
+
+            pending_exception = exc_handler.pending_exception
+            if pending_exception is not None:
+                raise pending_exception from None
+            assert result is not None
+            return result
         finally:
             self._release_pooled_statement(statement)
-        msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT - Required Abstract Methods
@@ -518,32 +518,29 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         exc_handler = self.handle_database_exceptions()
-        try:
-            try:
-                async with exc_handler:
-                    if (
-                        self._stmt_cache_enabled
-                        and (statement_config is None or statement_config is self.statement_config)
-                        and isinstance(statement, str)
-                        and len(parameters) == 1
-                        and isinstance(parameters[0], (tuple, list))
-                        and not kwargs
-                    ):
-                        fast_result = await self._stmt_cache_lookup(statement, parameters[0])
-                        if fast_result is not None:
-                            return fast_result
-                    sql_statement = self.prepare_statement(
-                        statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-                    )
-                    return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-            except Exception as exc:
-                self._raise_async_database_exception(exc_handler, exc)
-            finally:
-                self._raise_async_database_exception(exc_handler, None)
-        finally:
-            pass
-        msg = "unreachable"
-        raise AssertionError(msg)
+        result: SQLResult | None = None
+        async with exc_handler:
+            if (
+                self._stmt_cache_enabled
+                and (statement_config is None or statement_config is self.statement_config)
+                and isinstance(statement, str)
+                and len(parameters) == 1
+                and isinstance(parameters[0], (tuple, list))
+                and not kwargs
+            ):
+                fast_result = await self._stmt_cache_lookup(statement, parameters[0])
+                if fast_result is not None:
+                    result = fast_result
+            if result is None:
+                sql_statement = self.prepare_statement(
+                    statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+                )
+                result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            raise pending_exception from None
+        assert result is not None
+        return result
 
     async def execute_many(
         self,
@@ -559,30 +556,26 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Parameters passed will be used as the batch execution sequence.
         """
         exc_handler = self.handle_database_exceptions()
-        try:
-            try:
-                async with exc_handler:
-                    config = statement_config or self.statement_config
+        result: SQLResult | None = None
+        async with exc_handler:
+            config = statement_config or self.statement_config
 
-                    if isinstance(statement, str) and not filters and not kwargs:
-                        sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-                    elif isinstance(statement, SQL):
-                        statement_seed = statement.raw_expression or statement.raw_sql
-                        sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-                    else:
-                        base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-                        statement_seed = base_statement.raw_expression or base_statement.raw_sql
-                        sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+            if isinstance(statement, str) and not filters and not kwargs:
+                sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+            elif isinstance(statement, SQL):
+                statement_seed = statement.raw_expression or statement.raw_sql
+                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+            else:
+                base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+                statement_seed = base_statement.raw_expression or base_statement.raw_sql
+                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
-                    return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-            except Exception as exc:
-                self._raise_async_database_exception(exc_handler, exc)
-            finally:
-                self._raise_async_database_exception(exc_handler, None)
-        finally:
-            pass
-        msg = "unreachable"
-        raise AssertionError(msg)
+            result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            raise pending_exception from None
+        assert result is not None
+        return result
 
     async def execute_script(
         self,
@@ -598,23 +591,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
         exc_handler = self.handle_database_exceptions()
-        try:
-            try:
-                async with exc_handler:
-                    config = statement_config or self.statement_config
-                    sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-
-                    return await self.dispatch_statement_execution(
-                        statement=sql_statement.as_script(), connection=self.connection
-                    )
-            except Exception as exc:
-                self._raise_async_database_exception(exc_handler, exc)
-            finally:
-                self._raise_async_database_exception(exc_handler, None)
-        finally:
-            pass
-        msg = "unreachable"
-        raise AssertionError(msg)
+        result: SQLResult | None = None
+        async with exc_handler:
+            config = statement_config or self.statement_config
+            sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+            result = await self.dispatch_statement_execution(
+                statement=sql_statement.as_script(), connection=self.connection
+            )
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            raise pending_exception from None
+        assert result is not None
+        return result
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PUBLIC API - Query Methods (select/fetch variants)
@@ -920,11 +908,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            The scalar value, optionally converted to the specified type.
-
-        Raises:
-            ValueError: If no rows or more than one row/column is returned.
-            TypeError: If value_type is provided and conversion fails.
+            The scalar value, optionally converted to the specified type
 
         Examples:
             Basic usage (returns Any):
@@ -1053,10 +1037,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Returns:
             The scalar value (optionally converted), or None if no rows found.
-
-        Raises:
-            ValueError: If more than one row is returned.
-            TypeError: If value_type is provided and conversion fails.
 
         Examples:
             Basic usage:

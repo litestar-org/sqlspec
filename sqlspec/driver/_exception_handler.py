@@ -1,6 +1,6 @@
 """Shared exception handler bases for driver adapters."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
