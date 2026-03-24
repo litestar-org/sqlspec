@@ -314,11 +314,7 @@ def test_sync_driver_execution_wrappers_reraise_deferred_database_errors(
     mock_sync_driver: MockSyncDriver, method_name: str, call_args: tuple[Any, ...]
 ) -> None:
     """Test wrapper methods re-raise mapped errors after the exception context exits."""
-    with patch.object(
-        mock_sync_driver,
-        "dispatch_statement_execution",
-        side_effect=ValueError("Test wrapper error"),
-    ):
+    with patch.object(mock_sync_driver, "dispatch_statement_execution", side_effect=ValueError("Test wrapper error")):
         method = getattr(mock_sync_driver, method_name)
 
         with pytest.raises(SQLSpecError, match="Mock database error: Test wrapper error"):
