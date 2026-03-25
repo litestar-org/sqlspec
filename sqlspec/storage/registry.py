@@ -9,6 +9,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Final, cast
+from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 
@@ -112,35 +113,59 @@ class StorageRegistry:
             msg = "URI or alias cannot be empty."
             raise ImproperConfigurationError(msg)
 
-        if isinstance(uri_or_alias, Path):
-            local_path = uri_or_alias.expanduser().resolve()
-            uri_or_alias = f"file://{local_path.parent}" if local_path.is_file() else f"file://{local_path}"
-
         cache_params = dict(kwargs)
         if backend:
             cache_params["__backend__"] = backend
-        cache_key = (uri_or_alias, self._make_hashable(cache_params)) if cache_params else uri_or_alias
-        if cache_key in self._instances:
-            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=str(uri_or_alias), cached=True)
-            return self._instances[cache_key]
-        scheme = self._get_scheme(uri_or_alias)
-        if not scheme and is_local_path(uri_or_alias):
-            scheme = "file"
-            local_path = Path(uri_or_alias).expanduser().resolve()
-            uri_or_alias = f"file://{local_path.parent}" if local_path.is_file() else f"file://{local_path}"
 
-        if scheme:
-            instance = self._resolve_from_uri(uri_or_alias, backend_override=backend, **kwargs)
-        elif uri_or_alias in self._alias_configs:
-            backend_cls, stored_uri, config = self._alias_configs[uri_or_alias]
-            if backend:
-                backend_cls = self._get_backend_class(backend)
-            instance = backend_cls(stored_uri, **{**config, **kwargs})
+        path_str = str(uri_or_alias)
+        scheme = self._get_scheme(path_str)
+
+        # 1. Resolve to a base URI
+        base_uri = path_str
+        is_alias = False
+
+        # Check if it's an alias first (either exact match or prefix match like "alias/path")
+        parts = path_str.split("/", 1)
+        potential_alias = parts[0]
+
+        if potential_alias in self._alias_configs:
+            base_uri = potential_alias
+            is_alias = True
+        elif scheme:
+            if scheme == "file":
+                parsed = urlparse(path_str)
+                file_path = unquote(parsed.path)
+                if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
+                    file_path = file_path[1:]
+
+                path_obj = Path(file_path).expanduser().resolve()
+                base_uri = f"file://{path_obj.parent}" if path_obj.is_file() else f"file://{path_obj}"
+        elif is_local_path(path_str):
+            scheme = "file"
+            path_obj = Path(path_str).expanduser().resolve()
+            base_uri = f"file://{path_obj.parent}" if path_obj.is_file() else f"file://{path_obj}"
         else:
             msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
             raise ImproperConfigurationError(msg)
+
+        # 2. Check instance cache using the BASE URI
+        cache_key = (base_uri, self._make_hashable(cache_params)) if cache_params else base_uri
+        if cache_key in self._instances:
+            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=True)
+            return self._instances[cache_key]
+
+        # 3. Create new instance if not cached
+        if not is_alias:
+            instance = self._resolve_from_uri(base_uri, backend_override=backend, **kwargs)
+        else:
+            # It must be an alias (already validated above)
+            backend_cls, stored_uri, config = self._alias_configs[base_uri]
+            if backend:
+                backend_cls = self._get_backend_class(backend)
+            instance = backend_cls(stored_uri, **{**config, **kwargs})
+
         self._instances[cache_key] = instance
-        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=str(uri_or_alias), cached=False)
+        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=False)
         return instance
 
     def _resolve_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
