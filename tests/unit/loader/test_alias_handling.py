@@ -19,6 +19,7 @@ def test_load_file_with_alias_is_not_double_dir_stripped(tmp_path: Path) -> None
 
     assert loader.has_query("query1")
 
+
 def test_load_file_from_alias_nested(tmp_path: Path) -> None:
     """Test loading a nested file through an alias."""
     nested_dir = tmp_path / "nested"

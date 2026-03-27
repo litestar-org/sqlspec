@@ -24,6 +24,7 @@ def test_load_specific_file_in_nested_dir(tmp_path: Path) -> None:
     assert not loader.has_query("query2")
     assert loader.list_files() == [str(file1)]
 
+
 def test_load_specific_file_is_not_namespaced(tmp_path: Path) -> None:
     """Test that a specific file loaded directly is NOT namespaced by its directory.
 
@@ -41,6 +42,7 @@ def test_load_specific_file_is_not_namespaced(tmp_path: Path) -> None:
     # It should be "query1", not "nested.dir.query1"
     assert loader.has_query("query1")
     assert not loader.has_query("nested.dir.query1")
+
 
 def test_load_directory_is_namespaced(tmp_path: Path) -> None:
     """Test that loading a directory IS namespaced."""
