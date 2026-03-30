@@ -10,7 +10,6 @@ from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
-from tests.conftest import requires_interpreted
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -256,7 +255,6 @@ def test_bigquery_statement_stack_sequential(bigquery_session: "BigQueryDriver",
     assert count_result.get_data()[0]["total"] == 2
 
 
-@requires_interpreted
 def test_bigquery_statement_stack_continue_on_error(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Continue-on-error should surface BigQuery failures but keep executing."""
 

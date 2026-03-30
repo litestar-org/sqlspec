@@ -8,7 +8,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig, PsycopgSyncDriver
-from tests.conftest import requires_interpreted
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -288,7 +287,6 @@ def test_psycopg_statement_stack_pipeline(psycopg_session: "PsycopgSyncDriver") 
     assert total_result.get_data()[0]["total"] == 2
 
 
-@requires_interpreted
 def test_psycopg_statement_stack_continue_on_error(psycopg_session: "PsycopgSyncDriver") -> None:
     """Pipeline execution should continue when instructed to handle errors."""
 

@@ -12,9 +12,8 @@ from sqlspec.exceptions import (
     SQLParsingError,
     UniqueViolationError,
 )
-from tests.conftest import requires_interpreted
 
-pytestmark = [pytest.mark.xdist_group("sqlite"), requires_interpreted]
+pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 @pytest.fixture

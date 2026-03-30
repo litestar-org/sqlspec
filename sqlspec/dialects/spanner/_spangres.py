@@ -4,6 +4,7 @@ from typing import Any, Final, cast
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
+from sqlglot.generators.postgres import PostgresGenerator
 from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokenizer_core import TokenType
 
@@ -77,7 +78,7 @@ def _register_postgres_spangres_parser_hooks() -> None:
     setattr(PostgresParser, _HOOKS_REGISTERED_ATTR, True)
 
 
-class SpangresGenerator(Postgres.Generator):
+class SpangresGenerator(PostgresGenerator):
     """Generate Spanner row deletion policies."""
 
     def property_sql(self, expression: exp.Property) -> str:
@@ -88,7 +89,7 @@ class SpangresGenerator(Postgres.Generator):
                 interval_sql = _render_interval_sql(self, values.expressions[1])
                 return f"ROW DELETION POLICY (OLDER_THAN({column}, {interval_sql}))"
 
-        return super().property_sql(expression)
+        return str(super().property_sql(expression))
 
 
 _register_postgres_spangres_parser_hooks()

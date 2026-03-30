@@ -7,7 +7,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
-from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -184,7 +183,6 @@ async def test_psycopg_async_statement_stack_pipeline(psycopg_async_session: Psy
     assert verify.get_data()[0]["total"] == 2
 
 
-@requires_interpreted
 async def test_psycopg_async_statement_stack_continue_on_error(psycopg_async_session: PsycopgAsyncDriver) -> None:
     """Ensure async pipeline honors continue-on-error semantics."""
 

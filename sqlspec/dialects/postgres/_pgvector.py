@@ -12,6 +12,7 @@ Adds support for pgvector distance operators:
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.dialects.postgres import Postgres
+from sqlglot.generators.postgres import PostgresGenerator
 
 from sqlspec.builder._vector_distance import (
     is_vector_distance_expression,
@@ -32,7 +33,7 @@ register_postgres_extension_operators()
 _BASE_OPERATOR_TRANSFORM = Postgres.Generator.TRANSFORMS[exp.Operator]
 
 
-def _postgres_extension_operator_sql(generator: Postgres.Generator, expression: exp.Operator) -> str:
+def _postgres_extension_operator_sql(generator: PostgresGenerator, expression: exp.Operator) -> str:
     if is_vector_distance_expression(expression):
         return render_vector_distance_postgres(
             generator.sql(expression, "this"),
@@ -56,7 +57,7 @@ class PGVectorTokenizer(Postgres.Tokenizer):
     KEYWORDS = {**Postgres.Tokenizer.KEYWORDS, **PGVECTOR_OPERATOR_TOKENS}
 
 
-class PGVectorGenerator(Postgres.Generator):
+class PGVectorGenerator(PostgresGenerator):
     """Generator that renders pgvector and SQLSpec vector-distance operators."""
 
 

@@ -8,7 +8,6 @@ import pytest
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.core import StatementConfig
-from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -235,7 +234,6 @@ async def test_aiosqlite_statement_stack_sequential(aiosqlite_session: Aiosqlite
     assert count_result.get_data()[0]["total"] == 2
 
 
-@requires_interpreted
 async def test_aiosqlite_statement_stack_continue_on_error(aiosqlite_session: AiosqliteDriver) -> None:
     """Sequential execution should continue when continue_on_error is enabled."""
 

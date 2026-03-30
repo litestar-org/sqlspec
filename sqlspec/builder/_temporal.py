@@ -18,24 +18,29 @@ from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.snowflake import Snowflake
 from sqlglot.generator import Generator
+from sqlglot.generators.bigquery import BigQueryGenerator
+from sqlglot.generators.duckdb import DuckDBGenerator
+from sqlglot.generators.oracle import OracleGenerator
+from sqlglot.generators.postgres import PostgresGenerator
+from sqlglot.generators.snowflake import SnowflakeGenerator
 
 __all__ = ("create_temporal_table", "register_version_generators")
 
 
-def _oracle_version_sql(self: "Oracle.Generator", expression: exp.Version) -> str:
+def _oracle_version_sql(self: OracleGenerator, expression: exp.Version) -> str:
     """Oracle: AS OF TIMESTAMP timestamp or AS OF SCN scn."""
     expr = self.sql(expression, "expression")
     this = expression.name or "TIMESTAMP"
     return f"AS OF {this} {expr}"
 
 
-def _bigquery_version_sql(self: "BigQuery.Generator", expression: exp.Version) -> str:
+def _bigquery_version_sql(self: BigQueryGenerator, expression: exp.Version) -> str:
     """BigQuery: FOR SYSTEM_TIME AS OF timestamp."""
     expr = self.sql(expression, "expression")
     return f"FOR SYSTEM_TIME AS OF {expr}"
 
 
-def _snowflake_version_sql(self: "Snowflake.Generator", expression: exp.Version) -> str:
+def _snowflake_version_sql(self: SnowflakeGenerator, expression: exp.Version) -> str:
     """Snowflake: AT (TIMESTAMP => timestamp) or BEFORE (TIMESTAMP => ...).
 
     AS OF is mapped to AT, and BEFORE is supported for point-before queries.
@@ -48,19 +53,19 @@ def _snowflake_version_sql(self: "Snowflake.Generator", expression: exp.Version)
     return f"AT ({this} => {expr})"
 
 
-def _duckdb_version_sql(self: "DuckDB.Generator", expression: exp.Version) -> str:
+def _duckdb_version_sql(self: DuckDBGenerator, expression: exp.Version) -> str:
     """DuckDB: AT (TIMESTAMP => timestamp)."""
     expr = self.sql(expression, "expression")
     return f"AT (TIMESTAMP => {expr})"
 
 
-def _cockroachdb_version_sql(self: "Postgres.Generator", expression: exp.Version) -> str:
+def _cockroachdb_version_sql(self: PostgresGenerator, expression: exp.Version) -> str:
     """CockroachDB (via Postgres dialect): AS OF SYSTEM TIME timestamp."""
     expr = self.sql(expression, "expression")
     return f"AS OF SYSTEM TIME {expr}"
 
 
-def _default_version_sql(self: "Generator", expression: exp.Version) -> str:
+def _default_version_sql(self: Generator, expression: exp.Version) -> str:
     """Default: AS OF SYSTEM TIME timestamp (CockroachDB style).
 
     When no dialect is specified, we default to CockroachDB/Postgres style

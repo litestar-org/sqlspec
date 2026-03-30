@@ -10,6 +10,7 @@ from typing import Any, Final, cast
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.parsers.bigquery import BigQueryParser
 from sqlglot.tokenizer_core import TokenType
 
@@ -168,7 +169,7 @@ class SpannerTokenizer(BigQuery.Tokenizer):
     KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, **_SPANNER_KEYWORDS}
 
 
-class SpannerGenerator(BigQuery.Generator):
+class SpannerGenerator(BigQueryGenerator):
     """Generate Spanner-specific DDL syntax."""
 
     def locate_properties(self, properties: exp.Properties) -> Any:
@@ -215,7 +216,7 @@ class SpannerGenerator(BigQuery.Generator):
         if root_props and with_props and not self.pretty:
             with_props = f" {with_props}"
 
-        return root_props + with_props
+        return str(root_props) + str(with_props)
 
     def property_sql(self, expression: exp.Property) -> str:
         """Render Spanner-specific properties."""
@@ -244,7 +245,7 @@ class SpannerGenerator(BigQuery.Generator):
                 column = self.sql(values.expressions[1])
                 return f"TTL INTERVAL {interval} ON {column}"
 
-        return super().property_sql(expression)
+        return str(super().property_sql(expression))
 
 
 _register_bigquery_spanner_parser_hooks()
