@@ -192,10 +192,6 @@ exclude = [
   "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
   "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
-  "sqlspec/dialects/postgres/_pgvector.py",   # Dialect shell patches compiled sqlglot parser/generator registries
-  "sqlspec/dialects/postgres/_paradedb.py",   # Dialect shell patches compiled sqlglot parser/generator registries
-  "sqlspec/dialects/spanner/_spanner.py",     # Dialect shell patches compiled sqlglot parser hooks and post-processes DDL
-  "sqlspec/dialects/spanner/_spangres.py",    # Dialect shell patches compiled sqlglot parser hooks
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
@@ -205,6 +201,7 @@ exclude = [
 include = [
   "sqlspec/core/**/*.py",                  # Core module
   "sqlspec/builder/**/*.py",               # Builder module
+  "sqlspec/dialects/**/*.py",              # Dialect extensions (must compile with sqlglot[c] generators)
   "sqlspec/exceptions.py",                 # Exceptions module
   "sqlspec/loader.py",                     # Loader module
   "sqlspec/observability/**/*.py",         # Observability utilities
