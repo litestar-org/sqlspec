@@ -164,10 +164,10 @@ def _patched_pg_property_sql(self: Any, expression: exp.Property) -> str:
     return _original_pg_property_sql(self, expression)
 
 
-BigQueryGenerator.locate_properties = _patched_bq_locate_properties
-BigQueryGenerator.properties_sql = _patched_bq_properties_sql
-BigQueryGenerator.property_sql = _patched_bq_property_sql
-PostgresGenerator.property_sql = _patched_pg_property_sql
+setattr(BigQueryGenerator, "locate_properties", _patched_bq_locate_properties)
+setattr(BigQueryGenerator, "properties_sql", _patched_bq_properties_sql)
+setattr(BigQueryGenerator, "property_sql", _patched_bq_property_sql)
+setattr(PostgresGenerator, "property_sql", _patched_pg_property_sql)
 
 SpannerGenerator = BigQueryGenerator
 SpangresGenerator = PostgresGenerator
