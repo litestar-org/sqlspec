@@ -4,9 +4,10 @@ from typing import Any, Final, cast
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
-from sqlglot.generators.postgres import PostgresGenerator
 from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokenizer_core import TokenType
+
+from sqlspec.dialects.spanner._generators import SpangresGenerator
 
 __all__ = ("Spangres",)
 
@@ -38,18 +39,6 @@ def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
     return expression
 
 
-def _render_interval_sql(generator: Any, expression: exp.Expr) -> str:
-    if isinstance(expression, exp.Interval):
-        unit = expression.args.get("unit")
-        if isinstance(expression.this, exp.Literal) and not expression.this.is_string and isinstance(unit, exp.Expr):
-            return f"INTERVAL {generator.sql(expression.this)} {generator.sql(unit)}"
-
-    interval_sql = cast("str", generator.sql(expression))
-    if not interval_sql.upper().startswith("INTERVAL"):
-        return f"INTERVAL {interval_sql}"
-    return interval_sql
-
-
 def _spangres_parse_property(self: Any) -> exp.Expr:
     if _is_spangres_dialect(self) and self._match_text_seq("ROW", "DELETION", "POLICY"):
         self._match(TokenType.L_PAREN)
@@ -76,20 +65,6 @@ def _register_postgres_spangres_parser_hooks() -> None:
     _original_postgres_parse_property()
     setattr(PostgresParser, "_parse_property", _spangres_parse_property)
     setattr(PostgresParser, _HOOKS_REGISTERED_ATTR, True)
-
-
-class SpangresGenerator(PostgresGenerator):
-    """Generate Spanner row deletion policies."""
-
-    def property_sql(self, expression: exp.Property) -> str:
-        if isinstance(expression.this, exp.Literal) and expression.this.name.upper() == _ROW_DELETION_NAME:
-            values = expression.args.get("value")
-            if isinstance(values, exp.Tuple) and len(values.expressions) >= _TTL_MIN_COMPONENTS:
-                column = self.sql(values.expressions[0])
-                interval_sql = _render_interval_sql(self, values.expressions[1])
-                return f"ROW DELETION POLICY (OLDER_THAN({column}, {interval_sql}))"
-
-        return str(super().property_sql(expression))
 
 
 _register_postgres_spangres_parser_hooks()

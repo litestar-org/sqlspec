@@ -201,7 +201,6 @@ exclude = [
 include = [
   "sqlspec/core/**/*.py",                  # Core module
   "sqlspec/builder/**/*.py",               # Builder module
-  "sqlspec/dialects/**/*.py",              # Dialect extensions (must compile with sqlglot[c] generators)
   "sqlspec/exceptions.py",                 # Exceptions module
   "sqlspec/loader.py",                     # Loader module
   "sqlspec/observability/**/*.py",         # Observability utilities
