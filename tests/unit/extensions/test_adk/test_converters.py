@@ -366,22 +366,18 @@ def test_record_to_event_roundtrip_preserves_timestamp() -> None:
     assert abs(restored.timestamp - fixed_ts) < 1.0  # within 1 second
 
 
-@pytest.mark.xfail(
-    reason="ADK Event model uses extra='forbid' — unknown fields raise ValidationError. "
-    "Future ADK versions that add fields will also update the model, so this is safe.",
-    strict=True,
-)
-def test_record_to_event_with_extra_fields_in_event_json() -> None:
-    """Events with extra/unknown fields in event_json are rejected by Event model."""
+def test_record_to_event_ignores_unknown_fields_in_event_json() -> None:
+    """Unknown event_json fields are ignored by the current ADK Event model."""
     event = _make_event(event_id="extra-fields-evt", author="tool")
     record = event_to_record(event, "s1")
 
     # Inject hypothetical future ADK field into event_json
     record["event_json"]["hypothetical_v3_field"] = "some_value"  # type: ignore[index]
 
-    # This WILL raise because Event has extra='forbid'
     restored = record_to_event(record)
     assert restored.id == "extra-fields-evt"
+    assert restored.author == "tool"
+    assert "hypothetical_v3_field" not in restored.model_dump(exclude_none=True, mode="json")
 
 
 # ---------------------------------------------------------------------------

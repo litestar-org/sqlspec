@@ -187,6 +187,7 @@ exclude = [
   "sqlspec/**/_typing.py",                    # Type aliases (mypyc-incompatible)
   "sqlspec/config.py",                        # Main config
   "sqlspec/extensions/**",                    # All extensions
+  "sqlspec/dialects/**/*.py",                 # Keep SQLGlot dialect subclasses interpreted
   "sqlspec/**/__init__.py",                   # Init files (usually just imports)
   "sqlspec/protocols.py",                     # Protocol definitions
   "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)

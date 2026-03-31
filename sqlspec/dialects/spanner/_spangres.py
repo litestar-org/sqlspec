@@ -17,6 +17,14 @@ _ORIGINAL_PARSE_PROPERTY_ATTR: Final[str] = "_sqlspec_original_parse_property"
 _HOOKS_REGISTERED_ATTR: Final[str] = "_sqlspec_spangres_hooks_registered"
 
 
+def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
+    if isinstance(expression, exp.Alias):
+        alias = expression.args.get("alias")
+        if isinstance(alias, exp.Identifier) and isinstance(expression.this, exp.Expr):
+            return exp.Interval(this=expression.this.copy(), unit=alias.copy())
+    return expression
+
+
 def _is_spangres_dialect(parser: Any) -> bool:
     dialect = getattr(parser, "dialect", None)
     return dialect is not None and dialect.__class__.__name__ == "Spangres"
@@ -29,14 +37,6 @@ def _original_postgres_parse_property() -> Any:
     original = PostgresParser._parse_property
     setattr(PostgresParser, _ORIGINAL_PARSE_PROPERTY_ATTR, original)
     return original
-
-
-def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
-    if isinstance(expression, exp.Alias):
-        alias = expression.args.get("alias")
-        if isinstance(alias, exp.Identifier) and isinstance(expression.this, exp.Expr):
-            return exp.Interval(this=expression.this.copy(), unit=alias.copy())
-    return expression
 
 
 def _spangres_parse_property(self: Any) -> exp.Expr:

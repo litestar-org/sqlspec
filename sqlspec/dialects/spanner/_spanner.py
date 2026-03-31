@@ -41,20 +41,6 @@ _INTERLEAVE_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 
-def _is_spanner_dialect(parser: Any) -> bool:
-    dialect = getattr(parser, "dialect", None)
-    return dialect is not None and dialect.__class__.__name__ == "Spanner"
-
-
-def _original_bigquery_parse_property() -> Any:
-    original = getattr(BigQueryParser, _ORIGINAL_PARSE_PROPERTY_ATTR, None)
-    if callable(original):
-        return original
-    original = BigQueryParser._parse_property
-    setattr(BigQueryParser, _ORIGINAL_PARSE_PROPERTY_ATTR, original)
-    return original
-
-
 def _normalize_on_delete_value(on_delete: str) -> str:
     return " ".join(on_delete.upper().split())
 
@@ -95,6 +81,20 @@ def _attach_create_property(create: exp.Create, property_expression: exp.Propert
     else:
         create.set("properties", exp.Properties(expressions=[property_expression]))
     return create
+
+
+def _is_spanner_dialect(parser: Any) -> bool:
+    dialect = getattr(parser, "dialect", None)
+    return dialect is not None and dialect.__class__.__name__ == "Spanner"
+
+
+def _original_bigquery_parse_property() -> Any:
+    original = getattr(BigQueryParser, _ORIGINAL_PARSE_PROPERTY_ATTR, None)
+    if callable(original):
+        return original
+    original = BigQueryParser._parse_property
+    setattr(BigQueryParser, _ORIGINAL_PARSE_PROPERTY_ATTR, original)
+    return original
 
 
 def _spanner_parse_property(self: Any) -> exp.Expr:
