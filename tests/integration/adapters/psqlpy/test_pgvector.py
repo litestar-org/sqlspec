@@ -27,13 +27,14 @@ async def pgvector_psqlpy_config(
     pgvector_psqlpy_connection_config: "PsqlpyPoolParams",
 ) -> "AsyncGenerator[PsqlpyConfig, None]":
     """Provide a PsqlpyConfig instance connected to pgvector postgres."""
-    # Enable the pgvector extension before creating the pool
-    pool = ConnectionPool(**pgvector_psqlpy_connection_config)
-    async with pool.acquire() as conn:
+    # Enable the pgvector extension before creating the pool using the DSN
+    dsn = pgvector_psqlpy_connection_config.get("dsn", "")
+    setup_pool = ConnectionPool(dsn=dsn)
+    async with setup_pool.acquire() as conn:
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    pool.close()
+    setup_pool.close()
 
-    config = PsqlpyConfig(connection_config=PsqlpyPoolParams(**pgvector_psqlpy_connection_config))
+    config = PsqlpyConfig(connection_config=pgvector_psqlpy_connection_config)
     try:
         yield config
     finally:

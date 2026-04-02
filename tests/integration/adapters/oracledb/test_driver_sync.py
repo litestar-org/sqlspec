@@ -38,7 +38,9 @@ def test_sync_connection(oracle_23ai_service: "OracleService") -> None:
     finally:
         pool.close()
 
-    pooled_config = OraclePoolParams(**base_config, min=1, max=5)
+    pooled_config = OraclePoolParams(**base_config)
+    pooled_config["min"] = 1
+    pooled_config["max"] = 5
     another_config = OracleSyncConfig(connection_config=pooled_config)
     pool = another_config.create_pool()
     assert pool is not None
@@ -507,8 +509,7 @@ def test_sync_lowercase_columns_default(oracle_sync_session: "OracleSyncDriver")
 def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConfig) -> None:
     """Ensure disabling lowercase feature preserves uppercase columns."""
     custom_config = OracleSyncConfig(
-        connection_config=OraclePoolParams(**oracle_sync_config.connection_config),
-        driver_features={"enable_lowercase_column_names": False},
+        connection_config=oracle_sync_config.connection_config, driver_features={"enable_lowercase_column_names": False}
     )
 
     with custom_config.provide_session() as session:

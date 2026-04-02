@@ -38,7 +38,9 @@ async def test_async_connection(oracle_23ai_service: "OracleService") -> None:
     finally:
         await pool.close()
 
-    pooled_config = OraclePoolParams(**base_config, min=1, max=5)
+    pooled_config = OraclePoolParams(**base_config)
+    pooled_config["min"] = 1
+    pooled_config["max"] = 5
     another_config = OracleAsyncConfig(connection_config=pooled_config)
     pool = await another_config.create_pool()
     assert pool is not None
@@ -509,7 +511,7 @@ async def test_async_lowercase_columns_default(oracle_async_session: "OracleAsyn
 async def test_async_uppercase_columns_when_disabled(oracle_async_config: OracleAsyncConfig) -> None:
     """Ensure disabling lowercase feature preserves uppercase columns."""
     custom_config = OracleAsyncConfig(
-        connection_config=OraclePoolParams(**oracle_async_config.connection_config),
+        connection_config=oracle_async_config.connection_config,
         driver_features={"enable_lowercase_column_names": False},
     )
 

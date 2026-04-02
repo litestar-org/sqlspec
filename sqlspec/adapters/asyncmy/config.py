@@ -174,7 +174,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
     def __init__(
         self,
         *,
-        connection_config: "AsyncmyPoolParams | None" = None,
+        connection_config: "AsyncmyPoolParams | dict[str, Any] | None" = None,
         connection_instance: "AsyncmyPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

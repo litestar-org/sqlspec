@@ -177,7 +177,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def __init__(
         self,
         *,
-        connection_config: "BigQueryConnectionParams | None" = None,
+        connection_config: "BigQueryConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "Any" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

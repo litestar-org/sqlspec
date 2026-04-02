@@ -235,7 +235,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     def __init__(
         self,
         *,
-        connection_config: "DuckDBPoolParams | None" = None,
+        connection_config: "DuckDBPoolParams | dict[str, Any] | None" = None,
         connection_instance: "DuckDBConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

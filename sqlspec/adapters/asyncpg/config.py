@@ -272,7 +272,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     def __init__(
         self,
         *,
-        connection_config: "AsyncpgPoolConfig | None" = None,
+        connection_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
         connection_instance: "Pool[Record] | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

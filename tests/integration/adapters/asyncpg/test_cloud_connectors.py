@@ -37,10 +37,12 @@ async def test_cloud_sql_connection_basic() -> None:
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
     user = os.environ.get("GOOGLE_CLOUD_SQL_USER", "postgres")
     database = os.environ.get("GOOGLE_CLOUD_SQL_DATABASE", "postgres")
-    password = os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD")
+    pool_config = AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2)
+    if password := os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD"):
+        pool_config["password"] = password
 
     config = AsyncpgConfig(
-        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
+        connection_config=pool_config,
         driver_features={"enable_cloud_sql": True, "cloud_sql_instance": instance, "cloud_sql_enable_iam_auth": False},
     )
 
@@ -59,10 +61,12 @@ async def test_cloud_sql_query_execution() -> None:
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
     user = os.environ.get("GOOGLE_CLOUD_SQL_USER", "postgres")
     database = os.environ.get("GOOGLE_CLOUD_SQL_DATABASE", "postgres")
-    password = os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD")
+    pool_config = AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2)
+    if password := os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD"):
+        pool_config["password"] = password
 
     config = AsyncpgConfig(
-        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
+        connection_config=pool_config,
         driver_features={"enable_cloud_sql": True, "cloud_sql_instance": instance, "cloud_sql_enable_iam_auth": False},
     )
 
@@ -103,10 +107,12 @@ async def test_cloud_sql_private_ip() -> None:
     instance = os.environ["GOOGLE_CLOUD_SQL_INSTANCE"]
     user = os.environ.get("GOOGLE_CLOUD_SQL_USER", "postgres")
     database = os.environ.get("GOOGLE_CLOUD_SQL_DATABASE", "postgres")
-    password = os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD")
+    pool_config = AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2)
+    if password := os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD"):
+        pool_config["password"] = password
 
     config = AsyncpgConfig(
-        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
+        connection_config=pool_config,
         driver_features={
             "enable_cloud_sql": True,
             "cloud_sql_instance": instance,
@@ -130,10 +136,12 @@ async def test_alloydb_connection_basic() -> None:
     instance_uri = os.environ["GOOGLE_ALLOYDB_INSTANCE_URI"]
     user = os.environ.get("GOOGLE_ALLOYDB_USER", "postgres")
     database = os.environ.get("GOOGLE_ALLOYDB_DATABASE", "postgres")
-    password = os.environ.get("GOOGLE_ALLOYDB_PASSWORD")
+    pool_config = AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2)
+    if password := os.environ.get("GOOGLE_ALLOYDB_PASSWORD"):
+        pool_config["password"] = password
 
     config = AsyncpgConfig(
-        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
+        connection_config=pool_config,
         driver_features={
             "enable_alloydb": True,
             "alloydb_instance_uri": instance_uri,
@@ -156,10 +164,12 @@ async def test_alloydb_query_execution() -> None:
     instance_uri = os.environ["GOOGLE_ALLOYDB_INSTANCE_URI"]
     user = os.environ.get("GOOGLE_ALLOYDB_USER", "postgres")
     database = os.environ.get("GOOGLE_ALLOYDB_DATABASE", "postgres")
-    password = os.environ.get("GOOGLE_ALLOYDB_PASSWORD")
+    pool_config = AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2)
+    if password := os.environ.get("GOOGLE_ALLOYDB_PASSWORD"):
+        pool_config["password"] = password
 
     config = AsyncpgConfig(
-        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
+        connection_config=pool_config,
         driver_features={
             "enable_alloydb": True,
             "alloydb_instance_uri": instance_uri,

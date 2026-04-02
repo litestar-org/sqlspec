@@ -109,7 +109,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def __init__(
         self,
         *,
-        connection_config: "SqliteConnectionParams | None" = None,
+        connection_config: "SqliteConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "SqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

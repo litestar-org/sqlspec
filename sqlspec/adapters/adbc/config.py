@@ -197,7 +197,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def __init__(
         self,
         *,
-        connection_config: "AdbcConnectionParams | None" = None,
+        connection_config: "AdbcConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "Any" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: StatementConfig | None = None,

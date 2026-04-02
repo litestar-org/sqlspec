@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnectionParams
+from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.config import DuckDBPoolParams
 
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
@@ -50,7 +51,7 @@ async def test_asyncpg_pool_concurrency(postgres_service: PostgresService) -> No
 def test_duckdb_pool_concurrency() -> None:
     """Verify that multiple concurrent calls to provide_pool result in a single pool (Sync)."""
     # Use shared memory db for valid concurrency test
-    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"))
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
 
     # We need to capture results from threads
     results: list[DuckDBConnectionPool | None] = [None] * 50

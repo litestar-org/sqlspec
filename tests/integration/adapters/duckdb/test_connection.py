@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec import ObservabilityConfig, SQLSpec
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection, DuckDBConnectionParams
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
 from sqlspec.adapters.duckdb.config import DuckDBPoolParams
 from sqlspec.adapters.duckdb.core import build_connection_config
 from sqlspec.config import LifecycleConfig
@@ -45,7 +45,7 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
         # Use a unique memory database identifier to avoid configuration conflicts
         connection_config["database"] = f":memory:{uuid4().hex}"
 
-    kwargs["connection_config"] = DuckDBConnectionParams(**connection_config)
+    kwargs["connection_config"] = cast("DuckDBPoolParams", connection_config)
     return DuckDBConfig(**kwargs)
 
 
@@ -121,7 +121,7 @@ def test_connection_with_data_processing_settings() -> None:
 
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
-    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"))
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
 
     with config.provide_session() as session:
         result = session.execute("SELECT ? as test_value", (42))
@@ -139,7 +139,7 @@ def test_connection_with_hook() -> None:
         connection.execute("SET threads = 1")
 
     config = DuckDBConfig(
-        connection_config=DuckDBConnectionParams(database=":memory:"),
+        connection_config=DuckDBPoolParams(database=":memory:"),
         driver_features={"on_connection_create": connection_hook},
     )
 
@@ -164,7 +164,7 @@ def test_connection_hook_direct_config() -> None:
         hook_call_count += 1
 
     config = DuckDBConfig(
-        connection_config=DuckDBConnectionParams(database=f":memory:{uuid4().hex}"),
+        connection_config=DuckDBPoolParams(database=f":memory:{uuid4().hex}"),
         driver_features={"on_connection_create": connection_hook},
     )
 
@@ -307,7 +307,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     """Test that DuckDBConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / "test.duckdb"
-    connection_config = DuckDBConnectionParams(database=str(db_path), memory_limit="256MB", threads=4)
+    connection_config = DuckDBPoolParams(database=str(db_path), memory_limit="256MB", threads=4)
 
     config = DuckDBConfig(connection_config=connection_config)
 
@@ -332,7 +332,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
 def test_config_memory_database_shared_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
-    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"))
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
 
     try:
         assert config.connection_config["database"] == ":memory:shared_db"
@@ -349,7 +349,7 @@ def test_config_memory_database_shared_conversion() -> None:
 def test_config_empty_database_conversion() -> None:
     """Test that empty database string is converted to shared memory."""
 
-    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=""))
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=""))
 
     try:
         assert config.connection_config["database"] == ":memory:shared_db"

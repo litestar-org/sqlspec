@@ -14,7 +14,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqlitePoolParams
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgPoolConfig
-from sqlspec.adapters.duckdb.config import DuckDBConfig, DuckDBConnectionParams
+from sqlspec.adapters.duckdb.config import DuckDBConfig, DuckDBPoolParams
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 
 pytestmark = pytest.mark.xdist_group("config")
@@ -26,13 +26,11 @@ async def test_asyncpg_connection_instance_with_pre_created_pool(asyncpg_connect
     import asyncpg
 
     # Create pool manually
-    pool = await asyncpg.create_pool(**asyncpg_connection_config, min_size=1, max_size=2)
+    pool = await asyncpg.create_pool(**asyncpg_connection_config, min_size=1, max_size=2)  # type: ignore[arg-type]
 
     try:
         # Inject pool into config
-        config = AsyncpgConfig(
-            connection_config=AsyncpgPoolConfig(**asyncpg_connection_config), connection_instance=pool
-        )
+        config = AsyncpgConfig(connection_config=asyncpg_connection_config, connection_instance=pool)
 
         # Verify pool is used
         assert config.connection_instance is pool
@@ -55,9 +53,7 @@ async def test_asyncpg_connection_instance_bypasses_pool_creation(asyncpg_connec
 
     try:
         # Config with connection_instance should not call _create_pool
-        config = AsyncpgConfig(
-            connection_config=AsyncpgPoolConfig(**asyncpg_connection_config), connection_instance=pool
-        )
+        config = AsyncpgConfig(connection_config=asyncpg_connection_config, connection_instance=pool)
 
         # Get pool - should return the injected one
         retrieved_pool = await config.provide_pool()
@@ -132,7 +128,7 @@ def test_duckdb_connection_instance_with_pre_created_pool() -> None:
 
     try:
         # Inject pool into config
-        config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=pool)
+        config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=pool)
 
         # Verify pool is used
         assert config.connection_instance is pool
@@ -200,7 +196,7 @@ def test_connection_instance_persists_across_sessions() -> None:
     pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
 
     try:
-        config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=pool)
+        config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=pool)
 
         # First session
         with config.provide_session() as session1:
@@ -226,7 +222,7 @@ def test_connection_instance_with_empty_connection_config() -> None:
 
     try:
         # Empty connection_config, only connection_instance
-        config = DuckDBConfig(connection_config=DuckDBConnectionParams(), connection_instance=pool)
+        config = DuckDBConfig(connection_config=DuckDBPoolParams(), connection_instance=pool)
 
         assert config.connection_instance is pool
         # DuckDB adds default database parameter
@@ -248,11 +244,11 @@ async def test_asyncpg_connection_instance_overrides_connection_config_pool_para
     import asyncpg
 
     # Create pool with specific size
-    pool = await asyncpg.create_pool(**asyncpg_connection_config, min_size=3, max_size=5)
+    pool = await asyncpg.create_pool(**asyncpg_connection_config, min_size=3, max_size=5)  # type: ignore[arg-type]
 
     try:
         # Config has different pool params but connection_instance should take precedence
-        merged_config = AsyncpgPoolConfig(**asyncpg_connection_config, min_size=10, max_size=20)
+        merged_config = {**asyncpg_connection_config, "min_size": 10, "max_size": 20}
         config = AsyncpgConfig(connection_config=merged_config, connection_instance=pool)
 
         # The injected pool should be used, not a new one with config params
@@ -274,7 +270,7 @@ def test_connection_instance_manual_close() -> None:
 
     pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
 
-    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=pool)
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=pool)
 
     # Use the config
     with config.provide_session() as session:
@@ -323,7 +319,7 @@ def test_connection_instance_with_mock_pool() -> None:
     mock_pool = MagicMock()
     mock_pool.acquire = MagicMock()
 
-    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=mock_pool)
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=mock_pool)
 
     assert config.connection_instance is mock_pool
 

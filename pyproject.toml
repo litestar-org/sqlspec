@@ -405,11 +405,7 @@ warn_unused_ignores = true
 ignore_missing_imports = true
 module = [
   "orjson",
-  "re2",
-  "re2.*",
   "uvicorn.*",
-  "googleapiclient",
-  "googleapiclient.*",
   "uvloop.*",
   "asyncmy",
   "asyncmy.*",
@@ -424,8 +420,6 @@ module = [
   "fsspec.*",
   "sqlglot",
   "sqlglot.*",
-  "pgvector",
-  "pgvector.*",
   "minio",
 ]
 

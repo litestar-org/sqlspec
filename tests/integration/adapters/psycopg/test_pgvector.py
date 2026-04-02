@@ -25,16 +25,14 @@ def pgvector_psycopg_config(
     pgvector_psycopg_connection_config: "PsycopgPoolParams",
 ) -> "Generator[PsycopgSyncConfig, None, None]":
     """Provide a PsycopgSyncConfig instance connected to pgvector postgres."""
-    # Enable the pgvector extension before creating the pool
     import psycopg
 
-    with psycopg.connect(**pgvector_psycopg_connection_config) as conn:
+    conninfo = pgvector_psycopg_connection_config.get("conninfo", "")
+    with psycopg.connect(conninfo) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.commit()
 
-    config = PsycopgSyncConfig(
-        connection_config=PsycopgPoolParams(**pgvector_psycopg_connection_config), pool_config={"min_size": 1}
-    )
+    config = PsycopgSyncConfig(connection_config=pgvector_psycopg_connection_config, pool_config={"min_size": 1})
     try:
         yield config
     finally:

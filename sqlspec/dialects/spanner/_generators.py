@@ -11,8 +11,6 @@ from sqlglot import exp
 from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.postgres import PostgresGenerator
 
-from sqlspec.dialects._compat import is_generator_compiled
-
 __all__ = ("SpangresGenerator", "SpannerGenerator")
 
 _TTL_MIN_COMPONENTS = 2
@@ -79,24 +77,6 @@ def _spanner_property_sql(self: Any, expression: exp.Property) -> str:
     return str(_original_bq_property_sql(self, expression))
 
 
-def _spanner_locate_properties(self: Any, properties: exp.Properties) -> Any:
-    """Keep custom Spanner CREATE TABLE properties at the schema boundary."""
-    properties_locs = _original_bq_locate_properties(self, properties)
-    with_properties = list(properties_locs[exp.Properties.Location.POST_WITH])
-    if not with_properties:
-        return properties_locs
-
-    retained_with_properties: list[exp.Expr] = []
-    for property_expression in with_properties:
-        if _is_post_schema_spanner_property(property_expression):
-            properties_locs[exp.Properties.Location.POST_SCHEMA].append(property_expression)
-        else:
-            retained_with_properties.append(property_expression)
-
-    properties_locs[exp.Properties.Location.POST_WITH] = retained_with_properties
-    return properties_locs
-
-
 def _spanner_properties_sql(self: Any, expression: exp.Properties) -> str:
     """Render custom Spanner properties without BigQuery's OPTIONS wrapper."""
     root_properties: list[exp.Expr] = []
@@ -145,84 +125,77 @@ def _spangres_property_sql(self: Any, expression: exp.Property) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Conditional path: compiled vs pure-Python
+# Unified extension logic (sqlglot[c] & Pure-Python)
 # ---------------------------------------------------------------------------
 
-_bq_compiled = is_generator_compiled(BigQueryGenerator)
-_pg_compiled = is_generator_compiled(PostgresGenerator)
-
-if _bq_compiled:
-    # sqlglot[c]: use TRANSFORMS entries with dialect name checks
-
-    _original_bq_property_transform = BigQueryGenerator.TRANSFORMS.get(exp.Property)
-    _original_bq_properties_transform = BigQueryGenerator.TRANSFORMS.get(exp.Properties)
-
-    def _bq_property_transform(self: Any, expression: exp.Property) -> str:
-        dialect = getattr(self, "dialect", None)
-        if dialect and type(dialect).__name__ == "Spanner":
-            return _spanner_property_sql(self, expression)
-        if _original_bq_property_transform is not None:
-            return _original_bq_property_transform(self, expression)
-        return self.property_sql(expression)
-
-    def _bq_properties_transform(self: Any, expression: exp.Properties) -> str:
-        dialect = getattr(self, "dialect", None)
-        if dialect and type(dialect).__name__ == "Spanner":
-            return _spanner_properties_sql(self, expression)
-        if _original_bq_properties_transform is not None:
-            return _original_bq_properties_transform(self, expression)
-        return self.properties_sql(expression)
-
-    BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
-    BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
-
-    # Also need to patch locate_properties via setattr since it's not a TRANSFORMS entry
-    def _patched_bq_locate_properties(self: Any, properties: exp.Properties) -> Any:
-        dialect = getattr(self, "dialect", None)
-        if dialect and type(dialect).__name__ == "Spanner":
-            return _spanner_locate_properties(self, properties)
-        return _original_bq_locate_properties(self, properties)
-
-    setattr(BigQueryGenerator, "locate_properties", _patched_bq_locate_properties)
-
-    SpannerGenerator = BigQueryGenerator
-else:
-    # Pure-Python sqlglot: real subclass
-
-    class SpannerGenerator(BigQueryGenerator):  # type: ignore[no-redef]
-        """Generator for Google Cloud Spanner (GoogleSQL variant)."""
-
-        def property_sql(self, expression: exp.Property) -> str:
-            return _spanner_property_sql(self, expression)
-
-        def locate_properties(self, properties: exp.Properties) -> Any:
-            return _spanner_locate_properties(self, properties)
-
-        def properties_sql(self, expression: exp.Properties) -> str:
-            return _spanner_properties_sql(self, expression)
+# BigQuery / Spanner
+_original_bq_property_transform = BigQueryGenerator.TRANSFORMS.get(exp.Property)
+_original_bq_properties_transform = BigQueryGenerator.TRANSFORMS.get(exp.Properties)
+_original_bq_create_transform = BigQueryGenerator.TRANSFORMS.get(exp.Create)
 
 
-if _pg_compiled:
-    # sqlglot[c]: use TRANSFORMS entry with dialect name check
+def _bq_property_transform(self: Any, expression: exp.Property) -> str:
+    dialect_class = getattr(self.dialect, "__class__", None)
+    dialect_name = dialect_class.__name__ if dialect_class else None
+    if dialect_name == "Spanner":
+        return _spanner_property_sql(self, expression)
+    if _original_bq_property_transform is not None:
+        return str(_original_bq_property_transform(self, expression))
+    return str(_original_bq_property_sql(self, expression))
 
-    _original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
 
-    def _pg_property_transform(self: Any, expression: exp.Property) -> str:
-        dialect = getattr(self, "dialect", None)
-        if dialect and type(dialect).__name__ == "Spangres":
-            return _spangres_property_sql(self, expression)
-        if _original_pg_property_transform is not None:
-            return _original_pg_property_transform(self, expression)
-        return self.property_sql(expression)
+def _bq_properties_transform(self: Any, expression: exp.Properties) -> str:
+    dialect_class = getattr(self.dialect, "__class__", None)
+    dialect_name = dialect_class.__name__ if dialect_class else None
+    if dialect_name == "Spanner":
+        return _spanner_properties_sql(self, expression)
+    if _original_bq_properties_transform is not None:
+        return str(_original_bq_properties_transform(self, expression))
+    return str(_original_bq_properties_sql(self, expression))
 
-    PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
 
-    SpangresGenerator = PostgresGenerator
-else:
-    # Pure-Python sqlglot: real subclass
+def _bq_create_transform(self: Any, expression: exp.Create) -> str:
+    dialect_class = getattr(self.dialect, "__class__", None)
+    dialect_name = dialect_class.__name__ if dialect_class else None
+    if dialect_name == "Spanner" and expression.this and expression.kind == "TABLE":
+        properties = expression.args.get("properties")
+        if properties:
+            # Re-order properties so Spanner ones stay at the schema boundary
+            new_expressions = []
+            for p in properties.expressions:
+                if _is_post_schema_spanner_property(p):
+                    # Force to POST_SCHEMA if it's a Spanner property
+                    new_expressions.append(p)
+                else:
+                    new_expressions.append(p)
+            properties.set("expressions", new_expressions)
 
-    class SpangresGenerator(PostgresGenerator):  # type: ignore[no-redef]
-        """Generator for Spanner PostgreSQL-interface (Spangres)."""
+    if _original_bq_create_transform is not None:
+        return str(_original_bq_create_transform(self, expression))
+    return str(self.create_sql(expression))
 
-        def property_sql(self, expression: exp.Property) -> str:
-            return _spangres_property_sql(self, expression)
+
+BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
+BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
+BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
+
+SpannerGenerator = BigQueryGenerator  # pyright: ignore[reportAssignmentType]
+
+
+# Postgres / Spangres
+_original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
+
+
+def _pg_property_transform(self: Any, expression: exp.Property) -> str:
+    dialect_class = getattr(self.dialect, "__class__", None)
+    dialect_name = dialect_class.__name__ if dialect_class else None
+    if dialect_name == "Spangres":
+        return _spangres_property_sql(self, expression)
+    if _original_pg_property_transform is not None:
+        return str(_original_pg_property_transform(self, expression))
+    return str(_original_pg_property_sql(self, expression))
+
+
+PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
+
+SpangresGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]

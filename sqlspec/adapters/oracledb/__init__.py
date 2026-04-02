@@ -23,6 +23,7 @@ from sqlspec.adapters.oracledb._uuid_handlers import (
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,
+    OracleDriverFeatures,
     OraclePoolParams,
     OracleSyncConfig,
 )
@@ -42,6 +43,7 @@ __all__ = (
     "OracleAsyncDriver",
     "OracleAsyncExceptionHandler",
     "OracleConnectionParams",
+    "OracleDriverFeatures",
     "OraclePoolParams",
     "OracleSyncConfig",
     "OracleSyncConnection",

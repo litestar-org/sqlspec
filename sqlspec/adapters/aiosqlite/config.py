@@ -161,7 +161,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     def __init__(
         self,
         *,
-        connection_config: "AiosqlitePoolParams | None" = None,
+        connection_config: "AiosqlitePoolParams | dict[str, Any] | None" = None,
         connection_instance: "AiosqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

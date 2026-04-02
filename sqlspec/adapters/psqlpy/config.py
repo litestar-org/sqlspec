@@ -203,7 +203,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def __init__(
         self,
         *,
-        connection_config: "PsqlpyPoolParams | None" = None,
+        connection_config: "PsqlpyPoolParams | dict[str, Any] | None" = None,
         connection_instance: ConnectionPool | None = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

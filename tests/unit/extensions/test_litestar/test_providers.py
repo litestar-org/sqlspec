@@ -7,6 +7,7 @@ import pytest
 from sqlspec.core import InCollectionFilter, NotInCollectionFilter
 from sqlspec.extensions.litestar.providers import (
     FieldNameType,
+    FilterConfig,
     _create_filter_aggregate_function,
     _create_statement_filters,
     dep_cache,
@@ -26,7 +27,7 @@ def _clear_dependency_cache() -> Any:
 
 def test_in_fields_creates_provider_and_aggregate_param() -> None:
     """in_fields config creates both individual provider and aggregate parameter."""
-    config: dict[str, Any] = {"in_fields": {FieldNameType(name="status", type_hint=str)}}
+    config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
     deps = _create_statement_filters(config)
 
     assert "status_in_filter" in deps
@@ -35,7 +36,7 @@ def test_in_fields_creates_provider_and_aggregate_param() -> None:
 
 def test_in_fields_provider_returns_filter_when_values_present() -> None:
     """Individual in_fields provider returns InCollectionFilter when values are given."""
-    config: dict[str, Any] = {"in_fields": {FieldNameType(name="status", type_hint=str)}}
+    config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
     deps = _create_statement_filters(config)
 
     provider = deps["status_in_filter"]
@@ -48,7 +49,7 @@ def test_in_fields_provider_returns_filter_when_values_present() -> None:
 
 def test_in_fields_provider_returns_none_when_no_values() -> None:
     """Individual in_fields provider returns None when values is None."""
-    config: dict[str, Any] = {"in_fields": {FieldNameType(name="status", type_hint=str)}}
+    config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
     deps = _create_statement_filters(config)
 
     provider = deps["status_in_filter"]
@@ -58,7 +59,7 @@ def test_in_fields_provider_returns_none_when_no_values() -> None:
 
 def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
     """Individual not_in_fields provider returns NotInCollectionFilter when values are given."""
-    config: dict[str, Any] = {"not_in_fields": {FieldNameType(name="status", type_hint=str)}}
+    config = FilterConfig(not_in_fields={FieldNameType(name="status", type_hint=str)})
     deps = _create_statement_filters(config)
 
     provider = deps["status_not_in_filter"]
@@ -71,7 +72,7 @@ def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
 
 def test_aggregate_function_includes_in_filter() -> None:
     """Aggregate function includes InCollectionFilter in results."""
-    config: dict[str, Any] = {"in_fields": {FieldNameType(name="status", type_hint=str)}}
+    config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
     agg_fn = _create_filter_aggregate_function(config)
 
     in_filter = InCollectionFilter(field_name="status", values=["active", "pending"])
@@ -84,7 +85,7 @@ def test_aggregate_function_includes_in_filter() -> None:
 
 def test_aggregate_function_excludes_none_in_filter() -> None:
     """Aggregate function excludes None in_filter values."""
-    config: dict[str, Any] = {"in_fields": {FieldNameType(name="status", type_hint=str)}}
+    config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
     agg_fn = _create_filter_aggregate_function(config)
 
     result = agg_fn(status_in_filter=None)
@@ -93,9 +94,9 @@ def test_aggregate_function_excludes_none_in_filter() -> None:
 
 def test_aggregate_function_multiple_in_fields() -> None:
     """Aggregate function handles multiple in_fields."""
-    config: dict[str, Any] = {
-        "in_fields": {FieldNameType(name="status", type_hint=str), FieldNameType(name="role", type_hint=str)}
-    }
+    config = FilterConfig(
+        in_fields={FieldNameType(name="status", type_hint=str), FieldNameType(name="role", type_hint=str)}
+    )
     agg_fn = _create_filter_aggregate_function(config)
 
     status_filter = InCollectionFilter(field_name="status", values=["active"])
@@ -104,13 +105,13 @@ def test_aggregate_function_multiple_in_fields() -> None:
     result = agg_fn(status_in_filter=status_filter, role_in_filter=role_filter)
 
     assert len(result) == 2
-    field_names = {f.field_name for f in result}
+    field_names = {f.field_name for f in result if isinstance(f, (InCollectionFilter, NotInCollectionFilter))}
     assert field_names == {"status", "role"}
 
 
 def test_in_fields_with_string_config() -> None:
     """in_fields config with list of strings works correctly."""
-    config: dict[str, Any] = {"in_fields": ["status"]}
+    config = FilterConfig(in_fields=["status"])
     deps = _create_statement_filters(config)
 
     assert "status_in_filter" in deps

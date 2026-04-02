@@ -207,7 +207,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def __init__(
         self,
         *,
-        connection_config: "OraclePoolParams | None" = None,
+        connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
         connection_instance: "OracleSyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
@@ -382,7 +382,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     def __init__(
         self,
         *,
-        connection_config: "OraclePoolParams | None" = None,
+        connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
         connection_instance: "OracleAsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

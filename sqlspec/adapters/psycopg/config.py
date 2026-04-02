@@ -210,7 +210,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def __init__(
         self,
         *,
-        connection_config: "PsycopgPoolParams | None" = None,
+        connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
         connection_instance: "ConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
@@ -491,7 +491,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     def __init__(
         self,
         *,
-        connection_config: "PsycopgPoolParams | None" = None,
+        connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
         connection_instance: "AsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
