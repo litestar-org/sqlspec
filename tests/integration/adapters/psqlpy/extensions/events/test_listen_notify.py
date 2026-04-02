@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """PostgreSQL LISTEN/NOTIFY event channel tests for psqlpy adapter."""
 
 import asyncio
@@ -7,7 +6,7 @@ from typing import Any
 import pytest
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.psqlpy import PsqlpyConfig
+from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyPoolParams
 from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = pytest.mark.xdist_group("postgres")
@@ -21,7 +20,8 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
     """Native LISTEN/NOTIFY path delivers payloads."""
 
     config = PsqlpyConfig(
-        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "listen_notify"}}
+        connection_config=PsqlpyPoolParams(dsn=_dsn(postgres_service)),
+        extension_config={"events": {"backend": "listen_notify"}},
     )
 
     spec = SQLSpec()
@@ -62,7 +62,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
     migrations.mkdir()
 
     config = PsqlpyConfig(
-        connection_config={"dsn": _dsn(postgres_service)},
+        connection_config=PsqlpyPoolParams(dsn=_dsn(postgres_service)),
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
         extension_config={"events": {"backend": "listen_notify_durable"}},
     )

@@ -393,3 +393,145 @@ def test_fastapi_filter_validation_error() -> None:
         assert "detail" in error_data
         # Should mention the validation error for createdBefore
         assert any("createdBefore" in str(error) for error in error_data["detail"])
+
+
+def test_fastapi_in_fields_filter_dependency() -> None:
+    """Test in_fields filter dependency with actual HTTP request (issue #405)."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    from sqlspec.extensions.fastapi.providers import FieldNameType, InCollectionFilter
+
+    @app.get("/users")
+    async def list_users(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(db_ext.provide_filters({"in_fields": {FieldNameType(name="status", type_hint=str)}})),
+        ],
+    ) -> dict[str, Any]:
+        in_filters = [f for f in filters if isinstance(f, InCollectionFilter)]
+        if in_filters:
+            return {
+                "filter_count": len(filters),
+                "field_name": in_filters[0].field_name,
+                "values": list(in_filters[0].values) if in_filters[0].values else [],
+            }
+        return {"filter_count": len(filters), "field_name": None, "values": []}
+
+    with TestClient(app) as client:
+        # No query params - should return empty filters
+        response = client.get("/users")
+        assert response.status_code == 200
+        assert response.json()["filter_count"] == 0
+
+        # With in-collection values
+        response = client.get("/users?statusIn=active&statusIn=archived")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["filter_count"] == 1
+        assert data["field_name"] == "status"
+        assert set(data["values"]) == {"active", "archived"}
+
+
+def test_fastapi_not_in_fields_filter_dependency() -> None:
+    """Test not_in_fields filter dependency with actual HTTP request (issue #405)."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    from sqlspec.extensions.fastapi.providers import FieldNameType, NotInCollectionFilter
+
+    @app.get("/users")
+    async def list_users(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(db_ext.provide_filters({"not_in_fields": {FieldNameType(name="status", type_hint=str)}})),
+        ],
+    ) -> dict[str, Any]:
+        not_in_filters = [f for f in filters if isinstance(f, NotInCollectionFilter)]
+        if not_in_filters:
+            return {
+                "filter_count": len(filters),
+                "field_name": not_in_filters[0].field_name,
+                "values": list(not_in_filters[0].values) if not_in_filters[0].values else [],
+            }
+        return {"filter_count": len(filters), "field_name": None, "values": []}
+
+    with TestClient(app) as client:
+        # No query params - should return empty filters
+        response = client.get("/users")
+        assert response.status_code == 200
+        assert response.json()["filter_count"] == 0
+
+        # With not-in-collection values
+        response = client.get("/users?statusNotIn=deleted&statusNotIn=archived")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["filter_count"] == 1
+        assert data["field_name"] == "status"
+        assert set(data["values"]) == {"deleted", "archived"}
+
+
+def test_fastapi_in_fields_with_query_execution() -> None:
+    """Test in_fields filter applied to actual SQL query execution (issue #405)."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    from sqlspec.extensions.fastapi.providers import FieldNameType
+
+    @app.post("/setup")
+    async def setup(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, Any]:
+        await db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT)")
+        await db.execute("INSERT INTO users (name, status) VALUES ('Alice', 'active')")
+        await db.execute("INSERT INTO users (name, status) VALUES ('Bob', 'archived')")
+        await db.execute("INSERT INTO users (name, status) VALUES ('Charlie', 'deleted')")
+        await db.execute("INSERT INTO users (name, status) VALUES ('Diana', 'active')")
+        return {"created": True}
+
+    @app.get("/users")
+    async def list_users(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(db_ext.provide_filters({"in_fields": {FieldNameType(name="status", type_hint=str)}})),
+        ],
+        db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
+    ) -> dict[str, Any]:
+        result = await db.select("SELECT * FROM users", *filters)
+        return {"users": result, "applied_filters": len(filters)}
+
+    with TestClient(app) as client:
+        response = client.post("/setup")
+        assert response.status_code == 200
+
+        # Filter by status IN ('active')
+        response = client.get("/users?statusIn=active")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["applied_filters"] == 1
+        names = {u["name"] for u in data["users"]}
+        assert names == {"Alice", "Diana"}
+
+        # Filter by status IN ('active', 'archived')
+        response = client.get("/users?statusIn=active&statusIn=archived")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["applied_filters"] == 1
+        names = {u["name"] for u in data["users"]}
+        assert names == {"Alice", "Bob", "Diana"}

@@ -77,12 +77,16 @@ class StatementFilter(ABC):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.
 
-        This method should modify the SQL expression only, not the parameters.
-        Parameters should be provided via extract_parameters().
+        This method modifies the SQL expression and adds parameters via
+        ``add_named_parameter()`` on the returned statement.
         """
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
-        """Extract parameters that this filter contributes.
+        """Return the parameters this filter would contribute.
+
+        This is an introspection helper and is not called during the normal
+        filter-application path (``append_to_statement`` handles both
+        expression modification and parameter addition).
 
         Returns:
             Tuple of (positional_parameters, named_parameters) where:
@@ -382,8 +386,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
         """Get parameter names without storing them."""
         if not self.values:
             return []
-        # Use object id to ensure uniqueness between instances
-        return [f"{self.field_name}_notin_{i}_{id(self)}" for i, _ in enumerate(self.values)]
+        return [f"{self.field_name}_notin_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
@@ -677,7 +680,7 @@ class SearchFilter(StatementFilter):
     def __init__(self, field_name: str | set[str], value: str | None, ignore_case: bool | None = False) -> None:
         self._field_name = field_name
         self._value = value
-        self._ignore_case = ignore_case
+        self._ignore_case = ignore_case if ignore_case is not None else False
 
     @property
     def field_name(self) -> "str | set[str]":

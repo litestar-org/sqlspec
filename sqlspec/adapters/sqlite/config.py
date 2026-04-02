@@ -83,7 +83,16 @@ class _SqliteSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
-    """SQLite configuration with thread-local connections."""
+    """SQLite configuration with thread-local connections.
+
+    Example::
+
+        config = SqliteConfig(
+            connection_config=SqliteConnectionParams(
+                database="app.db"
+            )
+        )
+    """
 
     driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
     connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection
@@ -100,7 +109,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def __init__(
         self,
         *,
-        connection_config: "SqliteConnectionParams | dict[str, Any] | None" = None,
+        connection_config: "SqliteConnectionParams | None" = None,
         connection_instance: "SqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqlitePoolParams
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgPoolConfig
+from sqlspec.adapters.duckdb.config import DuckDBConfig, DuckDBConnectionParams
+from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 
 pytestmark = pytest.mark.xdist_group("config")
 
@@ -30,7 +30,9 @@ async def test_asyncpg_connection_instance_with_pre_created_pool(asyncpg_connect
 
     try:
         # Inject pool into config
-        config = AsyncpgConfig(connection_config=asyncpg_connection_config, connection_instance=pool)
+        config = AsyncpgConfig(
+            connection_config=AsyncpgPoolConfig(**asyncpg_connection_config), connection_instance=pool
+        )
 
         # Verify pool is used
         assert config.connection_instance is pool
@@ -53,7 +55,9 @@ async def test_asyncpg_connection_instance_bypasses_pool_creation(asyncpg_connec
 
     try:
         # Config with connection_instance should not call _create_pool
-        config = AsyncpgConfig(connection_config=asyncpg_connection_config, connection_instance=pool)
+        config = AsyncpgConfig(
+            connection_config=AsyncpgPoolConfig(**asyncpg_connection_config), connection_instance=pool
+        )
 
         # Get pool - should return the injected one
         retrieved_pool = await config.provide_pool()
@@ -78,7 +82,7 @@ async def test_aiosqlite_connection_instance_with_pre_created_pool(tmp_path: Pat
 
     try:
         # Inject pool into config
-        config = AiosqliteConfig(connection_config={"database": str(db_path)}, connection_instance=pool)
+        config = AiosqliteConfig(connection_config=AiosqlitePoolParams(database=str(db_path)), connection_instance=pool)
 
         # Verify pool is used
         assert config.connection_instance is pool
@@ -104,7 +108,7 @@ def test_sqlite_connection_instance_with_pre_created_pool(tmp_path: Path) -> Non
 
     try:
         # Inject pool into config
-        config = SqliteConfig(connection_config={"database": str(db_path)}, connection_instance=pool)
+        config = SqliteConfig(connection_config=SqliteConnectionParams(database=str(db_path)), connection_instance=pool)
 
         # Verify pool is used
         assert config.connection_instance is pool
@@ -128,7 +132,7 @@ def test_duckdb_connection_instance_with_pre_created_pool() -> None:
 
     try:
         # Inject pool into config
-        config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=pool)
+        config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=pool)
 
         # Verify pool is used
         assert config.connection_instance is pool
@@ -147,9 +151,7 @@ def test_sqlite_connection_instance_none_creates_new_pool(tmp_path: Path) -> Non
     """Test that connection_instance=None causes new pool creation."""
     db_path = tmp_path / "test.db"
 
-    config = SqliteConfig(
-        connection_config={"database": str(db_path), "pool_min_size": 2, "pool_max_size": 5}, connection_instance=None
-    )
+    config = SqliteConfig(connection_config=SqliteConnectionParams(database=str(db_path)), connection_instance=None)
 
     # Should create new pool
     assert config.connection_instance is None
@@ -172,9 +174,7 @@ async def test_aiosqlite_connection_instance_none_creates_new_pool(tmp_path: Pat
     """Test that connection_instance=None causes new pool creation for async."""
     db_path = tmp_path / "test.db"
 
-    config = AiosqliteConfig(
-        connection_config={"database": str(db_path), "pool_min_size": 2, "pool_max_size": 5}, connection_instance=None
-    )
+    config = AiosqliteConfig(connection_config=AiosqlitePoolParams(database=str(db_path)), connection_instance=None)
 
     # Should create new pool
     assert config.connection_instance is None
@@ -200,7 +200,7 @@ def test_connection_instance_persists_across_sessions() -> None:
     pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
 
     try:
-        config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=pool)
+        config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=pool)
 
         # First session
         with config.provide_session() as session1:
@@ -226,7 +226,7 @@ def test_connection_instance_with_empty_connection_config() -> None:
 
     try:
         # Empty connection_config, only connection_instance
-        config = DuckDBConfig(connection_config={}, connection_instance=pool)
+        config = DuckDBConfig(connection_config=DuckDBConnectionParams(), connection_instance=pool)
 
         assert config.connection_instance is pool
         # DuckDB adds default database parameter
@@ -252,9 +252,7 @@ async def test_asyncpg_connection_instance_overrides_connection_config_pool_para
 
     try:
         # Config has different pool params but connection_instance should take precedence
-        merged_config = dict(asyncpg_connection_config)
-        merged_config["min_size"] = 10  # This should be ignored
-        merged_config["max_size"] = 20  # This should be ignored
+        merged_config = AsyncpgPoolConfig(**asyncpg_connection_config, min_size=10, max_size=20)
         config = AsyncpgConfig(connection_config=merged_config, connection_instance=pool)
 
         # The injected pool should be used, not a new one with config params
@@ -276,7 +274,7 @@ def test_connection_instance_manual_close() -> None:
 
     pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=pool)
+    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=pool)
 
     # Use the config
     with config.provide_session() as session:
@@ -296,7 +294,7 @@ def test_sqlite_connection_instance_after_close_pool() -> None:
 
     pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"})
 
-    config = SqliteConfig(connection_config={"database": ":memory:"}, connection_instance=pool)
+    config = SqliteConfig(connection_config=SqliteConnectionParams(database=":memory:"), connection_instance=pool)
 
     # Close the pool via config
     config.close_pool()
@@ -311,7 +309,7 @@ async def test_aiosqlite_connection_instance_after_close_pool() -> None:
 
     pool = AiosqliteConnectionPool(connection_parameters={"database": ":memory:"}, pool_size=2)
 
-    config = AiosqliteConfig(connection_config={"database": ":memory:"}, connection_instance=pool)
+    config = AiosqliteConfig(connection_config=AiosqlitePoolParams(database=":memory:"), connection_instance=pool)
 
     # Close the pool via config
     await config.close_pool()
@@ -325,7 +323,7 @@ def test_connection_instance_with_mock_pool() -> None:
     mock_pool = MagicMock()
     mock_pool.acquire = MagicMock()
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=mock_pool)
+    config = DuckDBConfig(connection_config=DuckDBConnectionParams(database=":memory:"), connection_instance=mock_pool)
 
     assert config.connection_instance is mock_pool
 
@@ -335,6 +333,8 @@ async def test_connection_instance_with_async_mock_pool() -> None:
     mock_pool = MagicMock()
     mock_pool.acquire = AsyncMock()
 
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"}, connection_instance=mock_pool)
+    config = AsyncpgConfig(
+        connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"), connection_instance=mock_pool
+    )
 
     assert config.connection_instance is mock_pool

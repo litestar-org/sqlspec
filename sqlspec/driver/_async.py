@@ -175,6 +175,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     # ─────────────────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _check_pending_exception(exc_handler: AsyncExceptionHandler) -> None:
+        """Raise any pending mapped exception after context manager exit."""
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+    @staticmethod
     def _raise_async_database_exception(exc_handler: AsyncExceptionHandler, exc: Exception | None) -> None:
         """Raise any mapped database exception captured by the async handler."""
         pending_exception = exc_handler.pending_exception
@@ -425,9 +431,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                     )
                     result = DMLResult(cached.operation_type, affected_rows)
 
-            pending_exception = exc_handler.pending_exception
-            if pending_exception is not None:
-                raise pending_exception from None
+            self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
@@ -461,9 +465,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 execution_result = await self.dispatch_execute(cursor, statement)
                 result = self.build_statement_result(statement, execution_result)
 
-            pending_exception = exc_handler.pending_exception
-            if pending_exception is not None:
-                raise pending_exception from None
+            self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
@@ -536,9 +538,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                     statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
                 )
                 result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            raise pending_exception from None
+        self._check_pending_exception(exc_handler)
         assert result is not None
         return result
 
@@ -571,9 +571,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
             result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            raise pending_exception from None
+        self._check_pending_exception(exc_handler)
         assert result is not None
         return result
 
@@ -598,9 +596,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             result = await self.dispatch_statement_execution(
                 statement=sql_statement.as_script(), connection=self.connection
             )
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            raise pending_exception from None
+        self._check_pending_exception(exc_handler)
         assert result is not None
         return result
 

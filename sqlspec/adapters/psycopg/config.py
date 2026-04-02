@@ -182,7 +182,16 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
-    """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
+    """Configuration for Psycopg synchronous database connections with direct field-based configuration.
+
+    Example::
+
+        config = PsycopgSyncConfig(
+            connection_config=PsycopgPoolParams(
+                conninfo="postgresql://user:pass@localhost/db"
+            )
+        )
+    """
 
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
@@ -201,7 +210,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def __init__(
         self,
         *,
-        connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
+        connection_config: "PsycopgPoolParams | None" = None,
         connection_instance: "ConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
@@ -454,7 +463,16 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 @mypyc_attr(native_class=False)
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
-    """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
+    """Configuration for Psycopg asynchronous database connections with direct field-based configuration.
+
+    Example::
+
+        config = PsycopgAsyncConfig(
+            connection_config=PsycopgPoolParams(
+                conninfo="postgresql://user:pass@localhost/db"
+            )
+        )
+    """
 
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
@@ -473,7 +491,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     def __init__(
         self,
         *,
-        connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
+        connection_config: "PsycopgPoolParams | None" = None,
         connection_instance: "AsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

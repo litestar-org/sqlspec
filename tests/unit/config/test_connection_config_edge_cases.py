@@ -4,15 +4,19 @@ Tests unusual scenarios, boundary conditions, and error cases for the
 standardized parameter naming.
 """
 
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.adapters.sqlite.config import SqliteConfig
+from typing import Any, cast
+
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqlitePoolParams
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgPoolConfig
+from sqlspec.adapters.duckdb.config import DuckDBConfig, DuckDBPoolParams
+from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 
 
 def test_connection_config_with_zero_pool_size() -> None:
     """Test connection_config with zero pool size parameters."""
-    config = SqliteConfig(connection_config={"database": ":memory:", "pool_min_size": 0, "pool_max_size": 0})
+    config = SqliteConfig(
+        connection_config=cast(SqliteConnectionParams, {"database": ":memory:", "pool_min_size": 0, "pool_max_size": 0})
+    )
 
     assert config.connection_config["pool_min_size"] == 0
     assert config.connection_config["pool_max_size"] == 0
@@ -20,7 +24,7 @@ def test_connection_config_with_zero_pool_size() -> None:
 
 def test_connection_config_with_negative_pool_size() -> None:
     """Test connection_config with negative pool size parameters."""
-    config = DuckDBConfig(connection_config={"database": ":memory:", "pool_min_size": -1, "pool_max_size": -1})
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:", pool_min_size=-1, pool_max_size=-1))
 
     # Negative values are stored but pool creation may validate them
     assert config.connection_config["pool_min_size"] == -1
@@ -30,7 +34,7 @@ def test_connection_config_with_negative_pool_size() -> None:
 def test_connection_config_with_very_large_pool_size() -> None:
     """Test connection_config with very large pool size values."""
     config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://localhost/test", "min_size": 1000, "max_size": 10000}
+        connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=1000, max_size=10000)
     )
 
     assert config.connection_config["min_size"] == 1000
@@ -39,7 +43,11 @@ def test_connection_config_with_very_large_pool_size() -> None:
 
 def test_connection_config_with_min_greater_than_max() -> None:
     """Test connection_config with min_size > max_size (invalid but stored)."""
-    config = SqliteConfig(connection_config={"database": ":memory:", "pool_min_size": 10, "pool_max_size": 5})
+    config = SqliteConfig(
+        connection_config=cast(
+            SqliteConnectionParams, {"database": ":memory:", "pool_min_size": 10, "pool_max_size": 5}
+        )
+    )
 
     # Config stores values, validation happens at pool creation
     assert config.connection_config["pool_min_size"] == 10
@@ -49,10 +57,10 @@ def test_connection_config_with_min_greater_than_max() -> None:
 def test_connection_config_with_special_characters_in_strings() -> None:
     """Test connection_config with special characters in string values."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://user:p@ss!w0rd#$%@localhost/test?sslmode=require",
-            "server_settings": {"application_name": "app with spaces & symbols!"},
-        }
+        connection_config=AsyncpgPoolConfig(
+            dsn="postgresql://user:p@ss!w0rd#$%@localhost/test?sslmode=require",
+            server_settings={"application_name": "app with spaces & symbols!"},
+        )
     )
 
     assert "p@ss!w0rd#$%" in config.connection_config["dsn"]
@@ -62,10 +70,9 @@ def test_connection_config_with_special_characters_in_strings() -> None:
 def test_connection_config_with_unicode_strings() -> None:
     """Test connection_config with unicode characters."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",
-            "server_settings": {"application_name": "テスト アプリ"},
-        }
+        connection_config=AsyncpgPoolConfig(
+            dsn="postgresql://localhost/test", server_settings={"application_name": "テスト アプリ"}
+        )
     )
 
     assert config.connection_config["server_settings"]["application_name"] == "テスト アプリ"
@@ -73,7 +80,7 @@ def test_connection_config_with_unicode_strings() -> None:
 
 def test_connection_config_with_empty_strings() -> None:
     """Test connection_config with empty string values."""
-    config = AsyncpgConfig(connection_config={"dsn": "", "user": "", "password": ""})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="", user="", password=""))
 
     assert config.connection_config["dsn"] == ""
     assert config.connection_config["user"] == ""
@@ -82,7 +89,11 @@ def test_connection_config_with_empty_strings() -> None:
 
 def test_connection_config_with_none_values_in_dict() -> None:
     """Test connection_config with None values for keys."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "user": None, "password": None})
+    config = AsyncpgConfig(
+        connection_config=cast(
+            AsyncpgPoolConfig, {"dsn": "postgresql://localhost/test", "user": None, "password": None}
+        )
+    )
 
     assert config.connection_config["dsn"] == "postgresql://localhost/test"
     assert config.connection_config["user"] is None
@@ -92,7 +103,7 @@ def test_connection_config_with_none_values_in_dict() -> None:
 def test_connection_config_with_boolean_false_values() -> None:
     """Test connection_config with False boolean values."""
     config = SqliteConfig(
-        connection_config={"database": ":memory:", "check_same_thread": False, "cached_statements": 0}
+        connection_config=SqliteConnectionParams(database=":memory:", check_same_thread=False, cached_statements=0)
     )
 
     assert config.connection_config["check_same_thread"] is False
@@ -102,14 +113,17 @@ def test_connection_config_with_boolean_false_values() -> None:
 def test_connection_config_with_mixed_types() -> None:
     """Test connection_config with various Python types."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",
-            "min_size": 5,
-            "timeout": 30.5,
-            "ssl": True,
-            "server_settings": {"key": "value"},
-            "record_class": None,
-        }
+        connection_config=cast(
+            AsyncpgPoolConfig,
+            {
+                "dsn": "postgresql://localhost/test",
+                "min_size": 5,
+                "timeout": 30.5,
+                "ssl": True,
+                "server_settings": {"key": "value"},
+                "record_class": None,
+            },
+        )
     )
 
     assert isinstance(config.connection_config["dsn"], str)
@@ -122,7 +136,7 @@ def test_connection_config_with_mixed_types() -> None:
 
 def test_connection_config_modification_after_creation() -> None:
     """Test that connection_config can be modified after config creation."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     # Modify existing key
     config.connection_config["dsn"] = "postgresql://localhost/test2"
@@ -139,7 +153,7 @@ def test_connection_config_modification_after_creation() -> None:
 
 def test_connection_config_clear_after_creation() -> None:
     """Test that connection_config can be cleared after creation."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     config.connection_config.clear()
 
@@ -148,7 +162,7 @@ def test_connection_config_clear_after_creation() -> None:
 
 def test_connection_config_update_method() -> None:
     """Test that connection_config supports dict update() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     config.connection_config.update({"min_size": 5, "max_size": 10})
 
@@ -159,10 +173,13 @@ def test_connection_config_update_method() -> None:
 def test_connection_config_with_deeply_nested_dicts() -> None:
     """Test connection_config with deeply nested dict structures."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",
-            "server_settings": {"level1": {"level2": {"level3": {"key": "value"}}}},
-        }
+        connection_config=cast(
+            AsyncpgPoolConfig,
+            {
+                "dsn": "postgresql://localhost/test",
+                "server_settings": {"level1": {"level2": {"level3": {"key": "value"}}}},
+            },
+        )
     )
 
     assert config.connection_config["server_settings"]["level1"]["level2"]["level3"]["key"] == "value"
@@ -171,10 +188,13 @@ def test_connection_config_with_deeply_nested_dicts() -> None:
 def test_connection_config_with_list_values() -> None:
     """Test connection_config with list values."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",
-            "server_settings": {"extensions": ["pg_trgm", "pgcrypto", "uuid-ossp"]},
-        }
+        connection_config=cast(
+            AsyncpgPoolConfig,
+            {
+                "dsn": "postgresql://localhost/test",
+                "server_settings": {"extensions": ["pg_trgm", "pgcrypto", "uuid-ossp"]},
+            },
+        )
     )
 
     assert config.connection_config["server_settings"]["extensions"] == ["pg_trgm", "pgcrypto", "uuid-ossp"]
@@ -182,7 +202,11 @@ def test_connection_config_with_list_values() -> None:
 
 def test_connection_config_with_tuple_values() -> None:
     """Test connection_config with tuple values."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "ssl": ("require", "verify-ca")})
+    config = AsyncpgConfig(
+        connection_config=cast(
+            AsyncpgPoolConfig, {"dsn": "postgresql://localhost/test", "ssl": ("require", "verify-ca")}
+        )
+    )
 
     assert config.connection_config["ssl"] == ("require", "verify-ca")
 
@@ -194,7 +218,7 @@ def test_connection_instance_set_to_arbitrary_object() -> None:
         pass
 
     fake_pool = FakePool()
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=fake_pool)  # type: ignore[arg-type]
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=fake_pool)  # type: ignore[arg-type]
 
     assert config.connection_instance is fake_pool  # type: ignore[comparison-overlap]
 
@@ -203,7 +227,7 @@ def test_connection_instance_can_be_modified_after_creation() -> None:
     """Test that connection_instance can be modified after config creation."""
     from unittest.mock import MagicMock
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
     assert config.connection_instance is None
 
     mock_pool = MagicMock()
@@ -214,8 +238,8 @@ def test_connection_instance_can_be_modified_after_creation() -> None:
 
 def test_multiple_configs_do_not_share_connection_config() -> None:
     """Test that modifying one config's connection_config doesn't affect another."""
-    config1 = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db1"})
-    config2 = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db2"})
+    config1 = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/db1"))
+    config2 = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/db2"))
 
     # Modify config1
     config1.connection_config["min_size"] = 5
@@ -227,12 +251,12 @@ def test_multiple_configs_do_not_share_connection_config() -> None:
 
 def test_connection_config_dict_reference_semantics() -> None:
     """Test that connection_config has dict reference semantics."""
-    test_dict = {"dsn": "postgresql://localhost/test"}
-    config = AsyncpgConfig(connection_config=test_dict)
+    test_dict: dict[str, Any] = {"dsn": "postgresql://localhost/test"}
+    config = AsyncpgConfig(connection_config=cast(AsyncpgPoolConfig, test_dict))
 
     # Modifying the original dict should NOT affect config
     # (because config stores a copy or processes it)
-    test_dict["min_size"] = 5  # pyright: ignore[reportArgumentType]
+    test_dict["min_size"] = 5
 
     # Depending on implementation, this may or may not affect config
     # Let's test the actual behavior
@@ -248,7 +272,9 @@ def test_connection_config_with_callables() -> None:
     def custom_init() -> str:
         return "initialized"
 
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "init": custom_init})
+    config = AsyncpgConfig(
+        connection_config=cast(AsyncpgPoolConfig, {"dsn": "postgresql://localhost/test", "init": custom_init})
+    )
 
     assert callable(config.connection_config["init"])
     assert config.connection_config["init"]() == "initialized"
@@ -257,7 +283,7 @@ def test_connection_config_with_callables() -> None:
 def test_connection_config_with_very_long_strings() -> None:
     """Test connection_config with very long string values."""
     long_string = "x" * 10000
-    config = AsyncpgConfig(connection_config={"dsn": f"postgresql://localhost/{long_string}"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn=f"postgresql://localhost/{long_string}"))
 
     assert len(config.connection_config["dsn"]) > 10000
 
@@ -266,12 +292,15 @@ def test_connection_config_key_with_reserved_python_keywords() -> None:
     """Test connection_config keys that are Python reserved words."""
     # Note: This is valid in dict keys even if they're reserved words
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",
-            "class": "value",  # reserved word
-            "def": "value",  # reserved word
-            "return": "value",  # reserved word
-        }
+        connection_config=cast(
+            AsyncpgPoolConfig,
+            {
+                "dsn": "postgresql://localhost/test",
+                "class": "value",  # reserved word
+                "def": "value",  # reserved word
+                "return": "value",  # reserved word
+            },
+        )
     )
 
     assert config.connection_config["class"] == "value"
@@ -281,7 +310,9 @@ def test_connection_config_key_with_reserved_python_keywords() -> None:
 
 def test_connection_config_numeric_keys() -> None:
     """Test connection_config with numeric keys (valid dict keys)."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", 1: "value", 2.5: "value"})  # type: ignore[dict-item,misc]
+    config = AsyncpgConfig(
+        connection_config=cast(AsyncpgPoolConfig, {"dsn": "postgresql://localhost/test", 1: "value", 2.5: "value"})
+    )  # type: ignore[dict-item,misc]
 
     assert config.connection_config[1] == "value"  # type: ignore[index]
     assert config.connection_config[2.5] == "value"  # type: ignore[index]
@@ -292,7 +323,9 @@ def test_connection_instance_remains_after_connection_config_change() -> None:
     from unittest.mock import MagicMock
 
     mock_pool = MagicMock()
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"}, connection_instance=mock_pool)
+    config = AsyncpgConfig(
+        connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"), connection_instance=mock_pool
+    )
 
     # Modify connection_config
     config.connection_config["min_size"] = 5
@@ -303,7 +336,11 @@ def test_connection_instance_remains_after_connection_config_change() -> None:
 
 def test_connection_config_with_bytes_values() -> None:
     """Test connection_config with bytes values."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "ssl_cert": b"certificate data"})
+    config = AsyncpgConfig(
+        connection_config=cast(
+            AsyncpgPoolConfig, {"dsn": "postgresql://localhost/test", "ssl_cert": b"certificate data"}
+        )
+    )
 
     assert config.connection_config["ssl_cert"] == b"certificate data"
 
@@ -313,14 +350,14 @@ async def test_aiosqlite_connection_config_with_pathlib_path() -> None:
     from pathlib import Path
 
     db_path = Path(":memory:")
-    config = AiosqliteConfig(connection_config={"database": db_path})
+    config = AiosqliteConfig(connection_config=cast(AiosqlitePoolParams, {"database": db_path}))
 
     assert config.connection_config["database"] == db_path
 
 
 def test_connection_config_setdefault_method() -> None:
     """Test that connection_config supports dict setdefault() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     result = config.connection_config.setdefault("min_size", 5)
 
@@ -334,7 +371,7 @@ def test_connection_config_setdefault_method() -> None:
 
 def test_connection_config_get_method_with_default() -> None:
     """Test that connection_config supports dict get() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert config.connection_config.get("min_size", 5) == 5
     assert config.connection_config.get("dsn") == "postgresql://localhost/test"
@@ -342,7 +379,7 @@ def test_connection_config_get_method_with_default() -> None:
 
 def test_connection_config_pop_method() -> None:
     """Test that connection_config supports dict pop() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     popped_value = config.connection_config.pop("min_size")
 
@@ -352,7 +389,9 @@ def test_connection_config_pop_method() -> None:
 
 def test_connection_config_items_method() -> None:
     """Test that connection_config supports dict items() iteration."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5, "max_size": 10})
+    config = AsyncpgConfig(
+        connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5, max_size=10)
+    )
 
     items = list(config.connection_config.items())
 
@@ -364,7 +403,7 @@ def test_connection_config_items_method() -> None:
 
 def test_connection_config_keys_method() -> None:
     """Test that connection_config supports dict keys() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     keys = list(config.connection_config.keys())
 
@@ -375,7 +414,7 @@ def test_connection_config_keys_method() -> None:
 
 def test_connection_config_values_method() -> None:
     """Test that connection_config supports dict values() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     values = list(config.connection_config.values())
 
@@ -386,7 +425,7 @@ def test_connection_config_values_method() -> None:
 
 def test_connection_config_in_operator() -> None:
     """Test that connection_config supports 'in' operator."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert "dsn" in config.connection_config
     assert "min_size" not in config.connection_config
@@ -394,7 +433,7 @@ def test_connection_config_in_operator() -> None:
 
 def test_connection_config_len_function() -> None:
     """Test that connection_config supports len() function."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     assert len(config.connection_config) == 2
 
@@ -402,8 +441,8 @@ def test_connection_config_len_function() -> None:
 def test_connection_config_bool_evaluation() -> None:
     """Test that connection_config evaluates to bool correctly."""
     # Use AsyncpgConfig which doesn't add default values
-    config_empty = AsyncpgConfig(connection_config={})
-    config_with_data = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config_empty = AsyncpgConfig(connection_config=AsyncpgPoolConfig())
+    config_with_data = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert not bool(config_empty.connection_config)
     assert bool(config_with_data.connection_config)
@@ -411,7 +450,7 @@ def test_connection_config_bool_evaluation() -> None:
 
 def test_connection_config_copy_method() -> None:
     """Test that connection_config supports dict copy() method."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     config_copy = config.connection_config.copy()
 

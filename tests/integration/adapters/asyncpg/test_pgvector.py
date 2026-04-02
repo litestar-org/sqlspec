@@ -1,33 +1,32 @@
 """Integration tests for asyncpg driver with pgvector extension."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import sql
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
 from sqlspec.builder import Column
 
 pytestmark = pytest.mark.xdist_group("pgvector")
 
 
 @pytest.fixture(scope="session")
-def pgvector_asyncpg_connection_config(pgvector_service: "PostgresService") -> "dict[str, Any]":
+def pgvector_asyncpg_connection_config(pgvector_service: "PostgresService") -> "AsyncpgPoolConfig":
     """Base pool configuration for AsyncPG tests with pgvector."""
-    return {
-        "host": pgvector_service.host,
-        "port": pgvector_service.port,
-        "user": pgvector_service.user,
-        "password": pgvector_service.password,
-        "database": pgvector_service.database,
-    }
+    return AsyncpgPoolConfig(
+        host=pgvector_service.host,
+        port=pgvector_service.port,
+        user=pgvector_service.user,
+        password=pgvector_service.password,
+        database=pgvector_service.database,
+    )
 
 
 @pytest.fixture(scope="function")
 async def pgvector_asyncpg_config(
-    pgvector_asyncpg_connection_config: "dict[str, Any]",
+    pgvector_asyncpg_connection_config: "AsyncpgPoolConfig",
 ) -> "AsyncGenerator[AsyncpgConfig, None]":
     """Provide an AsyncpgConfig instance connected to pgvector postgres."""
     # Enable the pgvector extension before creating the pool
@@ -39,7 +38,7 @@ async def pgvector_asyncpg_config(
     finally:
         await conn.close()
 
-    config = AsyncpgConfig(connection_config=dict(pgvector_asyncpg_connection_config))
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(**pgvector_asyncpg_connection_config))
     try:
         yield config
     finally:

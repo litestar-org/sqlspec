@@ -137,7 +137,14 @@ class AiosqliteConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnectionPool, AiosqliteDriver]):
-    """Database configuration for AioSQLite engine."""
+    """Database configuration for AioSQLite engine.
+
+    Example::
+
+        config = AiosqliteConfig(
+            connection_config=AiosqlitePoolParams(database="app.db")
+        )
+    """
 
     driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
     connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
@@ -154,7 +161,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
     def __init__(
         self,
         *,
-        connection_config: "AiosqlitePoolParams | dict[str, Any] | None" = None,
+        connection_config: "AiosqlitePoolParams | None" = None,
         connection_instance: "AiosqliteConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

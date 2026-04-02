@@ -148,7 +148,16 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
-    """Configuration for Asyncmy database connections."""
+    """Configuration for Asyncmy database connections.
+
+    Example::
+
+        config = AsyncmyConfig(
+            connection_config=AsyncmyPoolParams(
+                host="localhost", user="root", database="mydb"
+            )
+        )
+    """
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
@@ -165,7 +174,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
     def __init__(
         self,
         *,
-        connection_config: "AsyncmyPoolParams | dict[str, Any] | None" = None,
+        connection_config: "AsyncmyPoolParams | None" = None,
         connection_instance: "AsyncmyPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

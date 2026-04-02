@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED
 
 HAS_CLOUD_SQL_CREDENTIALS = (
@@ -40,7 +40,7 @@ async def test_cloud_sql_connection_basic() -> None:
     password = os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "password": password, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
         driver_features={"enable_cloud_sql": True, "cloud_sql_instance": instance, "cloud_sql_enable_iam_auth": False},
     )
 
@@ -62,7 +62,7 @@ async def test_cloud_sql_query_execution() -> None:
     password = os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "password": password, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
         driver_features={"enable_cloud_sql": True, "cloud_sql_instance": instance, "cloud_sql_enable_iam_auth": False},
     )
 
@@ -84,7 +84,7 @@ async def test_cloud_sql_iam_auth() -> None:
     database = os.environ.get("GOOGLE_CLOUD_SQL_DATABASE", "postgres")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2),
         driver_features={"enable_cloud_sql": True, "cloud_sql_instance": instance, "cloud_sql_enable_iam_auth": True},
     )
 
@@ -106,7 +106,7 @@ async def test_cloud_sql_private_ip() -> None:
     password = os.environ.get("GOOGLE_CLOUD_SQL_PASSWORD")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "password": password, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
         driver_features={
             "enable_cloud_sql": True,
             "cloud_sql_instance": instance,
@@ -133,7 +133,7 @@ async def test_alloydb_connection_basic() -> None:
     password = os.environ.get("GOOGLE_ALLOYDB_PASSWORD")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "password": password, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
         driver_features={
             "enable_alloydb": True,
             "alloydb_instance_uri": instance_uri,
@@ -159,7 +159,7 @@ async def test_alloydb_query_execution() -> None:
     password = os.environ.get("GOOGLE_ALLOYDB_PASSWORD")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "password": password, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, password=password, database=database, min_size=1, max_size=2),
         driver_features={
             "enable_alloydb": True,
             "alloydb_instance_uri": instance_uri,
@@ -185,7 +185,7 @@ async def test_alloydb_iam_auth() -> None:
     database = os.environ.get("GOOGLE_ALLOYDB_DATABASE", "postgres")
 
     config = AsyncpgConfig(
-        connection_config={"user": user, "database": database, "min_size": 1, "max_size": 2},
+        connection_config=AsyncpgPoolConfig(user=user, database=database, min_size=1, max_size=2),
         driver_features={"enable_alloydb": True, "alloydb_instance_uri": instance_uri, "enable_alloydb_iam_auth": True},
     )
 

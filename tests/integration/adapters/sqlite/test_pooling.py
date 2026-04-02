@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 from sqlspec.adapters.sqlite.core import build_connection_config
 from sqlspec.core import SQLResult
 
@@ -219,7 +219,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     """Test that SqliteConfig correctly accepts connection_config parameter."""
 
     db_path = tmp_path / "test.sqlite"
-    connection_config = {"database": str(db_path), "timeout": 10.0, "check_same_thread": False}
+    connection_config = SqliteConnectionParams(database=str(db_path), timeout=10.0, check_same_thread=False)
 
     config = SqliteConfig(connection_config=connection_config)
 
@@ -244,7 +244,7 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
 def test_config_memory_database_conversion() -> None:
     """Test that :memory: databases are converted to shared memory."""
 
-    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config=SqliteConnectionParams(database=":memory:"))
 
     try:
         db_uri = config.connection_config["database"]

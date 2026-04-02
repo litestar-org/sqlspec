@@ -151,6 +151,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     """BigQuery configuration.
 
     Configuration for Google Cloud BigQuery connections.
+
+    Example::
+
+        config = BigQueryConfig(
+            connection_config=BigQueryConnectionParams(
+                project="my-gcp-project"
+            )
+        )
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
@@ -169,7 +177,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def __init__(
         self,
         *,
-        connection_config: "BigQueryConnectionParams | dict[str, Any] | None" = None,
+        connection_config: "BigQueryConnectionParams | None" = None,
         connection_instance: "Any" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

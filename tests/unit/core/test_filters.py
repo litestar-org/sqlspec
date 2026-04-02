@@ -621,3 +621,241 @@ def test_search_filter_single_field_unchanged() -> None:
     assert positional == []
     assert len(named) == 1
     assert named["name_search"] == "%oracle%"
+
+
+# --- Task 1.1: NotInCollectionFilter deterministic param names ---
+
+
+def test_not_in_collection_filter_deterministic_param_names() -> None:
+    """Verify NotInCollectionFilter param names are deterministic (no id())."""
+    f1 = NotInCollectionFilter("status", ["a", "b", "c"])
+    f2 = NotInCollectionFilter("status", ["a", "b", "c"])
+
+    assert f1.get_param_names() == f2.get_param_names()
+    assert f1.get_param_names() == ["status_notin_0", "status_notin_1", "status_notin_2"]
+
+
+def test_not_in_collection_filter_param_name_pattern() -> None:
+    """Verify param names follow {field}_notin_{i} pattern."""
+    f = NotInCollectionFilter("col", ["x"])
+    names = f.get_param_names()
+    assert names == ["col_notin_0"]
+
+
+def test_not_in_collection_filter_extract_parameters_deterministic() -> None:
+    """Verify extract_parameters uses deterministic names."""
+    f = NotInCollectionFilter("status", ["deleted", "archived"])
+    _, named = f.extract_parameters()
+    assert named == {"status_notin_0": "deleted", "status_notin_1": "archived"}
+
+
+# --- Task 1.2: SearchFilter ignore_case=None normalization ---
+
+
+def test_search_filter_ignore_case_none_behaves_as_false() -> None:
+    """ignore_case=None should normalize to False and use exp.Like."""
+
+    f_none = SearchFilter("name", "test", ignore_case=None)
+    f_false = SearchFilter("name", "test", ignore_case=False)
+
+    assert f_none.ignore_case is False
+    assert f_false.ignore_case is False
+
+    sql_stmt = SQL("SELECT * FROM t")
+    result_none = apply_filter(sql_stmt, f_none)
+    result_false = apply_filter(sql_stmt, f_false)
+
+    # Both should produce LIKE, not ILIKE
+    assert "ILIKE" not in result_none.sql.upper()
+    assert "LIKE" in result_none.sql.upper()
+    assert result_none.sql == result_false.sql
+
+
+def test_search_filter_ignore_case_true_uses_ilike() -> None:
+    """ignore_case=True should use ILIKE."""
+    f = SearchFilter("name", "test", ignore_case=True)
+    assert f.ignore_case is True
+
+    sql_stmt = SQL("SELECT * FROM t")
+    result = apply_filter(sql_stmt, f)
+    assert "ILIKE" in result.sql.upper()
+
+
+# --- Task 1.4: InCollectionFilter edge cases ---
+
+
+def test_in_collection_filter_empty_collection_returns_false() -> None:
+    """Empty collection should add WHERE FALSE."""
+    sql_stmt = SQL("SELECT * FROM t")
+    f: InCollectionFilter[str] = InCollectionFilter("status", [])
+    result = apply_filter(sql_stmt, f)
+    assert "FALSE" in result.sql.upper()
+
+
+def test_in_collection_filter_none_values_returns_unchanged() -> None:
+    """None values should return statement unchanged."""
+    sql_stmt = SQL("SELECT * FROM t")
+    f: InCollectionFilter[str] = InCollectionFilter("status", None)
+    result = apply_filter(sql_stmt, f)
+    assert result.sql == sql_stmt.sql
+
+
+# --- Task 1.4: NotInCollectionFilter edge cases ---
+
+
+def test_not_in_collection_filter_empty_values_returns_unchanged() -> None:
+    """Empty values should return statement unchanged."""
+    sql_stmt = SQL("SELECT * FROM t")
+    f: NotInCollectionFilter[str] = NotInCollectionFilter("status", [])
+    result = apply_filter(sql_stmt, f)
+    assert result.sql == sql_stmt.sql
+
+
+def test_not_in_collection_filter_none_values_returns_unchanged() -> None:
+    """None values should return statement unchanged."""
+    sql_stmt = SQL("SELECT * FROM t")
+    f: NotInCollectionFilter[str] = NotInCollectionFilter("status", None)
+    result = apply_filter(sql_stmt, f)
+    assert result.sql == sql_stmt.sql
+
+
+# --- Task 1.5: Parameter conflict resolution and compound filters ---
+
+
+def test_two_in_filters_same_column_no_collision() -> None:
+    """Two InCollectionFilter instances on the same column should not collide."""
+    sql_stmt = SQL("SELECT * FROM t")
+    f1 = InCollectionFilter("status", ["a", "b"])
+    f2 = InCollectionFilter("status", ["c", "d"])
+
+    result = apply_filter(sql_stmt, f1)
+    result = apply_filter(result, f2)
+
+    params = result.parameters
+    # First filter gets status_in_0, status_in_1
+    assert params["status_in_0"] == "a"
+    assert params["status_in_1"] == "b"
+    # Second filter should get conflict-resolved names
+    conflict_keys = [k for k in params if k.startswith("status_in_0_") or k.startswith("status_in_1_")]
+    assert len(conflict_keys) == 2
+    conflict_values = {params[k] for k in conflict_keys}
+    assert conflict_values == {"c", "d"}
+
+
+def test_multiple_filters_sequential_compound_where() -> None:
+    """Multiple filters applied sequentially produce compound WHERE clauses."""
+    sql_stmt = SQL("SELECT * FROM users")
+
+    f1 = InCollectionFilter("status", ["active"])
+    f2 = NotInCollectionFilter("role", ["admin"])
+    f3 = SearchFilter("name", "john")
+
+    result = apply_filter(sql_stmt, f1)
+    result = apply_filter(result, f2)
+    result = apply_filter(result, f3)
+
+    sql_upper = result.sql.upper()
+    assert "WHERE" in sql_upper
+    assert "STATUS IN" in sql_upper
+    assert "NOT" in sql_upper
+    assert "ROLE" in sql_upper
+    assert "LIKE" in sql_upper
+
+    params = result.parameters
+    assert params["status_in_0"] == "active"
+    assert params["role_notin_0"] == "admin"
+    assert params["name_search"] == "%john%"
+
+
+# --- Task 2.4-2.5: QueryBuilder.apply_filters and prepare_statement with filters ---
+
+
+def test_query_builder_apply_filters_in_collection() -> None:
+    """QueryBuilder.apply_filters applies InCollectionFilter correctly (issue #405)."""
+    from sqlspec.builder import Select
+
+    builder = Select("*").from_("users")
+    f = InCollectionFilter("status", ["active", "pending"])
+
+    result = builder.apply_filters(f)
+
+    sql_upper = result.sql.upper()
+    assert "WHERE" in sql_upper
+    assert "STATUS IN" in sql_upper
+    assert result.parameters["status_in_0"] == "active"
+    assert result.parameters["status_in_1"] == "pending"
+
+
+def test_query_builder_apply_filters_multiple() -> None:
+    """QueryBuilder.apply_filters handles multiple filters (issue #405)."""
+    from sqlspec.builder import Select
+
+    builder = Select("*").from_("users")
+    f1 = InCollectionFilter("status", ["active"])
+    f2 = SearchFilter("name", "john")
+    f3 = LimitOffsetFilter(10, 0)
+
+    result = builder.apply_filters(f1, f2, f3)
+
+    sql_upper = result.sql.upper()
+    assert "STATUS IN" in sql_upper
+    assert "LIKE" in sql_upper
+    assert "LIMIT" in sql_upper
+    assert result.parameters["status_in_0"] == "active"
+    assert result.parameters["name_search"] == "%john%"
+    assert result.parameters["limit"] == 10
+
+
+def test_query_builder_apply_filters_not_in_collection() -> None:
+    """QueryBuilder.apply_filters applies NotInCollectionFilter correctly (issue #405)."""
+    from sqlspec.builder import Select
+
+    builder = Select("*").from_("users")
+    f = NotInCollectionFilter("status", ["deleted", "archived"])
+
+    result = builder.apply_filters(f)
+
+    sql_upper = result.sql.upper()
+    assert "WHERE" in sql_upper
+    assert "NOT" in sql_upper
+    assert "STATUS" in sql_upper
+    assert result.parameters["status_notin_0"] == "deleted"
+    assert result.parameters["status_notin_1"] == "archived"
+
+
+def test_query_builder_apply_filters_empty() -> None:
+    """QueryBuilder.apply_filters with no filters returns unmodified SQL."""
+    from sqlspec.builder import Select
+
+    builder = Select("*").from_("users")
+
+    result = builder.apply_filters()
+
+    assert "WHERE" not in result.sql.upper()
+
+
+def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
+    """QueryBuilder.apply_filters produces SQL that can be used with prepare_statement (issue #405).
+
+    This verifies the end-to-end path: QueryBuilder -> apply_filters -> SQL with parameters.
+    """
+    from sqlspec.builder import Select
+
+    builder = Select("id", "name", "status").from_("users")
+    f1 = InCollectionFilter("status", ["active", "pending"])
+    f2 = OrderByFilter("name", "asc")
+    f3 = LimitOffsetFilter(10, 0)
+
+    result = builder.apply_filters(f1, f2, f3)
+
+    sql_upper = result.sql.upper()
+    assert "SELECT" in sql_upper
+    assert "FROM USERS" in sql_upper.replace('"', "")
+    assert "STATUS IN" in sql_upper
+    assert "ORDER BY" in sql_upper
+    assert "LIMIT" in sql_upper
+
+    assert result.parameters["status_in_0"] == "active"
+    assert result.parameters["status_in_1"] == "pending"
+    assert result.parameters["limit"] == 10
+    assert result.parameters["offset"] == 0

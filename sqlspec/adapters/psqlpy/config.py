@@ -177,7 +177,16 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
-    """Configuration for Psqlpy asynchronous database connections."""
+    """Configuration for Psqlpy asynchronous database connections.
+
+    Example::
+
+        config = PsqlpyConfig(
+            connection_config=PsqlpyPoolParams(
+                dsn="postgresql://user:pass@localhost/db"
+            )
+        )
+    """
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
@@ -194,7 +203,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def __init__(
         self,
         *,
-        connection_config: "PsqlpyPoolParams | dict[str, Any] | None" = None,
+        connection_config: "PsqlpyPoolParams | None" = None,
         connection_instance: ConnectionPool | None = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

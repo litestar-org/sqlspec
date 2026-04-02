@@ -176,7 +176,18 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
-    """Configuration for Oracle synchronous database connections."""
+    """Configuration for Oracle synchronous database connections.
+
+    Example::
+
+        config = OracleSyncConfig(
+            connection_config=OraclePoolParams(
+                dsn="localhost:1521/XEPDB1",
+                user="app",
+                password="secret",
+            )
+        )
+    """
 
     __slots__ = ("_user_connection_hook",)
 
@@ -196,7 +207,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def __init__(
         self,
         *,
-        connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
+        connection_config: "OraclePoolParams | None" = None,
         connection_instance: "OracleSyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
@@ -338,7 +349,18 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 @mypyc_attr(native_class=False)
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
-    """Configuration for Oracle asynchronous database connections."""
+    """Configuration for Oracle asynchronous database connections.
+
+    Example::
+
+        config = OracleAsyncConfig(
+            connection_config=OraclePoolParams(
+                dsn="localhost:1521/XEPDB1",
+                user="app",
+                password="secret",
+            )
+        )
+    """
 
     __slots__ = ("_user_connection_hook",)
 
@@ -360,7 +382,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     def __init__(
         self,
         *,
-        connection_config: "OraclePoolParams | dict[str, Any] | None" = None,
+        connection_config: "OraclePoolParams | None" = None,
         connection_instance: "OracleAsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

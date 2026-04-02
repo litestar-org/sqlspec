@@ -7,7 +7,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec import sql
-from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver, OraclePoolParams
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLSpecError
 
@@ -18,13 +18,13 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 
 async def test_async_connection(oracle_23ai_service: "OracleService") -> None:
     """Test async connection components for OracleDB."""
-    base_config: dict[str, object] = {
-        "host": oracle_23ai_service.host,
-        "port": oracle_23ai_service.port,
-        "service_name": oracle_23ai_service.service_name,
-        "user": oracle_23ai_service.user,
-        "password": oracle_23ai_service.password,
-    }
+    base_config = OraclePoolParams(
+        host=oracle_23ai_service.host,
+        port=oracle_23ai_service.port,
+        service_name=oracle_23ai_service.service_name,
+        user=oracle_23ai_service.user,
+        password=oracle_23ai_service.password,
+    )
     async_config = OracleAsyncConfig(connection_config=base_config)
     pool = await async_config.create_pool()
     assert pool is not None
@@ -38,9 +38,7 @@ async def test_async_connection(oracle_23ai_service: "OracleService") -> None:
     finally:
         await pool.close()
 
-    pooled_config = dict(base_config)
-    pooled_config["min"] = 1
-    pooled_config["max"] = 5
+    pooled_config = OraclePoolParams(**base_config, min=1, max=5)
     another_config = OracleAsyncConfig(connection_config=pooled_config)
     pool = await another_config.create_pool()
     assert pool is not None
@@ -511,7 +509,7 @@ async def test_async_lowercase_columns_default(oracle_async_session: "OracleAsyn
 async def test_async_uppercase_columns_when_disabled(oracle_async_config: OracleAsyncConfig) -> None:
     """Ensure disabling lowercase feature preserves uppercase columns."""
     custom_config = OracleAsyncConfig(
-        connection_config=dict(oracle_async_config.connection_config),
+        connection_config=OraclePoolParams(**oracle_async_config.connection_config),
         driver_features={"enable_lowercase_column_names": False},
     )
 
@@ -554,15 +552,15 @@ async def test_oracle_async_on_connection_create_hook(oracle_23ai_service: "Orac
         hook_call_count += 1
 
     config = OracleAsyncConfig(
-        connection_config={
-            "host": oracle_23ai_service.host,
-            "port": oracle_23ai_service.port,
-            "service_name": oracle_23ai_service.service_name,
-            "user": oracle_23ai_service.user,
-            "password": oracle_23ai_service.password,
-            "min": 1,
-            "max": 2,
-        },
+        connection_config=OraclePoolParams(
+            host=oracle_23ai_service.host,
+            port=oracle_23ai_service.port,
+            service_name=oracle_23ai_service.service_name,
+            user=oracle_23ai_service.user,
+            password=oracle_23ai_service.password,
+            min=1,
+            max=2,
+        ),
         driver_features={"on_connection_create": connection_hook},
     )
 

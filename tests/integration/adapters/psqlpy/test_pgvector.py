@@ -1,7 +1,6 @@
 """Integration tests for psqlpy driver with pgvector extension."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import pytest
 from psqlpy import ConnectionPool
@@ -9,23 +8,23 @@ from psqlpy.extra_types import PgVector
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import sql
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyPoolParams
 from sqlspec.builder import Column
 
 pytestmark = pytest.mark.xdist_group("pgvector")
 
 
 @pytest.fixture(scope="session")
-def pgvector_psqlpy_connection_config(pgvector_service: "PostgresService") -> "dict[str, Any]":
+def pgvector_psqlpy_connection_config(pgvector_service: "PostgresService") -> "PsqlpyPoolParams":
     """Base pool configuration for Psqlpy tests with pgvector."""
-    return {
-        "dsn": f"postgres://{pgvector_service.user}:{pgvector_service.password}@{pgvector_service.host}:{pgvector_service.port}/{pgvector_service.database}"
-    }
+    return PsqlpyPoolParams(
+        dsn=f"postgres://{pgvector_service.user}:{pgvector_service.password}@{pgvector_service.host}:{pgvector_service.port}/{pgvector_service.database}"
+    )
 
 
 @pytest.fixture(scope="function")
 async def pgvector_psqlpy_config(
-    pgvector_psqlpy_connection_config: "dict[str, Any]",
+    pgvector_psqlpy_connection_config: "PsqlpyPoolParams",
 ) -> "AsyncGenerator[PsqlpyConfig, None]":
     """Provide a PsqlpyConfig instance connected to pgvector postgres."""
     # Enable the pgvector extension before creating the pool
@@ -34,7 +33,7 @@ async def pgvector_psqlpy_config(
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
     pool.close()
 
-    config = PsqlpyConfig(connection_config=dict(pgvector_psqlpy_connection_config))
+    config = PsqlpyConfig(connection_config=PsqlpyPoolParams(**pgvector_psqlpy_connection_config))
     try:
         yield config
     finally:

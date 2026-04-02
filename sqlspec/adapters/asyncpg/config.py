@@ -246,7 +246,16 @@ class AsyncpgConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
-    """Configuration for AsyncPG database connections using TypedDict."""
+    """Configuration for AsyncPG database connections using TypedDict.
+
+    Example::
+
+        config = AsyncpgConfig(
+            connection_config=AsyncpgPoolConfig(
+                dsn="postgresql://user:pass@localhost/db"
+            )
+        )
+    """
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
     connection_type: "ClassVar[type[AsyncpgConnection]]" = type(AsyncpgConnection)  # type: ignore[assignment]
@@ -263,7 +272,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     def __init__(
         self,
         *,
-        connection_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
+        connection_config: "AsyncpgPoolConfig | None" = None,
         connection_instance: "Pool[Record] | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,

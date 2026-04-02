@@ -156,6 +156,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     # ─────────────────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _check_pending_exception(exc_handler: SyncExceptionHandler) -> None:
+        """Raise any pending mapped exception after context manager exit."""
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+    @staticmethod
     def _raise_sync_database_exception(exc_handler: SyncExceptionHandler, exc: Exception | None) -> None:
         """Raise any mapped database exception captured by the sync handler."""
         pending_exception = exc_handler.pending_exception
@@ -204,9 +210,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         else:
                             execution_result = self.dispatch_execute(cursor, statement)
                             result = self.build_statement_result(statement, execution_result)
-                pending_exception = exc_handler.pending_exception
-                if pending_exception is not None:
-                    raise pending_exception from None
+                self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
 
@@ -459,9 +463,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         )
                         result = DMLResult(cached.operation_type, affected_rows)
 
-            pending_exception = exc_handler.pending_exception
-            if pending_exception is not None:
-                raise pending_exception from None
+            self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
@@ -480,9 +482,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             with exc_handler, self.with_cursor(self.connection) as cursor:
                 execution_result = self.dispatch_execute(cursor, statement)
                 result = self.build_statement_result(statement, execution_result)
-            pending_exception = exc_handler.pending_exception
-            if pending_exception is not None:
-                raise pending_exception from None
+            self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
@@ -555,9 +555,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                     statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
                 )
                 result = self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            raise pending_exception from None
+        self._check_pending_exception(exc_handler)
         assert result is not None
         return result
 
@@ -590,9 +588,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
             result = self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            raise pending_exception from None
+        self._check_pending_exception(exc_handler)
         assert result is not None
         return result
 
@@ -615,9 +611,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             config = statement_config or self.statement_config
             sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
             result = self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            raise pending_exception from None
+        self._check_pending_exception(exc_handler)
         assert result is not None
         return result
 

@@ -1036,6 +1036,17 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if self._migration_components_ready():
             self._initialize_migration_components()
 
+    def set_migration_config(self, config: "dict[str, Any] | MigrationConfig") -> None:
+        """Attach migration configuration after initial config creation.
+
+        This is equivalent to setting ``migration_config`` directly but provides
+        a discoverable method for post-construction configuration.
+
+        Args:
+            config: Migration configuration dictionary.
+        """
+        self.migration_config = config
+
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return cached storage capabilities for this configuration."""
 
