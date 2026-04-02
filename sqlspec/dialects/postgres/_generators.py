@@ -25,7 +25,7 @@ _BASE_OPERATOR_TRANSFORM = Postgres.Generator.TRANSFORMS[exp.Operator]
 def _postgres_extension_operator_sql(generator: PostgresGenerator, expression: exp.Operator) -> str:
     dialect_class = getattr(generator.dialect, "__class__", None)
     dialect_name = dialect_class.__name__ if dialect_class else None
-    if dialect_name in ("PGVector", "ParadeDB"):
+    if dialect_name in {"PGVector", "ParadeDB"}:
         if is_vector_distance_expression(expression):
             return render_vector_distance_postgres(
                 generator.sql(expression, "this"),

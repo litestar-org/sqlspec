@@ -9,7 +9,7 @@ MySQL requires:
 
 from typing import Final
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("AsyncmyEventQueueStore",)
@@ -32,7 +32,7 @@ class AsyncmyEventQueueStore(BaseEventQueueStore[AsyncmyConfig]):
         - queue_table: Table name (default: "sqlspec_event_queue")
 
     Example:
-        from sqlspec.adapters.asyncmy import AsyncmyConfig
+        from sqlspec.adapters.asyncmy.config import AsyncmyConfig
         from sqlspec.adapters.asyncmy.events import AsyncmyEventQueueStore
 
         config = AsyncmyConfig(
