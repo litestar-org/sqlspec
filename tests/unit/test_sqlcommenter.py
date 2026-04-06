@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlspec.sqlcommenter import SQLCommenterAttributes, append_comment, generate_comment, parse_comment
+from sqlspec.extensions.sqlcommenter import SQLCommenterAttributes, append_comment, generate_comment, parse_comment
 
 # ── generate_comment ──────────────────────────────────────────────────────
 
