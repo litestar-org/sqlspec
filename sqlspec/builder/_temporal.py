@@ -149,4 +149,18 @@ def register_version_generators() -> None:
     DuckDB.Generator.TRANSFORMS[exp.Version] = _duckdb_version_sql
     Postgres.Generator.TRANSFORMS[exp.Version] = _cockroachdb_version_sql
 
+    # Invalidate sqlglot's per-class dispatch cache so new TRANSFORMS entries
+    # are picked up by the next Generator instantiation.
+    from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
+
+    for gen_cls in (
+        Generator,
+        BigQuery.Generator,
+        Oracle.Generator,
+        Snowflake.Generator,
+        DuckDB.Generator,
+        Postgres.Generator,
+    ):
+        _DISPATCH_CACHE.pop(gen_cls, None)
+
     _VERSION_GENERATORS_REGISTERED = True

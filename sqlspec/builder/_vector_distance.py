@@ -309,4 +309,22 @@ def _register_with_sqlglot() -> None:
     _register_operator_transform(DuckDB.Generator.TRANSFORMS, _operator_sql_duckdb)
     _register_operator_transform(Spanner.Generator.TRANSFORMS, _operator_sql_spanner)
     _register_operator_transform(Spangres.Generator.TRANSFORMS, _operator_sql_spangres)
+
+    # sqlglot caches the dispatch table (built from TRANSFORMS) per Generator class
+    # in _DISPATCH_CACHE. We must invalidate stale entries so the next instantiation
+    # picks up our new Operator transforms.
+    from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
+
+    for gen_cls in (
+        Generator,
+        Postgres.Generator,
+        MySQL.Generator,
+        Oracle.Generator,
+        BigQuery.Generator,
+        DuckDB.Generator,
+        Spanner.Generator,
+        Spangres.Generator,
+    ):
+        _DISPATCH_CACHE.pop(gen_cls, None)
+
     _SQLGLOT_VECTOR_DISTANCE_REGISTERED = True

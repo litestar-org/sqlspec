@@ -8,6 +8,7 @@ generators. When running pure-Python sqlglot, we create real subclasses.
 from typing import Any, cast
 
 from sqlglot import exp
+from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
 from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.postgres import PostgresGenerator
 
@@ -179,6 +180,8 @@ BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
 BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
 BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
 
+_DISPATCH_CACHE.pop(BigQueryGenerator, None)
+
 SpannerGenerator = BigQueryGenerator  # pyright: ignore[reportAssignmentType]
 
 
@@ -197,5 +200,7 @@ def _pg_property_transform(self: Any, expression: exp.Property) -> str:
 
 
 PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
+
+_DISPATCH_CACHE.pop(PostgresGenerator, None)
 
 SpangresGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]
