@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
 
-from sqlspec.extensions.adk.converters import event_to_record, filter_temp_state, record_to_session
+from sqlspec.extensions.adk.converters import (
+    compute_update_marker,
+    event_to_record,
+    filter_temp_state,
+    record_to_session,
+)
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -195,9 +200,15 @@ class SQLSpecSessionService(BaseSessionService):
         """Append an event to a session.
 
         Persists the event record and the post-append durable state
-        atomically via ``store.append_event_and_update_state()``.  ``temp:``
-        keys are stripped from the persisted state snapshot so they never
-        survive a reload.
+        atomically via ``store.append_event_and_update_state()``, then
+        updates the in-memory session only after persistence succeeds.
+
+        Implements stale-session detection: if the session has been
+        modified in storage since it was last loaded, a ``ValueError``
+        is raised instead of silently overwriting.
+
+        ``temp:`` keys are stripped from the persisted state snapshot so
+        they never survive a reload.
 
         Args:
             session: Session to append to.
@@ -205,31 +216,66 @@ class SQLSpecSessionService(BaseSessionService):
 
         Returns:
             The appended event.
-        """
-        event = await super().append_event(session, event)  # pyright: ignore
 
+        Raises:
+            ValueError: If the session has been modified in storage since
+                it was loaded (stale session).
+        """
         if event.partial:
             return event
 
+        # Apply temp state to in-memory session so subsequent agents in
+        # the same invocation can read temp values, then strip temp keys
+        # from the event delta before persistence.
+        self._apply_temp_state(session, event)
+        event = self._trim_temp_delta_state(event)
+
         event_record = event_to_record(event=event, session_id=session.id)
 
-        # Strip temp: keys before persisting state
+        # Build durable state: current state minus temp keys, plus the
+        # event's state delta (temp keys already stripped by _trim above).
         durable_state = filter_temp_state(session.state)
+        if event.actions and event.actions.state_delta:
+            durable_state.update(event.actions.state_delta)
 
+        # --- Stale-session detection ---
+        current_record = await self._store.get_session(session.id)
+        if current_record is None:
+            msg = f"Session {session.id} not found."
+            raise ValueError(msg)
+
+        if session._storage_update_marker is not None:  # pyright: ignore[reportPrivateUsage]
+            current_marker = compute_update_marker(current_record["update_time"])
+            if session._storage_update_marker != current_marker:  # pyright: ignore[reportPrivateUsage]
+                msg = (
+                    "The session has been modified in storage since it was loaded. "
+                    "Please reload the session before appending more events."
+                )
+                raise ValueError(msg)
+        elif current_record["update_time"].timestamp() > session.last_update_time:
+            msg = (
+                "The session has been modified in storage since it was loaded. "
+                "Please reload the session before appending more events."
+            )
+            raise ValueError(msg)
+
+        # --- Persist event and state atomically ---
         await self._store.append_event_and_update_state(
             event_record=event_record, session_id=session.id, state=durable_state
         )
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.session.event.append",
-            app_name=session.app_name,
-            session_id=session.id,
-            partial=bool(event.partial),
-        )
 
-        session_record = await self._store.get_session(session.id)
-        if session_record:
-            session.last_update_time = session_record["update_time"].timestamp()
+        # Fetch updated session to refresh marker and timestamp
+        updated_record = await self._store.get_session(session.id)
+        if updated_record:
+            session.last_update_time = updated_record["update_time"].timestamp()
+            session._storage_update_marker = compute_update_marker(updated_record["update_time"])  # pyright: ignore[reportPrivateUsage]
+
+        # Update in-memory session AFTER successful persistence
+        self._update_session_state(session, event)
+        session.events.append(event)
+
+        log_with_context(
+            logger, logging.DEBUG, "adk.session.event.append", app_name=session.app_name, session_id=session.id
+        )
 
         return event
