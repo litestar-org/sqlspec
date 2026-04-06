@@ -920,7 +920,7 @@ class SQLCommenterMiddleware:
             await self.app(scope, receive, send)
             return
 
-        from sqlspec.extensions.sqlcommenter import SQLCommenterContext
+        from sqlspec.core.sqlcommenter import SQLCommenterContext
 
         attrs: dict[str, str] = {"route": scope.get("path", ""), "framework": "litestar"}
         handler = scope.get("route_handler")

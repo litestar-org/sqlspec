@@ -1611,7 +1611,7 @@ class StatementConfig:
     and other processing options for SQL statements.
     """
 
-    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer")
+    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer", "_user_statement_transformers")
 
     def __init__(
         self,
@@ -1691,32 +1691,21 @@ class StatementConfig:
         self.sqlcommenter_attributes = sqlcommenter_attributes
         self.sqlcommenter_enable_traceparent = sqlcommenter_enable_traceparent
         self.sqlcommenter_enable_context = sqlcommenter_enable_context
+        self.output_transformer = output_transformer
 
+        self._user_statement_transformers = tuple(statement_transformers) if statement_transformers else ()
+        all_transformers: list[Callable[..., Any]] = list(self._user_statement_transformers)
         if enable_sqlcommenter:
-            from sqlspec.extensions.sqlcommenter import create_sqlcommenter_transformer
+            from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
 
-            sc_transformer = create_sqlcommenter_transformer(
+            sc_transformer = create_sqlcommenter_statement_transformer(
                 attributes=sqlcommenter_attributes,
                 enable_traceparent=sqlcommenter_enable_traceparent,
                 enable_context=sqlcommenter_enable_context,
             )
-            if output_transformer is not None:
-                user_transformer = output_transformer
+            all_transformers.append(sc_transformer)
 
-                def _chained(sql: str, params: Any) -> "tuple[str, Any]":
-                    sql, params = user_transformer(sql, params)
-                    return sc_transformer(sql, params)
-
-                self.output_transformer = _chained
-            else:
-                self.output_transformer = sc_transformer
-        else:
-            self.output_transformer = output_transformer
-
-        if statement_transformers:
-            self.statement_transformers = tuple(statement_transformers)
-        else:
-            self.statement_transformers = ()
+        self.statement_transformers = tuple(all_transformers)
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
@@ -1757,7 +1746,7 @@ class StatementConfig:
             "execution_mode": self.execution_mode,
             "execution_args": self.execution_args,
             "output_transformer": self.output_transformer,
-            "statement_transformers": self.statement_transformers,
+            "statement_transformers": self._user_statement_transformers,
             "enable_sqlcommenter": self.enable_sqlcommenter,
             "sqlcommenter_attributes": self.sqlcommenter_attributes,
             "sqlcommenter_enable_traceparent": self.sqlcommenter_enable_traceparent,

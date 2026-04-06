@@ -263,7 +263,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
-        from sqlspec.extensions.sqlcommenter import SQLCommenterContext
+        from sqlspec.core.sqlcommenter import SQLCommenterContext
 
         attrs: dict[str, str] = {"route": request.url.path, "framework": self._framework}
         endpoint = request.scope.get("endpoint")

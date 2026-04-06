@@ -1,16 +1,17 @@
 """Google SQLCommenter support — structured SQL comments for query attribution.
 
-Implements the `SQLCommenter spec <https://google.github.io/sqlcommenter/spec/>`_:
-URL-encode keys/values, escape meta-characters, sort lexicographically,
-and append as ``/* key='value' */`` SQL comments.
+Implements the `SQLCommenter spec <https://google.github.io/sqlcommenter/spec/>`_
+using sqlglot AST-level comment manipulation. Comments are added to the parsed
+expression tree and coexist with existing comments and optimizer hints.
 """
 
-import re
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, ClassVar, TypedDict
 from urllib.parse import quote, unquote
+
+from sqlglot import exp
 
 from sqlspec.observability import get_trace_context
 
@@ -18,19 +19,12 @@ __all__ = (
     "SQLCommenterAttributes",
     "SQLCommenterContext",
     "append_comment",
-    "create_sqlcommenter_transformer",
+    "create_sqlcommenter_statement_transformer",
     "generate_comment",
     "parse_comment",
 )
 
-# Matches a trailing sqlcommenter block comment, optionally followed by a semicolon.
-_TRAILING_COMMENT_RE = re.compile(r"\s*/\*(.+?)\*/\s*;?\s*$", re.DOTALL)
-
-# Matches individual key='value' pairs inside a comment.
-_PAIR_RE = re.compile(r"((?:[^,=]|(?<=\\),)+?)='((?:[^']|\\')*?)'")
-
-# Detects any block comment anywhere in the SQL.
-_HAS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_SQLCOMMENTER_PREFIX = "sqlcommenter:"
 
 
 class SQLCommenterAttributes(TypedDict, total=False):
@@ -52,7 +46,7 @@ class SQLCommenterContext:
     """Request-scoped storage for sqlcommenter attributes via contextvars.
 
     Framework middlewares set attributes per-request, and the sqlcommenter
-    transformer reads them at compile time.
+    statement transformer reads them at compile time.
     """
 
     _var: ClassVar[ContextVar[dict[str, str] | None]] = _sqlcommenter_ctx
@@ -113,67 +107,75 @@ def generate_comment(attrs: dict[str, str | None]) -> str:
     return ",".join(pairs)
 
 
-def append_comment(sql: str, attrs: dict[str, str | None]) -> str:
-    """Append a sqlcommenter comment to a SQL statement.
+def _is_sqlcommenter_comment(comment: str) -> bool:
+    """Check whether a comment string looks like a sqlcommenter payload."""
+    stripped = comment.strip()
+    # sqlcommenter comments have key='value' pairs
+    return "='" in stripped and stripped.endswith("'")
 
-    Per the spec, if the statement already contains a ``/* */`` comment,
-    it is returned unchanged.
+
+def append_comment(expression: exp.Expression, attrs: dict[str, str | None]) -> exp.Expression:
+    """Add sqlcommenter attributes as a comment on a parsed expression.
+
+    Uses sqlglot's ``add_comments()`` API so the comment coexists with
+    existing comments and optimizer hints.
 
     Args:
-        sql: The SQL statement.
+        expression: Parsed sqlglot expression tree.
         attrs: Attributes to serialize into the comment.
 
     Returns:
-        The SQL statement with appended comment, or unchanged if it already
-        contains a comment or attributes are empty.
+        The expression with the sqlcommenter comment added (mutated in place).
     """
     comment_body = generate_comment(attrs)
     if not comment_body:
-        return sql
-    if _HAS_COMMENT_RE.search(sql):
-        return sql
-
-    stripped = sql.rstrip()
-    has_semicolon = stripped.endswith(";")
-    if has_semicolon:
-        stripped = stripped[:-1].rstrip()
-    result = f"{stripped} /*{comment_body}*/"
-    if has_semicolon:
-        result += ";"
-    return result
+        return expression
+    expression.add_comments([comment_body])
+    return expression
 
 
-def parse_comment(sql: str) -> tuple[str, dict[str, str]]:
-    """Extract sqlcommenter attributes from a SQL statement.
+def parse_comment(expression: exp.Expression) -> tuple[exp.Expression, dict[str, str]]:
+    """Extract sqlcommenter attributes from a parsed expression's comments.
+
+    Identifies sqlcommenter comments by their ``key='value'`` structure,
+    extracts the attributes, and removes the sqlcommenter comment from the
+    expression while preserving other comments.
 
     Args:
-        sql: SQL statement potentially containing a trailing sqlcommenter comment.
+        expression: Parsed sqlglot expression tree.
 
     Returns:
-        Tuple of (sql_without_comment, parsed_attributes). If no valid
-        sqlcommenter comment is found, returns the original SQL and empty dict.
+        Tuple of (expression_without_sqlcommenter_comment, parsed_attributes).
+        If no sqlcommenter comment is found, returns the expression unchanged
+        and an empty dict.
     """
-    match = _TRAILING_COMMENT_RE.search(sql)
-    if not match:
-        return sql, {}
-
-    comment_content = match.group(1).strip()
-    pairs = _PAIR_RE.findall(comment_content)
-    if not pairs:
-        return sql, {}
-
-    # Verify the pairs reconstruct the full comment (not a plain-text comment).
-    reconstructed = ",".join(f"{k}='{v}'" for k, v in pairs)
-    if reconstructed != comment_content:
-        return sql, {}
+    if not expression.comments:
+        return expression, {}
 
     attrs: dict[str, str] = {}
-    for raw_key, raw_value in pairs:
-        attrs[_decode(raw_key)] = _decode(raw_value)
+    remaining_comments: list[str] = []
 
-    # Strip the comment from the SQL.
-    clean_sql = sql[: match.start()].rstrip()
-    return clean_sql, attrs
+    for comment in expression.comments:
+        stripped = comment.strip()
+        if _is_sqlcommenter_comment(stripped):
+            # Parse key='value' pairs
+            for pair in stripped.split(","):
+                eq_idx = pair.find("='")
+                if eq_idx == -1:
+                    continue
+                raw_key = pair[:eq_idx]
+                raw_value = pair[eq_idx + 2 :]
+                raw_value = raw_value.removesuffix("'")
+                attrs[_decode(raw_key)] = _decode(raw_value)
+        else:
+            remaining_comments.append(comment)
+
+    if remaining_comments:
+        expression.comments = remaining_comments
+    else:
+        expression.comments = None
+
+    return expression, attrs
 
 
 def _build_traceparent(trace_id: str, span_id: str) -> str:
@@ -181,15 +183,14 @@ def _build_traceparent(trace_id: str, span_id: str) -> str:
     return f"00-{trace_id}-{span_id}-01"
 
 
-def create_sqlcommenter_transformer(
+def create_sqlcommenter_statement_transformer(
     *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
-) -> Callable[[str, Any], tuple[str, Any]]:
-    """Create an ``output_transformer`` that appends sqlcommenter attributes.
+) -> Callable[[exp.Expression, Any], tuple[exp.Expression, Any]]:
+    """Create a ``statement_transformer`` that adds sqlcommenter comments to the AST.
 
-    Static attributes are pre-serialized at creation time for zero per-call
-    overhead. When ``enable_traceparent`` is True, the current OpenTelemetry
-    trace context is captured at each call. When ``enable_context`` is True,
-    attributes from :class:`SQLCommenterContext` are merged at each call.
+    Static attributes are pre-serialized at creation time. When
+    ``enable_traceparent`` or ``enable_context`` is True, dynamic attributes
+    are resolved per invocation.
 
     Args:
         attributes: Static key-value pairs to include in every comment.
@@ -199,15 +200,15 @@ def create_sqlcommenter_transformer(
             :class:`SQLCommenterContext` and merge them with static attributes.
 
     Returns:
-        A callable suitable for ``StatementConfig(output_transformer=...)``.
+        A callable suitable for ``StatementConfig(statement_transformers=[...])``.
     """
     static_attrs: dict[str, str | None] = dict(attributes) if attributes else {}
     is_dynamic = enable_traceparent or enable_context
 
     if not is_dynamic and not static_attrs:
 
-        def _noop_transformer(sql: str, params: Any) -> tuple[str, Any]:
-            return sql, params
+        def _noop_transformer(expression: exp.Expression, params: Any) -> tuple[exp.Expression, Any]:
+            return expression, params
 
         return _noop_transformer
 
@@ -215,21 +216,14 @@ def create_sqlcommenter_transformer(
         # Pure static path — pre-generate the comment body once.
         precomputed_body = generate_comment(static_attrs)
 
-        def _static_transformer(sql: str, params: Any) -> tuple[str, Any]:
-            if not precomputed_body or _HAS_COMMENT_RE.search(sql):
-                return sql, params
-            stripped = sql.rstrip()
-            has_semi = stripped.endswith(";")
-            if has_semi:
-                stripped = stripped[:-1].rstrip()
-            result = f"{stripped} /*{precomputed_body}*/"
-            if has_semi:
-                result += ";"
-            return result, params
+        def _static_transformer(expression: exp.Expression, params: Any) -> tuple[exp.Expression, Any]:
+            if precomputed_body:
+                expression.add_comments([precomputed_body])
+            return expression, params
 
         return _static_transformer
 
-    def _dynamic_transformer(sql: str, params: Any) -> tuple[str, Any]:
+    def _dynamic_transformer(expression: exp.Expression, params: Any) -> tuple[exp.Expression, Any]:
         merged: dict[str, str | None] = {}
         if enable_context:
             ctx_attrs = SQLCommenterContext.get()
@@ -241,6 +235,9 @@ def create_sqlcommenter_transformer(
             trace_id, span_id = get_trace_context()
             if trace_id and span_id:
                 merged["traceparent"] = _build_traceparent(trace_id, span_id)
-        return append_comment(sql, merged), params
+        comment_body = generate_comment(merged)
+        if comment_body:
+            expression.add_comments([comment_body])
+        return expression, params
 
     return _dynamic_transformer

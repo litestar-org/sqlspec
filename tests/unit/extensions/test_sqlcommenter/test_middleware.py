@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sqlspec.extensions.sqlcommenter import SQLCommenterContext
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 
 # ── Starlette SQLCommenterMiddleware ──────────────────────────────────────
 
