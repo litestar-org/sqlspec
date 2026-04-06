@@ -6,10 +6,19 @@ and append as ``/* key='value' */`` SQL comments.
 """
 
 import re
-from typing import TypedDict
+from collections.abc import Callable
+from typing import Any, TypedDict
 from urllib.parse import quote, unquote
 
-__all__ = ("SQLCommenterAttributes", "append_comment", "generate_comment", "parse_comment")
+from sqlspec.observability import get_trace_context
+
+__all__ = (
+    "SQLCommenterAttributes",
+    "append_comment",
+    "create_sqlcommenter_transformer",
+    "generate_comment",
+    "parse_comment",
+)
 
 # Matches a trailing sqlcommenter block comment, optionally followed by a semicolon.
 _TRAILING_COMMENT_RE = re.compile(r"\s*/\*(.+?)\*/\s*;?\s*$", re.DOTALL)
@@ -128,3 +137,62 @@ def parse_comment(sql: str) -> tuple[str, dict[str, str]]:
     # Strip the comment from the SQL.
     clean_sql = sql[: match.start()].rstrip()
     return clean_sql, attrs
+
+
+def _build_traceparent(trace_id: str, span_id: str) -> str:
+    """Build a W3C traceparent header value from trace and span IDs."""
+    return f"00-{trace_id}-{span_id}-01"
+
+
+def create_sqlcommenter_transformer(
+    *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False
+) -> Callable[[str, Any], tuple[str, Any]]:
+    """Create an ``output_transformer`` that appends sqlcommenter attributes.
+
+    Static attributes are pre-serialized at creation time for zero per-call
+    overhead. When ``enable_traceparent`` is True, the current OpenTelemetry
+    trace context is captured at each call.
+
+    Args:
+        attributes: Static key-value pairs to include in every comment.
+        enable_traceparent: If True, auto-populate ``traceparent`` from the
+            current OpenTelemetry span context on each invocation.
+
+    Returns:
+        A callable suitable for ``StatementConfig(output_transformer=...)``.
+    """
+    static_attrs: dict[str, str | None] = dict(attributes) if attributes else {}
+
+    if not enable_traceparent and not static_attrs:
+
+        def _noop_transformer(sql: str, params: Any) -> tuple[str, Any]:
+            return sql, params
+
+        return _noop_transformer
+
+    if not enable_traceparent:
+        # Pure static path — pre-generate the comment body once.
+        precomputed_body = generate_comment(static_attrs)
+
+        def _static_transformer(sql: str, params: Any) -> tuple[str, Any]:
+            if not precomputed_body or _HAS_COMMENT_RE.search(sql):
+                return sql, params
+            stripped = sql.rstrip()
+            has_semi = stripped.endswith(";")
+            if has_semi:
+                stripped = stripped[:-1].rstrip()
+            result = f"{stripped} /*{precomputed_body}*/"
+            if has_semi:
+                result += ";"
+            return result, params
+
+        return _static_transformer
+
+    def _dynamic_transformer(sql: str, params: Any) -> tuple[str, Any]:
+        merged: dict[str, str | None] = dict(static_attrs)
+        trace_id, span_id = get_trace_context()
+        if trace_id and span_id:
+            merged["traceparent"] = _build_traceparent(trace_id, span_id)
+        return append_comment(sql, merged), params
+
+    return _dynamic_transformer
