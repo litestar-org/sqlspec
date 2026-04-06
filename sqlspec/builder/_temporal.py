@@ -17,7 +17,10 @@ from sqlglot.dialects.duckdb import DuckDB
 from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.snowflake import Snowflake
-from sqlglot.generator import Generator
+from sqlglot.generator import (
+    _DISPATCH_CACHE,  # pyright: ignore[reportPrivateUsage]
+    Generator,
+)
 from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.duckdb import DuckDBGenerator
 from sqlglot.generators.oracle import OracleGenerator
@@ -151,8 +154,6 @@ def register_version_generators() -> None:
 
     # Invalidate sqlglot's per-class dispatch cache so new TRANSFORMS entries
     # are picked up by the next Generator instantiation.
-    from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
-
     for gen_cls in (
         Generator,
         BigQuery.Generator,
