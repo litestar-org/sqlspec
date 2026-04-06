@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from sqlspec.core import CorrelationExtractor
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -263,8 +264,6 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
-        from sqlspec.core.sqlcommenter import SQLCommenterContext
-
         attrs: dict[str, str] = {"route": request.url.path, "framework": self._framework}
         endpoint = request.scope.get("endpoint")
         if endpoint is not None and hasattr(endpoint, "__name__"):
@@ -273,6 +272,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
         previous = SQLCommenterContext.get()
         SQLCommenterContext.set(attrs)
         try:
-            return await call_next(request)
+            response: Response = await call_next(request)
+            return response
         finally:
             SQLCommenterContext.set(previous)

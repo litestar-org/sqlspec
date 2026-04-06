@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import sqlglot
+from sqlglot import exp
 
 from sqlspec.core.sqlcommenter import (
-    SQLCommenterAttributes,
     SQLCommenterContext,
     append_comment,
     create_sqlcommenter_statement_transformer,
@@ -19,7 +20,7 @@ from sqlspec.core.sqlcommenter import (
 
 
 def test_generate_comment_basic() -> None:
-    attrs: SQLCommenterAttributes = {"db_driver": "asyncpg", "route": "/users"}
+    attrs: dict[str, str | None] = {"db_driver": "asyncpg", "route": "/users"}
     result = generate_comment(attrs)
     assert result == "db_driver='asyncpg',route='%2Fusers'"
 
@@ -30,49 +31,49 @@ def test_generate_comment_empty_attrs() -> None:
 
 
 def test_generate_comment_lexicographic_sort() -> None:
-    attrs: SQLCommenterAttributes = {"z_key": "z", "a_key": "a", "m_key": "m"}
+    attrs: dict[str, str | None] = {"z_key": "z", "a_key": "a", "m_key": "m"}
     result = generate_comment(attrs)
     assert result == "a_key='a',m_key='m',z_key='z'"
 
 
 def test_generate_comment_url_encodes_values() -> None:
-    attrs: SQLCommenterAttributes = {"route": "/polls 1000"}
+    attrs: dict[str, str | None] = {"route": "/polls 1000"}
     result = generate_comment(attrs)
     assert result == "route='%2Fpolls%201000'"
 
 
 def test_generate_comment_url_encodes_keys() -> None:
-    attrs: SQLCommenterAttributes = {"route parameter": "value"}
+    attrs: dict[str, str | None] = {"route parameter": "value"}
     result = generate_comment(attrs)
     assert result == "route%20parameter='value'"
 
 
 def test_generate_comment_encodes_single_quotes_in_values() -> None:
-    attrs: SQLCommenterAttributes = {"key": "it's a test"}
+    attrs: dict[str, str | None] = {"key": "it's a test"}
     result = generate_comment(attrs)
     assert result == "key='it%27s%20a%20test'"
 
 
 def test_generate_comment_encodes_single_quotes_in_keys() -> None:
-    attrs: SQLCommenterAttributes = {"it's": "value"}
+    attrs: dict[str, str | None] = {"it's": "value"}
     result = generate_comment(attrs)
     assert result == "it%27s='value'"
 
 
 def test_generate_comment_special_characters() -> None:
-    attrs: SQLCommenterAttributes = {"key": "a=b&c"}
+    attrs: dict[str, str | None] = {"key": "a=b&c"}
     result = generate_comment(attrs)
     assert result == "key='a%3Db%26c'"
 
 
 def test_generate_comment_none_values_skipped() -> None:
-    attrs: SQLCommenterAttributes = {"key1": "val1", "key2": None}  # type: ignore[typeddict-item]
+    attrs: dict[str, str | None] = {"key1": "val1", "key2": None}  # type: ignore[typeddict-item]
     result = generate_comment(attrs)
     assert result == "key1='val1'"
 
 
 def test_empty_string_value() -> None:
-    attrs: SQLCommenterAttributes = {"key": ""}
+    attrs: dict[str, str | None] = {"key": ""}
     result = generate_comment(attrs)
     assert result == "key=''"
 
@@ -168,7 +169,7 @@ def test_parse_comment_url_decodes() -> None:
 
 
 def test_parse_comment_round_trip() -> None:
-    original_attrs: SQLCommenterAttributes = {
+    original_attrs: dict[str, str] = {
         "db_driver": "asyncpg",
         "framework": "litestar",
         "route": "/api/users",
@@ -198,7 +199,7 @@ def test_parse_comment_separates_sqlcommenter_from_regular() -> None:
 
 def test_traceparent_format_round_trip() -> None:
     tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-    attrs: SQLCommenterAttributes = {"traceparent": tp}
+    attrs: dict[str, str | None] = {"traceparent": tp}
     expr = sqlglot.parse_one("SELECT 1")
     append_comment(expr, attrs)
     expr2 = sqlglot.parse_one(expr.sql())
@@ -320,6 +321,53 @@ def test_transformer_coexists_with_hints() -> None:
     assert "INDEXSCAN" in sql.upper()
 
 
+# ── Correlation ID integration ────────────────────────────────────────────
+
+
+def test_transformer_includes_correlation_id_when_context_enabled() -> None:
+    from sqlspec.utils.correlation import CorrelationContext
+
+    transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"}, enable_context=True)
+    with CorrelationContext.context("abc-123"):
+        expr = sqlglot.parse_one("SELECT 1")
+        expr, _ = transformer(expr, None)
+        sql = expr.sql()
+        assert "correlation_id='abc-123'" in sql
+        assert "db_driver='asyncpg'" in sql
+
+
+def test_transformer_no_correlation_id_without_context_enabled() -> None:
+    from sqlspec.utils.correlation import CorrelationContext
+
+    transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"})
+    with CorrelationContext.context("abc-123"):
+        expr = sqlglot.parse_one("SELECT 1")
+        expr, _ = transformer(expr, None)
+        sql = expr.sql()
+        assert "correlation_id" not in sql
+
+
+def test_transformer_no_correlation_id_when_not_set() -> None:
+    transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"}, enable_context=True)
+    expr = sqlglot.parse_one("SELECT 1")
+    expr, _ = transformer(expr, None)
+    sql = expr.sql()
+    assert "correlation_id" not in sql
+
+
+def test_transformer_explicit_correlation_id_in_context_overrides() -> None:
+    from sqlspec.utils.correlation import CorrelationContext
+
+    transformer = create_sqlcommenter_statement_transformer(enable_context=True)
+    with CorrelationContext.context("from-middleware"):
+        with SQLCommenterContext.scope({"correlation_id": "explicit-value"}):
+            expr = sqlglot.parse_one("SELECT 1")
+            expr, _ = transformer(expr, None)
+            sql = expr.sql()
+            assert "correlation_id='explicit-value'" in sql
+            assert "from-middleware" not in sql
+
+
 # ── SQLCommenterContext ───────────────────────────────────────────────────
 
 
@@ -375,7 +423,7 @@ def test_statement_config_sqlcommenter_disabled_by_default() -> None:
 def test_statement_config_sqlcommenter_appends_to_existing_transformers() -> None:
     from sqlspec.core import StatementConfig
 
-    def my_transformer(expr: object, params: object) -> tuple[object, object]:
+    def my_transformer(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
         return expr, params
 
     config = StatementConfig(

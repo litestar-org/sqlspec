@@ -126,8 +126,8 @@ async def test_litestar_middleware_sets_context() -> None:
 
     scope: dict = {"type": "http", "path": "/api/users", "route_handler": handler}
 
-    middleware = SQLCommenterMiddleware(mock_app)
-    await middleware(scope, AsyncMock(), AsyncMock())
+    middleware = SQLCommenterMiddleware(mock_app)  # type: ignore[arg-type]
+    await middleware(scope, AsyncMock(), AsyncMock())  # type: ignore[arg-type]
 
     assert captured_attrs is not None
     assert captured_attrs["route"] == "/api/users"
@@ -144,8 +144,8 @@ async def test_litestar_middleware_cleans_up_context() -> None:
         pass
 
     scope: dict = {"type": "http", "path": "/test"}
-    middleware = SQLCommenterMiddleware(mock_app)
-    await middleware(scope, AsyncMock(), AsyncMock())
+    middleware = SQLCommenterMiddleware(mock_app)  # type: ignore[arg-type]
+    await middleware(scope, AsyncMock(), AsyncMock())  # type: ignore[arg-type]
 
     assert SQLCommenterContext.get() is None
 
@@ -161,8 +161,8 @@ async def test_litestar_middleware_passes_non_http() -> None:
         called = True
 
     scope: dict = {"type": "websocket", "path": "/ws"}
-    middleware = SQLCommenterMiddleware(mock_app)
-    await middleware(scope, AsyncMock(), AsyncMock())
+    middleware = SQLCommenterMiddleware(mock_app)  # type: ignore[arg-type]
+    await middleware(scope, AsyncMock(), AsyncMock())  # type: ignore[arg-type]
 
     assert called
     assert SQLCommenterContext.get() is None

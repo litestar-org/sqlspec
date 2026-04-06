@@ -5,7 +5,7 @@ using sqlglot AST-level comment manipulation. Comments are added to the parsed
 expression tree and coexist with existing comments and optimizer hints.
 """
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, ClassVar, TypedDict
@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 from sqlglot import exp
 
 from sqlspec.observability import get_trace_context
+from sqlspec.utils.correlation import CorrelationContext
 
 __all__ = (
     "SQLCommenterAttributes",
@@ -35,6 +36,7 @@ class SQLCommenterAttributes(TypedDict, total=False):
     route: str
     controller: str
     action: str
+    correlation_id: str
     traceparent: str
     tracestate: str
 
@@ -88,7 +90,7 @@ def _decode(raw: str) -> str:
     return unquote(raw)
 
 
-def generate_comment(attrs: dict[str, str | None]) -> str:
+def generate_comment(attrs: Mapping[str, str | None]) -> str:
     """Serialize attributes into a sqlcommenter comment body.
 
     Args:
@@ -114,7 +116,7 @@ def _is_sqlcommenter_comment(comment: str) -> bool:
     return "='" in stripped and stripped.endswith("'")
 
 
-def append_comment(expression: exp.Expression, attrs: dict[str, str | None]) -> exp.Expression:
+def append_comment(expression: exp.Expr, attrs: Mapping[str, str | None]) -> exp.Expr:
     """Add sqlcommenter attributes as a comment on a parsed expression.
 
     Uses sqlglot's ``add_comments()`` API so the comment coexists with
@@ -134,7 +136,7 @@ def append_comment(expression: exp.Expression, attrs: dict[str, str | None]) -> 
     return expression
 
 
-def parse_comment(expression: exp.Expression) -> tuple[exp.Expression, dict[str, str]]:
+def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
     """Extract sqlcommenter attributes from a parsed expression's comments.
 
     Identifies sqlcommenter comments by their ``key='value'`` structure,
@@ -185,7 +187,7 @@ def _build_traceparent(trace_id: str, span_id: str) -> str:
 
 def create_sqlcommenter_statement_transformer(
     *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
-) -> Callable[[exp.Expression, Any], tuple[exp.Expression, Any]]:
+) -> Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]:
     """Create a ``statement_transformer`` that adds sqlcommenter comments to the AST.
 
     Static attributes are pre-serialized at creation time. When
@@ -207,7 +209,7 @@ def create_sqlcommenter_statement_transformer(
 
     if not is_dynamic and not static_attrs:
 
-        def _noop_transformer(expression: exp.Expression, params: Any) -> tuple[exp.Expression, Any]:
+        def _noop_transformer(expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
             return expression, params
 
         return _noop_transformer
@@ -216,19 +218,23 @@ def create_sqlcommenter_statement_transformer(
         # Pure static path — pre-generate the comment body once.
         precomputed_body = generate_comment(static_attrs)
 
-        def _static_transformer(expression: exp.Expression, params: Any) -> tuple[exp.Expression, Any]:
+        def _static_transformer(expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
             if precomputed_body:
                 expression.add_comments([precomputed_body])
             return expression, params
 
         return _static_transformer
 
-    def _dynamic_transformer(expression: exp.Expression, params: Any) -> tuple[exp.Expression, Any]:
+    def _dynamic_transformer(expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
         merged: dict[str, str | None] = {}
         if enable_context:
             ctx_attrs = SQLCommenterContext.get()
             if ctx_attrs:
                 merged.update(ctx_attrs)
+            # Include correlation ID from CorrelationContext if set
+            correlation_id = CorrelationContext.get()
+            if correlation_id and "correlation_id" not in merged:
+                merged["correlation_id"] = correlation_id
         # Static attrs override context attrs
         merged.update(static_attrs)
         if enable_traceparent:

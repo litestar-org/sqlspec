@@ -63,7 +63,7 @@ class SQLSpecPlugin:
             return JSONResponse({"users": result.all()})
     """
 
-    __slots__ = ("_config_states", "_correlation_middleware_added", "_sqlspec")
+    __slots__ = ("_config_states", "_correlation_middleware_added", "_sqlcommenter_middleware_added", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, app: "Starlette | None" = None) -> None:
         """Initialize SQLSpec Starlette extension.
@@ -75,6 +75,7 @@ class SQLSpecPlugin:
         self._sqlspec = sqlspec
         self._config_states: list[SQLSpecConfigState] = []
         self._correlation_middleware_added = False
+        self._sqlcommenter_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_starlette_settings(cfg)
@@ -130,6 +131,8 @@ class SQLSpecPlugin:
             "correlation_header": correlation_header,
             "correlation_headers": correlation_headers,
             "auto_trace_headers": auto_trace_headers,
+            "enable_sqlcommenter_middleware": starlette_config.get("enable_sqlcommenter_middleware", True),
+            "sqlcommenter_framework": starlette_config.get("sqlcommenter_framework", "starlette"),
         }
 
     def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
@@ -155,6 +158,8 @@ class SQLSpecPlugin:
             correlation_header=settings["correlation_header"],
             correlation_headers=settings["correlation_headers"],
             auto_trace_headers=settings["auto_trace_headers"],
+            enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
+            sqlcommenter_framework=settings["sqlcommenter_framework"],
         )
 
     def init_app(self, app: "Starlette") -> None:
@@ -182,6 +187,7 @@ class SQLSpecPlugin:
 
         # Add correlation middleware if any config enables it (only add once)
         self._add_correlation_middleware(app)
+        self._add_sqlcommenter_middleware(app)
 
         log_with_context(
             logger,
@@ -253,6 +259,29 @@ class SQLSpecPlugin:
                     framework="starlette",
                     stage="correlation_middleware",
                     primary_header=config_state.correlation_header,
+                )
+                break
+
+    def _add_sqlcommenter_middleware(self, app: "Starlette") -> None:
+        """Add SQLCommenter middleware if any config enables it.
+
+        Only adds the middleware once, using the framework name from the first
+        config that enables it.
+
+        Args:
+            app: Starlette application instance.
+        """
+        if self._sqlcommenter_middleware_added:
+            return
+
+        for config_state in self._config_states:
+            if config_state.enable_sqlcommenter_middleware and config_state.config.statement_config.enable_sqlcommenter:
+                from sqlspec.extensions.starlette.middleware import SQLCommenterMiddleware
+
+                app.add_middleware(SQLCommenterMiddleware, framework=config_state.sqlcommenter_framework)
+                self._sqlcommenter_middleware_added = True
+                log_with_context(
+                    logger, logging.DEBUG, "extension.init", framework="starlette", stage="sqlcommenter_middleware"
                 )
                 break
 

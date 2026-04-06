@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from sqlspec.base import SQLSpec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
@@ -79,6 +80,7 @@ class SQLSpecPlugin:
         self._cleanup_registered = False
         self._shutdown_complete = False
         self._enable_correlation = False
+        self._enable_sqlcommenter = False
         self._extractor: CorrelationExtractor | None = None
 
         for cfg in self._sqlspec.configs.values():
@@ -95,6 +97,12 @@ class SQLSpecPlugin:
                     additional_headers=state.correlation_headers,
                     auto_trace_headers=state.auto_trace_headers,
                 )
+            if (
+                state.enable_sqlcommenter_middleware
+                and state.config.statement_config.enable_sqlcommenter
+                and not self._enable_sqlcommenter
+            ):
+                self._enable_sqlcommenter = True
 
         if app is not None:
             self.init_app(app)
@@ -123,6 +131,7 @@ class SQLSpecPlugin:
         if correlation_headers is not None:
             correlation_headers = tuple(correlation_headers)
         auto_trace_headers = flask_config.get("auto_trace_headers", True)
+        enable_sqlcommenter = flask_config.get("enable_sqlcommenter_middleware", True)
 
         is_async = isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig))
 
@@ -139,6 +148,7 @@ class SQLSpecPlugin:
             correlation_header=correlation_header,
             correlation_headers=correlation_headers,
             auto_trace_headers=auto_trace_headers,
+            enable_sqlcommenter_middleware=enable_sqlcommenter,
         )
 
     def init_app(self, app: "Flask") -> None:
@@ -236,6 +246,13 @@ class SQLSpecPlugin:
             set_context_value(g, "correlation_id", correlation_id)
             CorrelationContext.set(correlation_id)
 
+        if self._enable_sqlcommenter:
+            attrs: dict[str, str] = {"route": request.path, "framework": "flask"}
+            endpoint = request.endpoint
+            if endpoint is not None:
+                attrs["action"] = endpoint
+            SQLCommenterContext.set(attrs)
+
         for config_state in self._config_states:
             if config_state.disable_di:
                 continue
@@ -307,6 +324,9 @@ class SQLSpecPlugin:
             CorrelationContext.clear()
             if has_context_value(g, "correlation_id"):
                 pop_context_value(g, "correlation_id")
+
+        if self._enable_sqlcommenter:
+            SQLCommenterContext.set(None)
 
         for config_state in self._config_states:
             if config_state.disable_di:
