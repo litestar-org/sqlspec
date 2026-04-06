@@ -17,11 +17,6 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
-[options]
-
-[options.exclude-newer-package]
-mysql-connector-python = "2026-01-21T00:00:00Z"
-
 [[package]]
 name = "adbc-driver-bigquery"
 version = "1.10.0"
