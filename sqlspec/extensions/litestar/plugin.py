@@ -900,3 +900,41 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """Raise error when pool keys are not unique."""
         msg = "When using multiple database configuration, each configuration must have a unique `pool_key`."
         raise ImproperConfigurationError(detail=msg)
+
+
+class SQLCommenterMiddleware:
+    """ASGI middleware that populates SQLCommenterContext with Litestar request attributes.
+
+    Extracts route, controller, and action from the Litestar scope and sets them
+    in :class:`~sqlspec.extensions.sqlcommenter.SQLCommenterContext` for the
+    duration of the request.
+    """
+
+    __slots__ = ("app",)
+
+    def __init__(self, app: "ASGIApp") -> None:
+        self.app = app
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        from sqlspec.extensions.sqlcommenter import SQLCommenterContext
+
+        attrs: dict[str, str] = {"route": scope.get("path", ""), "framework": "litestar"}
+        handler = scope.get("route_handler")
+        if handler is not None:
+            fn = getattr(handler, "fn", None)
+            if fn is not None:
+                attrs["action"] = getattr(fn, "__name__", "")
+            owner = getattr(handler, "owner", None)
+            if owner is not None:
+                attrs["controller"] = getattr(owner, "__name__", "")
+
+        previous = SQLCommenterContext.get()
+        SQLCommenterContext.set(attrs)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            SQLCommenterContext.set(previous)

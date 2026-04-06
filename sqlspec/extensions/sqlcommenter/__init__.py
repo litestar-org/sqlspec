@@ -6,14 +6,17 @@ and append as ``/* key='value' */`` SQL comments.
 """
 
 import re
-from collections.abc import Callable
-from typing import Any, TypedDict
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, ClassVar, TypedDict
 from urllib.parse import quote, unquote
 
 from sqlspec.observability import get_trace_context
 
 __all__ = (
     "SQLCommenterAttributes",
+    "SQLCommenterContext",
     "append_comment",
     "create_sqlcommenter_transformer",
     "generate_comment",
@@ -40,6 +43,40 @@ class SQLCommenterAttributes(TypedDict, total=False):
     action: str
     traceparent: str
     tracestate: str
+
+
+_sqlcommenter_ctx: ContextVar[dict[str, str] | None] = ContextVar("_sqlcommenter_ctx", default=None)
+
+
+class SQLCommenterContext:
+    """Request-scoped storage for sqlcommenter attributes via contextvars.
+
+    Framework middlewares set attributes per-request, and the sqlcommenter
+    transformer reads them at compile time.
+    """
+
+    _var: ClassVar[ContextVar[dict[str, str] | None]] = _sqlcommenter_ctx
+
+    @classmethod
+    def get(cls) -> dict[str, str] | None:
+        """Get the current request-scoped attributes."""
+        return cls._var.get()
+
+    @classmethod
+    def set(cls, attrs: dict[str, str] | None) -> None:
+        """Set request-scoped attributes."""
+        cls._var.set(attrs)
+
+    @classmethod
+    @contextmanager
+    def scope(cls, attrs: dict[str, str]) -> Generator[None, None, None]:
+        """Context manager that sets attributes for the duration of a block."""
+        previous = cls._var.get()
+        cls._var.set(attrs)
+        try:
+            yield
+        finally:
+            cls._var.set(previous)
 
 
 def _encode_key(key: str) -> str:
@@ -145,32 +182,36 @@ def _build_traceparent(trace_id: str, span_id: str) -> str:
 
 
 def create_sqlcommenter_transformer(
-    *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False
+    *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
 ) -> Callable[[str, Any], tuple[str, Any]]:
     """Create an ``output_transformer`` that appends sqlcommenter attributes.
 
     Static attributes are pre-serialized at creation time for zero per-call
     overhead. When ``enable_traceparent`` is True, the current OpenTelemetry
-    trace context is captured at each call.
+    trace context is captured at each call. When ``enable_context`` is True,
+    attributes from :class:`SQLCommenterContext` are merged at each call.
 
     Args:
         attributes: Static key-value pairs to include in every comment.
         enable_traceparent: If True, auto-populate ``traceparent`` from the
             current OpenTelemetry span context on each invocation.
+        enable_context: If True, read request-scoped attributes from
+            :class:`SQLCommenterContext` and merge them with static attributes.
 
     Returns:
         A callable suitable for ``StatementConfig(output_transformer=...)``.
     """
     static_attrs: dict[str, str | None] = dict(attributes) if attributes else {}
+    is_dynamic = enable_traceparent or enable_context
 
-    if not enable_traceparent and not static_attrs:
+    if not is_dynamic and not static_attrs:
 
         def _noop_transformer(sql: str, params: Any) -> tuple[str, Any]:
             return sql, params
 
         return _noop_transformer
 
-    if not enable_traceparent:
+    if not is_dynamic:
         # Pure static path — pre-generate the comment body once.
         precomputed_body = generate_comment(static_attrs)
 
@@ -189,10 +230,17 @@ def create_sqlcommenter_transformer(
         return _static_transformer
 
     def _dynamic_transformer(sql: str, params: Any) -> tuple[str, Any]:
-        merged: dict[str, str | None] = dict(static_attrs)
-        trace_id, span_id = get_trace_context()
-        if trace_id and span_id:
-            merged["traceparent"] = _build_traceparent(trace_id, span_id)
+        merged: dict[str, str | None] = {}
+        if enable_context:
+            ctx_attrs = SQLCommenterContext.get()
+            if ctx_attrs:
+                merged.update(ctx_attrs)
+        # Static attrs override context attrs
+        merged.update(static_attrs)
+        if enable_traceparent:
+            trace_id, span_id = get_trace_context()
+            if trace_id and span_id:
+                merged["traceparent"] = _build_traceparent(trace_id, span_id)
         return append_comment(sql, merged), params
 
     return _dynamic_transformer

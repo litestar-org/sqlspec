@@ -93,6 +93,7 @@ SQL_CONFIG_SLOTS: Final = (
     "execution_args",
     "output_transformer",
     "sqlcommenter_attributes",
+    "sqlcommenter_enable_context",
     "sqlcommenter_enable_traceparent",
     "statement_transformers",
     "parameter_config",
@@ -1633,6 +1634,7 @@ class StatementConfig:
         enable_sqlcommenter: bool = False,
         sqlcommenter_attributes: "dict[str, str | None] | None" = None,
         sqlcommenter_enable_traceparent: bool = False,
+        sqlcommenter_enable_context: bool = False,
     ) -> None:
         """Initialize StatementConfig.
 
@@ -1656,6 +1658,7 @@ class StatementConfig:
             enable_sqlcommenter: Auto-append Google SQLCommenter attributes to SQL
             sqlcommenter_attributes: Static key-value pairs for SQLCommenter comments
             sqlcommenter_enable_traceparent: Auto-populate W3C traceparent from OpenTelemetry
+            sqlcommenter_enable_context: Read request-scoped attrs from SQLCommenterContext
         """
         self.enable_parsing = enable_parsing
         self.enable_validation = enable_validation
@@ -1687,12 +1690,15 @@ class StatementConfig:
         self.enable_sqlcommenter = enable_sqlcommenter
         self.sqlcommenter_attributes = sqlcommenter_attributes
         self.sqlcommenter_enable_traceparent = sqlcommenter_enable_traceparent
+        self.sqlcommenter_enable_context = sqlcommenter_enable_context
 
         if enable_sqlcommenter:
             from sqlspec.extensions.sqlcommenter import create_sqlcommenter_transformer
 
             sc_transformer = create_sqlcommenter_transformer(
-                attributes=sqlcommenter_attributes, enable_traceparent=sqlcommenter_enable_traceparent
+                attributes=sqlcommenter_attributes,
+                enable_traceparent=sqlcommenter_enable_traceparent,
+                enable_context=sqlcommenter_enable_context,
             )
             if output_transformer is not None:
                 user_transformer = output_transformer
@@ -1755,6 +1761,7 @@ class StatementConfig:
             "enable_sqlcommenter": self.enable_sqlcommenter,
             "sqlcommenter_attributes": self.sqlcommenter_attributes,
             "sqlcommenter_enable_traceparent": self.sqlcommenter_enable_traceparent,
+            "sqlcommenter_enable_context": self.sqlcommenter_enable_context,
         }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)
