@@ -3,9 +3,8 @@
 import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyDriver
-from tests.conftest import requires_interpreted
 
-pytestmark = [pytest.mark.xdist_group("mysql"), requires_interpreted]
+pytestmark = pytest.mark.xdist_group("mysql")
 
 
 async def test_select_to_arrow_basic(asyncmy_driver: AsyncmyDriver) -> None:

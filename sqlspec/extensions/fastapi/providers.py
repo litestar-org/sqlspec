@@ -106,9 +106,9 @@ class FilterConfig(TypedDict):
     """When True, enables created_at date range filtering. Uses 'created_at' field by default."""
     updated_at: NotRequired[bool]
     """When True, enables updated_at date range filtering. Uses 'updated_at' field by default."""
-    not_in_fields: NotRequired[FieldNameType | set[FieldNameType]]
+    not_in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
     """Fields that support not-in collection filtering. Can be single field or set of fields with type info."""
-    in_fields: NotRequired[FieldNameType | set[FieldNameType]]
+    in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
     """Fields that support in-collection filtering. Can be single field or set of fields with type info."""
     null_fields: NotRequired[str | set[str]]
     """Fields that support IS NULL filtering. Can be single field name or set of field names."""
@@ -466,9 +466,12 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
     if not_in_fields := config.get("not_in_fields"):
         not_in_fields = {not_in_fields} if isinstance(not_in_fields, (str, FieldNameType)) else not_in_fields
         for field_def in not_in_fields:
+            resolved_field: FieldNameType = (
+                FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
+            )
 
             def create_not_in_filter_provider(
-                field_name: FieldNameType = field_def,
+                field_name: FieldNameType = resolved_field,
             ) -> "Callable[..., NotInCollectionFilter[Any] | None]":
                 def provide_not_in_filter(
                     values: Annotated[
@@ -484,7 +487,7 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 return provide_not_in_filter
 
             not_in_provider = create_not_in_filter_provider()
-            param_name = f"{field_def.name}_not_in_filter"
+            param_name = f"{resolved_field.name}_not_in_filter"
             params.append(
                 inspect.Parameter(
                     name=param_name,
@@ -497,9 +500,10 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
     if in_fields := config.get("in_fields"):
         in_fields = {in_fields} if isinstance(in_fields, (str, FieldNameType)) else in_fields
         for field_def in in_fields:
+            resolved_field = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
 
             def create_in_filter_provider(
-                field_name: FieldNameType = field_def,
+                field_name: FieldNameType = resolved_field,
             ) -> "Callable[..., InCollectionFilter[Any] | None]":
                 def provide_in_filter(
                     values: Annotated[
@@ -514,7 +518,7 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 return provide_in_filter
 
             in_provider = create_in_filter_provider()
-            param_name = f"{field_def.name}_in_filter"
+            param_name = f"{resolved_field.name}_in_filter"
             params.append(
                 inspect.Parameter(
                     name=param_name,

@@ -1,9 +1,8 @@
-# pyright: reportArgumentType=false
 """SQLite integration tests for EventChannel with table queue backend."""
 
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionParams
 from tests.integration.adapters._events_helpers import prepare_events_migrations, setup_sync_event_channel
 
 
@@ -15,7 +14,7 @@ def test_sqlite_event_channel_publish_and_consume(tmp_path) -> None:
     db_path = tmp_path / "events.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -38,7 +37,7 @@ def test_sqlite_event_channel_ack_updates_status(tmp_path) -> None:
     db_path = tmp_path / "events_ack.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -65,7 +64,7 @@ def test_sqlite_event_channel_custom_table_name(tmp_path) -> None:
     db_path = tmp_path / "custom_events.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
         extension_config={"events": {"queue_table": "app_events"}},
     )
@@ -88,7 +87,7 @@ def test_sqlite_event_channel_multiple_channels(tmp_path) -> None:
     db_path = tmp_path / "multi_channel.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -113,7 +112,7 @@ def test_sqlite_event_channel_metadata_preserved(tmp_path) -> None:
     db_path = tmp_path / "metadata.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -138,7 +137,7 @@ def test_sqlite_event_channel_attempts_tracked(tmp_path) -> None:
     db_path = tmp_path / "attempts.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 
@@ -165,7 +164,7 @@ def test_sqlite_event_channel_telemetry(tmp_path) -> None:
     db_path = tmp_path / "telemetry.db"
 
     config = SqliteConfig(
-        connection_config={"database": str(db_path)},
+        connection_config=SqliteConnectionParams(database=str(db_path)),
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
     )
 

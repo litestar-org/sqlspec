@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.sql import SQL as PsycopgSQL  # noqa: N811
+from psycopg.sql import Composed as PsycopgComposed
+from psycopg.sql import Identifier as PsycopgIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -203,8 +206,11 @@ __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncRawCursor",
     "PsycopgAsyncSessionContext",
+    "PsycopgComposed",
     "PsycopgDictRow",
+    "PsycopgIdentifier",
     "PsycopgPipelineDriver",
+    "PsycopgSQL",
     "PsycopgSyncConnection",
     "PsycopgSyncCursor",
     "PsycopgSyncRawCursor",

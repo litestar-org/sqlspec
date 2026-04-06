@@ -7,7 +7,6 @@ import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
-from tests.conftest import requires_interpreted
 
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
@@ -321,7 +320,6 @@ async def test_psqlpy_statement_stack_sequential(psqlpy_session: "PsqlpyDriver")
     assert verify.get_data()[0]["total"] == 2
 
 
-@requires_interpreted
 async def test_psqlpy_statement_stack_continue_on_error(psqlpy_session: "PsqlpyDriver") -> None:
     """Sequential stack execution should honor continue-on-error flag."""
 

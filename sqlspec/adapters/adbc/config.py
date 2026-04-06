@@ -171,6 +171,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
     Supports multiple database backends including PostgreSQL, SQLite, DuckDB,
     BigQuery, and Snowflake with automatic driver detection and loading.
+
+    Example::
+
+        config = AdbcConfig(
+            connection_config=AdbcConnectionParams(
+                uri="postgresql://user:pass@localhost/db"
+            )
+        )
     """
 
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver

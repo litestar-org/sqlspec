@@ -968,6 +968,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     __slots__ = (
         "_migration_commands",
+        "_migration_config",
         "_migration_loader",
         "_observability_runtime",
         "_storage_capabilities",
@@ -975,13 +976,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "connection_instance",
         "driver_features",
         "extension_config",
-        "migration_config",
         "observability_config",
         "statement_config",
     )
 
     _migration_loader: "SQLFileLoader"
     _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]"
+    _migration_config: "dict[str, Any] | MigrationConfig"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
@@ -998,7 +999,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     bind_key: "str | None"
     statement_config: "StatementConfig"
     connection_instance: "PoolT | None"
-    migration_config: "dict[str, Any] | MigrationConfig"
     extension_config: "ExtensionConfigs"
     driver_features: "dict[str, Any]"
     _storage_capabilities: "StorageCapabilities | None"
@@ -1022,6 +1022,31 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         ])
         return f"{type(self).__name__}({parts})"
 
+    @property
+    def migration_config(self) -> "dict[str, Any] | MigrationConfig":
+        """Return the current migration configuration."""
+        return self._migration_config
+
+    @migration_config.setter
+    def migration_config(self, value: "dict[str, Any] | MigrationConfig | None") -> None:
+        """Store migration configuration and refresh derived migration helpers."""
+        object.__setattr__(self, "_migration_config", dict(cast("dict[str, Any]", value) or {}))
+        if self._has_initialized_attribute("extension_config"):
+            self._ensure_extension_migrations()
+        if self._migration_components_ready():
+            self._initialize_migration_components()
+
+    def set_migration_config(self, config: "dict[str, Any] | MigrationConfig") -> None:
+        """Attach migration configuration after initial config creation.
+
+        This is equivalent to setting ``migration_config`` directly but provides
+        a discoverable method for post-construction configuration.
+
+        Args:
+            config: Migration configuration dictionary.
+        """
+        self.migration_config = config
+
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return cached storage capabilities for this configuration."""
 
@@ -1033,6 +1058,20 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Clear the cached capability snapshot."""
 
         self._storage_capabilities = None
+
+    def _has_initialized_attribute(self, attribute_name: str) -> bool:
+        """Return whether a slot-backed attribute has been initialized."""
+        try:
+            object.__getattribute__(self, attribute_name)
+        except AttributeError:
+            return False
+        return True
+
+    def _migration_components_ready(self) -> bool:
+        """Return whether migration helpers have already been initialized."""
+        return self._has_initialized_attribute("_migration_loader") and self._has_initialized_attribute(
+            "_migration_commands"
+        )
 
     def _ensure_extension_migrations(self) -> None:
         """Auto-include extension migrations when extension_config has them configured.
@@ -1473,8 +1512,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
-        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
-        self._ensure_extension_migrations()
+        self.migration_config = migration_config or {}
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -1637,8 +1675,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
-        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
-        self._ensure_extension_migrations()
+        self.migration_config = migration_config or {}
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -1806,8 +1843,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
-        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
-        self._ensure_extension_migrations()
+        self.migration_config = migration_config or {}
         self._init_observability(observability_config)
         self._initialize_migration_components()
 
@@ -2017,8 +2053,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
-        self.migration_config: dict[str, Any] | MigrationConfig = migration_config or {}
-        self._ensure_extension_migrations()
+        self.migration_config = migration_config or {}
         self._init_observability(observability_config)
         self._initialize_migration_components()
 

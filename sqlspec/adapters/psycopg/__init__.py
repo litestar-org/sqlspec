@@ -7,6 +7,7 @@ from sqlspec.adapters.psycopg._typing import (
 from sqlspec.adapters.psycopg.config import (
     PsycopgAsyncConfig,
     PsycopgConnectionParams,
+    PsycopgDriverFeatures,
     PsycopgPoolParams,
     PsycopgSyncConfig,
 )
@@ -26,6 +27,7 @@ __all__ = (
     "PsycopgAsyncDriver",
     "PsycopgAsyncExceptionHandler",
     "PsycopgConnectionParams",
+    "PsycopgDriverFeatures",
     "PsycopgPoolParams",
     "PsycopgSyncConfig",
     "PsycopgSyncConnection",

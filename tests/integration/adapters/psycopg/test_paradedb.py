@@ -1,30 +1,31 @@
 """Integration tests for psycopg driver with ParadeDB (pgvector + pg_search)."""
 
 from collections.abc import Generator
-from typing import Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
+from sqlspec.adapters.psycopg import PsycopgPoolParams, PsycopgSyncConfig, PsycopgSyncDriver
 
 pytestmark = pytest.mark.xdist_group("paradedb")
 
 
 @pytest.fixture(scope="session")
-def paradedb_psycopg_connection_config(paradedb_service: "PostgresService") -> "dict[str, Any]":
+def paradedb_psycopg_connection_config(paradedb_service: "PostgresService") -> "PsycopgPoolParams":
     """Base pool configuration for Psycopg tests with ParadeDB."""
-    return {
-        "conninfo": f"postgresql://{paradedb_service.user}:{paradedb_service.password}@{paradedb_service.host}:{paradedb_service.port}/{paradedb_service.database}"
-    }
+    return PsycopgPoolParams(
+        conninfo=f"postgresql://{paradedb_service.user}:{paradedb_service.password}@{paradedb_service.host}:{paradedb_service.port}/{paradedb_service.database}"
+    )
 
 
 @pytest.fixture(scope="session")
 def paradedb_psycopg_config(
-    paradedb_psycopg_connection_config: "dict[str, Any]",
+    paradedb_psycopg_connection_config: "PsycopgPoolParams",
 ) -> "Generator[PsycopgSyncConfig, None, None]":
     """Provide a PsycopgSyncConfig instance connected to ParadeDB."""
-    config = PsycopgSyncConfig(connection_config=dict(paradedb_psycopg_connection_config), pool_config={"min_size": 1})
+    config = PsycopgSyncConfig(
+        connection_config=PsycopgPoolParams(**paradedb_psycopg_connection_config), pool_config={"min_size": 1}
+    )
     try:
         yield config
     finally:

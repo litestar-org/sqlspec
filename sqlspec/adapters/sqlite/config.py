@@ -83,7 +83,16 @@ class _SqliteSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
-    """SQLite configuration with thread-local connections."""
+    """SQLite configuration with thread-local connections.
+
+    Example::
+
+        config = SqliteConfig(
+            connection_config=SqliteConnectionParams(
+                database="app.db"
+            )
+        )
+    """
 
     driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
     connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection

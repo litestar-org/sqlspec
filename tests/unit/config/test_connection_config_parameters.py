@@ -15,22 +15,24 @@ Key aspects tested:
 5. Configuration merging and overrides
 """
 
-from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-from sqlspec.adapters.asyncmy.config import AsyncmyConfig
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+from typing import Any, cast
+
+from sqlspec.adapters.adbc.config import AdbcConfig, AdbcConnectionParams
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqlitePoolParams
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig, AsyncmyPoolParams
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgPoolConfig
+from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams
+from sqlspec.adapters.duckdb.config import DuckDBConfig, DuckDBPoolParams
+from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OraclePoolParams, OracleSyncConfig
+from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolParams
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgPoolParams, PsycopgSyncConfig
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
-from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 
 
 def test_connection_config_parameter_accepts_dict() -> None:
     """Test that connection_config parameter accepts dict values."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "min_size": 5})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test", min_size=5))
 
     assert config.connection_config["dsn"] == "postgresql://localhost/test"
     assert config.connection_config["min_size"] == 5
@@ -56,21 +58,23 @@ def test_connection_config_accepts_none_and_converts_to_empty_dict() -> None:
 
 def test_connection_instance_defaults_to_none() -> None:
     """Test that connection_instance defaults to None when not provided."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert config.connection_instance is None
 
 
 def test_connection_instance_accepts_none_explicitly() -> None:
     """Test that connection_instance=None is explicitly accepted."""
-    config = PsycopgAsyncConfig(connection_config={"conninfo": "postgresql://localhost/test"}, connection_instance=None)
+    config = PsycopgAsyncConfig(
+        connection_config=PsycopgPoolParams(conninfo="postgresql://localhost/test"), connection_instance=None
+    )
 
     assert config.connection_instance is None
 
 
 def test_connection_config_stored_in_base_class() -> None:
     """Test that connection_config is stored in the base class attribute."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert hasattr(config, "connection_config")
     assert config.connection_config["dsn"] == "postgresql://localhost/test"
@@ -78,7 +82,7 @@ def test_connection_config_stored_in_base_class() -> None:
 
 def test_connection_instance_stored_in_base_class() -> None:
     """Test that connection_instance is stored in the base class attribute."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert hasattr(config, "connection_instance")
     assert config.connection_instance is None
@@ -87,21 +91,23 @@ def test_connection_instance_stored_in_base_class() -> None:
 def test_asyncpg_config_accepts_connection_parameters() -> None:
     """Test AsyncpgConfig accepts connection_config and connection_instance."""
     config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://localhost/test", "min_size": 5, "max_size": 10, "timeout": 30.0},
+        connection_config=AsyncpgPoolConfig(
+            dsn="postgresql://localhost/test", min_size=5, max_size=10, connect_timeout=30.0
+        ),
         connection_instance=None,
     )
 
     assert config.connection_config["dsn"] == "postgresql://localhost/test"
     assert config.connection_config["min_size"] == 5
     assert config.connection_config["max_size"] == 10
-    assert config.connection_config["timeout"] == 30.0
+    assert config.connection_config["connect_timeout"] == 30.0
     assert config.connection_instance is None
 
 
 def test_psycopg_async_config_accepts_connection_parameters() -> None:
     """Test PsycopgAsyncConfig accepts connection_config and connection_instance."""
     config = PsycopgAsyncConfig(
-        connection_config={"conninfo": "postgresql://localhost/test", "min_size": 2, "max_size": 20},
+        connection_config=PsycopgPoolParams(conninfo="postgresql://localhost/test", min_size=2, max_size=20),
         connection_instance=None,
     )
 
@@ -114,7 +120,7 @@ def test_psycopg_async_config_accepts_connection_parameters() -> None:
 def test_psycopg_sync_config_accepts_connection_parameters() -> None:
     """Test PsycopgSyncConfig accepts connection_config and connection_instance."""
     config = PsycopgSyncConfig(
-        connection_config={"conninfo": "postgresql://localhost/test", "min_size": 1, "max_size": 5},
+        connection_config=PsycopgPoolParams(conninfo="postgresql://localhost/test", min_size=1, max_size=5),
         connection_instance=None,
     )
 
@@ -127,15 +133,9 @@ def test_psycopg_sync_config_accepts_connection_parameters() -> None:
 def test_asyncmy_config_accepts_connection_parameters() -> None:
     """Test AsyncmyConfig accepts connection_config and connection_instance."""
     config = AsyncmyConfig(
-        connection_config={
-            "host": "localhost",
-            "port": 3306,
-            "user": "root",
-            "password": "password",
-            "database": "test",
-            "minsize": 1,
-            "maxsize": 10,
-        },
+        connection_config=AsyncmyPoolParams(
+            host="localhost", port=3306, user="root", password="password", database="test", minsize=1, maxsize=10
+        ),
         connection_instance=None,
     )
 
@@ -150,7 +150,8 @@ def test_asyncmy_config_accepts_connection_parameters() -> None:
 def test_psqlpy_config_accepts_connection_parameters() -> None:
     """Test PsqlpyConfig accepts connection_config and connection_instance."""
     config = PsqlpyConfig(
-        connection_config={"dsn": "postgresql://localhost/test", "max_db_pool_size": 10}, connection_instance=None
+        connection_config=PsqlpyPoolParams(dsn="postgresql://localhost/test", max_db_pool_size=10),
+        connection_instance=None,
     )
 
     assert config.connection_config["dsn"] == "postgresql://localhost/test"
@@ -161,13 +162,9 @@ def test_psqlpy_config_accepts_connection_parameters() -> None:
 def test_oracle_async_config_accepts_connection_parameters() -> None:
     """Test OracleAsyncConfig accepts connection_config and connection_instance."""
     config = OracleAsyncConfig(
-        connection_config={
-            "user": "system",
-            "password": "password",
-            "dsn": "localhost:1521/ORCLPDB1",
-            "min": 1,
-            "max": 5,
-        },
+        connection_config=OraclePoolParams(
+            user="system", password="password", dsn="localhost:1521/ORCLPDB1", min=1, max=5
+        ),
         connection_instance=None,
     )
 
@@ -181,13 +178,9 @@ def test_oracle_async_config_accepts_connection_parameters() -> None:
 def test_oracle_sync_config_accepts_connection_parameters() -> None:
     """Test OracleSyncConfig accepts connection_config and connection_instance."""
     config = OracleSyncConfig(
-        connection_config={
-            "user": "system",
-            "password": "password",
-            "dsn": "localhost:1521/ORCLPDB1",
-            "min": 2,
-            "max": 10,
-        },
+        connection_config=OraclePoolParams(
+            user="system", password="password", dsn="localhost:1521/ORCLPDB1", min=2, max=10
+        ),
         connection_instance=None,
     )
 
@@ -201,7 +194,10 @@ def test_oracle_sync_config_accepts_connection_parameters() -> None:
 def test_sqlite_config_accepts_connection_parameters() -> None:
     """Test SqliteConfig accepts connection_config and connection_instance."""
     config = SqliteConfig(
-        connection_config={"database": ":memory:", "check_same_thread": False, "pool_min_size": 5, "pool_max_size": 10},
+        connection_config=cast(
+            SqliteConnectionParams,
+            {"database": ":memory:", "check_same_thread": False, "pool_min_size": 5, "pool_max_size": 10},
+        ),
         connection_instance=None,
     )
 
@@ -216,7 +212,9 @@ def test_sqlite_config_accepts_connection_parameters() -> None:
 def test_aiosqlite_config_accepts_connection_parameters() -> None:
     """Test AiosqliteConfig accepts connection_config and connection_instance."""
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:", "timeout": 10.0, "pool_min_size": 2, "pool_max_size": 8},
+        connection_config=cast(
+            AiosqlitePoolParams, {"database": ":memory:", "timeout": 10.0, "pool_min_size": 2, "pool_max_size": 8}
+        ),
         connection_instance=None,
     )
 
@@ -231,7 +229,7 @@ def test_aiosqlite_config_accepts_connection_parameters() -> None:
 def test_duckdb_config_accepts_connection_parameters() -> None:
     """Test DuckDBConfig accepts connection_config and connection_instance."""
     config = DuckDBConfig(
-        connection_config={"database": ":memory:", "read_only": False, "pool_min_size": 3, "pool_max_size": 12},
+        connection_config=DuckDBPoolParams(database=":memory:", read_only=False, pool_min_size=3, pool_max_size=12),
         connection_instance=None,
     )
 
@@ -246,7 +244,7 @@ def test_duckdb_config_accepts_connection_parameters() -> None:
 def test_bigquery_config_accepts_connection_parameters() -> None:
     """Test BigQueryConfig accepts connection_config and connection_instance."""
     config = BigQueryConfig(
-        connection_config={"project": "my-project", "dataset_id": "my_dataset", "location": "US"},
+        connection_config=BigQueryConnectionParams(project="my-project", dataset_id="my_dataset", location="US"),
         connection_instance=None,
     )
 
@@ -259,7 +257,9 @@ def test_bigquery_config_accepts_connection_parameters() -> None:
 def test_adbc_config_accepts_connection_parameters() -> None:
     """Test AdbcConfig accepts connection_config and connection_instance."""
     config = AdbcConfig(
-        connection_config={"driver": "adbc_driver_postgresql", "uri": "postgresql://localhost/test"},
+        connection_config=cast(
+            AdbcConnectionParams, {"driver": "adbc_driver_postgresql", "uri": "postgresql://localhost/test"}
+        ),
         connection_instance=None,
     )
 
@@ -282,7 +282,7 @@ def test_spanner_config_accepts_connection_parameters() -> None:
 def test_connection_config_empty_dict_is_valid() -> None:
     """Test that empty connection_config dict is valid for adapters."""
     # Use AsyncpgConfig which doesn't add defaults
-    config = AsyncpgConfig(connection_config={})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig())
 
     assert config.connection_config == {}
     assert isinstance(config.connection_config, dict)
@@ -290,7 +290,7 @@ def test_connection_config_empty_dict_is_valid() -> None:
 
 def test_connection_config_can_be_modified_after_creation() -> None:
     """Test that connection_config dict can be modified after config creation."""
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     config.connection_config["min_size"] = 5
     config.connection_config["max_size"] = 10
@@ -301,14 +301,14 @@ def test_connection_config_can_be_modified_after_creation() -> None:
 
 def test_connection_config_preserves_all_keys() -> None:
     """Test that connection_config preserves all provided keys."""
-    test_config = {
-        "dsn": "postgresql://localhost/test",
-        "min_size": 5,
-        "max_size": 10,
-        "timeout": 30.0,
-        "command_timeout": 60.0,
-        "server_settings": {"application_name": "sqlspec"},
-    }
+    test_config = AsyncpgPoolConfig(
+        dsn="postgresql://localhost/test",
+        min_size=5,
+        max_size=10,
+        connect_timeout=30.0,
+        command_timeout=60.0,
+        server_settings={"application_name": "sqlspec"},
+    )
     config = AsyncpgConfig(connection_config=test_config)
 
     for key, value in test_config.items():
@@ -317,8 +317,8 @@ def test_connection_config_preserves_all_keys() -> None:
 
 def test_multiple_configs_have_independent_connection_configs() -> None:
     """Test that multiple config instances have independent connection_config dicts."""
-    config1 = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db1"})
-    config2 = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db2"})
+    config1 = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/db1"))
+    config2 = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/db2"))
 
     assert config1.connection_config["dsn"] == "postgresql://localhost/db1"
     assert config2.connection_config["dsn"] == "postgresql://localhost/db2"
@@ -331,10 +331,9 @@ def test_multiple_configs_have_independent_connection_configs() -> None:
 def test_connection_config_with_nested_dicts() -> None:
     """Test that connection_config handles nested dict values."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",
-            "server_settings": {"application_name": "sqlspec", "timezone": "UTC"},
-        }
+        connection_config=AsyncpgPoolConfig(
+            dsn="postgresql://localhost/test", server_settings={"application_name": "sqlspec", "timezone": "UTC"}
+        )
     )
 
     assert config.connection_config["server_settings"]["application_name"] == "sqlspec"
@@ -344,18 +343,13 @@ def test_connection_config_with_nested_dicts() -> None:
 def test_connection_config_with_various_value_types() -> None:
     """Test that connection_config handles various value types."""
     config = AsyncpgConfig(
-        connection_config={
-            "dsn": "postgresql://localhost/test",  # str
-            "min_size": 5,  # int
-            "timeout": 30.5,  # float
-            "ssl": True,  # bool
-            "server_settings": {"key": "value"},  # dict
-        }
+        connection_config=AsyncpgPoolConfig(
+            dsn="postgresql://localhost/test", min_size=5, server_settings={"key": "value"}, ssl=True
+        )
     )
 
     assert isinstance(config.connection_config["dsn"], str)
     assert isinstance(config.connection_config["min_size"], int)
-    assert isinstance(config.connection_config["timeout"], float)
     assert isinstance(config.connection_config["ssl"], bool)
     assert isinstance(config.connection_config["server_settings"], dict)
 
@@ -363,13 +357,16 @@ def test_connection_config_with_various_value_types() -> None:
 def test_sqlite_custom_pool_parameters_in_connection_config() -> None:
     """Test that SQLite custom pool parameters work in connection_config."""
     config = SqliteConfig(
-        connection_config={
-            "database": ":memory:",
-            "pool_min_size": 5,
-            "pool_max_size": 10,
-            "pool_pre_ping": True,
-            "pool_recycle": 3600,
-        }
+        connection_config=cast(
+            SqliteConnectionParams,
+            {
+                "database": ":memory:",
+                "pool_min_size": 5,
+                "pool_max_size": 10,
+                "pool_pre_ping": True,
+                "pool_recycle": 3600,
+            },
+        )
     )
 
     assert config.connection_config["pool_min_size"] == 5
@@ -381,13 +378,16 @@ def test_sqlite_custom_pool_parameters_in_connection_config() -> None:
 def test_aiosqlite_custom_pool_parameters_in_connection_config() -> None:
     """Test that AioSQLite custom pool parameters work in connection_config."""
     config = AiosqliteConfig(
-        connection_config={
-            "database": ":memory:",
-            "pool_min_size": 2,
-            "pool_max_size": 8,
-            "pool_pre_ping": False,
-            "pool_recycle": 7200,
-        }
+        connection_config=cast(
+            AiosqlitePoolParams,
+            {
+                "database": ":memory:",
+                "pool_min_size": 2,
+                "pool_max_size": 8,
+                "pool_pre_ping": False,
+                "pool_recycle": 7200,
+            },
+        )
     )
 
     assert config.connection_config["pool_min_size"] == 2
@@ -399,7 +399,9 @@ def test_aiosqlite_custom_pool_parameters_in_connection_config() -> None:
 def test_duckdb_custom_pool_parameters_in_connection_config() -> None:
     """Test that DuckDB custom pool parameters work in connection_config."""
     config = DuckDBConfig(
-        connection_config={"database": ":memory:", "pool_min_size": 3, "pool_max_size": 12, "pool_pre_ping": True}
+        connection_config=cast(
+            DuckDBPoolParams, {"database": ":memory:", "pool_min_size": 3, "pool_max_size": 12, "pool_pre_ping": True}
+        )
     )
 
     assert config.connection_config["pool_min_size"] == 3
@@ -409,29 +411,29 @@ def test_duckdb_custom_pool_parameters_in_connection_config() -> None:
 
 def test_connection_config_parameter_naming_consistency() -> None:
     """Test that all adapters use consistent connection_config parameter name."""
-    adapters = [
-        (AsyncpgConfig, {"dsn": "postgresql://localhost/test"}, None),
-        (PsycopgAsyncConfig, {"conninfo": "postgresql://localhost/test"}, None),
-        (PsycopgSyncConfig, {"conninfo": "postgresql://localhost/test"}, None),
-        (AsyncmyConfig, {"host": "localhost", "database": "test"}, "port"),  # Adds default port
-        (PsqlpyConfig, {"dsn": "postgresql://localhost/test"}, None),
-        (OracleAsyncConfig, {"user": "system", "password": "pwd", "dsn": "localhost/XE"}, None),
-        (OracleSyncConfig, {"user": "system", "password": "pwd", "dsn": "localhost/XE"}, None),
-        (SqliteConfig, {"database": ":memory:"}, "database"),  # Converts :memory: to URI
-        (AiosqliteConfig, {"database": ":memory:"}, "database"),  # Converts :memory: to URI
-        (DuckDBConfig, {"database": ":memory:"}, "database"),  # Converts :memory: to shared_db
-        (BigQueryConfig, {"project": "test-project"}, None),
-        (AdbcConfig, {"driver": "adbc_driver_sqlite"}, None),
+    adapters: list[tuple[Any, Any, str | None]] = [
+        (AsyncpgConfig, AsyncpgPoolConfig(dsn="postgresql://localhost/test"), None),
+        (PsycopgAsyncConfig, PsycopgPoolParams(conninfo="postgresql://localhost/test"), None),
+        (PsycopgSyncConfig, PsycopgPoolParams(conninfo="postgresql://localhost/test"), None),
+        (AsyncmyConfig, AsyncmyPoolParams(host="localhost", database="test"), "port"),  # Adds default port
+        (PsqlpyConfig, PsqlpyPoolParams(dsn="postgresql://localhost/test"), None),
+        (OracleAsyncConfig, OraclePoolParams(user="system", password="pwd", dsn="localhost/XE"), None),
+        (OracleSyncConfig, OraclePoolParams(user="system", password="pwd", dsn="localhost/XE"), None),
+        (SqliteConfig, SqliteConnectionParams(database=":memory:"), "database"),  # Converts :memory: to URI
+        (AiosqliteConfig, AiosqlitePoolParams(database=":memory:"), "database"),  # Converts :memory: to URI
+        (DuckDBConfig, DuckDBPoolParams(database=":memory:"), "database"),  # Converts :memory: to shared_db
+        (BigQueryConfig, BigQueryConnectionParams(project="test-project"), None),
+        (AdbcConfig, cast(AdbcConnectionParams, {"driver": "adbc_driver_sqlite"}), None),
         (SpannerSyncConfig, {"instance_id": "test", "database_id": "test"}, None),
     ]
 
-    for adapter_class, config_dict, modified_key in adapters:
-        config = adapter_class(connection_config=config_dict)
+    for adapter_class, config_val, modified_key in adapters:
+        config = adapter_class(connection_config=config_val)
         assert hasattr(config, "connection_config")
         assert hasattr(config, "connection_instance")
 
         # Check that original keys are present (may be modified or have defaults added)
-        for key in config_dict:
+        for key in config_val:
             if key != modified_key:
                 assert key in config.connection_config
 
@@ -440,24 +442,24 @@ def test_connection_config_parameter_naming_consistency() -> None:
 
 def test_connection_instance_parameter_naming_consistency() -> None:
     """Test that all adapters use consistent connection_instance parameter name."""
-    adapters = [
-        (AsyncpgConfig, {"dsn": "postgresql://localhost/test"}),
-        (PsycopgAsyncConfig, {"conninfo": "postgresql://localhost/test"}),
-        (PsycopgSyncConfig, {"conninfo": "postgresql://localhost/test"}),
-        (AsyncmyConfig, {"host": "localhost", "database": "test"}),
-        (PsqlpyConfig, {"dsn": "postgresql://localhost/test"}),
-        (OracleAsyncConfig, {"user": "system", "password": "pwd", "dsn": "localhost/XE"}),
-        (OracleSyncConfig, {"user": "system", "password": "pwd", "dsn": "localhost/XE"}),
-        (SqliteConfig, {"database": ":memory:"}),
-        (AiosqliteConfig, {"database": ":memory:"}),
-        (DuckDBConfig, {"database": ":memory:"}),
-        (BigQueryConfig, {"project": "test-project"}),
-        (AdbcConfig, {"driver": "adbc_driver_sqlite"}),
+    adapters: list[tuple[Any, Any]] = [
+        (AsyncpgConfig, AsyncpgPoolConfig(dsn="postgresql://localhost/test")),
+        (PsycopgAsyncConfig, PsycopgPoolParams(conninfo="postgresql://localhost/test")),
+        (PsycopgSyncConfig, PsycopgPoolParams(conninfo="postgresql://localhost/test")),
+        (AsyncmyConfig, AsyncmyPoolParams(host="localhost", database="test")),
+        (PsqlpyConfig, PsqlpyPoolParams(dsn="postgresql://localhost/test")),
+        (OracleAsyncConfig, OraclePoolParams(user="system", password="pwd", dsn="localhost/XE")),
+        (OracleSyncConfig, OraclePoolParams(user="system", password="pwd", dsn="localhost/XE")),
+        (SqliteConfig, SqliteConnectionParams(database=":memory:")),
+        (AiosqliteConfig, AiosqlitePoolParams(database=":memory:")),
+        (DuckDBConfig, DuckDBPoolParams(database=":memory:")),
+        (BigQueryConfig, BigQueryConnectionParams(project="test-project")),
+        (AdbcConfig, cast(AdbcConnectionParams, {"driver": "adbc_driver_sqlite"})),
         (SpannerSyncConfig, {"instance_id": "test", "database_id": "test"}),
     ]
 
-    for adapter_class, config_dict in adapters:
-        config = adapter_class(connection_config=config_dict, connection_instance=None)
+    for adapter_class, config_val in adapters:
+        config = adapter_class(connection_config=config_val, connection_instance=None)
         assert hasattr(config, "connection_instance")
         assert config.connection_instance is None
 
@@ -470,7 +472,9 @@ async def test_asyncpg_config_with_pre_created_pool() -> None:
     mock_pool = MagicMock()
     mock_pool.acquire = AsyncMock()
 
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"}, connection_instance=mock_pool)
+    config = AsyncpgConfig(
+        connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"), connection_instance=mock_pool
+    )
 
     assert config.connection_instance is mock_pool
     assert config.connection_config["dsn"] == "postgresql://localhost/test"
@@ -483,7 +487,7 @@ def test_sqlite_config_with_pre_created_pool() -> None:
     # Create a mock pool
     mock_pool = MagicMock()
 
-    config = SqliteConfig(connection_config={"database": ":memory:"}, connection_instance=mock_pool)
+    config = SqliteConfig(connection_config=SqliteConnectionParams(database=":memory:"), connection_instance=mock_pool)
 
     assert config.connection_instance is mock_pool
     # SQLite converts :memory: to shared memory URI for pooling
@@ -497,7 +501,7 @@ def test_duckdb_config_with_pre_created_pool() -> None:
     # Create a mock pool
     mock_pool = MagicMock()
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=mock_pool)
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=mock_pool)
 
     assert config.connection_instance is mock_pool
     # DuckDB converts :memory: to :memory:shared_db for pooling
@@ -511,7 +515,9 @@ def test_bigquery_config_with_pre_created_client() -> None:
     # Create a mock client
     mock_client = MagicMock()
 
-    config = BigQueryConfig(connection_config={"project": "test-project"}, connection_instance=mock_client)
+    config = BigQueryConfig(
+        connection_config=BigQueryConnectionParams(project="test-project"), connection_instance=mock_client
+    )
 
     assert config.connection_instance is mock_client
     assert config.connection_config["project"] == "test-project"
@@ -523,7 +529,7 @@ def test_connection_instance_bypasses_pool_creation() -> None:
 
     mock_pool = MagicMock()
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, connection_instance=mock_pool)
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"), connection_instance=mock_pool)
 
     # When connection_instance is set, _create_pool should not be called
     # and provide_pool should return the provided instance
@@ -536,6 +542,6 @@ def test_connection_config_does_not_accept_invalid_types() -> None:
     """Test that connection_config validates type at runtime (if validation exists)."""
     # Note: SQLSpec uses TypedDict, so type validation happens at type-check time
     # At runtime, we just ensure dict assignment works
-    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(dsn="postgresql://localhost/test"))
 
     assert isinstance(config.connection_config, dict)

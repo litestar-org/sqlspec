@@ -162,6 +162,27 @@ def test_sqlite_config_init_migrations_uses_default_directory(tmp_path: Path) ->
         mock_init.assert_called_once_with(str(migration_dir), True)
 
 
+def test_sqlite_config_refreshes_migration_components_after_assignment(tmp_path: Path) -> None:
+    """Late migration_config assignment should refresh cached migration helpers."""
+    temp_db = str(tmp_path / "test.db")
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+
+    config = SqliteConfig(connection_config={"database": temp_db})
+
+    original_commands = config.get_migration_commands()
+    original_loader = config.get_migration_loader()
+
+    config.migration_config = {"script_location": str(migration_dir)}
+
+    refreshed_commands = config.get_migration_commands()
+    refreshed_loader = config.get_migration_loader()
+
+    assert refreshed_commands is not original_commands
+    assert refreshed_loader is not original_loader
+    assert refreshed_commands.migrations_path == migration_dir
+
+
 def test_sqlite_config_stamp_migration_calls_commands(tmp_path: Path) -> None:
     """Test that SqliteConfig.stamp_migration() delegates to SyncMigrationCommands.stamp()."""
     migration_dir = tmp_path / "migrations"

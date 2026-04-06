@@ -14,7 +14,6 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.utils.serializers import from_json, to_json
-from tests.conftest import requires_interpreted
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -192,7 +191,6 @@ async def test_asyncmy_statement_stack_sequential(asyncmy_driver: AsyncmyDriver)
     assert data[0]["total"] == 2
 
 
-@requires_interpreted
 async def test_asyncmy_statement_stack_continue_on_error(asyncmy_driver: AsyncmyDriver) -> None:
     """Continue-on-error should still work with sequential fallback."""
 

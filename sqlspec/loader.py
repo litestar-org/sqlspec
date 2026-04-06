@@ -27,6 +27,7 @@ from sqlspec.storage.registry import storage_registry as default_storage_registr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import slugify
+from sqlspec.utils.type_guards import is_local_path
 
 if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
@@ -272,13 +273,23 @@ class SQLFileLoader:
 
         try:
             backend = self.storage_registry.get(path)
+
+            # If path_str contains a '/', we check if the first part is a registered alias.
+            # This is specifically for when a path is provided relative to an alias.
+            parts = path_str.split("/", 1)
+            if len(parts) > 1 and self.storage_registry.is_alias_registered(parts[0]):
+                return backend.read_text_sync(parts[1], encoding=self.encoding)
+
             if path_str.startswith("file://"):
                 parsed = urlparse(path_str)
                 file_path = unquote(parsed.path)
                 if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
                     file_path = file_path[1:]
-                filename = Path(file_path).name
-                return backend.read_text_sync(filename, encoding=self.encoding)
+                return backend.read_text_sync(Path(file_path).name, encoding=self.encoding)
+
+            if isinstance(path, Path) or is_local_path(path_str):
+                return backend.read_text_sync(Path(path_str).name, encoding=self.encoding)
+
             return backend.read_text_sync(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
@@ -398,16 +409,18 @@ class SQLFileLoader:
         try:
             for path in paths:
                 path_str = str(path)
-                if "://" in path_str:
+                # If it looks like a URI or a potential alias (contains no path separators, or is in registry)
+                if "://" in path_str or self.storage_registry.is_alias_registered(path_str.split("/", maxsplit=1)[0]):
                     self._load_single_file(path, None)
-                else:
-                    path_obj = Path(path)
-                    if path_obj.is_dir():
-                        self._load_directory(path_obj)
-                    elif path_obj.exists():
-                        self._load_single_file(path_obj, None)
-                    elif path_obj.suffix:
-                        self._raise_file_not_found(str(path))
+                    continue
+
+                path_obj = Path(path)
+                if path_obj.is_dir():
+                    self._load_directory(path_obj)
+                elif path_obj.exists():
+                    self._load_single_file(path_obj, None)
+                elif path_obj.suffix:
+                    self._raise_file_not_found(str(path))
 
         except Exception as exc:
             error = exc

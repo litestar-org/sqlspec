@@ -174,6 +174,23 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     # CORE DISPATCH METHODS - The Execution Engine
     # ─────────────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _check_pending_exception(exc_handler: AsyncExceptionHandler) -> None:
+        """Raise any pending mapped exception after context manager exit."""
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+    @staticmethod
+    def _raise_async_database_exception(exc_handler: AsyncExceptionHandler, exc: Exception | None) -> None:
+        """Raise any mapped database exception captured by the async handler."""
+        pending_exception = exc_handler.pending_exception
+        if pending_exception is not None:
+            if exc is None:
+                raise pending_exception from None
+            raise pending_exception from exc
+        if exc is not None:
+            raise exc
+
     @final
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -205,56 +222,37 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
             result: SQLResult | None = None
             exc_handler = self.handle_database_exceptions()
-            cursor_manager = self.with_cursor(connection)
-            cursor: Any | None = None
-            exc: Exception | None = None
-            exc_handler_entered = False
-            cursor_entered = False
-
             try:
-                await exc_handler.__aenter__()
-                exc_handler_entered = True
-                cursor = await cursor_manager.__aenter__()
-                cursor_entered = True
-                special_result = await self.dispatch_special_handling(cursor, statement)
-                if special_result is not None:
-                    result = special_result
-                elif statement.is_script:
-                    execution_result = await self.dispatch_execute_script(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                elif statement.is_many:
-                    execution_result = await self.dispatch_execute_many(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-                else:
-                    execution_result = await self.dispatch_execute(cursor, statement)
-                    result = self.build_statement_result(statement, execution_result)
-            except Exception as err:
-                exc = err
-            finally:
-                if cursor_entered:
-                    if exc is None:
-                        await cursor_manager.__aexit__(None, None, None)
+                async with exc_handler, self.with_cursor(connection) as cursor:
+                    special_result = await self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        result = special_result
+                    elif statement.is_script:
+                        execution_result = await self.dispatch_execute_script(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    elif statement.is_many:
+                        execution_result = await self.dispatch_execute_many(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
                     else:
-                        await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
-                if exc_handler_entered:
-                    if exc is None:
-                        await exc_handler.__aexit__(None, None, None)
-                    else:
-                        await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
+                        execution_result = await self.dispatch_execute(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+            except Exception as exc:  # pragma: no cover - instrumentation path
+                pending_exception = exc_handler.pending_exception
+                if pending_exception is not None:
+                    mapped_exc = pending_exception
+                    runtime.span_manager.end_span(span, error=mapped_exc)
+                    runtime.emit_error(mapped_exc, **query_context)
+                    self._raise_async_database_exception(exc_handler, exc)
+                runtime.span_manager.end_span(span, error=exc)
+                runtime.emit_error(exc, **query_context)
+                self._raise_async_database_exception(exc_handler, exc)
 
-            if exc is not None:
-                mapped_exc = exc_handler.pending_exception or exc
+            pending_exception = exc_handler.pending_exception
+            if pending_exception is not None:
+                mapped_exc = pending_exception
                 runtime.span_manager.end_span(span, error=mapped_exc)
                 runtime.emit_error(mapped_exc, **query_context)
-                if exc_handler.pending_exception is not None:
-                    raise mapped_exc from exc
-                raise exc
-
-            if exc_handler.pending_exception is not None:
-                mapped_exc = exc_handler.pending_exception
-                runtime.span_manager.end_span(span, error=mapped_exc)
-                runtime.emit_error(mapped_exc, **query_context)
-                raise mapped_exc from None
+                self._raise_async_database_exception(exc_handler, None)
 
             assert result is not None  # Guaranteed: no exception means result was assigned
 
@@ -417,55 +415,23 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
 
         exc_handler = self.handle_database_exceptions()
-        cursor_manager = self.with_cursor(self.connection)
-        cursor: Any | None = None
-        exc: Exception | None = None
-        exc_handler_entered = False
-        cursor_entered = False
         result: SQLResult | None = None
-
         try:
-            await exc_handler.__aenter__()
-            exc_handler_entered = True
-            cursor = await cursor_manager.__aenter__()
-            cursor_entered = True
-            execution_result = await self.dispatch_execute(cursor, direct_statement)
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                execution_result = await self.dispatch_execute(cursor, direct_statement)
 
-            if cached.operation_profile.returns_rows:
-                result = self.build_statement_result(direct_statement, execution_result)
-            else:
-                # DML path: use DMLResult to bypass full SQLResult construction
-                affected_rows = (
-                    execution_result.rowcount_override
-                    if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
-                    else 0
-                )
-                result = DMLResult(cached.operation_type, affected_rows)
-        except Exception as err:
-            exc = err
-        finally:
-            if cursor_entered:
-                if exc is None:
-                    await cursor_manager.__aexit__(None, None, None)
+                if cached.operation_profile.returns_rows:
+                    result = self.build_statement_result(direct_statement, execution_result)
                 else:
-                    await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
-            if exc_handler_entered:
-                if exc is None:
-                    await exc_handler.__aexit__(None, None, None)
-                else:
-                    await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
+                    # DML path: use DMLResult to bypass full SQLResult construction
+                    affected_rows = (
+                        execution_result.rowcount_override
+                        if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
+                        else 0
+                    )
+                    result = DMLResult(cached.operation_type, affected_rows)
 
-        try:
-            if exc is not None:
-                mapped_exc = exc_handler.pending_exception or exc
-                if exc_handler.pending_exception is not None:
-                    raise mapped_exc from exc
-                raise exc
-
-            if exc_handler.pending_exception is not None:
-                mapped_exc = exc_handler.pending_exception
-                raise mapped_exc from None
-
+            self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
@@ -493,45 +459,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         will hit the fast path in _get_compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
-        cursor_manager = self.with_cursor(self.connection)
-        cursor: Any | None = None
-        exc: Exception | None = None
-        exc_handler_entered = False
-        cursor_entered = False
         result: SQLResult | None = None
-
         try:
-            await exc_handler.__aenter__()
-            exc_handler_entered = True
-            cursor = await cursor_manager.__aenter__()
-            cursor_entered = True
-            execution_result = await self.dispatch_execute(cursor, statement)
-            result = self.build_statement_result(statement, execution_result)
-        except Exception as err:
-            exc = err
-        finally:
-            if cursor_entered:
-                if exc is None:
-                    await cursor_manager.__aexit__(None, None, None)
-                else:
-                    await cursor_manager.__aexit__(type(exc), exc, exc.__traceback__)
-            if exc_handler_entered:
-                if exc is None:
-                    await exc_handler.__aexit__(None, None, None)
-                else:
-                    await exc_handler.__aexit__(type(exc), exc, exc.__traceback__)
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                execution_result = await self.dispatch_execute(cursor, statement)
+                result = self.build_statement_result(statement, execution_result)
 
-        try:
-            if exc is not None:
-                mapped_exc = exc_handler.pending_exception or exc
-                if exc_handler.pending_exception is not None:
-                    raise mapped_exc from exc
-                raise exc
-
-            if exc_handler.pending_exception is not None:
-                mapped_exc = exc_handler.pending_exception
-                raise mapped_exc from None
-
+            self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
@@ -585,21 +519,28 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
-        if (
-            self._stmt_cache_enabled
-            and (statement_config is None or statement_config is self.statement_config)
-            and isinstance(statement, str)
-            and len(parameters) == 1
-            and isinstance(parameters[0], (tuple, list))
-            and not kwargs
-        ):
-            fast_result = await self._stmt_cache_lookup(statement, parameters[0])
-            if fast_result is not None:
-                return fast_result
-        sql_statement = self.prepare_statement(
-            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-        )
-        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        async with exc_handler:
+            if (
+                self._stmt_cache_enabled
+                and (statement_config is None or statement_config is self.statement_config)
+                and isinstance(statement, str)
+                and len(parameters) == 1
+                and isinstance(parameters[0], (tuple, list))
+                and not kwargs
+            ):
+                fast_result = await self._stmt_cache_lookup(statement, parameters[0])
+                if fast_result is not None:
+                    result = fast_result
+            if result is None:
+                sql_statement = self.prepare_statement(
+                    statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+                )
+                result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        self._check_pending_exception(exc_handler)
+        assert result is not None
+        return result
 
     async def execute_many(
         self,
@@ -614,19 +555,25 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Parameters passed will be used as the batch execution sequence.
         """
-        config = statement_config or self.statement_config
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        async with exc_handler:
+            config = statement_config or self.statement_config
 
-        if isinstance(statement, str) and not filters and not kwargs:
-            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-        elif isinstance(statement, SQL):
-            statement_seed = statement.raw_expression or statement.raw_sql
-            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-        else:
-            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-            statement_seed = base_statement.raw_expression or base_statement.raw_sql
-            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+            if isinstance(statement, str) and not filters and not kwargs:
+                sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+            elif isinstance(statement, SQL):
+                statement_seed = statement.raw_expression or statement.raw_sql
+                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+            else:
+                base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+                statement_seed = base_statement.raw_expression or base_statement.raw_sql
+                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
-        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+            result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        self._check_pending_exception(exc_handler)
+        assert result is not None
+        return result
 
     async def execute_script(
         self,
@@ -641,10 +588,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-
-        return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        async with exc_handler:
+            config = statement_config or self.statement_config
+            sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+            result = await self.dispatch_statement_execution(
+                statement=sql_statement.as_script(), connection=self.connection
+            )
+        self._check_pending_exception(exc_handler)
+        assert result is not None
+        return result
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PUBLIC API - Query Methods (select/fetch variants)
@@ -950,11 +904,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            The scalar value, optionally converted to the specified type.
-
-        Raises:
-            ValueError: If no rows or more than one row/column is returned.
-            TypeError: If value_type is provided and conversion fails.
+            The scalar value, optionally converted to the specified type
 
         Examples:
             Basic usage (returns Any):
@@ -1083,10 +1033,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Returns:
             The scalar value (optionally converted), or None if no rows found.
-
-        Raises:
-            ValueError: If more than one row is returned.
-            TypeError: If value_type is provided and conversion fails.
 
         Examples:
             Basic usage:

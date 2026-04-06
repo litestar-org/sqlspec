@@ -266,6 +266,30 @@ async def test_async_driver_execute_script_method(mock_async_driver: MockAsyncDr
     assert result.successful_statements == 2
 
 
+@pytest.mark.parametrize(
+    ("method_name", "call_args"),
+    [
+        pytest.param("execute", ("SELECT * FROM users WHERE id = ?", 1), id="execute"),
+        pytest.param("execute_many", ("INSERT INTO users (name) VALUES (?)", [["alice"]]), id="execute_many"),
+        pytest.param("execute_script", ("INSERT INTO users (name) VALUES ('alice');",), id="execute_script"),
+    ],
+)
+async def test_async_driver_execution_wrappers_reraise_deferred_database_errors(
+    mock_async_driver: MockAsyncDriver, method_name: str, call_args: tuple[Any, ...]
+) -> None:
+    """Test wrapper methods re-raise mapped errors after the exception context exits."""
+    with patch.object(
+        mock_async_driver,
+        "dispatch_statement_execution",
+        new_callable=AsyncMock,
+        side_effect=ValueError("Test async wrapper error"),
+    ):
+        method = getattr(mock_async_driver, method_name)
+
+        with pytest.raises(SQLSpecError, match="Mock async database error: Test async wrapper error"):
+            await method(*call_args)
+
+
 async def test_async_driver_select_one(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select_one method - expects error when multiple rows returned."""
     with pytest.raises(ValueError, match="Multiple results found"):

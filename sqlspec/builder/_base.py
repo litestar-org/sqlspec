@@ -28,6 +28,7 @@ from sqlspec.core import (
     get_cache_config,
     hash_optimized_expression,
 )
+from sqlspec.core.filters import StatementFilter
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
@@ -790,6 +791,26 @@ class QueryBuilder(ABC):
         sql_statement = self._to_statement(config)
         cache.put_builder(cache_key_str, sql_statement)
 
+        return sql_statement
+
+    def apply_filters(self, *filters: StatementFilter, config: "StatementConfig | None" = None) -> "SQL":
+        """Apply statement filters to this query builder.
+
+        Converts the builder to a SQL statement, then applies each filter's
+        ``append_to_statement`` method to produce the final SQL with all
+        WHERE clauses, ORDER BY, LIMIT/OFFSET, etc.
+
+        Args:
+            *filters: Statement filters (e.g., InCollectionFilter, SearchFilter, OrderByFilter).
+            config: Optional SQL configuration.
+
+        Returns:
+            SQL statement with all filters applied.
+
+        """
+        sql_statement = self.to_statement(config)
+        for filter_obj in filters:
+            sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
 
     def _to_statement(self, config: "StatementConfig | None" = None) -> "SQL":

@@ -19,7 +19,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
-from sqlspec.storage.backends._iterators import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -141,11 +141,13 @@ class ObStoreBackend:
 
                 # Combine URI path with base_path for correct storage location
                 # If base_path is absolute, Path division will use it directly (backward compat)
-                local_store_root = str(Path(path_str) / self.base_path) if self.base_path else path_str
+                local_store_root_obj = Path(path_str)
+                if self.base_path:
+                    local_store_root_obj = local_store_root_obj / self.base_path
 
                 self._is_local_store = True
-                self._local_store_root = local_store_root
-                self.store = LocalStore(local_store_root, mkdir=True)
+                self._local_store_root = str(local_store_root_obj.resolve())
+                self.store = LocalStore(self._local_store_root, mkdir=True)
             else:
                 from obstore.store import from_url
 
@@ -193,7 +195,8 @@ class ObStoreBackend:
 
         if path_obj.is_absolute() and self._local_store_root:
             try:
-                return str(path_obj.relative_to(self._local_store_root))
+                rel = path_obj.relative_to(self._local_store_root)
+                return "" if str(rel) == "." else str(rel)
             except ValueError:
                 return str(path).lstrip("/")
 
@@ -500,6 +503,9 @@ class ObStoreBackend:
 
         Uses obstore's sync streaming iterator which yields chunks without
         loading the entire file into memory, for both local and remote backends.
+
+        Yields:
+            Chunks of bytes from the file, with size determined by chunk_size (default: 65536 bytes).
         """
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
@@ -521,6 +527,9 @@ class ObStoreBackend:
 
         For each matching file, streams data through a buffered wrapper
         that PyArrow can read directly without loading the entire file.
+
+        Yields:
+            Chunks of bytes from the file, with size determined by chunk_size (default: 65536 bytes).
         """
         pq = import_pyarrow_parquet()
         for obj_path in self.glob_sync(pattern, **kwargs):

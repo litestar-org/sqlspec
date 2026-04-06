@@ -326,3 +326,45 @@ def test_provide_filters_search_without_value_excluded() -> None:
     # SearchFilter with None value should be excluded
     filters = provider(search_filter=SearchFilter(field_name={"name"}, value=None, ignore_case=False))  # type: ignore[arg-type]
     assert filters == []
+
+
+def test_provide_filters_in_fields_with_string_list() -> None:
+    """Test in_fields config with list of strings (issue #405)."""
+    config: FilterConfig = {"in_fields": [FieldNameType(name="status", type_hint=str)]}  # type: ignore[typeddict-item]
+    provider = provide_filters(config)
+
+    filters = provider(status_in_filter=InCollectionFilter(field_name="status", values=["active"]))
+    assert len(filters) == 1
+    assert isinstance(filters[0], InCollectionFilter)
+    assert filters[0].field_name == "status"
+
+
+def test_provide_filters_null_fields() -> None:
+    """Test null_fields filter generation."""
+    from sqlspec.core import NullFilter
+
+    config: FilterConfig = {"null_fields": {"email"}}
+    provider = provide_filters(config)
+
+    # No filter
+    filters = provider(email_null_filter=None)
+    assert filters == []
+
+    # With filter
+    filters = provider(email_null_filter=NullFilter(field_name="email"))
+    assert len(filters) == 1
+    assert isinstance(filters[0], NullFilter)
+    assert filters[0].field_name == "email"
+
+
+def test_provide_filters_not_null_fields() -> None:
+    """Test not_null_fields filter generation."""
+    from sqlspec.core import NotNullFilter
+
+    config: FilterConfig = {"not_null_fields": {"email"}}
+    provider = provide_filters(config)
+
+    filters = provider(email_not_null_filter=NotNullFilter(field_name="email"))
+    assert len(filters) == 1
+    assert isinstance(filters[0], NotNullFilter)
+    assert filters[0].field_name == "email"

@@ -7,7 +7,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec import sql
-from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncDriver
+from sqlspec.adapters.oracledb import OraclePoolParams, OracleSyncConfig, OracleSyncDriver
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLSpecError
 
@@ -18,13 +18,13 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 
 def test_sync_connection(oracle_23ai_service: "OracleService") -> None:
     """Test sync connection components for OracleDB."""
-    base_config: dict[str, object] = {
-        "host": oracle_23ai_service.host,
-        "port": oracle_23ai_service.port,
-        "service_name": oracle_23ai_service.service_name,
-        "user": oracle_23ai_service.user,
-        "password": oracle_23ai_service.password,
-    }
+    base_config = OraclePoolParams(
+        host=oracle_23ai_service.host,
+        port=oracle_23ai_service.port,
+        service_name=oracle_23ai_service.service_name,
+        user=oracle_23ai_service.user,
+        password=oracle_23ai_service.password,
+    )
     sync_config = OracleSyncConfig(connection_config=base_config)
     pool = sync_config.create_pool()
     assert pool is not None
@@ -38,7 +38,7 @@ def test_sync_connection(oracle_23ai_service: "OracleService") -> None:
     finally:
         pool.close()
 
-    pooled_config = dict(base_config)
+    pooled_config = OraclePoolParams(**base_config)
     pooled_config["min"] = 1
     pooled_config["max"] = 5
     another_config = OracleSyncConfig(connection_config=pooled_config)
@@ -509,8 +509,7 @@ def test_sync_lowercase_columns_default(oracle_sync_session: "OracleSyncDriver")
 def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConfig) -> None:
     """Ensure disabling lowercase feature preserves uppercase columns."""
     custom_config = OracleSyncConfig(
-        connection_config=dict(oracle_sync_config.connection_config),
-        driver_features={"enable_lowercase_column_names": False},
+        connection_config=oracle_sync_config.connection_config, driver_features={"enable_lowercase_column_names": False}
     )
 
     with custom_config.provide_session() as session:
@@ -552,13 +551,13 @@ def test_oracle_sync_on_connection_create_hook(oracle_23ai_service: "OracleServi
         hook_call_count += 1
 
     config = OracleSyncConfig(
-        connection_config={
-            "host": oracle_23ai_service.host,
-            "port": oracle_23ai_service.port,
-            "service_name": oracle_23ai_service.service_name,
-            "user": oracle_23ai_service.user,
-            "password": oracle_23ai_service.password,
-        },
+        connection_config=OraclePoolParams(
+            host=oracle_23ai_service.host,
+            port=oracle_23ai_service.port,
+            service_name=oracle_23ai_service.service_name,
+            user=oracle_23ai_service.user,
+            password=oracle_23ai_service.password,
+        ),
         driver_features={"on_connection_create": connection_hook},
     )
 

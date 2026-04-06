@@ -1,31 +1,30 @@
 """Integration tests for psqlpy driver with ParadeDB (pgvector + pg_search)."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import pytest
 from psqlpy.extra_types import PgVector
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyPoolParams
 
 pytestmark = pytest.mark.xdist_group("paradedb")
 
 
 @pytest.fixture(scope="session")
-def paradedb_psqlpy_connection_config(paradedb_service: "PostgresService") -> "dict[str, Any]":
+def paradedb_psqlpy_connection_config(paradedb_service: "PostgresService") -> "PsqlpyPoolParams":
     """Base pool configuration for Psqlpy tests with ParadeDB."""
-    return {
-        "dsn": f"postgres://{paradedb_service.user}:{paradedb_service.password}@{paradedb_service.host}:{paradedb_service.port}/{paradedb_service.database}"
-    }
+    return PsqlpyPoolParams(
+        dsn=f"postgres://{paradedb_service.user}:{paradedb_service.password}@{paradedb_service.host}:{paradedb_service.port}/{paradedb_service.database}"
+    )
 
 
 @pytest.fixture(scope="function")
 async def paradedb_psqlpy_config(
-    paradedb_psqlpy_connection_config: "dict[str, Any]",
+    paradedb_psqlpy_connection_config: "PsqlpyPoolParams",
 ) -> "AsyncGenerator[PsqlpyConfig, None]":
     """Provide a PsqlpyConfig instance connected to ParadeDB."""
-    config = PsqlpyConfig(connection_config=dict(paradedb_psqlpy_connection_config))
+    config = PsqlpyConfig(connection_config=PsqlpyPoolParams(**paradedb_psqlpy_connection_config))
     try:
         yield config
     finally:

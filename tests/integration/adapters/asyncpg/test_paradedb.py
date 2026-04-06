@@ -1,34 +1,33 @@
 """Integration tests for asyncpg driver with ParadeDB (pgvector + pg_search)."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
 
 pytestmark = pytest.mark.xdist_group("paradedb")
 
 
 @pytest.fixture(scope="session")
-def paradedb_asyncpg_connection_config(paradedb_service: "PostgresService") -> "dict[str, Any]":
+def paradedb_asyncpg_connection_config(paradedb_service: "PostgresService") -> "AsyncpgPoolConfig":
     """Base pool configuration for AsyncPG tests with ParadeDB."""
-    return {
-        "host": paradedb_service.host,
-        "port": paradedb_service.port,
-        "user": paradedb_service.user,
-        "password": paradedb_service.password,
-        "database": paradedb_service.database,
-    }
+    return AsyncpgPoolConfig(
+        host=paradedb_service.host,
+        port=paradedb_service.port,
+        user=paradedb_service.user,
+        password=paradedb_service.password,
+        database=paradedb_service.database,
+    )
 
 
 @pytest.fixture(scope="function")
 async def paradedb_asyncpg_config(
-    paradedb_asyncpg_connection_config: "dict[str, Any]",
+    paradedb_asyncpg_connection_config: "AsyncpgPoolConfig",
 ) -> "AsyncGenerator[AsyncpgConfig, None]":
     """Provide an AsyncpgConfig instance connected to ParadeDB."""
-    config = AsyncpgConfig(connection_config=dict(paradedb_asyncpg_connection_config))
+    config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(**paradedb_asyncpg_connection_config))
     try:
         yield config
     finally:

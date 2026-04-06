@@ -151,6 +151,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     """BigQuery configuration.
 
     Configuration for Google Cloud BigQuery connections.
+
+    Example::
+
+        config = BigQueryConfig(
+            connection_config=BigQueryConnectionParams(
+                project="my-gcp-project"
+            )
+        )
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver

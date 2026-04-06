@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionParams
 from sqlspec.adapters.sqlite.adk.store import SqliteADKStore
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.sqlite, pytest.mark.integration]
@@ -74,7 +74,7 @@ def sqlite_config() -> SqliteConfig:
     - Prevent table schema conflicts between different tests
     - Enable foreign key relationships across connections
     """
-    return SqliteConfig(connection_config={"database": _make_shared_memory_db_name(), "uri": True})
+    return SqliteConfig(connection_config=SqliteConnectionParams(database=_make_shared_memory_db_name(), uri=True))
 
 
 @pytest.fixture

@@ -12,7 +12,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from tests.conftest import requires_interpreted
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -885,7 +884,6 @@ async def test_asyncpg_statement_stack_batch(asyncpg_session: "AsyncpgDriver") -
     assert count_result.get_data()[0]["total_rows"] == 2
 
 
-@requires_interpreted
 async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "AsyncpgDriver") -> None:
     """Stack execution should surface errors while continuing operations when requested."""
 

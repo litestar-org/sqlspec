@@ -4,9 +4,9 @@ import datetime
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-from psycopg import sql as psycopg_sql
 from typing_extensions import LiteralString
 
+from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -88,7 +88,7 @@ class PreparedStackOperation(NamedTuple):
     operation_index: int
     operation: "StackOperation"
     statement: "SQL"
-    sql: "LiteralString | psycopg_sql.SQL"
+    sql: "LiteralString | PsycopgSQL | PsycopgComposed"
     parameters: "tuple[Any, ...] | dict[str, Any] | None"
 
 
@@ -113,23 +113,23 @@ def pipeline_supported() -> bool:
         return False
 
 
-def _compose_table_identifier(table: str) -> "psycopg_sql.Composed":
+def _compose_table_identifier(table: str) -> "PsycopgComposed":
     parts = [part for part in table.split(".") if part]
     if not parts:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
-    identifiers = [psycopg_sql.Identifier(part) for part in parts]
-    return psycopg_sql.SQL(".").join(identifiers)
+    identifiers = [PsycopgIdentifier(part) for part in parts]
+    return PsycopgSQL(".").join(identifiers)
 
 
-def build_copy_from_command(table: str, columns: "list[str]") -> "psycopg_sql.Composed":
+def build_copy_from_command(table: str, columns: "list[str]") -> "PsycopgComposed":
     table_identifier = _compose_table_identifier(table)
-    column_sql = psycopg_sql.SQL(", ").join([psycopg_sql.Identifier(column) for column in columns])
-    return psycopg_sql.SQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
+    column_sql = PsycopgSQL(", ").join([PsycopgIdentifier(column) for column in columns])
+    return PsycopgSQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
 
 
-def build_truncate_command(table: str) -> "psycopg_sql.Composed":
-    return psycopg_sql.SQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
+def build_truncate_command(table: str) -> "PsycopgComposed":
+    return PsycopgSQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
 
 
 def _identity(value: Any) -> Any:

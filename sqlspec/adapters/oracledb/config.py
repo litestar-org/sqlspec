@@ -176,7 +176,18 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
-    """Configuration for Oracle synchronous database connections."""
+    """Configuration for Oracle synchronous database connections.
+
+    Example::
+
+        config = OracleSyncConfig(
+            connection_config=OraclePoolParams(
+                dsn="localhost:1521/XEPDB1",
+                user="app",
+                password="secret",
+            )
+        )
+    """
 
     __slots__ = ("_user_connection_hook",)
 
@@ -338,7 +349,18 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 @mypyc_attr(native_class=False)
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
-    """Configuration for Oracle asynchronous database connections."""
+    """Configuration for Oracle asynchronous database connections.
+
+    Example::
+
+        config = OracleAsyncConfig(
+            connection_config=OraclePoolParams(
+                dsn="localhost:1521/XEPDB1",
+                user="app",
+                password="secret",
+            )
+        )
+    """
 
     __slots__ = ("_user_connection_hook",)
 

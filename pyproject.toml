@@ -70,7 +70,7 @@ uuid = ["uuid-utils"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]
-build = ["bump-my-version", "hatch-mypyc", "pydantic-settings"]
+build = ["bump-my-version", "hatch-mypyc", "mypy>=1.19.1", "pydantic-settings"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -115,7 +115,7 @@ extras = [
   "dishka",
 ]
 lint = [
-  "mypy>=1.13.0",
+  "mypy>=1.19.1",
   "pre-commit>=3.5.0",
   "pyright>=1.1.386",
   "ruff>=0.7.1",
@@ -176,7 +176,7 @@ packages = ["sqlspec"]
 
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
-dependencies = ["hatch-mypyc", "hatch-cython"]
+dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=1.19.1"]
 enable-by-default = false
 exclude = [
   "tests/**",                                 # Test files
@@ -187,21 +187,17 @@ exclude = [
   "sqlspec/**/_typing.py",                    # Type aliases (mypyc-incompatible)
   "sqlspec/config.py",                        # Main config
   "sqlspec/extensions/**",                    # All extensions
+  "sqlspec/dialects/**/*.py",                 # Keep SQLGlot dialect subclasses interpreted
   "sqlspec/**/__init__.py",                   # Init files (usually just imports)
   "sqlspec/protocols.py",                     # Protocol definitions
   "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
   "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
-  "sqlspec/dialects/postgres/_pgvector.py",   # Dialect shell patches compiled sqlglot parser/generator registries
-  "sqlspec/dialects/postgres/_paradedb.py",   # Dialect shell patches compiled sqlglot parser/generator registries
-  "sqlspec/dialects/spanner/_spanner.py",     # Dialect shell patches compiled sqlglot parser hooks and post-processes DDL
-  "sqlspec/dialects/spanner/_spangres.py",    # Dialect shell patches compiled sqlglot parser hooks
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
   "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
   "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
-  "sqlspec/storage/backends/_iterators.py",   # Async __anext__ + asyncio.to_thread causes mypyc segfault
 ]
 include = [
   "sqlspec/core/**/*.py",                  # Core module
@@ -212,7 +208,7 @@ include = [
   "sqlspec/driver/**/*.py",                # Driver module
   "sqlspec/storage/registry.py",           # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",             # Safe storage error normalization
-  "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes (iterators in _iterators.py)
+  "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
@@ -409,11 +405,7 @@ warn_unused_ignores = true
 ignore_missing_imports = true
 module = [
   "orjson",
-  "re2",
-  "re2.*",
   "uvicorn.*",
-  "googleapiclient",
-  "googleapiclient.*",
   "uvloop.*",
   "asyncmy",
   "asyncmy.*",
@@ -428,8 +420,6 @@ module = [
   "fsspec.*",
   "sqlglot",
   "sqlglot.*",
-  "pgvector",
-  "pgvector.*",
   "minio",
 ]
 
