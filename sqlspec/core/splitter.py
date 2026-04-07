@@ -937,6 +937,8 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
         "sqlserver": TSQLDialectConfig(),
         "postgresql": PostgreSQLDialectConfig(),
         "postgres": PostgreSQLDialectConfig(),
+        "paradedb": PostgreSQLDialectConfig(),
+        "pgvector": PostgreSQLDialectConfig(),
         "mysql": MySQLDialectConfig(),
         "sqlite": SQLiteDialectConfig(),
         "duckdb": DuckDBDialectConfig(),
