@@ -69,7 +69,6 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx_click",
     "click_extra.sphinx",
-    "sphinx_toolbox.collapse",
     "sphinx_design",
     "sphinx_tabs.tabs",
     "sphinx_togglebutton",
