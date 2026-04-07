@@ -7,7 +7,9 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from asyncmy import Connection  # pyright: ignore
+from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
+from asyncmy.cursors import DictCursor  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -110,4 +112,11 @@ class AsyncmySessionContext:
         return None
 
 
-__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyRawCursor", "AsyncmySessionContext")
+__all__ = (
+    "ASYNC_MY_FIELD_TYPE",
+    "AsyncmyConnection",
+    "AsyncmyCursor",
+    "AsyncmyRawCursor",
+    "AsyncmySessionContext",
+    "DictCursor",
+)

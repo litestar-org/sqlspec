@@ -8,9 +8,8 @@ from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncmy.errors  # pyright: ignore
-from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 
-from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmySessionContext
+from sqlspec.adapters.asyncmy._typing import ASYNC_MY_FIELD_TYPE, AsyncmyCursor, AsyncmySessionContext
 from sqlspec.adapters.asyncmy.core import (
     build_insert_statement,
     collect_rows,

@@ -2,11 +2,9 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from google.cloud.spanner_v1 import Client
-from google.cloud.spanner_v1.pool import FixedSizePool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.spanner._typing import SpannerConnection
+from sqlspec.adapters.spanner._typing import Client, FixedSizePool, SpannerConnection
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
 from sqlspec.config import SyncDatabaseConfig
@@ -22,8 +20,8 @@ if TYPE_CHECKING:
 
     from google.auth.credentials import Credentials
     from google.cloud.spanner_v1.database import Database
-    from google.cloud.spanner_v1.pool import AbstractSessionPool
 
+    from sqlspec.adapters.spanner._typing import AbstractSessionPool
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig

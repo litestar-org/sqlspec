@@ -7,7 +7,14 @@ compilation to avoid ABI boundary issues.
 import logging
 from typing import TYPE_CHECKING, Any
 
-from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
+from google.cloud.bigquery import (
+    ArrayQueryParameter,
+    Client,
+    LoadJobConfig,
+    QueryJob,
+    QueryJobConfig,
+    ScalarQueryParameter,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -105,4 +112,12 @@ class BigQuerySessionContext:
         return None
 
 
-__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryParam", "BigQuerySessionContext")
+__all__ = (
+    "BigQueryConnection",
+    "BigQueryCursor",
+    "BigQueryParam",
+    "BigQuerySessionContext",
+    "LoadJobConfig",
+    "QueryJob",
+    "QueryJobConfig",
+)

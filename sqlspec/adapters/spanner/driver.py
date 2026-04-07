@@ -4,9 +4,8 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from google.api_core import exceptions as api_exceptions
-from google.cloud.spanner_v1.transaction import Transaction
 
-from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor
+from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor, Transaction
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     coerce_params,

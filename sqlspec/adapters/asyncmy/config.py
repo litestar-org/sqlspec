@@ -8,7 +8,7 @@ from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor, AsyncmySessionContext
+from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor, AsyncmySessionContext, DictCursor
 from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
+    from asyncmy.cursors import Cursor  # pyright: ignore
     from asyncmy.pool import Pool  # pyright: ignore
 
     from sqlspec.core import StatementConfig

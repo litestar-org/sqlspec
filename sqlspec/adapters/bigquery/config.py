@@ -2,10 +2,15 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
+from sqlspec.adapters.bigquery._typing import (
+    BigQueryConnection,
+    BigQueryCursor,
+    BigQuerySessionContext,
+    LoadJobConfig,
+    QueryJobConfig,
+)
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig

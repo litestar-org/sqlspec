@@ -2,10 +2,6 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from asyncpg import Connection, Record
-from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.connection import ConnectionMeta
-from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
@@ -15,6 +11,13 @@ from sqlspec.adapters.asyncpg._typing import (
     AsyncpgPool,
     AsyncpgPreparedStatement,
     AsyncpgSessionContext,
+    Connection,
+    ConnectionMeta,
+    Pool,
+    PoolConnectionProxy,
+    PoolConnectionProxyMeta,
+    Record,
+    asyncpg_create_pool,
 )
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,

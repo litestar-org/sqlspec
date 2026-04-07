@@ -6,16 +6,16 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from asyncpg import Pool
-from asyncpg.pool import PoolConnectionProxy
+from asyncpg import Connection, Pool, Record
+from asyncpg import create_pool as asyncpg_create_pool
+from asyncpg.connection import ConnectionMeta
+from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
 from asyncpg.prepared_stmt import PreparedStatement
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
-
-    from asyncpg import Connection, Record
 
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
     from sqlspec.core import StatementConfig
@@ -100,4 +100,17 @@ class AsyncpgSessionContext:
         return None
 
 
-__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")
+__all__ = (
+    "AsyncpgConnection",
+    "AsyncpgCursor",
+    "AsyncpgPool",
+    "AsyncpgPreparedStatement",
+    "AsyncpgSessionContext",
+    "Connection",
+    "ConnectionMeta",
+    "Pool",
+    "PoolConnectionProxy",
+    "PoolConnectionProxyMeta",
+    "Record",
+    "asyncpg_create_pool",
+)

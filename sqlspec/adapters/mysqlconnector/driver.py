@@ -8,8 +8,8 @@ from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import mysql.connector
-from mysql.connector.constants import FieldType
 
+from sqlspec.adapters.mysqlconnector._typing import FieldType
 from sqlspec.adapters.mysqlconnector.core import (
     build_insert_statement,
     collect_rows,

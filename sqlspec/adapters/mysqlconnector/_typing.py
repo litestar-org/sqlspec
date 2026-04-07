@@ -13,6 +13,7 @@ from mysql.connector.aio import (
 from mysql.connector.aio.cursor import (
     MySQLCursor as _MysqlConnectorAsyncRawCursor,  # pyright: ignore[reportMissingImports]
 )
+from mysql.connector.constants import FieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
 if TYPE_CHECKING:
@@ -175,6 +176,7 @@ class MysqlConnectorAsyncSessionContext:
 
 
 __all__ = (
+    "FieldType",
     "MysqlConnectorAsyncConnection",
     "MysqlConnectorAsyncCursor",
     "MysqlConnectorAsyncRawCursor",

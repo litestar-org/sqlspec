@@ -6,21 +6,24 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from google.cloud.spanner_v1 import Client
+from google.cloud.spanner_v1.database import SnapshotCheckout
+from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
+from google.cloud.spanner_v1.snapshot import Snapshot
+from google.cloud.spanner_v1.transaction import Transaction
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-
-    from google.cloud.spanner_v1.database import SnapshotCheckout
-    from google.cloud.spanner_v1.snapshot import Snapshot
-    from google.cloud.spanner_v1.transaction import Transaction
+    from typing import TypeAlias
 
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
     from sqlspec.core import StatementConfig
 
-    SpannerConnection = Snapshot | SnapshotCheckout | Transaction
+    SpannerConnection: TypeAlias = Snapshot | SnapshotCheckout | Transaction
 
 if not TYPE_CHECKING:
-    SpannerConnection = Any
+    SpannerConnection = Snapshot | SnapshotCheckout | Transaction
 
 
 class SpannerSyncCursor:
@@ -99,4 +102,13 @@ class SpannerSessionContext:
         return None
 
 
-__all__ = ("SpannerConnection", "SpannerSessionContext", "SpannerSyncCursor")
+__all__ = (
+    "AbstractSessionPool",
+    "Client",
+    "FixedSizePool",
+    "SnapshotCheckout",
+    "SpannerConnection",
+    "SpannerSessionContext",
+    "SpannerSyncCursor",
+    "Transaction",
+)
