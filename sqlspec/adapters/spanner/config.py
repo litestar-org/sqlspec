@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
-from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
+from google.cloud.spanner_v1.pool import FixedSizePool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from google.auth.credentials import Credentials
     from google.cloud.spanner_v1.database import Database
+    from google.cloud.spanner_v1.pool import AbstractSessionPool
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
@@ -244,7 +245,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         database = client.instance(instance_id).database(database_id, pool=self.connection_instance)  # type: ignore[no-untyped-call]
         return cast("SpannerConnection", database.snapshot())
 
-    def _create_pool(self) -> AbstractSessionPool:
+    def _create_pool(self) -> "AbstractSessionPool":
         instance_id = self.connection_config.get("instance_id")
         database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:

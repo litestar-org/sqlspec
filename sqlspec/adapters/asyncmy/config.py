@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
 import asyncmy
-from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
 from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
