@@ -413,6 +413,24 @@ def test_statement_config_enable_sqlcommenter() -> None:
     assert config.output_transformer is None
 
 
+def test_statement_config_auto_sets_db_driver_from_dialect() -> None:
+    from sqlspec.core import StatementConfig
+
+    config = StatementConfig(enable_sqlcommenter=True, dialect="postgres")
+    assert config.sqlcommenter_attributes is not None
+    assert config.sqlcommenter_attributes["db_driver"] == "postgresql"
+
+
+def test_statement_config_db_driver_not_overridden_when_explicit() -> None:
+    from sqlspec.core import StatementConfig
+
+    config = StatementConfig(
+        enable_sqlcommenter=True, dialect="postgres", sqlcommenter_attributes={"db_driver": "custom-pg"}
+    )
+    assert config.sqlcommenter_attributes is not None
+    assert config.sqlcommenter_attributes["db_driver"] == "custom-pg"
+
+
 def test_statement_config_sqlcommenter_disabled_by_default() -> None:
     from sqlspec.core import StatementConfig
 

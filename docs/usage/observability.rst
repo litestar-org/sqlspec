@@ -108,16 +108,16 @@ Enable it on your :class:`~sqlspec.core.statement.StatementConfig`:
 
     config = StatementConfig(enable_sqlcommenter=True)
 
-This produces queries like:
+The ``db_driver`` attribute is set automatically from the adapter's dialect (e.g.
+``postgresql``, ``sqlite``, ``mysql``). This produces queries like:
 
 .. code-block:: sql
 
-    SELECT * FROM users /* framework='litestar',route='%2Fusers' */
+    SELECT * FROM users /* db_driver='postgresql',framework='litestar',route='%2Fusers' */
 
 All framework extensions automatically register SQLCommenter middleware that populates
 request-scoped attributes (``route``, ``action``, ``framework``, and ``controller`` for
-Litestar) — no extra configuration needed. To include these request-scoped attributes in
-the SQL comments, enable ``sqlcommenter_enable_context``:
+Litestar). To include these in the SQL comments, enable ``sqlcommenter_enable_context``:
 
 .. code-block:: python
 
@@ -126,16 +126,16 @@ the SQL comments, enable ``sqlcommenter_enable_context``:
         sqlcommenter_enable_context=True,
     )
 
-You can also add **static attributes** that appear on every query:
+You can add **custom static attributes** that appear on every query:
 
 .. code-block:: python
 
     config = StatementConfig(
         enable_sqlcommenter=True,
-        sqlcommenter_attributes={"db_driver": "asyncpg"},
+        sqlcommenter_attributes={"app_name": "my-service", "deployment": "prod"},
     )
 
-And **OpenTelemetry traceparent** can be auto-populated from the current span:
+**OpenTelemetry traceparent** can be auto-populated from the current span:
 
 .. code-block:: python
 

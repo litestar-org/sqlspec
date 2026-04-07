@@ -1545,6 +1545,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
         self._storage_capabilities = None
         self.statement_config = statement_config or build_default_statement_config("sqlite")
+
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
@@ -1707,6 +1708,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self._initialize_migration_components()
 
         self.statement_config = statement_config or build_default_statement_config("sqlite")
+
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
@@ -1875,6 +1877,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self._initialize_migration_components()
 
         self.statement_config = statement_config or build_default_statement_config("postgres")
+
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
@@ -2085,6 +2088,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self._initialize_migration_components()
 
         self.statement_config = statement_config or build_default_statement_config("postgres")
+
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()

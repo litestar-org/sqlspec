@@ -49,6 +49,8 @@ from sqlspec.core.query_modifiers import (
     extract_column_name,
     safe_modify_with_cte,
 )
+from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
+from sqlspec.observability import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -1696,10 +1698,13 @@ class StatementConfig:
         self._user_statement_transformers = tuple(statement_transformers) if statement_transformers else ()
         all_transformers: list[Callable[..., Any]] = list(self._user_statement_transformers)
         if enable_sqlcommenter:
-            from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
+            effective_attrs = dict(sqlcommenter_attributes) if sqlcommenter_attributes else {}
+            if "db_driver" not in effective_attrs and dialect:
+                effective_attrs["db_driver"] = resolve_db_system(str(dialect))
+            self.sqlcommenter_attributes = effective_attrs or None
 
             sc_transformer = create_sqlcommenter_statement_transformer(
-                attributes=sqlcommenter_attributes,
+                attributes=effective_attrs,
                 enable_traceparent=sqlcommenter_enable_traceparent,
                 enable_context=sqlcommenter_enable_context,
             )
