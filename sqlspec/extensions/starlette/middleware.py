@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from sqlspec.core import CorrelationExtractor
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
-__all__ = ("CorrelationMiddleware", "SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
+__all__ = ("CorrelationMiddleware", "SQLCommenterMiddleware", "SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
 
 HTTP_200_OK = 200
 HTTP_300_MULTIPLE_CHOICES = 300
@@ -233,3 +234,45 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
         finally:
             CorrelationContext.set(previous_id)
             pop_state_value(request.state, "correlation_id")
+
+
+class SQLCommenterMiddleware(BaseHTTPMiddleware):
+    """Middleware that populates SQLCommenterContext with request attributes.
+
+    Extracts route and endpoint information from the Starlette/FastAPI request
+    and sets them in :class:`~sqlspec.extensions.sqlcommenter.SQLCommenterContext`
+    for the duration of the request.
+    """
+
+    def __init__(self, app: Any, *, framework: str = "starlette") -> None:
+        """Initialize SQLCommenter middleware.
+
+        Args:
+            app: Starlette application instance.
+            framework: Framework name to include in attributes (e.g. "starlette", "fastapi").
+        """
+        super().__init__(app)
+        self._framework = framework
+
+    async def dispatch(self, request: "Request", call_next: Any) -> "Response":
+        """Extract request context and set SQLCommenter attributes.
+
+        Args:
+            request: Incoming HTTP request.
+            call_next: Next middleware or route handler.
+
+        Returns:
+            HTTP response.
+        """
+        attrs: dict[str, str] = {"route": request.url.path, "framework": self._framework}
+        endpoint = request.scope.get("endpoint")
+        if endpoint is not None and hasattr(endpoint, "__name__"):
+            attrs["action"] = endpoint.__name__
+
+        previous = SQLCommenterContext.get()
+        SQLCommenterContext.set(attrs)
+        try:
+            response: Response = await call_next(request)
+            return response
+        finally:
+            SQLCommenterContext.set(previous)

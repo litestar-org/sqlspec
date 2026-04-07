@@ -20,6 +20,7 @@ from sqlspec.config import (
     SyncDatabaseConfig,
 )
 from sqlspec.core.filters import OffsetPagination
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
@@ -177,6 +178,7 @@ class PluginConfigState:
     extra_rollback_statuses: "set[int] | None"
     enable_correlation_middleware: bool
     correlation_header: str
+    enable_sqlcommenter_middleware: bool
     correlation_headers: tuple[str, ...] = field(init=False)
     disable_di: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
@@ -220,7 +222,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         prevent version conflicts with application migrations.
     """
 
-    __slots__ = ("_correlation_headers", "_plugin_configs", "_sqlspec")
+    __slots__ = ("_correlation_headers", "_enable_sqlcommenter_middleware", "_plugin_configs", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, *, loader: "SQLFileLoader | None" = None) -> None:
         """Initialize SQLSpec plugin.
@@ -242,13 +244,17 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             self._plugin_configs.append(state)
 
         correlation_headers: list[str] = []
+        enable_sqlcommenter = False
         for state in self._plugin_configs:
+            if state.enable_sqlcommenter_middleware and state.config.statement_config.enable_sqlcommenter:
+                enable_sqlcommenter = True
             if not state.enable_correlation_middleware:
                 continue
             for header in state.correlation_headers:
                 if header not in correlation_headers:
                     correlation_headers.append(header)
         self._correlation_headers = tuple(correlation_headers)
+        self._enable_sqlcommenter_middleware = enable_sqlcommenter
         log_with_context(
             logger,
             logging.DEBUG,
@@ -291,6 +297,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 primary=correlation_header, configured=configured_headers, auto_trace_headers=auto_trace_headers
             ),
             "disable_di": litestar_config.get("disable_di", False),
+            "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
         }
 
     def _create_config_state(
@@ -309,6 +316,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             extra_rollback_statuses=settings.get("extra_rollback_statuses"),
             enable_correlation_middleware=settings["enable_correlation_middleware"],
             correlation_header=settings["correlation_header"],
+            enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             disable_di=settings["disable_di"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
@@ -434,6 +442,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             middleware = DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers)
             existing_middleware = list(app_config.middleware or [])
             existing_middleware.append(middleware)
+            app_config.middleware = existing_middleware
+
+        if self._enable_sqlcommenter_middleware:
+            sc_middleware = DefineMiddleware(SQLCommenterMiddleware)
+            existing_middleware = list(app_config.middleware or [])
+            existing_middleware.append(sc_middleware)
             app_config.middleware = existing_middleware
 
         log_with_context(
@@ -900,3 +914,39 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """Raise error when pool keys are not unique."""
         msg = "When using multiple database configuration, each configuration must have a unique `pool_key`."
         raise ImproperConfigurationError(detail=msg)
+
+
+class SQLCommenterMiddleware:
+    """ASGI middleware that populates SQLCommenterContext with Litestar request attributes.
+
+    Extracts route, controller, and action from the Litestar scope and sets them
+    in :class:`~sqlspec.extensions.sqlcommenter.SQLCommenterContext` for the
+    duration of the request.
+    """
+
+    __slots__ = ("app",)
+
+    def __init__(self, app: "ASGIApp") -> None:
+        self.app = app
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if str(scope.get("type")) != "http":
+            await self.app(scope, receive, send)
+            return
+
+        attrs: dict[str, str] = {"route": scope.get("path", ""), "framework": "litestar"}
+        handler = scope.get("route_handler")
+        if handler is not None:
+            fn = getattr(handler, "fn", None)
+            if fn is not None:
+                attrs["action"] = getattr(fn, "__name__", "")
+            owner = getattr(handler, "owner", None)
+            if owner is not None:
+                attrs["controller"] = getattr(owner, "__name__", "")
+
+        previous = SQLCommenterContext.get()
+        SQLCommenterContext.set(attrs)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            SQLCommenterContext.set(previous)

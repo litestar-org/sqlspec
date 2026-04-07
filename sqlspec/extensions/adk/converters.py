@@ -19,6 +19,7 @@ from google.adk.sessions import Session
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
 __all__ = (
+    "compute_update_marker",
     "event_to_record",
     "filter_temp_state",
     "merge_scoped_state",
@@ -53,19 +54,39 @@ def session_to_record(session: "Session") -> SessionRecord:
     )
 
 
+def compute_update_marker(update_time: "datetime") -> str:
+    """Compute a stable revision marker from an update timestamp.
+
+    Uses the same format as ADK's ``StorageSession.get_update_marker()``:
+    ISO 8601 with microsecond precision, normalized to UTC.
+
+    Args:
+        update_time: The session's update timestamp.
+
+    Returns:
+        ISO 8601 string with microsecond precision.
+    """
+    if update_time.tzinfo is not None:
+        update_time = update_time.astimezone(timezone.utc)
+    return update_time.isoformat(timespec="microseconds")
+
+
 def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Session":
     """Convert database record to ADK Session.
+
+    Sets ``_storage_update_marker`` so the service layer can detect
+    concurrent modifications on subsequent ``append_event`` calls.
 
     Args:
         record: Session database record.
         events: List of event records for this session.
 
     Returns:
-        ADK Session object.
+        ADK Session object with storage marker set.
     """
     event_objects = [record_to_event(event_record) for event_record in events]
 
-    return Session(
+    session = Session(
         id=record["id"],
         app_name=record["app_name"],
         user_id=record["user_id"],
@@ -73,6 +94,8 @@ def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Se
         events=event_objects,
         last_update_time=record["update_time"].timestamp(),
     )
+    session._storage_update_marker = compute_update_marker(record["update_time"])
+    return session
 
 
 # ---------------------------------------------------------------------------

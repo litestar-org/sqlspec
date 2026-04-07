@@ -92,6 +92,65 @@ Metrics exposed:
 - ``myapp_sql_query_duration_seconds``: Histogram of execution duration.
 - ``myapp_sql_query_rows``: Histogram of rows affected.
 
+SQLCommenter
+------------
+
+SQLSpec supports the `Google SQLCommenter spec <https://google.github.io/sqlcommenter/spec/>`_,
+which appends structured ``/* key='value' */`` comments to SQL statements for query attribution.
+This lets database logs, query planners, and APM tools trace queries back to the application
+code that issued them.
+
+Enable it on your :class:`~sqlspec.core.statement.StatementConfig`:
+
+.. code-block:: python
+
+    from sqlspec.core import StatementConfig
+
+    config = StatementConfig(enable_sqlcommenter=True)
+
+The ``db_driver`` attribute is set automatically from the adapter's dialect (e.g.
+``postgresql``, ``sqlite``, ``mysql``). This produces queries like:
+
+.. code-block:: sql
+
+    SELECT * FROM users /* db_driver='postgresql',framework='litestar',route='%2Fusers' */
+
+All framework extensions automatically register SQLCommenter middleware that populates
+request-scoped attributes (``route``, ``action``, ``framework``, and ``controller`` for
+Litestar). To include these in the SQL comments, enable ``sqlcommenter_enable_context``:
+
+.. code-block:: python
+
+    config = StatementConfig(
+        enable_sqlcommenter=True,
+        sqlcommenter_enable_context=True,
+    )
+
+You can add **custom static attributes** that appear on every query:
+
+.. code-block:: python
+
+    config = StatementConfig(
+        enable_sqlcommenter=True,
+        sqlcommenter_attributes={"app_name": "my-service", "deployment": "prod"},
+    )
+
+**OpenTelemetry traceparent** can be auto-populated from the current span:
+
+.. code-block:: python
+
+    config = StatementConfig(
+        enable_sqlcommenter=True,
+        sqlcommenter_enable_traceparent=True,
+    )
+
+To **disable** the middleware for a specific extension, set
+``enable_sqlcommenter_middleware`` to ``False``:
+
+.. code-block:: python
+
+    extension_config={"litestar": {"enable_sqlcommenter_middleware": False}}
+
 Correlation Tracking
 --------------------
 

@@ -28,3 +28,5 @@ class SQLSpecConfigState:
     correlation_header: str = "x-request-id"
     correlation_headers: "tuple[str, ...] | None" = None
     auto_trace_headers: bool = True
+    enable_sqlcommenter_middleware: bool = True
+    sqlcommenter_framework: str = "starlette"

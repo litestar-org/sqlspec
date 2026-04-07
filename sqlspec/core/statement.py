@@ -49,6 +49,8 @@ from sqlspec.core.query_modifiers import (
     extract_column_name,
     safe_modify_with_cte,
 )
+from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
+from sqlspec.observability import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -86,11 +88,15 @@ SQL_CONFIG_SLOTS: Final = (
     "enable_expression_simplification",
     "enable_parameter_type_wrapping",
     "enable_parsing",
+    "enable_sqlcommenter",
     "enable_transformations",
     "enable_validation",
     "execution_mode",
     "execution_args",
     "output_transformer",
+    "sqlcommenter_attributes",
+    "sqlcommenter_enable_context",
+    "sqlcommenter_enable_traceparent",
     "statement_transformers",
     "parameter_config",
     "parameter_converter",
@@ -1607,7 +1613,7 @@ class StatementConfig:
     and other processing options for SQL statements.
     """
 
-    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer")
+    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer", "_user_statement_transformers")
 
     def __init__(
         self,
@@ -1627,6 +1633,10 @@ class StatementConfig:
         execution_args: "dict[str, Any] | None" = None,
         output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
         statement_transformers: "Sequence[Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]] | None" = None,
+        enable_sqlcommenter: bool = False,
+        sqlcommenter_attributes: "dict[str, str | None] | None" = None,
+        sqlcommenter_enable_traceparent: bool = False,
+        sqlcommenter_enable_context: bool = False,
     ) -> None:
         """Initialize StatementConfig.
 
@@ -1647,6 +1657,10 @@ class StatementConfig:
             execution_args: Arguments for special execution modes
             output_transformer: Optional output transformation function
             statement_transformers: Optional AST transformers executed during compilation
+            enable_sqlcommenter: Auto-append Google SQLCommenter attributes to SQL
+            sqlcommenter_attributes: Static key-value pairs for SQLCommenter comments
+            sqlcommenter_enable_traceparent: Auto-populate W3C traceparent from OpenTelemetry
+            sqlcommenter_enable_context: Read request-scoped attrs from SQLCommenterContext
         """
         self.enable_parsing = enable_parsing
         self.enable_validation = enable_validation
@@ -1675,16 +1689,33 @@ class StatementConfig:
         self.dialect = dialect
         self.execution_mode = execution_mode
         self.execution_args = execution_args
+        self.enable_sqlcommenter = enable_sqlcommenter
+        self.sqlcommenter_attributes = sqlcommenter_attributes
+        self.sqlcommenter_enable_traceparent = sqlcommenter_enable_traceparent
+        self.sqlcommenter_enable_context = sqlcommenter_enable_context
         self.output_transformer = output_transformer
-        if statement_transformers:
-            self.statement_transformers = tuple(statement_transformers)
-        else:
-            self.statement_transformers = ()
+
+        self._user_statement_transformers = tuple(statement_transformers) if statement_transformers else ()
+        all_transformers: list[Callable[..., Any]] = list(self._user_statement_transformers)
+        if enable_sqlcommenter:
+            effective_attrs = dict(sqlcommenter_attributes) if sqlcommenter_attributes else {}
+            if "db_driver" not in effective_attrs and dialect:
+                effective_attrs["db_driver"] = resolve_db_system(str(dialect))
+            self.sqlcommenter_attributes = effective_attrs or None
+
+            sc_transformer = create_sqlcommenter_statement_transformer(
+                attributes=effective_attrs,
+                enable_traceparent=sqlcommenter_enable_traceparent,
+                enable_context=sqlcommenter_enable_context,
+            )
+            all_transformers.append(sc_transformer)
+
+        self.statement_transformers = tuple(all_transformers)
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
         self._has_transformers = bool(self.statement_transformers)
-        self._has_output_transformer = output_transformer is not None
+        self._has_output_transformer = self.output_transformer is not None
 
     def freeze(self) -> None:
         """Mark the configuration as immutable to enable caching."""
@@ -1720,7 +1751,11 @@ class StatementConfig:
             "execution_mode": self.execution_mode,
             "execution_args": self.execution_args,
             "output_transformer": self.output_transformer,
-            "statement_transformers": self.statement_transformers,
+            "statement_transformers": self._user_statement_transformers,
+            "enable_sqlcommenter": self.enable_sqlcommenter,
+            "sqlcommenter_attributes": self.sqlcommenter_attributes,
+            "sqlcommenter_enable_traceparent": self.sqlcommenter_enable_traceparent,
+            "sqlcommenter_enable_context": self.sqlcommenter_enable_context,
         }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)

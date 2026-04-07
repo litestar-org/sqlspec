@@ -247,6 +247,13 @@ class FlaskConfig(TypedDict):
     database lifecycle manually via their own DI solution.
     """
 
+    enable_sqlcommenter_middleware: NotRequired[bool]
+    """Control automatic SQLCommenter context population. Default: True.
+    When the driver's :class:`~sqlspec.core.statement.StatementConfig` has
+    ``enable_sqlcommenter=True``, request attributes are populated automatically.
+    Set to ``False`` to explicitly disable this behavior.
+    """
+
 
 class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
@@ -294,6 +301,14 @@ class LitestarConfig(TypedDict):
     When True, the Litestar plugin will not register dependency providers for managing
     database connections, pools, and sessions. Users are responsible for managing the
     database lifecycle manually via their own DI solution.
+    """
+
+    enable_sqlcommenter_middleware: NotRequired[bool]
+    """Control automatic SQLCommenter middleware registration. Default: True.
+    When the driver's :class:`~sqlspec.core.statement.StatementConfig` has
+    ``enable_sqlcommenter=True``, the middleware is registered automatically.
+    Set to ``False`` to explicitly disable middleware registration even when
+    SQLCommenter is enabled on the driver config.
     """
 
 
@@ -356,6 +371,18 @@ class StarletteConfig(TypedDict):
     When True, the Starlette/FastAPI extension will not add middleware for managing
     database connections and sessions. Users are responsible for managing the
     database lifecycle manually via their own DI solution.
+    """
+
+    enable_sqlcommenter_middleware: NotRequired[bool]
+    """Control automatic SQLCommenter middleware registration. Default: True.
+    When the driver's :class:`~sqlspec.core.statement.StatementConfig` has
+    ``enable_sqlcommenter=True``, the middleware is registered automatically.
+    Set to ``False`` to explicitly disable middleware registration.
+    """
+
+    sqlcommenter_framework: NotRequired[str]
+    """Framework name for SQLCommenter attributes. Default: 'starlette'.
+    Set to 'fastapi' when using FastAPI.
     """
 
 
@@ -1518,6 +1545,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
         self._storage_capabilities = None
         self.statement_config = statement_config or build_default_statement_config("sqlite")
+
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
         self._configure_observability_extensions()
@@ -1680,6 +1708,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self._initialize_migration_components()
 
         self.statement_config = statement_config or build_default_statement_config("sqlite")
+
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
@@ -1848,6 +1877,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self._initialize_migration_components()
 
         self.statement_config = statement_config or build_default_statement_config("postgres")
+
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()
@@ -2058,6 +2088,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self._initialize_migration_components()
 
         self.statement_config = statement_config or build_default_statement_config("postgres")
+
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._promote_driver_feature_hooks()

@@ -32,6 +32,7 @@ class FlaskConfigState:
     correlation_header: str = "x-request-id"
     correlation_headers: "tuple[str, ...] | None" = None
     auto_trace_headers: bool = True
+    enable_sqlcommenter_middleware: bool = True
 
     def should_commit(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger commit.

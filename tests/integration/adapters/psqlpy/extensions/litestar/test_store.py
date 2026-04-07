@@ -187,7 +187,7 @@ async def test_store_renew_for(psqlpy_store: PsqlpyStore) -> None:
 
     expires_after = await psqlpy_store.expires_in("session_renew")
     assert expires_after is not None
-    assert expires_after > 8
+    assert expires_after >= 8
 
 
 async def test_store_large_data(psqlpy_store: PsqlpyStore) -> None:

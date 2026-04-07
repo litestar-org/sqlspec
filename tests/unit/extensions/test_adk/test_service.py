@@ -319,3 +319,132 @@ async def test_create_session_uses_provided_session_id() -> None:
     session = await service.create_session(app_name="app", user_id="u1", session_id="my-id")
 
     assert session.id == "my-id"
+
+
+# ---------------------------------------------------------------------------
+# Stale-session detection
+# ---------------------------------------------------------------------------
+
+
+class StaleDetectionStore(MockStore):
+    """Mock store that can simulate a storage-side update between load and append."""
+
+    def __init__(self, *, stale_marker: bool = False, stale_timestamp: bool = False) -> None:
+        super().__init__()
+        self._stale_marker = stale_marker
+        self._stale_timestamp = stale_timestamp
+
+    async def get_session(self, session_id: str) -> "dict[str, Any] | None":
+        record = dict(self._session_record)
+        if self._stale_marker or self._stale_timestamp:
+            # Simulate a storage-side update by advancing update_time
+            from datetime import timedelta
+
+            record["update_time"] = record["update_time"] + timedelta(seconds=10)  # type: ignore[operator]
+        return record
+
+
+class MissingSessionStore(MockStore):
+    """Mock store where the session disappears between load and append."""
+
+    async def get_session(self, session_id: str) -> "dict[str, Any] | None":
+        return None
+
+
+@pytest.mark.anyio
+async def test_append_event_raises_on_stale_marker() -> None:
+    """append_event raises ValueError when _storage_update_marker doesn't match storage."""
+    from sqlspec.extensions.adk.converters import compute_update_marker
+
+    store = StaleDetectionStore(stale_marker=True)
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session()
+    # Set a marker that won't match the advanced update_time
+    session._storage_update_marker = compute_update_marker(store._session_record["update_time"])  # type: ignore[arg-type]
+
+    event = _make_event()
+
+    with pytest.raises(ValueError, match="modified in storage"):
+        await service.append_event(session, event)
+
+    assert not store.append_event_and_update_state_called
+
+
+@pytest.mark.anyio
+async def test_append_event_raises_on_stale_timestamp() -> None:
+    """append_event raises ValueError when storage update_time > session.last_update_time."""
+    store = StaleDetectionStore(stale_timestamp=True)
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    # Session loaded with an older timestamp; marker is None (timestamp fallback)
+    session = _make_session()
+    session._storage_update_marker = None  # force timestamp-based check
+
+    event = _make_event()
+
+    with pytest.raises(ValueError, match="modified in storage"):
+        await service.append_event(session, event)
+
+    assert not store.append_event_and_update_state_called
+
+
+@pytest.mark.anyio
+async def test_append_event_raises_when_session_not_found() -> None:
+    """append_event raises ValueError when the session no longer exists in storage."""
+    store = MissingSessionStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session()
+    event = _make_event()
+
+    with pytest.raises(ValueError, match="not found"):
+        await service.append_event(session, event)
+
+    assert not store.append_event_and_update_state_called
+
+
+@pytest.mark.anyio
+async def test_append_event_sets_storage_update_marker() -> None:
+    """After a successful append, session._storage_update_marker is set."""
+    from sqlspec.extensions.adk.converters import compute_update_marker
+
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session()
+    event = _make_event()
+
+    await service.append_event(session, event)
+
+    expected_marker = compute_update_marker(store._session_record["update_time"])  # type: ignore[arg-type]
+    assert session._storage_update_marker == expected_marker
+
+
+@pytest.mark.anyio
+async def test_append_event_updates_inmemory_after_persist() -> None:
+    """In-memory session.events is only updated after persistence succeeds."""
+
+    class FailingStore(MockStore):
+        async def append_event_and_update_state(self, event_record: Any, session_id: str, state: Any) -> None:
+            raise RuntimeError("Simulated DB failure")
+
+    store = FailingStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"key": "original"})
+    event = _make_event(state_delta={"key": "updated"})
+
+    with pytest.raises(RuntimeError, match="Simulated DB failure"):
+        await service.append_event(session, event)
+
+    # In-memory session should NOT have the event appended
+    assert len(session.events) == 0
+    # State should NOT have been updated by _update_session_state
+    assert session.state["key"] == "original"
+
+
+@pytest.mark.anyio
+async def test_create_session_sets_storage_update_marker() -> None:
+    """create_session returns a Session with _storage_update_marker set."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    session = await service.create_session(app_name="app", user_id="u1")
+
+    assert session._storage_update_marker is not None
