@@ -34,6 +34,7 @@ Source = "https://github.com/litestar-org/sqlspec"
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
 adk = ["google-adk"]
+aiomysql = ["aiomysql"]
 aioodbc = ["aioodbc"]
 aiosqlite = ["aiosqlite"]
 alloydb = ["google-cloud-alloydb-connector"]
@@ -358,6 +359,7 @@ markers = [
   "mssql: marks tests specific to Microsoft SQL Server",
   # Driver markers
   "adbc: marks tests using ADBC drivers",
+  "aiomysql: marks tests using aiomysql",
   "aioodbc: marks tests using aioodbc",
   "aiosqlite: marks tests using aiosqlite",
   "asyncmy: marks tests using asyncmy",
@@ -400,6 +402,8 @@ module = [
   "orjson",
   "uvicorn.*",
   "uvloop.*",
+  "aiomysql",
+  "aiomysql.*",
   "asyncmy",
   "asyncmy.*",
   "pyarrow",
