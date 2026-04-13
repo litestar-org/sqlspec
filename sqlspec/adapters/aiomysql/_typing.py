@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class AiomysqlConnectionProtocol(Protocol):
-        def cursor(self) -> "AiomysqlRawCursor": ...
+        async def cursor(self) -> "AiomysqlRawCursor": ...
 
         async def commit(self) -> Any: ...
 
@@ -47,7 +47,7 @@ class AiomysqlCursor:
         self.cursor: AiomysqlRawCursor | None = None
 
     async def __aenter__(self) -> "AiomysqlRawCursor":
-        self.cursor = self.connection.cursor()
+        self.cursor = await self.connection.cursor()
         return self.cursor
 
     async def __aexit__(self, *_: Any) -> None:

@@ -52,7 +52,9 @@ async def test_select_to_arrow_batch_format(aiomysql_driver: AiomysqlDriver) -> 
     await aiomysql_driver.execute("CREATE TABLE IF NOT EXISTS arrow_batch_test (id INT, value VARCHAR(100))")
     await aiomysql_driver.execute("INSERT INTO arrow_batch_test VALUES (1, 'a'), (2, 'b')")
 
-    result = await aiomysql_driver.select_to_arrow("SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches")
+    result = await aiomysql_driver.select_to_arrow(
+        "SELECT * FROM arrow_batch_test ORDER BY id", return_format="batches"
+    )
 
     assert isinstance(result.data, list)
     for batch in result.data:
