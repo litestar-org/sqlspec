@@ -436,7 +436,9 @@ async def test_aiomysql_sql_object_execution(aiomysql_driver: AiomysqlDriver) ->
     assert isinstance(result, SQLResult)
     assert result.num_rows == 1
 
-    verify_result = await driver.execute("SELECT name, value FROM test_table_aiomysql WHERE name = ?", ("sql_obj_test",))
+    verify_result = await driver.execute(
+        "SELECT name, value FROM test_table_aiomysql WHERE name = ?", ("sql_obj_test",)
+    )
     assert len(verify_result.get_data()) == 1
     assert verify_result.get_data()[0]["name"] == "sql_obj_test"
     assert verify_result.get_data()[0]["value"] == 999

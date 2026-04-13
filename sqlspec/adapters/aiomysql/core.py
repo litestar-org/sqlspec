@@ -441,9 +441,7 @@ def collect_rows(
             rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
             return rows, resolved_column_names, "dict"
         rows = [dict(row) for row in fetched_data]
-        rows = _deserialize_json_dict_rows(
-            resolved_column_names, rows, json_indexes, deserializer, logger=logger
-        )
+        rows = _deserialize_json_dict_rows(resolved_column_names, rows, json_indexes, deserializer, logger=logger)
         return rows, resolved_column_names, "dict"
     rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
     if json_indexes:
