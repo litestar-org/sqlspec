@@ -89,8 +89,6 @@ from sqlspec.observability import (
 from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
 
-suppress_erroneous_sqlglot_log_messages()
-
 __all__ = (
     "SQL",
     "ArrowResult",
@@ -165,3 +163,5 @@ __all__ = (
     "typing",
     "utils",
 )
+
+suppress_erroneous_sqlglot_log_messages()

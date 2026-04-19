@@ -2,8 +2,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Final
 
-STACK_SQL_PREVIEW_LIMIT: Final[int] = 120
-
 __all__ = (
     "SQLSTATE_EXCEPTION_MAP",
     "CheckViolationError",
@@ -46,6 +44,8 @@ __all__ = (
     "UniqueViolationError",
     "map_sqlstate_to_exception",
 )
+
+STACK_SQL_PREVIEW_LIMIT: Final[int] = 120
 
 
 class SQLSpecError(Exception):
