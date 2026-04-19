@@ -35,20 +35,6 @@ from sqlspec.utils.type_guards import (
     is_iterable_parameters,
 )
 
-BETWEEN_BOUND_COUNT = 2
-PAIR_LENGTH = 2
-TRIPLE_LENGTH = 3
-
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
-    from sqlspec.builder._expression_wrappers import ExpressionWrapper
-    from sqlspec.protocols import SQLBuilderProtocol
-
 __all__ = (
     "Case",
     "CaseBuilder",
@@ -66,6 +52,19 @@ __all__ = (
     "WhereClauseMixin",
     "WindowFunctionBuilder",
 )
+
+BETWEEN_BOUND_COUNT = 2
+PAIR_LENGTH = 2
+TRIPLE_LENGTH = 3
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
+    from sqlspec.builder._expression_wrappers import ExpressionWrapper
+    from sqlspec.protocols import SQLBuilderProtocol
 
 
 def is_explicitly_quoted(identifier: Any) -> bool:

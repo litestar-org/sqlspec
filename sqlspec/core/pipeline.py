@@ -10,6 +10,13 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.compiler import CompiledSQL, SQLProcessor
 
+__all__ = (
+    "StatementPipelineRegistry",
+    "compile_with_pipeline",
+    "get_statement_pipeline_metrics",
+    "reset_statement_pipeline_cache",
+)
+
 if TYPE_CHECKING:
     import sqlglot.expressions as exp
 
@@ -323,11 +330,3 @@ def configure_statement_pipeline_cache(cache_size: int, parse_cache_size: int, c
 
 def get_statement_pipeline_metrics() -> "list[dict[str, Any]]":
     return _PIPELINE_REGISTRY.metrics()
-
-
-__all__ = (
-    "StatementPipelineRegistry",
-    "compile_with_pipeline",
-    "get_statement_pipeline_metrics",
-    "reset_statement_pipeline_cache",
-)

@@ -7,18 +7,6 @@ from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 from sqlglot import exp
 
-if TYPE_CHECKING:
-    from sqlglot.dialects.bigquery import BigQuery
-    from sqlglot.dialects.duckdb import DuckDB
-    from sqlglot.dialects.mysql import MySQL
-    from sqlglot.dialects.oracle import Oracle
-    from sqlglot.dialects.postgres import Postgres
-    from sqlglot.generator import Generator
-
-    from sqlspec.dialects.spanner import Spangres, Spanner
-
-SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
-
 __all__ = (
     "VectorDistance",
     "has_vector_distance_ancestor",
@@ -31,6 +19,18 @@ __all__ = (
     "render_vector_distance_postgres",
     "vector_distance_metric",
 )
+
+if TYPE_CHECKING:
+    from sqlglot.dialects.bigquery import BigQuery
+    from sqlglot.dialects.duckdb import DuckDB
+    from sqlglot.dialects.mysql import MySQL
+    from sqlglot.dialects.oracle import Oracle
+    from sqlglot.dialects.postgres import Postgres
+    from sqlglot.generator import Generator
+
+    from sqlspec.dialects.spanner import Spangres, Spanner
+
+SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
 
 _VECTOR_DISTANCE_META_KEY: Final[str] = "sqlspec_vector_distance_metric"
 _OperatorTransform = Callable[[Any, exp.Operator], str]
