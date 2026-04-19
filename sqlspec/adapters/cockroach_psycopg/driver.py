@@ -5,13 +5,12 @@ import contextlib
 import time
 from typing import TYPE_CHECKING, Any, cast
 
-import psycopg
-
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
     CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
+    PsycopgError,
 )
 from sqlspec.adapters.cockroach_psycopg.core import (
     CockroachPsycopgRetryConfig,
@@ -58,7 +57,7 @@ class CockroachPsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, psycopg.Error):
+        if issubclass(exc_type, PsycopgError):
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
                 self.pending_exception = SerializationConflictError(str(exc_val))
                 return True
@@ -75,7 +74,7 @@ class CockroachPsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, psycopg.Error):
+        if issubclass(exc_type, PsycopgError):
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
                 self.pending_exception = SerializationConflictError(str(exc_val))
                 return True

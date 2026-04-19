@@ -3,8 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql
-
+from sqlspec.adapters.pymysql._typing import PymysqlMySQLError
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -181,7 +180,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except pymysql.MySQLError as exc:
+        except PymysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -264,7 +263,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     )
                     for row in rows
                 ]
-        except pymysql.MySQLError as exc:
+        except PymysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -403,7 +402,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     )
                     for row in rows
                 ]
-        except pymysql.MySQLError as exc:
+        except PymysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise

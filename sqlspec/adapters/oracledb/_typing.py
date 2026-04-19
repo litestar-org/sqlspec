@@ -7,7 +7,16 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
+from oracledb import DB_TYPE_BLOB as OracleDbTypeBlob  # noqa: N811
+from oracledb import DB_TYPE_CLOB as OracleDbTypeClob  # noqa: N811
+from oracledb import DB_TYPE_JSON as OracleDbTypeJson  # noqa: N811
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from oracledb import DatabaseError as OracleDatabaseError
+from oracledb import Error as OracleError
+from oracledb import connect as oracledb_connect
+from oracledb import create_pipeline as oracledb_create_pipeline
+from oracledb import create_pool as oracledb_create_pool
+from oracledb import create_pool_async as oracledb_create_pool_async
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
 if TYPE_CHECKING:
@@ -223,6 +232,11 @@ __all__ = (
     "OracleAsyncCursor",
     "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
+    "OracleDatabaseError",
+    "OracleDbTypeBlob",
+    "OracleDbTypeClob",
+    "OracleDbTypeJson",
+    "OracleError",
     "OraclePipelineDriver",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",
@@ -230,4 +244,8 @@ __all__ = (
     "OracleSyncRawCursor",
     "OracleSyncSessionContext",
     "OracleVectorType",
+    "oracledb_connect",
+    "oracledb_create_pipeline",
+    "oracledb_create_pool",
+    "oracledb_create_pool_async",
 )

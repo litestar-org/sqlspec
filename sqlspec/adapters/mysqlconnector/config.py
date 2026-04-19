@@ -4,8 +4,6 @@ import contextlib
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
-import mysql.connector
-from mysql.connector import pooling
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.mysqlconnector._typing import (
@@ -15,6 +13,9 @@ from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorSyncConnection,
     MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
+    mysql_connector_aio_connect,
+    mysql_connector_connect,
+    mysql_connector_pooling,
 )
 from sqlspec.adapters.mysqlconnector.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.mysqlconnector.driver import (
@@ -33,8 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from mysql.connector.pooling import MySQLConnectionPool
-
+    from sqlspec.adapters.mysqlconnector._typing import MySQLConnectionPool
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
@@ -282,7 +282,7 @@ class MysqlConnectorSyncConfig(
         pool_name = config.pop("pool_name", None)
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
-        return pooling.MySQLConnectionPool(
+        return mysql_connector_pooling.MySQLConnectionPool(
             pool_name=pool_name, pool_size=pool_size or 5, pool_reset_session=pool_reset, **config
         )
 
@@ -291,7 +291,7 @@ class MysqlConnectorSyncConfig(
             self.connection_instance = None
 
     def create_connection(self) -> MysqlConnectorSyncConnection:
-        connection = cast("MysqlConnectorSyncConnection", mysql.connector.connect(**self.connection_config))
+        connection = cast("MysqlConnectorSyncConnection", mysql_connector_connect(**self.connection_config))
         autocommit = self.connection_config.get("autocommit")
         if autocommit is not None and hasattr(connection, "autocommit"):
             with contextlib.suppress(Exception):
@@ -373,9 +373,7 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         )
 
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
-        from mysql.connector import aio
-
-        connection = await aio.connect(**self.connection_config)
+        connection = await mysql_connector_aio_connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
         if autocommit is not None and hasattr(connection, "set_autocommit"):
             with contextlib.suppress(Exception):

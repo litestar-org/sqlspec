@@ -4,7 +4,6 @@ from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
-import psycopg
 from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
@@ -12,6 +11,7 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncCursor,
     PsycopgAsyncSessionContext,
     PsycopgComposed,
+    PsycopgError,
     PsycopgSQL,
     PsycopgSyncConnection,
     PsycopgSyncCursor,
@@ -135,7 +135,7 @@ class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, psycopg.Error):
+        if issubclass(exc_type, PsycopgError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -585,7 +585,7 @@ class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, psycopg.Error):
+        if issubclass(exc_type, PsycopgError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False

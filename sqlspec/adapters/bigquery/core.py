@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
 from google.api_core.retry import Retry
-from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
+from sqlspec.adapters.bigquery._typing import LoadJobConfig, QueryJob, QueryJobConfig
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterProfile,

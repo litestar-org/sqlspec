@@ -1,4 +1,4 @@
-"""Type definitions for Spanner adapter.
+"""Spanner adapter type definitions.
 
 This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
@@ -6,7 +6,8 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from google.cloud.spanner_v1 import Client
+from google.api_core.exceptions import GoogleAPICallError
+from google.cloud.spanner_v1 import Client, param_types
 from google.cloud.spanner_v1.database import SnapshotCheckout
 from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
 from google.cloud.spanner_v1.snapshot import Snapshot
@@ -106,9 +107,11 @@ __all__ = (
     "AbstractSessionPool",
     "Client",
     "FixedSizePool",
+    "GoogleAPICallError",
     "SnapshotCheckout",
     "SpannerConnection",
     "SpannerSessionContext",
     "SpannerSyncCursor",
     "Transaction",
+    "param_types",
 )

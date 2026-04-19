@@ -2,12 +2,15 @@
 
 import asyncio
 import random
-import sqlite3
 from typing import TYPE_CHECKING, Any, cast
 
-import aiosqlite
-
-from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
+from sqlspec.adapters.aiosqlite._typing import (
+    AiosqliteCursor,
+    AiosqliteError,
+    AiosqliteRawCursor,
+    AiosqliteSessionContext,
+    SqliteError,
+)
 from sqlspec.adapters.aiosqlite.core import (
     build_insert_statement,
     collect_rows,
@@ -63,7 +66,7 @@ class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
-        if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):
+        if isinstance(exc_val, (AiosqliteError, SqliteError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -152,14 +155,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         try:
             if not self.connection.in_transaction:
                 await self.connection.execute("BEGIN IMMEDIATE")
-        except aiosqlite.Error as e:
+        except AiosqliteError as e:
             max_retries = 3
             for attempt in range(max_retries):
                 delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
                 await asyncio.sleep(delay)
                 try:
                     await self.connection.execute("BEGIN IMMEDIATE")
-                except aiosqlite.Error:
+                except AiosqliteError:
                     if attempt == max_retries - 1:
                         break
                 else:
@@ -171,7 +174,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Commit the current transaction."""
         try:
             await self.connection.commit()
-        except aiosqlite.Error as e:
+        except AiosqliteError as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -179,7 +182,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Rollback the current transaction."""
         try:
             await self.connection.rollback()
-        except aiosqlite.Error as e:
+        except AiosqliteError as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 

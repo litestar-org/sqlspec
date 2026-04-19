@@ -6,9 +6,10 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from asyncpg import Connection, Pool, Record
+from asyncpg import Connection, Pool, PostgresError, Record
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.connection import ConnectionMeta
+from asyncpg.exceptions import UndefinedTableError
 from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
 from asyncpg.prepared_stmt import PreparedStatement
 
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     AsyncpgPool: TypeAlias = Pool[Record]
     AsyncpgPreparedStatement: TypeAlias = PreparedStatement[Record]
 
-if not TYPE_CHECKING:
+if not TYPE_CHECKING:  # pyright: ignore[reportUnreachable]
     AsyncpgConnection = PoolConnectionProxy
     AsyncpgPool = Pool
     AsyncpgPreparedStatement = PreparedStatement
@@ -94,6 +95,7 @@ class AsyncpgSessionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        del exc_type, exc_val, exc_tb
         if self._connection is not None:
             await self._release_connection(self._connection)
             self._connection = None
@@ -111,6 +113,8 @@ __all__ = (
     "Pool",
     "PoolConnectionProxy",
     "PoolConnectionProxyMeta",
+    "PostgresError",
     "Record",
+    "UndefinedTableError",
     "asyncpg_create_pool",
 )

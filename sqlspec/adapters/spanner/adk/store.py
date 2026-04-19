@@ -4,8 +4,7 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
-from google.cloud.spanner_v1 import param_types
-
+from sqlspec.adapters.spanner._typing import param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore

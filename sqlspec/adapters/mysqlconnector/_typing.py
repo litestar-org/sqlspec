@@ -6,15 +6,20 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from mysql.connector import Error as MysqlConnectorError
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
+from mysql.connector import connect as mysql_connector_connect
+from mysql.connector import pooling as mysql_connector_pooling
 from mysql.connector.aio import (
     MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
 )
+from mysql.connector.aio import connect as mysql_connector_aio_connect  # pyright: ignore[reportMissingImports]
 from mysql.connector.aio.cursor import (
     MySQLCursor as _MysqlConnectorAsyncRawCursor,  # pyright: ignore[reportMissingImports]
 )
 from mysql.connector.constants import FieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
+from mysql.connector.pooling import MySQLConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -177,12 +182,17 @@ class MysqlConnectorAsyncSessionContext:
 
 __all__ = (
     "FieldType",
+    "MySQLConnectionPool",
     "MysqlConnectorAsyncConnection",
     "MysqlConnectorAsyncCursor",
     "MysqlConnectorAsyncRawCursor",
     "MysqlConnectorAsyncSessionContext",
+    "MysqlConnectorError",
     "MysqlConnectorSyncConnection",
     "MysqlConnectorSyncCursor",
     "MysqlConnectorSyncRawCursor",
     "MysqlConnectorSyncSessionContext",
+    "mysql_connector_aio_connect",
+    "mysql_connector_connect",
+    "mysql_connector_pooling",
 )

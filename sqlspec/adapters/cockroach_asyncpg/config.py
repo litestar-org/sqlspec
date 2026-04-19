@@ -2,7 +2,6 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.core import apply_driver_features, build_connection_config, default_statement_config
@@ -10,6 +9,7 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
     CockroachAsyncpgPool,
     CockroachAsyncpgSessionContext,
+    asyncpg_create_pool,
 )
 from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler

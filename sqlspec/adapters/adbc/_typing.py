@@ -45,7 +45,7 @@ class AdbcCursor:
     def __exit__(self, *_: Any) -> None:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
-                self.cursor.close()  # type: ignore[no-untyped-call]
+                self.cursor.close()
 
 
 class AdbcSessionContext:

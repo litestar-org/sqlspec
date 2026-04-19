@@ -15,6 +15,7 @@ from google.cloud.bigquery import (
     QueryJobConfig,
     ScalarQueryParameter,
 )
+from google.cloud.exceptions import GoogleCloudError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -117,6 +118,7 @@ __all__ = (
     "BigQueryCursor",
     "BigQueryParam",
     "BigQuerySessionContext",
+    "GoogleCloudError",
     "LoadJobConfig",
     "QueryJob",
     "QueryJobConfig",

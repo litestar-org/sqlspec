@@ -4,9 +4,7 @@ from collections import OrderedDict
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, cast
 
-import asyncpg
-
-from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgSessionContext
+from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgSessionContext, PostgresError
 from sqlspec.adapters.asyncpg.core import (
     PREPARED_STATEMENT_CACHE_SIZE,
     NormalizedStackOperation,
@@ -68,7 +66,7 @@ class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
-        if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
+        if isinstance(exc_val, PostgresError) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -208,7 +206,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Begin a database transaction."""
         try:
             await self.connection.execute("BEGIN")
-        except asyncpg.PostgresError as e:
+        except PostgresError as e:
             msg = f"Failed to begin async transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -216,7 +214,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Commit the current transaction."""
         try:
             await self.connection.execute("COMMIT")
-        except asyncpg.PostgresError as e:
+        except PostgresError as e:
             msg = f"Failed to commit async transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -224,7 +222,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Rollback the current transaction."""
         try:
             await self.connection.execute("ROLLBACK")
-        except asyncpg.PostgresError as e:
+        except PostgresError as e:
             msg = f"Failed to rollback async transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -378,7 +376,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if overwrite:
             try:
                 await self.connection.execute(f"TRUNCATE TABLE {table}")
-            except asyncpg.PostgresError as exc:
+            except PostgresError as exc:
                 msg = f"Failed to truncate table '{table}': {exc}"
                 raise SQLSpecError(msg) from exc
         columns, records = self._arrow_table_to_rows(arrow_table)

@@ -7,9 +7,14 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from asyncmy import Connection  # pyright: ignore
+from asyncmy import create_pool as asyncmy_create_pool  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 from asyncmy.cursors import DictCursor  # pyright: ignore
+from asyncmy.errors import Error as AsyncmyError  # pyright: ignore
+from asyncmy.errors import MySQLError as AsyncmyMySQLError  # pyright: ignore
+from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError  # pyright: ignore
+from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -116,7 +121,12 @@ __all__ = (
     "ASYNC_MY_FIELD_TYPE",
     "AsyncmyConnection",
     "AsyncmyCursor",
+    "AsyncmyError",
+    "AsyncmyMySQLError",
+    "AsyncmyPool",
+    "AsyncmyProgrammingError",
     "AsyncmyRawCursor",
     "AsyncmySessionContext",
     "DictCursor",
+    "asyncmy_create_pool",
 )

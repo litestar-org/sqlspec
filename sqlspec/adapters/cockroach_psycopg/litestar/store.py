@@ -3,8 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from psycopg.rows import dict_row
-
+from sqlspec.adapters.cockroach_psycopg._typing import psycopg_dict_row as dict_row
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 

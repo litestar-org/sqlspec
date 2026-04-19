@@ -445,7 +445,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.execute(events_idx)
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -506,7 +506,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.execute(sql, params)
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
         result = self._get_session(session_id)
         if result is None:
@@ -557,7 +557,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         update_time=row[5],
                     )
                 finally:
-                    cursor.close()  # type: ignore[no-untyped-call]
+                    cursor.close()
         except Exception as e:
             error_msg = str(e).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -592,7 +592,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.execute(sql, (state_json, session_id))
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
@@ -616,7 +616,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.execute(sql, (session_id,))
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and associated events."""
@@ -671,7 +671,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         for row in rows
                     ]
                 finally:
-                    cursor.close()  # type: ignore[no-untyped-call]
+                    cursor.close()
         except Exception as e:
             error_msg = str(e).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -710,7 +710,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 )
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     def _append_event_and_update_state(
         self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
@@ -760,7 +760,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                     conn.rollback()
                 raise
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
@@ -820,7 +820,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         for row in rows
                     ]
                 finally:
-                    cursor.close()  # type: ignore[no-untyped-call]
+                    cursor.close()
         except Exception as e:
             error_msg = str(e).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -1014,7 +1014,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                 cursor.execute(idx_session)
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1122,7 +1122,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                             raise
                 conn.commit()
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
         return inserted_count
 
@@ -1161,7 +1161,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                     cursor.execute(sql, (app_name, user_id, pattern, effective_limit))
                     rows = cursor.fetchall()
                 finally:
-                    cursor.close()  # type: ignore[no-untyped-call]
+                    cursor.close()
         except Exception as exc:
             error_msg = str(exc).lower()
             if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -1193,7 +1193,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1217,7 +1217,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
-                cursor.close()  # type: ignore[no-untyped-call]
+                cursor.close()
 
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""

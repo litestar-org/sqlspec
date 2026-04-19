@@ -2,10 +2,9 @@
 
 from typing import TYPE_CHECKING, Any
 
-from psycopg import errors
-from psycopg import sql as pg_sql
-from psycopg.types.json import Jsonb
-
+from sqlspec.adapters.psycopg._typing import PsycopgJsonb as Jsonb
+from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
+from sqlspec.adapters.psycopg._typing import psycopg_sql as pg_sql
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger

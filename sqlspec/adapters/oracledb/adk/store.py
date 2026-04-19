@@ -4,9 +4,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import oracledb
-
 from sqlspec import SQL
+from sqlspec.adapters.oracledb._typing import OracleDatabaseError
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
     OracledbSyncDataDictionary,
@@ -569,7 +568,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -669,7 +668,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                         )
                     )
                 return results
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -798,7 +797,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     )
                     for row in rows
                 ]
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -1267,7 +1266,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -1379,7 +1378,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                         )
                     )
                 return results
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -1486,7 +1485,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                     )
                     for row in rows
                 ]
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -1731,7 +1730,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """Execute an insert and skip duplicate key errors."""
         try:
             await cursor.execute(sql, params)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
                 return False
@@ -1798,7 +1797,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             if self._use_fts:
                 return await self._search_entries_fts(query, app_name, user_id, effective_limit)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -2074,7 +2073,7 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
         """Execute an insert and skip duplicate key errors."""
         try:
             cursor.execute(sql, params)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
                 return False
@@ -2145,7 +2144,7 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
             if self._use_fts:
                 return self._search_entries_fts(query, app_name, user_id, effective_limit)
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []

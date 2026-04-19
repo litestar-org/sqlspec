@@ -2,7 +2,6 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-import oracledb
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
@@ -16,6 +15,8 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncConnectionPool,
     OracleSyncCursor,
     OracleSyncSessionContext,
+    oracledb_create_pool,
+    oracledb_create_pool_async,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
@@ -258,7 +259,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
             config["session_callback"] = self._init_connection
 
-        return oracledb.create_pool(**config)
+        return oracledb_create_pool(**config)
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
         """Initialize connection with optional type handlers and user callback.
@@ -432,7 +433,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
             config["session_callback"] = self._init_connection
 
-        return oracledb.create_pool_async(**config)
+        return oracledb_create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
         """Initialize async connection with optional type handlers and user callback.

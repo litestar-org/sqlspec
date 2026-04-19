@@ -3,9 +3,7 @@
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from google.api_core import exceptions as api_exceptions
-
-from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor, Transaction
+from sqlspec.adapters.spanner._typing import GoogleAPICallError, SpannerSessionContext, SpannerSyncCursor, Transaction
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     coerce_params,
@@ -88,7 +86,7 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
         if exc_type is None:
             return False
 
-        if isinstance(exc_val, api_exceptions.GoogleAPICallError):
+        if isinstance(exc_val, GoogleAPICallError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False

@@ -3,8 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 
-import pymysql
-
+from sqlspec.adapters.pymysql._typing import PymysqlDictCursor, PymysqlMySQLError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -64,7 +63,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
-                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                cursor = conn.cursor(PymysqlDictCursor)
                 try:
                     cursor.execute(sql, (key,))
                     row = cursor.fetchone()
@@ -91,7 +90,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                         conn.commit()
 
                 return bytes(row["data"])
-        except pymysql.MySQLError as exc:
+        except PymysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -150,7 +149,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                     cursor.close()
                 conn.commit()
             self._log_delete_all()
-        except pymysql.MySQLError as exc:
+        except PymysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -175,7 +174,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 finally:
                     cursor.close()
                 return result is not None
-        except pymysql.MySQLError as exc:
+        except PymysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

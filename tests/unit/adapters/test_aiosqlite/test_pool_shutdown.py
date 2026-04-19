@@ -73,7 +73,7 @@ async def test_create_connection_sets_daemon_for_legacy_proxy(monkeypatch: pytes
     connect_proxy = _LegacyConnectProxy(fake_connection)
     pool = AiosqliteConnectionPool({"database": ":memory:"})
 
-    monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: connect_proxy)
+    monkeypatch.setattr(pool_module, "aiosqlite_connect", lambda **_: connect_proxy)
 
     pool_connection = await pool._create_connection()
     try:
@@ -90,7 +90,7 @@ async def test_create_connection_sets_daemon_for_modern_proxy(monkeypatch: pytes
     connect_proxy = _ModernConnectProxy(fake_connection)
     pool = AiosqliteConnectionPool({"database": ":memory:"})
 
-    monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: connect_proxy)
+    monkeypatch.setattr(pool_module, "aiosqlite_connect", lambda **_: connect_proxy)
 
     pool_connection = await pool._create_connection()
     try:

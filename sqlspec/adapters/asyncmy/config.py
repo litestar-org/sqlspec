@@ -3,12 +3,17 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
-import asyncmy
-from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor, AsyncmySessionContext, DictCursor
+from sqlspec.adapters.asyncmy._typing import (
+    AsyncmyConnection,
+    AsyncmyCursor,
+    AsyncmyPool,
+    AsyncmySessionContext,
+    DictCursor,
+    asyncmy_create_pool,
+)
 from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -20,9 +25,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from asyncmy.cursors import Cursor  # pyright: ignore
-    from asyncmy.pool import Pool  # pyright: ignore
-
+    from sqlspec.adapters.asyncmy._typing import AsyncmyPool as Pool
+    from sqlspec.adapters.asyncmy._typing import AsyncmyRawCursor as Cursor
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
@@ -234,7 +238,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Future driver_features can be added here if needed (e.g., custom connection
         initialization, specialized type handling).
         """
-        return cast("AsyncmyPool", await asyncmy.create_pool(**dict(self.connection_config)))
+        return cast("AsyncmyPool", await asyncmy_create_pool(**dict(self.connection_config)))
 
     async def _ensure_connection_initialized(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.

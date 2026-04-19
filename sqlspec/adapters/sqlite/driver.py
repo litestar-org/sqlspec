@@ -1,9 +1,8 @@
 """SQLite driver implementation."""
 
-import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
+from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteError, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
     build_insert_statement,
     collect_rows,
@@ -52,7 +51,7 @@ class SqliteExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, sqlite3.Error):
+        if issubclass(exc_type, SqliteError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -182,7 +181,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         ):
             try:
                 cursor = self.connection.executemany(statement, parameters)
-            except sqlite3.Error as exc:
+            except SqliteError as exc:
                 raise create_mapped_exception(exc) from exc
 
             rowcount = cursor.rowcount
@@ -205,7 +204,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             if not returns_rows:
                 try:
                     cursor = self.connection.execute(cached.compiled_sql, params)
-                except sqlite3.Error as exc:
+                except SqliteError as exc:
                     raise create_mapped_exception(exc) from exc
 
                 rowcount = cursor.rowcount
@@ -214,7 +213,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             try:
                 cursor = self.connection.execute(cached.compiled_sql, params)
-            except sqlite3.Error as exc:
+            except SqliteError as exc:
                 raise create_mapped_exception(exc) from exc
 
             if returns_rows:
@@ -362,7 +361,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         try:
             if not self.connection.in_transaction:
                 self.connection.execute("BEGIN")
-        except sqlite3.Error as e:
+        except SqliteError as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -374,7 +373,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         try:
             self.connection.commit()
-        except sqlite3.Error as e:
+        except SqliteError as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -386,7 +385,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         try:
             self.connection.rollback()
-        except sqlite3.Error as e:
+        except SqliteError as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 

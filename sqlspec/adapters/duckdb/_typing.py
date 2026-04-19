@@ -7,6 +7,8 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from duckdb import DuckDBPyConnection
+from duckdb import Error as DuckDBError
+from duckdb import connect as duckdb_connect
 
 _DuckDBConnection = DuckDBPyConnection
 
@@ -101,4 +103,4 @@ class DuckDBSessionContext:
         return None
 
 
-__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")
+__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBError", "DuckDBSessionContext", "duckdb_connect")

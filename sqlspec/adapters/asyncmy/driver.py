@@ -7,9 +7,13 @@ type coercion, error handling, and transaction management.
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncmy.errors  # pyright: ignore
-
-from sqlspec.adapters.asyncmy._typing import ASYNC_MY_FIELD_TYPE, AsyncmyCursor, AsyncmySessionContext
+from sqlspec.adapters.asyncmy._typing import (
+    ASYNC_MY_FIELD_TYPE,
+    AsyncmyCursor,
+    AsyncmyError,
+    AsyncmyMySQLError,
+    AsyncmySessionContext,
+)
 from sqlspec.adapters.asyncmy.core import (
     build_insert_statement,
     collect_rows,
@@ -67,7 +71,7 @@ class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, asyncmy.errors.Error):
+        if issubclass(exc_type, AsyncmyError):
             result = create_mapped_exception(exc_val, logger=logger)
             if result is True:
                 return True
@@ -212,7 +216,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         try:
             async with AsyncmyCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
-        except asyncmy.errors.MySQLError as e:
+        except AsyncmyMySQLError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -224,7 +228,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.commit()
-        except asyncmy.errors.MySQLError as e:
+        except AsyncmyMySQLError as e:
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -236,7 +240,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.rollback()
-        except asyncmy.errors.MySQLError as e:
+        except AsyncmyMySQLError as e:
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 

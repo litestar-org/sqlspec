@@ -68,10 +68,10 @@ def spanner_database(
     spanner_service: SpannerService, spanner_connection: spanner.Client
 ) -> "Generator[Database, None, None]":
     """Ensure emulator instance and database exist, yield Database."""
-    instance = spanner_connection.instance(spanner_service.instance_name)
+    instance = spanner_connection.instance(spanner_service.instance_name)  # type: ignore[no-untyped-call]
     if not instance.exists():
         config_name = f"{spanner_connection.project_name}/instanceConfigs/emulator-config"
-        instance = spanner_connection.instance(spanner_service.instance_name, configuration_name=config_name)
+        instance = spanner_connection.instance(spanner_service.instance_name, configuration_name=config_name)  # type: ignore[no-untyped-call]
         instance.create().result(300)
 
     database = instance.database(spanner_service.database_name)

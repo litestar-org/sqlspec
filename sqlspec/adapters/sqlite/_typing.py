@@ -6,6 +6,8 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import sqlite3
+from sqlite3 import Error as SqliteError
+from sqlite3 import connect as sqlite3_connect
 from typing import TYPE_CHECKING, Any
 
 _SqliteConnection = sqlite3.Connection
@@ -120,4 +122,11 @@ class SqliteSessionContext:
         return None
 
 
-__all__ = ("SqliteConnection", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")
+__all__ = (
+    "SqliteConnection",
+    "SqliteCursor",
+    "SqliteError",
+    "SqliteRawCursor",
+    "SqliteSessionContext",
+    "sqlite3_connect",
+)

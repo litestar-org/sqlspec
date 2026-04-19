@@ -4,9 +4,7 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-import duckdb
-
-from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
+from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBError, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
     apply_driver_features,
     collect_rows,
@@ -190,7 +188,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Begin a database transaction."""
         try:
             self.connection.execute("BEGIN TRANSACTION")
-        except duckdb.Error as e:
+        except DuckDBError as e:
             msg = f"Failed to begin DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -198,7 +196,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Commit the current transaction."""
         try:
             self.connection.commit()
-        except duckdb.Error as e:
+        except DuckDBError as e:
             msg = f"Failed to commit DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -206,7 +204,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Rollback the current transaction."""
         try:
             self.connection.rollback()
-        except duckdb.Error as e:
+        except DuckDBError as e:
             msg = f"Failed to rollback DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
 

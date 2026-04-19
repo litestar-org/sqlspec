@@ -3,13 +3,14 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
+    PsycopgAsyncConnectionPool,
     PsycopgAsyncCursor,
     PsycopgAsyncSessionContext,
+    PsycopgConnectionPool,
     PsycopgSyncConnection,
     PsycopgSyncCursor,
     PsycopgSyncSessionContext,
@@ -181,7 +182,7 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
             self._conn = None
 
 
-class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
+class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, PsycopgConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration.
 
     Example::
@@ -211,7 +212,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self,
         *,
         connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "ConnectionPool | None" = None,
+        connection_instance: "PsycopgConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "PsycopgDriverFeatures | dict[str, Any] | None" = None,
@@ -255,7 +256,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             **kwargs,
         )
 
-    def _create_pool(self) -> "ConnectionPool":
+    def _create_pool(self) -> "PsycopgConnectionPool":
         """Create the actual connection pool."""
         all_config = dict(self.connection_config)
 
@@ -277,11 +278,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            pool = ConnectionPool(conninfo, open=True, **pool_parameters)
+            pool = PsycopgConnectionPool(conninfo, open=True, **pool_parameters)
         else:
             kwargs = all_config.pop("kwargs", {})
             all_config.update(kwargs)
-            pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
+            pool = PsycopgConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
         return pool
 
@@ -376,7 +377,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             prepare_driver=self._prepare_driver,
         )
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
+    def provide_pool(self, *args: Any, **kwargs: Any) -> "PsycopgConnectionPool":
         """Provide pool instance.
 
         Returns:
@@ -462,7 +463,7 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 
 @mypyc_attr(native_class=False)
-class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
+class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, PsycopgAsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration.
 
     Example::
@@ -492,7 +493,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self,
         *,
         connection_config: "PsycopgPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "AsyncConnectionPool | None" = None,
+        connection_instance: "PsycopgAsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "PsycopgDriverFeatures | dict[str, Any] | None" = None,
@@ -536,7 +537,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             **kwargs,
         )
 
-    async def _create_pool(self) -> "AsyncConnectionPool":
+    async def _create_pool(self) -> "PsycopgAsyncConnectionPool":
         """Create the actual async connection pool."""
 
         all_config = dict(self.connection_config)
@@ -559,11 +560,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            pool = AsyncConnectionPool(conninfo, open=False, **pool_parameters)
+            pool = PsycopgAsyncConnectionPool(conninfo, open=False, **pool_parameters)
         else:
             kwargs = all_config.pop("kwargs", {})
             all_config.update(kwargs)
-            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_parameters)
+            pool = PsycopgAsyncConnectionPool("", kwargs=all_config, open=False, **pool_parameters)
 
         await pool.open()
 
@@ -679,7 +680,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             prepare_driver=self._prepare_driver,
         )
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "PsycopgAsyncConnectionPool":
         """Provide async pool instance.
 
         Returns:

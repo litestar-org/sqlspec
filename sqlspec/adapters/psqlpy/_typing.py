@@ -7,6 +7,9 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from psqlpy import Connection as _PsqlpyConnection
+from psqlpy import ConnectionPool as PsqlpyConnectionPool
+from psqlpy.exceptions import DatabaseError as PsqlpyDatabaseError
+from psqlpy.exceptions import Error as PsqlpyError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -115,4 +118,11 @@ class PsqlpySessionContext:
         return None
 
 
-__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpySessionContext")
+__all__ = (
+    "PsqlpyConnection",
+    "PsqlpyConnectionPool",
+    "PsqlpyCursor",
+    "PsqlpyDatabaseError",
+    "PsqlpyError",
+    "PsqlpySessionContext",
+)

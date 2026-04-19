@@ -6,9 +6,12 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+from sqlite3 import Error as SqliteError
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
+from aiosqlite import Error as AiosqliteError
+from aiosqlite import connect as aiosqlite_connect
 
 _AiosqliteConnection = aiosqlite.Connection
 
@@ -106,4 +109,12 @@ class AiosqliteSessionContext:
         return None
 
 
-__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteRawCursor", "AiosqliteSessionContext")
+__all__ = (
+    "AiosqliteConnection",
+    "AiosqliteCursor",
+    "AiosqliteError",
+    "AiosqliteRawCursor",
+    "AiosqliteSessionContext",
+    "SqliteError",
+    "aiosqlite_connect",
+)

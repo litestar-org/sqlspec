@@ -8,8 +8,7 @@ from inspect import isawaitable
 from threading import Thread
 from typing import TYPE_CHECKING, Any
 
-import aiosqlite
-
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_connect
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -367,7 +366,7 @@ class AiosqliteConnectionPool:
         Returns:
             New pool connection instance
         """
-        connect_proxy = aiosqlite.connect(**self._connection_parameters)
+        connect_proxy = aiosqlite_connect(**self._connection_parameters)
         self._set_connect_proxy_daemon(connect_proxy)
         connection = await connect_proxy
 

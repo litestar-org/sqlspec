@@ -8,9 +8,12 @@ type coercion, error handling, and query job management.
 import io
 from typing import TYPE_CHECKING, Any, cast
 
-from google.cloud.exceptions import GoogleCloudError
-
-from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
+from sqlspec.adapters.bigquery._typing import (
+    BigQueryConnection,
+    BigQueryCursor,
+    BigQuerySessionContext,
+    GoogleCloudError,
+)
 from sqlspec.adapters.bigquery.core import (
     build_dml_rowcount,
     build_inlined_script,
@@ -47,8 +50,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from google.cloud.bigquery import QueryJob, QueryJobConfig
-
+    from sqlspec.adapters.bigquery._typing import QueryJobConfig
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.storage import (

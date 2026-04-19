@@ -8,10 +8,9 @@ import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-import pymysql
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnection
+from sqlspec.adapters.pymysql._typing import PyMysqlConnection, pymysql_connect
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -86,7 +85,7 @@ class PyMysqlConnectionPool:
         return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PyMysqlConnection:
-        connection = pymysql.connect(**self._connection_parameters)
+        connection = pymysql_connect(**self._connection_parameters)
 
         # Call user-provided callback after connection creation
         if self._on_connection_create is not None:

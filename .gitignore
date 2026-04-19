@@ -69,3 +69,8 @@ uv.toml
 .beads/
 tools/scripts/profiles/*.prof
 .agents/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+GEMINI.md

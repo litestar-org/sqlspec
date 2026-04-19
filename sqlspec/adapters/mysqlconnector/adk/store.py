@@ -3,8 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import mysql.connector
-
+from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -175,7 +174,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     create_time=cast("datetime", create_time_val),
                     update_time=cast("datetime", update_time_val),
                 )
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -246,7 +245,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -380,7 +379,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -495,7 +494,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     create_time=cast("datetime", create_time_val),
                     update_time=cast("datetime", update_time_val),
                 )
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -578,7 +577,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -717,7 +716,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise

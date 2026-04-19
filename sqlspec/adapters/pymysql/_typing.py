@@ -7,6 +7,10 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 import pymysql
+from pymysql import MySQLError as PymysqlMySQLError
+from pymysql import connect as pymysql_connect
+from pymysql import cursors as pymysql_cursors
+from pymysql.constants import FIELD_TYPE as PymysqlFieldType  # noqa: N811
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -22,6 +26,8 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     PyMysqlConnection = pymysql.connections.Connection
     PyMysqlRawCursor = pymysql.cursors.Cursor
+
+PymysqlDictCursor = pymysql_cursors.DictCursor
 
 
 class PyMysqlCursor:
@@ -89,4 +95,14 @@ class PyMysqlSessionContext:
         return None
 
 
-__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")
+__all__ = (
+    "PyMysqlConnection",
+    "PyMysqlCursor",
+    "PyMysqlRawCursor",
+    "PyMysqlSessionContext",
+    "PymysqlDictCursor",
+    "PymysqlFieldType",
+    "PymysqlMySQLError",
+    "pymysql_connect",
+    "pymysql_cursors",
+)

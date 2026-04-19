@@ -7,8 +7,15 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from psycopg import AsyncCursor, Cursor
+from psycopg import Error as PsycopgError
 from psycopg import crdb as psycopg_crdb
+from psycopg import errors as psycopg_errors
+from psycopg import sql as psycopg_sql
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.rows import dict_row as psycopg_dict_row
+from psycopg.types.json import Jsonb as PsycopgJsonb
+from psycopg_pool import AsyncConnectionPool as PsycopgAsyncConnectionPool
+from psycopg_pool import ConnectionPool as PsycopgConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -133,5 +140,13 @@ __all__ = (
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "CockroachSyncCursor",
+    "PsycopgAsyncConnectionPool",
+    "PsycopgConnectionPool",
     "PsycopgDictRow",
+    "PsycopgError",
+    "PsycopgJsonb",
+    "psycopg_crdb",
+    "psycopg_dict_row",
+    "psycopg_errors",
+    "psycopg_sql",
 )

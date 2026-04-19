@@ -2,7 +2,6 @@
 
 import contextlib
 import logging
-import sqlite3
 import threading
 import time
 import uuid
@@ -11,7 +10,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite._typing import SqliteConnection
+from sqlspec.adapters.sqlite._typing import SqliteConnection, sqlite3_connect
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -92,7 +91,7 @@ class SqliteConnectionPool:
 
     def _create_connection(self) -> SqliteConnection:
         """Create a new SQLite connection with optimizations."""
-        connection = sqlite3.connect(**self._connection_parameters)
+        connection = sqlite3_connect(**self._connection_parameters)
 
         if self._enable_optimizations:
             database = self._connection_parameters.get("database", ":memory:")

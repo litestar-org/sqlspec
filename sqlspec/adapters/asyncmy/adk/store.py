@@ -3,8 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncmy
-
+from sqlspec.adapters.asyncmy._typing import AsyncmyProgrammingError
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -212,7 +211,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue][reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -291,7 +290,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     )
                     for row in rows
                 ]
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -413,7 +412,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     )
                     for row in rows
                 ]
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise

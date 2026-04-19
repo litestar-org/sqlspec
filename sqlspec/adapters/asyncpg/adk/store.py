@@ -2,8 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, Final
 
-import asyncpg
-
+from sqlspec.adapters.asyncpg._typing import UndefinedTableError
 from sqlspec.config import AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -137,7 +136,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                     create_time=row["create_time"],
                     update_time=row["update_time"],
                 )
-        except asyncpg.exceptions.UndefinedTableError:
+        except UndefinedTableError:
             return None
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
@@ -189,7 +188,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                     )
                     for row in rows
                 ]
-        except asyncpg.exceptions.UndefinedTableError:
+        except UndefinedTableError:
             return []
 
     async def append_event(self, event_record: EventRecord) -> None:
@@ -270,7 +269,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                     )
                     for row in rows
                 ]
-        except asyncpg.exceptions.UndefinedTableError:
+        except UndefinedTableError:
             return []
 
 

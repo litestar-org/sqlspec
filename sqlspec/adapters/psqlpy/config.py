@@ -3,10 +3,9 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyConnectionPool, PsqlpyCursor, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
     apply_driver_features,
     build_connection_config,
@@ -176,7 +175,7 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
 
 
 @mypyc_attr(native_class=False)
-class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
+class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, PsqlpyConnectionPool, PsqlpyDriver]):
     """Configuration for Psqlpy asynchronous database connections.
 
     Example::
@@ -204,7 +203,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self,
         *,
         connection_config: "PsqlpyPoolParams | dict[str, Any] | None" = None,
-        connection_instance: ConnectionPool | None = None,
+        connection_instance: PsqlpyConnectionPool | None = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
@@ -278,9 +277,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             await self._user_connection_hook(connection)
         self._initialized_connection_ids.add(conn_id)
 
-    async def _create_pool(self) -> "ConnectionPool":
+    async def _create_pool(self) -> "PsqlpyConnectionPool":
         """Create the actual async connection pool."""
-        return ConnectionPool(**build_connection_config(self.connection_config))
+        return PsqlpyConnectionPool(**build_connection_config(self.connection_config))
 
     def _update_dialect_for_extensions(self) -> None:
         """Update statement_config dialect based on detected extensions.
@@ -344,7 +343,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             prepare_driver=self._prepare_driver,
         )
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> PsqlpyConnectionPool:
         """Provide async pool instance.
 
         Returns:
