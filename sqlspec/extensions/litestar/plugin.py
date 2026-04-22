@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 from litestar.di import Provide
 from litestar.middleware import DefineMiddleware
-from litestar.plugins import CLIPlugin, InitPluginProtocol
+from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import (
@@ -45,9 +45,12 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from litestar import Litestar
+    from litestar._openapi.schema_generation.schema import SchemaCreator
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
+    from litestar.openapi.spec import Schema
     from litestar.types import ASGIApp, BeforeMessageSendHookHandler, Receive, Scope, Send
+    from litestar.typing import FieldDefinition
     from rich_click import Group
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -85,11 +88,45 @@ __all__ = (
     "CorrelationMiddleware",
     "PluginConfigState",
     "SQLSpecPlugin",
+    "_OffsetPaginationSchemaPlugin",
 )
 
 
-def _encode_offset_pagination(value: OffsetPagination[Any]) -> dict[str, Any]:
-    return {"items": value.items, "limit": value.limit, "offset": value.offset, "total": value.total}
+class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
+    """OpenAPI schema plugin expanding OffsetPagination[T] into a concrete schema.
+
+    Defense-in-depth for sqlspec.core.filters.OffsetPagination. The msgspec.Struct
+    conversion already lets Litestar's default generator produce a correct schema;
+    this plugin guarantees the shape even if future Litestar or msgspec changes
+    break auto-detection.
+    """
+
+    @staticmethod
+    def is_plugin_supported_type(value: Any) -> bool:
+        origin = getattr(value, "__origin__", value)
+        return isinstance(origin, type) and issubclass(origin, OffsetPagination)
+
+    def to_openapi_schema(self, field_definition: "FieldDefinition", schema_creator: "SchemaCreator") -> "Schema":
+        from litestar.openapi.spec import OpenAPIType, Schema
+        from litestar.typing import FieldDefinition
+
+        inner_type: Any = Any
+        inner_args = getattr(field_definition, "inner_types", ())
+        if inner_args:
+            inner_type = inner_args[0].annotation
+
+        item_schema = schema_creator.for_field_definition(FieldDefinition.from_annotation(inner_type))
+
+        return Schema(
+            type=OpenAPIType.OBJECT,
+            properties={
+                "items": Schema(type=OpenAPIType.ARRAY, items=item_schema),
+                "limit": Schema(type=OpenAPIType.INTEGER),
+                "offset": Schema(type=OpenAPIType.INTEGER),
+                "total": Schema(type=OpenAPIType.INTEGER),
+            },
+            required=["items", "limit", "offset", "total"],
+        )
 
 
 def _normalize_header_list(headers: Any) -> list[str]:
@@ -414,12 +451,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)
 
-        if app_config.type_encoders is None:
-            app_config.type_encoders = {OffsetPagination: _encode_offset_pagination}
-        else:
-            encoders_dict = dict(app_config.type_encoders)
-            encoders_dict[OffsetPagination] = _encode_offset_pagination
-            app_config.type_encoders = encoders_dict
+        existing_plugins = list(app_config.plugins or [])
+        if not any(isinstance(p, _OffsetPaginationSchemaPlugin) for p in existing_plugins):
+            existing_plugins.append(_OffsetPaginationSchemaPlugin())
+            app_config.plugins = existing_plugins
 
         if NUMPY_INSTALLED:
             import numpy as np

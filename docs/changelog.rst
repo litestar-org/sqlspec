@@ -10,6 +10,41 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Schema Wire Correctness (Unreleased)
+-------------------------------------
+
+**Fixed:**
+
+* ``sqlspec.utils.serializers.schema_dump`` now honors ``msgspec.Struct``
+  ``rename=`` meta. Structs declared with ``rename="camel"`` / ``"kebab"`` /
+  ``"pascal"`` / callable now emit the renamed wire names instead of the
+  Python attribute names. (`#418
+  <https://github.com/litestar-org/sqlspec/issues/418>`_)
+
+* ``sqlspec.core.filters.OffsetPagination`` is now a stdlib
+  :func:`~dataclasses.dataclass`, living in ``sqlspec.core._pagination``
+  (excluded from mypyc because the ``@dataclass`` decorator mutates the class
+  at definition time, and mypyc-compiled classes forbid that). The public
+  import path ``from sqlspec.core.filters import OffsetPagination`` is
+  unchanged. This restores runtime ``__annotations__`` under mypyc-compiled
+  wheels, fixing empty OpenAPI response schemas and missing component types
+  when Litestar handlers return ``OffsetPagination[T]``. The Litestar
+  extension additionally registers an ``OpenAPISchemaPlugin`` as a
+  defensive fallback. ``msgspec`` is no longer required to import the
+  pagination container. (`#419
+  <https://github.com/litestar-org/sqlspec/issues/419>`_)
+
+**Behavior changes from the OffsetPagination conversion:**
+
+* ``__eq__`` is now field-wise (was identity). Two pagination objects with
+  identical contents now compare equal.
+* ``__hash__`` is now ``None`` (dataclass default without ``frozen=True``).
+  Instances can no longer be used as ``dict`` keys or ``set`` members.
+  ``Sequence[T]``-valued ``items`` already made this impractical, but the
+  change is noted for completeness.
+* ``__repr__`` now prints
+  ``OffsetPagination(items=..., limit=..., offset=..., total=...)``.
+
 Logging Improvements
 --------------------
 
