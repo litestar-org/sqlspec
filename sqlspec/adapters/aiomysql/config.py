@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
 import aiomysql  # pyright: ignore
+from aiomysql import Pool as AiomysqlPool  # pyright: ignore
 from aiomysql.cursors import Cursor, DictCursor  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
@@ -294,6 +295,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "aiomysql.Pool", Ai
             "AiomysqlDriver": AiomysqlDriver,
             "AiomysqlDriverFeatures": AiomysqlDriverFeatures,
             "AiomysqlExceptionHandler": AiomysqlExceptionHandler,
+            "AiomysqlPool": AiomysqlPool,
             "AiomysqlPoolParams": AiomysqlPoolParams,
             "AiomysqlSessionContext": AiomysqlSessionContext,
         })

@@ -1,5 +1,7 @@
 """aiomysql configuration tests covering statement config builders."""
 
+import aiomysql  # pyright: ignore
+
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 from sqlspec.adapters.aiomysql.core import build_statement_config
 
@@ -34,3 +36,13 @@ def test_aiomysql_config_applies_driver_feature_serializers() -> None:
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
     assert parameter_config.json_deserializer is deserializer
+
+
+def test_aiomysql_signature_namespace_exposes_pool_type() -> None:
+    """DI signature namespace must expose AiomysqlPool so Litestar route handlers can type-hint the pool.
+
+    Parity check against asyncmy, which registers AsyncmyPool for the same reason.
+    """
+    namespace = AiomysqlConfig().get_signature_namespace()
+    assert "AiomysqlPool" in namespace, "AiomysqlPool missing from DI namespace (parity gap vs asyncmy)"
+    assert namespace["AiomysqlPool"] is aiomysql.Pool
