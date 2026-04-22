@@ -4,12 +4,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
 import aiomysql  # pyright: ignore
-from aiomysql import Pool as AiomysqlPool  # pyright: ignore
-from aiomysql.cursors import Cursor, DictCursor  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiomysql._typing import AiomysqlConnection, AiomysqlCursor, AiomysqlSessionContext
+from sqlspec.adapters.aiomysql._typing import (
+    AiomysqlConnection,
+    AiomysqlCursor,
+    AiomysqlDictCursor,
+    AiomysqlPool,
+    AiomysqlRawCursor,
+    AiomysqlSessionContext,
+)
 from sqlspec.adapters.aiomysql.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -20,9 +25,6 @@ from sqlspec.utils.config_tools import normalize_connection_config
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
-
-    from aiomysql import Pool  # pyright: ignore
-    from aiomysql.cursors import Cursor, DictCursor  # pyright: ignore
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -49,7 +51,7 @@ class AiomysqlConnectionParams(TypedDict):
     ssl: NotRequired[Any]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
-    cursor_class: NotRequired[type["Cursor"] | type["DictCursor"]]
+    cursor_class: NotRequired[type["AiomysqlRawCursor"] | type["AiomysqlDictCursor"]]
 
 
 class AiomysqlPoolParams(AiomysqlConnectionParams):
@@ -146,7 +148,7 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
 
 
 @mypyc_attr(native_class=False)
-class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "aiomysql.Pool", AiomysqlDriver]):  # pyright: ignore
+class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", AiomysqlDriver]):  # pyright: ignore
     """Configuration for aiomysql database connections.
 
     Example::
@@ -174,7 +176,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "aiomysql.Pool", Ai
         self,
         *,
         connection_config: "AiomysqlPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "aiomysql.Pool | None" = None,
+        connection_instance: "AiomysqlPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AiomysqlDriverFeatures | dict[str, Any] | None" = None,
@@ -224,14 +226,14 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "aiomysql.Pool", Ai
             **kwargs,
         )
 
-    async def _create_pool(self) -> "aiomysql.Pool":
+    async def _create_pool(self) -> "AiomysqlPool":
         """Create the actual async connection pool.
 
         MySQL/MariaDB handle JSON types natively without requiring connection-level
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
         """
-        return cast("aiomysql.Pool", await aiomysql.create_pool(**dict(self.connection_config)))
+        return cast("AiomysqlPool", await aiomysql.create_pool(**dict(self.connection_config)))
 
     async def _ensure_connection_initialized(self, connection: "AiomysqlConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
@@ -269,7 +271,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "aiomysql.Pool", Ai
         await self._ensure_connection_initialized(connection)
         return connection
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AiomysqlPool":
         """Provide async pool instance.
 
         Returns:

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import pymysql.err
 
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
+from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -174,7 +174,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             """
             params = (session_id, app_name, user_id, state_json)
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, params)
             await conn.commit()
 
@@ -196,7 +199,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, (session_id,))
                 row = await cursor.fetchone()
 
@@ -233,7 +239,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         WHERE id = %s
         """
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (state_json, session_id))
             await conn.commit()
 
@@ -245,7 +254,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = %s"
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (session_id,))
             await conn.commit()
 
@@ -277,7 +289,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             params = (app_name, user_id)
 
         try:
-            async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
 
@@ -313,7 +328,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(
                 sql,
                 (
@@ -355,7 +373,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         WHERE id = %s
         """
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(
                 insert_sql,
                 (
@@ -400,7 +421,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
 
@@ -520,7 +544,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             """
 
         async with self._config.provide_connection() as conn:
-            async with AiomysqlCursor(conn) as cursor:
+            async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
                 for entry in entries:
                     params: tuple[Any, ...]
                     if self._owner_id_column_name:
@@ -587,7 +611,10 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             """
             params = (app_name, user_id, f"%{query}%", limit_value)
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, params)
             rows = await cursor.fetchall()
             columns = [col[0] for col in cursor.description or []]
@@ -601,7 +628,10 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (session_id,))
             await conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -616,7 +646,10 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
         DELETE FROM {self._memory_table}
         WHERE inserted_at < (UTC_TIMESTAMP(6) - INTERVAL %s DAY)
         """
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (days,))
             await conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0

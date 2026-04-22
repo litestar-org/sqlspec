@@ -1,7 +1,11 @@
 """aiomysql configuration tests covering statement config builders."""
 
-import aiomysql  # pyright: ignore
+from unittest.mock import AsyncMock, MagicMock
 
+import aiomysql  # pyright: ignore
+import pytest
+
+from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 from sqlspec.adapters.aiomysql.core import build_statement_config
 
@@ -46,3 +50,41 @@ def test_aiomysql_signature_namespace_exposes_pool_type() -> None:
     namespace = AiomysqlConfig().get_signature_namespace()
     assert "AiomysqlPool" in namespace, "AiomysqlPool missing from DI namespace (parity gap vs asyncmy)"
     assert namespace["AiomysqlPool"] is aiomysql.Pool
+
+
+@pytest.mark.asyncio
+async def test_aiomysql_cursor_omits_class_arg_when_unset() -> None:
+    """AiomysqlCursor with cursor_class=None must call conn.cursor() without args.
+
+    aiomysql's Connection.cursor(*cursors) rejects None via issubclass(None, Cursor),
+    so passing None-as-positional is a runtime TypeError. This test locks in the
+    omit-when-unset behavior.
+    """
+    raw_cursor = MagicMock()
+    raw_cursor.close = AsyncMock()
+    connection = MagicMock()
+    connection.cursor = AsyncMock(return_value=raw_cursor)
+
+    async with AiomysqlCursor(connection) as cursor:
+        assert cursor is raw_cursor
+
+    connection.cursor.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_aiomysql_cursor_forwards_class_arg_when_set() -> None:
+    """AiomysqlCursor with cursor_class=AiomysqlRawCursor must forward it.
+
+    First-party store code passes the tuple cursor class explicitly so that a
+    user-configured cursor_class=DictCursor on AiomysqlConfig doesn't break
+    positional row access in ADK/Litestar/Events stores.
+    """
+    raw_cursor = MagicMock()
+    raw_cursor.close = AsyncMock()
+    connection = MagicMock()
+    connection.cursor = AsyncMock(return_value=raw_cursor)
+
+    async with AiomysqlCursor(connection, cursor_class=AiomysqlRawCursor) as cursor:
+        assert cursor is raw_cursor
+
+    connection.cursor.assert_awaited_once_with(AiomysqlRawCursor)

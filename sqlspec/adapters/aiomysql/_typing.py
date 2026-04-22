@@ -7,7 +7,9 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 from aiomysql import Connection  # pyright: ignore
+from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
 from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
+from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -18,7 +20,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class AiomysqlConnectionProtocol(Protocol):
-        async def cursor(self) -> "AiomysqlRawCursor": ...
+        async def cursor(self, cursor: "type[Any] | None" = None) -> "AiomysqlRawCursor": ...
 
         async def commit(self) -> Any: ...
 
@@ -28,26 +30,41 @@ if TYPE_CHECKING:
 
     AiomysqlConnection: TypeAlias = AiomysqlConnectionProtocol
     AiomysqlRawCursor: TypeAlias = _AiomysqlCursor
+    AiomysqlDictCursor: TypeAlias = _AiomysqlDictCursor
+    AiomysqlPool: TypeAlias = _AiomysqlPool
 
 if not TYPE_CHECKING:
     AiomysqlConnection = Connection
     AiomysqlRawCursor = _AiomysqlCursor
+    AiomysqlDictCursor = _AiomysqlDictCursor
+    AiomysqlPool = _AiomysqlPool
 
 
 class AiomysqlCursor:
     """Context manager for aiomysql cursor operations.
 
     Provides automatic cursor acquisition and cleanup for database operations.
+
+    The optional ``cursor_class`` argument forces a specific cursor type (e.g.,
+    the tuple-returning ``AiomysqlRawCursor``) regardless of the user's
+    ``cursor_class`` setting in ``AiomysqlConnectionParams``. This is used by
+    first-party store code (ADK, Litestar, Events) that relies on positional
+    row access and must not be broken when a user configures ``DictCursor`` at
+    the connection level.
     """
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("connection", "cursor", "cursor_class")
 
-    def __init__(self, connection: "AiomysqlConnection") -> None:
+    def __init__(self, connection: "AiomysqlConnection", cursor_class: "type[Any] | None" = None) -> None:
         self.connection = connection
+        self.cursor_class = cursor_class
         self.cursor: AiomysqlRawCursor | None = None
 
     async def __aenter__(self) -> "AiomysqlRawCursor":
-        self.cursor = await self.connection.cursor()
+        if self.cursor_class is None:
+            self.cursor = await self.connection.cursor()
+        else:
+            self.cursor = await self.connection.cursor(self.cursor_class)
         return self.cursor
 
     async def __aexit__(self, *_: Any) -> None:
@@ -110,4 +127,11 @@ class AiomysqlSessionContext:
         return None
 
 
-__all__ = ("AiomysqlConnection", "AiomysqlCursor", "AiomysqlRawCursor", "AiomysqlSessionContext")
+__all__ = (
+    "AiomysqlConnection",
+    "AiomysqlCursor",
+    "AiomysqlDictCursor",
+    "AiomysqlPool",
+    "AiomysqlRawCursor",
+    "AiomysqlSessionContext",
+)

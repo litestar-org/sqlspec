@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 import pymysql.err
 
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
+from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
@@ -125,7 +125,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
 
@@ -178,7 +181,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (key, data, naive_expires_at))
             await conn.commit()
 
@@ -190,7 +196,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (key,))
             await conn.commit()
 
@@ -199,7 +208,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
@@ -228,7 +240,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
@@ -255,7 +270,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         WHERE session_id = %s
         """
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (key,))
             row = await cursor.fetchone()
 
@@ -284,7 +302,10 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
-        async with self._config.provide_connection() as conn, AiomysqlCursor(conn) as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
             await cursor.execute(sql)
             await conn.commit()
             count: int = cursor.rowcount
