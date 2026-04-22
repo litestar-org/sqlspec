@@ -184,7 +184,6 @@ exclude = [
   "sqlspec/dialects/**/*.py",                 # Keep SQLGlot dialect subclasses interpreted
   "sqlspec/**/__init__.py",                   # Init files (usually just imports)
   "sqlspec/protocols.py",                     # Protocol definitions
-  "sqlspec/adapters/mock/**",                 # Mock adapter (testing only)
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
   "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
