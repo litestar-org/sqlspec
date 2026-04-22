@@ -35,3 +35,31 @@ def test_litestar_offset_pagination_serialization() -> None:
             response = client.get("/pagination")
             assert response.status_code == 200
             assert response.json() == {"items": [{"id": 1}], "limit": 10, "offset": 0, "total": 1}
+
+
+def test_litestar_offset_pagination_openapi_schema() -> None:
+    """OffsetPagination[T] must register T as an OpenAPI component (regression for #419)."""
+    import msgspec
+
+    class Item(msgspec.Struct):
+        name: str
+
+    @get("/items")
+    async def list_items() -> OffsetPagination[Item]:
+        return OffsetPagination(items=[Item(name="a")], limit=10, offset=0, total=1)
+
+    sql = SQLSpec()
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    sql.add_config(config)
+    app = Litestar(route_handlers=[list_items], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+    schema = app.openapi_schema
+    component_names = set(schema.components.schemas.keys())
+    assert any("Item" in name for name in component_names), f"Item not in OpenAPI components: {component_names}"
+
+    response = schema.paths["/items"].get.responses["200"]
+    media = response.content["application/json"]
+    assert media.schema is not None, "response media schema is None"
+
+    schema_dict = media.schema.to_schema() if hasattr(media.schema, "to_schema") else media.schema
+    assert schema_dict, f"OpenAPI response schema empty for OffsetPagination[Item]: {schema_dict!r}"
