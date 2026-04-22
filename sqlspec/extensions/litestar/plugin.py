@@ -107,7 +107,7 @@ class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
         return isinstance(origin, type) and issubclass(origin, OffsetPagination)
 
     def to_openapi_schema(self, field_definition: "FieldDefinition", schema_creator: "SchemaCreator") -> "Schema":
-        from litestar.openapi.spec import Schema
+        from litestar.openapi.spec import OpenAPIType, Schema
         from litestar.typing import FieldDefinition
 
         inner_type: Any = Any
@@ -118,12 +118,12 @@ class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
         item_schema = schema_creator.for_field_definition(FieldDefinition.from_annotation(inner_type))
 
         return Schema(
-            type="object",
+            type=OpenAPIType.OBJECT,
             properties={
-                "items": Schema(type="array", items=item_schema),
-                "limit": Schema(type="integer"),
-                "offset": Schema(type="integer"),
-                "total": Schema(type="integer"),
+                "items": Schema(type=OpenAPIType.ARRAY, items=item_schema),
+                "limit": Schema(type=OpenAPIType.INTEGER),
+                "offset": Schema(type=OpenAPIType.INTEGER),
+                "total": Schema(type=OpenAPIType.INTEGER),
             },
             required=["items", "limit", "offset", "total"],
         )

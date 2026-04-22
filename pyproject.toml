@@ -191,6 +191,7 @@ exclude = [
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
   "sqlspec/observability/_formatting.py",     # Inherits from non-compiled logging.Formatter
   "sqlspec/utils/arrow_helpers.py",           # Arrow operations cause segfaults when compiled
+  "sqlspec/core/_pagination.py",              # msgspec.Struct metaclass incompatible with mypyc
 ]
 include = [
   "sqlspec/core/**/*.py",                  # Core module

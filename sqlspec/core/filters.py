@@ -21,16 +21,15 @@ Features:
 import uuid
 from abc import ABC, abstractmethod
 from collections import abc
-from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
 
-import msgspec
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
+from sqlspec.core._pagination import OffsetPagination
 from sqlspec.utils.type_guards import has_field_name
 
 if TYPE_CHECKING:
@@ -876,25 +875,6 @@ class NotInSearchFilter(SearchFilter):
         """Return cache key for this filter configuration."""
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
-
-
-class OffsetPagination(msgspec.Struct, Generic[T]):
-    """Container for data returned using limit/offset pagination.
-
-    Fields preserved at runtime via msgspec metaclass so Litestar OpenAPI and
-    generic-type introspection work under mypyc-compiled wheels.
-
-    Args:
-        items: List of data being sent as part of the response.
-        limit: Maximal number of items to send.
-        offset: Offset from the beginning of the query. Identical to an index.
-        total: Total number of items.
-    """
-
-    items: Sequence[T]
-    limit: int
-    offset: int
-    total: int
 
 
 def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":
