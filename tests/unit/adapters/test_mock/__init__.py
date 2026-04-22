@@ -1,1 +1,0 @@
-"""Mock adapter unit tests."""
