@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
 
+import msgspec
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -877,29 +878,23 @@ class NotInSearchFilter(SearchFilter):
         return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
 
 
-class OffsetPagination(Generic[T]):
-    """Container for data returned using limit/offset pagination."""
+class OffsetPagination(msgspec.Struct, Generic[T]):
+    """Container for data returned using limit/offset pagination.
 
-    __slots__ = ("items", "limit", "offset", "total")
+    Fields preserved at runtime via msgspec metaclass so Litestar OpenAPI and
+    generic-type introspection work under mypyc-compiled wheels.
+
+    Args:
+        items: List of data being sent as part of the response.
+        limit: Maximal number of items to send.
+        offset: Offset from the beginning of the query. Identical to an index.
+        total: Total number of items.
+    """
 
     items: Sequence[T]
     limit: int
     offset: int
     total: int
-
-    def __init__(self, items: Sequence[T], limit: int, offset: int, total: int) -> None:
-        """Initialize OffsetPagination.
-
-        Args:
-            items: List of data being sent as part of the response.
-            limit: Maximal number of items to send.
-            offset: Offset from the beginning of the query. Identical to an index.
-            total: Total number of items.
-        """
-        self.items = items
-        self.limit = limit
-        self.offset = offset
-        self.total = total
 
 
 def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":
