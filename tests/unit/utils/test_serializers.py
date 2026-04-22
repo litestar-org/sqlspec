@@ -16,8 +16,10 @@ from sqlspec.utils.serializers import (
     numpy_array_dec_hook,
     numpy_array_enc_hook,
     numpy_array_predicate,
+    schema_dump,
     to_json,
 )
+from sqlspec.utils.serializers._schema import reset_serializer_cache
 
 pytestmark = pytest.mark.xdist_group("utils")
 
@@ -702,3 +704,77 @@ def test_numpy_serialization_with_to_json() -> None:
 
     decoded_list = from_json(json_str)
     assert decoded_list == [1.0, 2.0, 3.0]
+
+
+class TestSchemaDumpRename:
+    """Regression suite for GitHub #418 — schema_dump must honor msgspec rename meta."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self) -> "Any":
+        reset_serializer_cache()
+        yield
+        reset_serializer_cache()
+
+    def test_rename_camel(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc-123", display_name="Cody")
+        assert schema_dump(obj) == {"userId": "abc-123", "displayName": "Cody"}
+
+    def test_rename_kebab(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="kebab"):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc", display_name="Cody")
+        assert schema_dump(obj) == {"user-id": "abc", "display-name": "Cody"}
+
+    def test_rename_pascal(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="pascal"):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc", display_name="Cody")
+        assert schema_dump(obj) == {"UserId": "abc", "DisplayName": "Cody"}
+
+    def test_rename_callable(self) -> None:
+        import msgspec
+
+        def _upper(name: str) -> str:
+            return name.upper()
+
+        class _User(msgspec.Struct, rename=_upper):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc", display_name="Cody")
+        assert schema_dump(obj) == {"USER_ID": "abc", "DISPLAY_NAME": "Cody"}
+
+    def test_no_rename_preserved(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc", display_name="Cody")
+        assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
+
+    def test_exclude_unset_with_rename(self) -> None:
+        import msgspec
+        from msgspec import UNSET
+
+        class _User(msgspec.Struct, rename="camel", omit_defaults=False):
+            user_id: str = UNSET  # type: ignore[assignment]
+            display_name: str = UNSET  # type: ignore[assignment]
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj, exclude_unset=True) == {"userId": "abc"}
