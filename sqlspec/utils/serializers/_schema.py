@@ -5,6 +5,8 @@ from functools import partial
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from msgspec import structs
+
 from sqlspec.typing import UNSET, ArrowReturnFormat, attrs_asdict
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.type_guards import (
@@ -125,14 +127,14 @@ def _dump_identity_dict(value: Any) -> "dict[str, Any]":
 
 
 def _dump_msgspec_fields(value: Any) -> "dict[str, Any]":
-    return {field_name: value.__getattribute__(field_name) for field_name in value.__struct_fields__}
+    return {field.encode_name: value.__getattribute__(field.name) for field in structs.fields(type(value))}
 
 
 def _dump_msgspec_excluding_unset(value: Any) -> "dict[str, Any]":
     return {
-        field_name: field_value
-        for field_name in value.__struct_fields__
-        if (field_value := value.__getattribute__(field_name)) != UNSET
+        field.encode_name: field_value
+        for field in structs.fields(type(value))
+        if (field_value := value.__getattribute__(field.name)) != UNSET
     }
 
 
