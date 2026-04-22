@@ -33,11 +33,9 @@ async def test_base_async_exception_handler_defaults_to_passthrough() -> None:
 def test_sync_exception_handlers_inherit_shared_base() -> None:
     """Representative sync handlers should inherit the shared base."""
     from sqlspec.adapters.bigquery.driver import BigQueryExceptionHandler
-    from sqlspec.adapters.mock.driver import MockExceptionHandler
     from sqlspec.adapters.sqlite.driver import SqliteExceptionHandler
 
     assert issubclass(BigQueryExceptionHandler, BaseSyncExceptionHandler)
-    assert issubclass(MockExceptionHandler, BaseSyncExceptionHandler)
     assert issubclass(SqliteExceptionHandler, BaseSyncExceptionHandler)
 
 
@@ -45,11 +43,9 @@ def test_async_exception_handlers_inherit_shared_base() -> None:
     """Representative async handlers should inherit the shared base."""
     from sqlspec.adapters.aiosqlite.driver import AiosqliteExceptionHandler
     from sqlspec.adapters.asyncpg.driver import AsyncpgExceptionHandler
-    from sqlspec.adapters.mock.driver import MockAsyncExceptionHandler
 
     assert issubclass(AiosqliteExceptionHandler, BaseAsyncExceptionHandler)
     assert issubclass(AsyncpgExceptionHandler, BaseAsyncExceptionHandler)
-    assert issubclass(MockAsyncExceptionHandler, BaseAsyncExceptionHandler)
 
 
 def test_duckdb_exception_handler_maps_any_present_exception(monkeypatch: pytest.MonkeyPatch) -> None:

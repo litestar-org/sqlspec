@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import Mock
 
+import pytest
+
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.migrations.context import MigrationContext
@@ -115,20 +117,15 @@ def test_validate_async_usage_with_async_function() -> None:
     context.validate_async_usage(async_migration)
 
 
-def test_validate_async_usage_with_sync_function() -> None:
+@pytest.mark.anyio
+async def test_validate_async_usage_with_sync_function(aiosqlite_async_driver) -> None:
     """Test sync function validation in async context."""
     context = MigrationContext()
 
     def sync_migration() -> list[str]:
         return ["CREATE TABLE test (id INT);"]
 
-    mock_async_driver = Mock()
-
-    async def mock_execute() -> None:
-        return None
-
-    mock_async_driver.execute_script = mock_execute
-    context.driver = mock_async_driver
+    context.driver = aiosqlite_async_driver
 
     context.validate_async_usage(sync_migration)
     assert context.get_execution_metadata("mixed_execution") is True

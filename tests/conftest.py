@@ -134,8 +134,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         ):
             item.add_marker(skip_compiled)
             continue
-        if {"mock_sync_driver", "mock_async_driver"} & set(getattr(item, "fixturenames", ())):
-            item.add_marker(skip_compiled)
 
 
 @pytest.fixture
