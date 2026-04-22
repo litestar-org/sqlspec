@@ -76,7 +76,7 @@ Choose a topic
       :link: testing
       :link-type: doc
 
-      Unit test with mock adapters and integration test patterns.
+      Unit and integration test patterns.
 
    .. grid-item-card:: ETL & Data Pipelines
       :link: etl

@@ -4,14 +4,18 @@ Provides fixtures for configuration, caching, SQL statements, mock databases,
 cleanup, and performance testing with proper scoping and test isolation.
 """
 
+import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import aiosqlite
 import pytest
 
+from sqlspec.adapters.aiosqlite import AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import (
     SQL,
     LRUCache,
@@ -23,11 +27,47 @@ from sqlspec.core import (
 )
 from sqlspec.driver import ExecutionResult
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
+
+class TestSqliteDriver(SqliteDriver):
+    """Test-friendly SQLite driver that allows patching."""
+
+    pass
+
+
+class TestAiosqliteDriver(AiosqliteDriver):
+    """Test-friendly aiosqlite driver that allows patching."""
+
+    pass
+
+
+@pytest.fixture
+def sqlite_sync_driver() -> Generator[TestSqliteDriver, None, None]:
+    """Fixture for a real SQLite sync driver using in-memory database."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute("INSERT INTO users (name) VALUES ('test'), ('example')")
+    conn.commit()
+
+    driver = TestSqliteDriver(conn)
+    yield driver
+    conn.close()
+
+
+@pytest.fixture
+async def aiosqlite_async_driver() -> AsyncGenerator[TestAiosqliteDriver, None]:
+    """Fixture for a real aiosqlite async driver using in-memory database."""
+    conn = await aiosqlite.connect(":memory:")
+    await conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    await conn.execute("INSERT INTO users (name) VALUES ('test'), ('example')")
+    await conn.commit()
+
+    driver = TestAiosqliteDriver(conn)
+    yield driver
+    await conn.close()
 
 
 __all__ = (
+    "aiosqlite_async_driver",
     "benchmark_tracker",
     "cache_config_disabled",
     "cache_config_enabled",
@@ -50,6 +90,7 @@ __all__ = (
     "sample_select_sql",
     "sample_update_sql",
     "sql_with_typed_parameters",
+    "sqlite_sync_driver",
     "statement_config_mysql",
     "statement_config_postgres",
     "statement_config_sqlite",

@@ -3,42 +3,6 @@ Testing
 
 SQLSpec provides tools for both unit and integration testing of database code.
 
-Mock Adapter for Unit Tests
----------------------------
-
-``MockSyncConfig`` and ``MockAsyncConfig`` use an in-memory SQLite backend with
-optional dialect transpilation. Write SQL in your production dialect (PostgreSQL,
-MySQL, Oracle) and it gets transpiled to SQLite before execution.
-
-.. literalinclude:: /examples/patterns/mock_testing.py
-   :language: python
-   :caption: ``mock adapter for unit tests``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
-Key features:
-
-- ``target_dialect`` accepts ``"postgres"``, ``"mysql"``, ``"oracle"``, or ``"sqlite"``
-- SQL is automatically transpiled to SQLite for execution
-- No external database required -- runs entirely in-memory
-- Supports ``initial_sql`` parameter for schema setup on connection create
-
-Integration Test Patterns
--------------------------
-
-For integration tests against real databases, use the standard ``SQLSpec`` +
-adapter config pattern with temporary databases.
-
-.. literalinclude:: /examples/patterns/integration_testing.py
-   :language: python
-   :caption: ``integration test fixtures``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
 Pytest Fixture Tips
 -------------------
 
@@ -63,6 +27,20 @@ Pytest Fixture Tips
         with spec.provide_session(config) as session:
             session.execute("create table users (id integer primary key, name text)")
             yield session
+
+Integration Test Patterns
+-------------------------
+
+For integration tests against real databases, use the standard ``SQLSpec`` +
+adapter config pattern with temporary databases.
+
+.. literalinclude:: /examples/patterns/integration_testing.py
+   :language: python
+   :caption: ``integration test fixtures``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
 
 Related Guides
 --------------
