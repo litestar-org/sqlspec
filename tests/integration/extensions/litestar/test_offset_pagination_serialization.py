@@ -63,3 +63,13 @@ def test_litestar_offset_pagination_openapi_schema() -> None:
 
     schema_dict = media.schema.to_schema() if hasattr(media.schema, "to_schema") else media.schema
     assert schema_dict, f"OpenAPI response schema empty for OffsetPagination[Item]: {schema_dict!r}"
+
+    pagination_component = next(
+        (body for name, body in schema.components.schemas.items() if name.startswith("OffsetPagination")), None
+    )
+    assert pagination_component is not None, "OffsetPagination component missing"
+    component_dict = (
+        pagination_component.to_schema() if hasattr(pagination_component, "to_schema") else pagination_component
+    )
+    assert set(component_dict.get("required", [])) == {"items", "limit", "offset", "total"}
+    assert set(component_dict.get("properties", {}).keys()) == {"items", "limit", "offset", "total"}
