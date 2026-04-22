@@ -5,14 +5,12 @@ cleanup, and performance testing with proper scoping and test isolation.
 """
 
 import time
-from collections import defaultdict
 from collections.abc import Callable
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.core import (
     SQL,
@@ -23,74 +21,13 @@ from sqlspec.core import (
     TypedParameter,
     get_default_cache,
 )
-from sqlspec.driver import (
-    AsyncDataDictionaryBase,
-    AsyncDriverAdapterBase,
-    ExecutionResult,
-    SyncDataDictionaryBase,
-    SyncDriverAdapterBase,
-)
-from sqlspec.exceptions import SQLSpecError
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-from tests.conftest import is_compiled
+from sqlspec.driver import ExecutionResult
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
-
-
-class MockSyncExceptionHandler:
-    """Mock sync exception handler for testing.
-
-    Implements the SyncExceptionHandler protocol with deferred exception pattern.
-    """
-
-    __slots__ = ("pending_exception",)
-
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_type is None:
-            return False
-        if isinstance(exc_val, Exception):
-            self.pending_exception = SQLSpecError(f"Mock database error: {exc_val}")
-            return True
-        return False
-
-
-class MockAsyncExceptionHandler:
-    """Mock async exception handler for testing.
-
-    Implements the AsyncExceptionHandler protocol with deferred exception pattern.
-    """
-
-    __slots__ = ("pending_exception",)
-
-    def __init__(self) -> None:
-        self.pending_exception: Exception | None = None
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_type is None:
-            return False
-        if isinstance(exc_val, Exception):
-            self.pending_exception = SQLSpecError(f"Mock async database error: {exc_val}")
-            return True
-        return False
+    from collections.abc import Generator
 
 
 __all__ = (
-    "MockAsyncConnection",
-    "MockAsyncCursor",
-    "MockAsyncDriver",
-    "MockSyncConnection",
-    "MockSyncCursor",
-    "MockSyncDriver",
     "benchmark_tracker",
     "cache_config_disabled",
     "cache_config_enabled",
@@ -99,15 +36,7 @@ __all__ = (
     "compilation_metrics",
     "complex_sql_with_joins",
     "memory_profiler",
-    "mock_async_connection",
-    "mock_async_driver",
-    "mock_bigquery_connection",
     "mock_lru_cache",
-    "mock_mysql_connection",
-    "mock_postgres_connection",
-    "mock_sqlite_connection",
-    "mock_sync_connection",
-    "mock_sync_driver",
     "parameter_style_config_advanced",
     "parameter_style_config_basic",
     "performance_timer",
@@ -203,61 +132,50 @@ def statement_config_postgres(parameter_style_config_advanced: ParameterStyleCon
 
 
 @pytest.fixture
-def statement_config_mysql() -> StatementConfig:
+def statement_config_mysql(parameter_style_config_basic: ParameterStyleConfig) -> StatementConfig:
     """MySQL statement configuration for testing."""
-    mysql_config = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-    )
     return StatementConfig(
-        dialect="mysql", parameter_config=mysql_config, enable_caching=True, enable_parsing=True, enable_validation=True
+        dialect="mysql",
+        parameter_config=parameter_style_config_basic,
+        execution_mode=None,
+        execution_args=None,
+        enable_caching=True,
+        enable_parsing=True,
+        enable_validation=True,
     )
 
 
 @pytest.fixture
-def cache_config_enabled() -> dict[str, Any]:
+def cache_config_enabled() -> LRUCache:
     """Cache configuration with caching enabled."""
-    return {
-        "enable_caching": True,
-        "max_cache_size": 1000,
-        "enable_file_cache": True,
-        "enable_compiled_cache": True,
-        "cache_hit_threshold": 0.8,
-    }
+    return LRUCache(capacity=100)
 
 
 @pytest.fixture
-def cache_config_disabled() -> dict[str, Any]:
-    """Cache configuration with caching disabled for testing scenarios."""
-    return {
-        "enable_caching": False,
-        "max_cache_size": 0,
-        "enable_file_cache": False,
-        "enable_compiled_cache": False,
-        "cache_hit_threshold": 0.0,
-    }
+def cache_config_disabled() -> None:
+    """Cache configuration with caching disabled."""
+    return
 
 
 @pytest.fixture
 def mock_lru_cache() -> LRUCache:
-    """Mock LRU cache for testing cache behavior."""
-
-    return get_default_cache()
+    """Mock LRU cache for testing cache operations."""
+    return LRUCache(capacity=10)
 
 
 @pytest.fixture
-def cache_statistics_tracker() -> dict[str, Any]:
-    """Cache statistics tracker for monitoring cache performance during tests."""
-    return {"hits": 0, "misses": 0, "evictions": 0, "cache_sizes": defaultdict(int), "hit_rates": []}
+def cache_statistics_tracker() -> dict[str, int]:
+    """Tracker for cache hits and misses during tests."""
+    return {"hits": 0, "misses": 0, "evictions": 0}
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def reset_cache_state() -> "Generator[None, None, None]":
-    """Auto-use fixture to reset global cache state before each test."""
-
+    """Fixture to reset the global SQL cache before and after each test."""
+    cache = get_default_cache()
+    cache.clear()
     yield
+    cache.clear()
 
 
 @pytest.fixture
@@ -338,645 +256,6 @@ def sql_with_typed_parameters(statement_config_sqlite: StatementConfig) -> SQL:
         TypedParameter(["electronics", "gadgets"], list, "categories"),
     ]
     return SQL(sql, *params, statement_config=statement_config_sqlite)
-
-
-class MockSyncConnection:
-    """Mock sync connection with database simulation."""
-
-    def __init__(self, name: str = "mock_sync_connection", dialect: str = "sqlite") -> None:
-        self.name = name
-        self.dialect = dialect
-        self.connected = True
-        self.in_transaction = False
-        self.autocommit = True
-        self.execute_count = 0
-        self.execute_many_count = 0
-        self.last_sql: str | None = None
-        self.last_parameters: Any = None
-        self.cursor_results: list[dict[str, Any]] = []
-        self.connection_info = {
-            "server_version": "1.0.0",
-            "client_version": "1.0.0",
-            "database_name": "test_db",
-            "user": "test_user",
-        }
-
-    def cursor(self) -> "MockSyncCursor":
-        """Return a mock cursor."""
-        return MockSyncCursor(self)
-
-    def execute(self, sql: str, parameters: Any = None) -> None:
-        """Mock execute method."""
-        self.execute_count += 1
-        self.last_sql = sql
-        self.last_parameters = parameters
-
-    def executemany(self, sql: str, parameters: list[Any]) -> None:
-        """Mock executemany method."""
-        self.execute_many_count += 1
-        self.last_sql = sql
-        self.last_parameters = parameters
-
-    def commit(self) -> None:
-        """Mock commit method."""
-        self.in_transaction = False
-
-    def rollback(self) -> None:
-        """Mock rollback method."""
-        self.in_transaction = False
-
-    def close(self) -> None:
-        """Mock close method."""
-        self.connected = False
-
-    def begin(self) -> None:
-        """Mock begin transaction method."""
-        self.in_transaction = True
-        self.autocommit = False
-
-
-class MockAsyncConnection:
-    """Mock async connection with database simulation."""
-
-    def __init__(self, name: str = "mock_async_connection", dialect: str = "sqlite") -> None:
-        self.name = name
-        self.dialect = dialect
-        self.connected = True
-        self.in_transaction = False
-        self.autocommit = True
-        self.execute_count = 0
-        self.execute_many_count = 0
-        self.last_sql: str | None = None
-        self.last_parameters: Any = None
-        self.cursor_results: list[dict[str, Any]] = []
-        self.connection_info = {
-            "server_version": "1.0.0",
-            "client_version": "1.0.0",
-            "database_name": "test_db",
-            "user": "test_user",
-        }
-
-    async def cursor(self) -> "MockAsyncCursor":
-        """Return a mock async cursor."""
-        return MockAsyncCursor(self)
-
-    async def execute(self, sql: str, parameters: Any = None) -> None:
-        """Mock async execute method."""
-        self.execute_count += 1
-        self.last_sql = sql
-        self.last_parameters = parameters
-
-    async def executemany(self, sql: str, parameters: list[Any]) -> None:
-        """Mock async executemany method."""
-        self.execute_many_count += 1
-        self.last_sql = sql
-        self.last_parameters = parameters
-
-    async def commit(self) -> None:
-        """Mock async commit method."""
-        self.in_transaction = False
-
-    async def rollback(self) -> None:
-        """Mock async rollback method."""
-        self.in_transaction = False
-
-    async def close(self) -> None:
-        """Mock async close method."""
-        self.connected = False
-
-    async def begin(self) -> None:
-        """Mock async begin transaction method."""
-        self.in_transaction = True
-        self.autocommit = False
-
-
-class MockSyncCursor:
-    """Mock sync cursor with database cursor behavior."""
-
-    def __init__(self, connection: MockSyncConnection) -> None:
-        self.connection = connection
-        self.rowcount = 0
-        self.description: list[tuple[str, ...]] | None = None
-        self.fetchall_result: list[tuple[Any, ...]] = []
-        self.fetchone_result: tuple[Any, ...] | None = None
-        self.closed = False
-        self.arraysize = 1
-
-    def execute(self, sql: str, parameters: Any = None) -> None:
-        """Mock execute method with smart result generation."""
-        self.connection.execute_count += 1
-        self.connection.last_sql = sql
-        self.connection.last_parameters = parameters
-
-        sql_upper = sql.upper().strip()
-        if sql_upper.startswith("SELECT"):
-            self.description = [("id", "INTEGER"), ("name", "TEXT"), ("email", "TEXT")]
-            self.fetchall_result = [(1, "John Doe", "john@example.com"), (2, "Jane Smith", "jane@example.com")]
-            self.fetchone_result = (1, "John Doe", "john@example.com")
-            self.rowcount = len(self.fetchall_result)
-        elif sql_upper.startswith("INSERT"):
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 1
-        elif sql_upper.startswith("UPDATE"):
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 2
-        elif sql_upper.startswith("DELETE"):
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 1
-        else:
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 0
-
-    def executemany(self, sql: str, parameters: list[Any]) -> None:
-        """Mock executemany method."""
-        self.connection.execute_many_count += 1
-        self.connection.last_sql = sql
-        self.connection.last_parameters = parameters
-        self.rowcount = len(parameters) if parameters else 0
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        """Mock fetchall method."""
-        return self.fetchall_result
-
-    def fetchone(self) -> tuple[Any, ...] | None:
-        """Mock fetchone method."""
-        return self.fetchone_result
-
-    def fetchmany(self, size: int | None = None) -> list[tuple[Any, ...]]:
-        """Mock fetchmany method."""
-        size = size or self.arraysize
-        return self.fetchall_result[:size]
-
-    def close(self) -> None:
-        """Mock close method."""
-        self.closed = True
-
-    def __enter__(self) -> Self:
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Context manager exit."""
-        self.close()
-
-
-class MockAsyncCursor:
-    """Mock async cursor with database cursor behavior."""
-
-    def __init__(self, connection: MockAsyncConnection) -> None:
-        self.connection = connection
-        self.rowcount = 0
-        self.description: list[tuple[str, ...]] | None = None
-        self.fetchall_result: list[tuple[Any, ...]] = []
-        self.fetchone_result: tuple[Any, ...] | None = None
-        self.closed = False
-        self.arraysize = 1
-
-    async def execute(self, sql: str, parameters: Any = None) -> None:
-        """Mock async execute method with smart result generation."""
-        self.connection.execute_count += 1
-        self.connection.last_sql = sql
-        self.connection.last_parameters = parameters
-
-        sql_upper = sql.upper().strip()
-        if sql_upper.startswith("SELECT"):
-            self.description = [("id", "INTEGER"), ("name", "TEXT"), ("email", "TEXT")]
-            self.fetchall_result = [(1, "John Doe", "john@example.com"), (2, "Jane Smith", "jane@example.com")]
-            self.fetchone_result = (1, "John Doe", "john@example.com")
-            self.rowcount = len(self.fetchall_result)
-        elif sql_upper.startswith("INSERT"):
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 1
-        elif sql_upper.startswith("UPDATE"):
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 2
-        elif sql_upper.startswith("DELETE"):
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 1
-        else:
-            self.description = None
-            self.fetchall_result = []
-            self.fetchone_result = None
-            self.rowcount = 0
-
-    async def executemany(self, sql: str, parameters: list[Any]) -> None:
-        """Mock async executemany method."""
-        self.connection.execute_many_count += 1
-        self.connection.last_sql = sql
-        self.connection.last_parameters = parameters
-        self.rowcount = len(parameters) if parameters else 0
-
-    async def fetchall(self) -> list[tuple[Any, ...]]:
-        """Mock async fetchall method."""
-        return self.fetchall_result
-
-    async def fetchone(self) -> tuple[Any, ...] | None:
-        """Mock async fetchone method."""
-        return self.fetchone_result
-
-    async def fetchmany(self, size: int | None = None) -> list[tuple[Any, ...]]:
-        """Mock async fetchmany method."""
-        size = size or self.arraysize
-        return self.fetchall_result[:size]
-
-    async def close(self) -> None:
-        """Mock async close method."""
-        self.closed = True
-
-    async def __aenter__(self) -> Self:
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Async context manager exit."""
-        await self.close()
-
-
-class MockSyncDataDictionary(SyncDataDictionaryBase):
-    """Mock sync data dictionary for testing."""
-
-    def get_version(self, driver: "MockSyncDriver") -> "VersionInfo | None":
-        """Return mock version info."""
-        return VersionInfo(3, 42, 0)
-
-    def get_feature_flag(self, driver: "MockSyncDriver", feature: str) -> bool:
-        """Return mock feature flag."""
-        return feature in {"supports_transactions", "supports_prepared_statements"}
-
-    def get_optimal_type(self, driver: "MockSyncDriver", type_category: str) -> str:
-        """Return mock optimal type."""
-        return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
-
-    def get_tables(self, driver: "MockSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
-        """Return mock table list."""
-        _ = (driver, schema)
-        return []
-
-    def get_columns(
-        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ColumnMetadata]":
-        """Return mock column metadata."""
-        _ = (driver, table, schema)
-        return []
-
-    def get_indexes(
-        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[IndexMetadata]":
-        """Return mock index metadata."""
-        _ = (driver, table, schema)
-        return []
-
-    def get_foreign_keys(
-        self, driver: "MockSyncDriver", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ForeignKeyMetadata]":
-        """Return mock foreign key metadata."""
-        _ = (driver, table, schema)
-        return []
-
-    def list_available_features(self) -> "list[str]":
-        """Return mock available features."""
-        return ["supports_transactions", "supports_prepared_statements"]
-
-
-class MockAsyncDataDictionary(AsyncDataDictionaryBase):
-    """Mock async data dictionary for testing."""
-
-    async def get_version(self, driver: "MockAsyncDriver") -> "VersionInfo | None":
-        """Return mock version info."""
-        return VersionInfo(3, 42, 0)
-
-    async def get_feature_flag(self, driver: "MockAsyncDriver", feature: str) -> bool:
-        """Return mock feature flag."""
-        return feature in {"supports_transactions", "supports_prepared_statements"}
-
-    async def get_optimal_type(self, driver: "MockAsyncDriver", type_category: str) -> str:
-        """Return mock optimal type."""
-        return {"text": "TEXT", "boolean": "INTEGER"}.get(type_category, "TEXT")
-
-    async def get_tables(self, driver: "MockAsyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
-        """Return mock table list."""
-        _ = (driver, schema)
-        return []
-
-    async def get_columns(
-        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ColumnMetadata]":
-        """Return mock column metadata."""
-        _ = (driver, table, schema)
-        return []
-
-    async def get_indexes(
-        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[IndexMetadata]":
-        """Return mock index metadata."""
-        _ = (driver, table, schema)
-        return []
-
-    async def get_foreign_keys(
-        self, driver: "MockAsyncDriver", table: "str | None" = None, schema: "str | None" = None
-    ) -> "list[ForeignKeyMetadata]":
-        """Return mock foreign key metadata."""
-        _ = (driver, table, schema)
-        return []
-
-    def list_available_features(self) -> "list[str]":
-        """Return mock available features."""
-        return ["supports_transactions", "supports_prepared_statements"]
-
-
-class MockSyncDriver(SyncDriverAdapterBase):
-    """Mock sync driver with adapter interface."""
-
-    dialect = "sqlite"
-
-    def __init__(
-        self,
-        connection: MockSyncConnection,
-        statement_config: StatementConfig | None = None,
-        driver_features: dict[str, Any] | None = None,
-    ) -> None:
-        if statement_config is None:
-            from sqlspec.core import ParameterStyleConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK},
-                supported_execution_parameter_styles={ParameterStyle.QMARK},
-                default_execution_parameter_style=ParameterStyle.QMARK,
-            )
-            statement_config = StatementConfig(
-                dialect="sqlite", parameter_config=parameter_config, enable_caching=False
-            )
-        super().__init__(connection, statement_config, driver_features)
-        self._data_dictionary: SyncDataDictionaryBase | None = None
-
-    @property
-    def data_dictionary(self) -> "SyncDataDictionaryBase":
-        """Get the data dictionary for this driver."""
-        if self._data_dictionary is None:
-            self._data_dictionary = MockSyncDataDictionary()
-        return self._data_dictionary
-
-    @contextmanager
-    def with_cursor(self, connection: MockSyncConnection) -> "Generator[MockSyncCursor, None, None]":
-        """Return mock cursor context manager."""
-        cursor = connection.cursor()
-        try:
-            yield cursor
-        finally:
-            cursor.close()
-
-    def handle_database_exceptions(self) -> "MockSyncExceptionHandler":
-        """Handle database exceptions."""
-        return MockSyncExceptionHandler()
-
-    def dispatch_special_handling(self, cursor: MockSyncCursor, statement: SQL) -> Any | None:
-        """Mock special handling - always return None."""
-        return None
-
-    def dispatch_execute(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
-        """Mock execute statement."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.execute(sql, prepared_parameters)
-
-        if statement.returns_rows():
-            fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-            data = [dict(zip(column_names, row)) for row in fetched_data]
-
-            return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
-            )
-
-        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
-
-    def dispatch_execute_many(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
-        """Mock execute many."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
-        parameter_sets = cast("list[Any]", prepared_parameters)
-        cursor.executemany(sql, parameter_sets)
-        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
-
-    def dispatch_execute_script(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
-        """Mock execute script."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        for stmt in statements:
-            cursor.execute(stmt, prepared_parameters or ())
-            successful_count += 1
-
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    def begin(self) -> None:
-        """Mock begin transaction."""
-        self.connection.begin()
-
-    def rollback(self) -> None:
-        """Mock rollback transaction."""
-        self.connection.rollback()
-
-    def commit(self) -> None:
-        """Mock commit transaction."""
-        self.connection.commit()
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.in_transaction)
-
-
-class MockAsyncDriver(AsyncDriverAdapterBase):
-    """Mock async driver with adapter interface."""
-
-    dialect = "sqlite"
-
-    def __init__(
-        self,
-        connection: MockAsyncConnection,
-        statement_config: StatementConfig | None = None,
-        driver_features: dict[str, Any] | None = None,
-    ) -> None:
-        if statement_config is None:
-            from sqlspec.core import ParameterStyleConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK},
-                supported_execution_parameter_styles={ParameterStyle.QMARK},
-                default_execution_parameter_style=ParameterStyle.QMARK,
-            )
-            statement_config = StatementConfig(
-                dialect="sqlite", parameter_config=parameter_config, enable_caching=False
-            )
-        super().__init__(connection, statement_config, driver_features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
-
-    @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
-        """Get the data dictionary for this driver."""
-        if self._data_dictionary is None:
-            self._data_dictionary = MockAsyncDataDictionary()
-        return self._data_dictionary
-
-    @asynccontextmanager
-    async def with_cursor(self, connection: MockAsyncConnection) -> "AsyncGenerator[MockAsyncCursor, None]":
-        """Return mock async cursor context manager."""
-        cursor = await connection.cursor()
-        try:
-            yield cursor
-        finally:
-            await cursor.close()
-
-    def handle_database_exceptions(self) -> "MockAsyncExceptionHandler":
-        """Handle database exceptions."""
-        return MockAsyncExceptionHandler()
-
-    async def dispatch_special_handling(self, cursor: MockAsyncCursor, statement: SQL) -> Any | None:
-        """Mock async special handling - always return None."""
-        return None
-
-    async def dispatch_execute(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
-        """Mock async execute statement."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        await cursor.execute(sql, prepared_parameters)
-
-        if statement.returns_rows():
-            fetched_data = await cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-            data = [dict(zip(column_names, row)) for row in fetched_data]
-
-            return self.create_execution_result(
-                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
-            )
-
-        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
-
-    async def dispatch_execute_many(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
-        """Mock async execute many."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
-        parameter_sets = cast("list[Any]", prepared_parameters)
-        await cursor.executemany(sql, parameter_sets)
-        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount, is_many_result=True)
-
-    async def dispatch_execute_script(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
-        """Mock async execute script."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        for stmt in statements:
-            await cursor.execute(stmt, prepared_parameters or ())
-            successful_count += 1
-
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
-
-    async def begin(self) -> None:
-        """Mock async begin transaction."""
-        await self.connection.begin()
-
-    async def rollback(self) -> None:
-        """Mock async rollback transaction."""
-        await self.connection.rollback()
-
-    async def commit(self) -> None:
-        """Mock async commit transaction."""
-        await self.connection.commit()
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.in_transaction)
-
-
-@pytest.fixture
-def mock_sync_connection() -> MockSyncConnection:
-    """Fixture for basic mock sync connection."""
-    return MockSyncConnection()
-
-
-@pytest.fixture
-def mock_async_connection() -> MockAsyncConnection:
-    """Fixture for basic mock async connection."""
-    return MockAsyncConnection()
-
-
-@pytest.fixture
-def mock_sync_driver(mock_sync_connection: MockSyncConnection) -> MockSyncDriver:
-    """Fixture for mock sync driver."""
-    if is_compiled():
-        pytest.skip("Requires interpreted driver base")
-    return MockSyncDriver(mock_sync_connection)
-
-
-@pytest.fixture
-def mock_async_driver(mock_async_connection: MockAsyncConnection) -> MockAsyncDriver:
-    """Fixture for mock async driver."""
-    if is_compiled():
-        pytest.skip("Requires interpreted driver base")
-    return MockAsyncDriver(mock_async_connection)
-
-
-@pytest.fixture
-def mock_sqlite_connection() -> MockSyncConnection:
-    """Mock SQLite connection with SQLite-specific behavior."""
-    return MockSyncConnection("sqlite_connection", "sqlite")
-
-
-@pytest.fixture
-def mock_postgres_connection() -> MockAsyncConnection:
-    """Mock PostgreSQL connection with Postgres-specific behavior."""
-    conn = MockAsyncConnection("postgres_connection", "postgres")
-    conn.connection_info.update({"server_version": "14.0", "supports_returning": "True", "supports_arrays": "True"})
-    return conn
-
-
-@pytest.fixture
-def mock_mysql_connection() -> MockSyncConnection:
-    """Mock MySQL connection with MySQL-specific behavior."""
-    conn = MockSyncConnection("mysql_connection", "mysql")
-    conn.connection_info.update({"server_version": "8.0.0", "supports_json": "True", "charset": "utf8mb4"})
-    return conn
-
-
-@pytest.fixture
-def mock_bigquery_connection() -> MockSyncConnection:
-    """Mock BigQuery connection with BigQuery-specific behavior."""
-    conn = MockSyncConnection("bigquery_connection", "bigquery")
-    conn.connection_info.update({
-        "project_id": "test-project",
-        "dataset_id": "test_dataset",
-        "supports_arrays": "True",
-        "supports_structs": "True",
-    })
-    return conn
 
 
 @pytest.fixture(autouse=True)
