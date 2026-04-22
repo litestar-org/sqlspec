@@ -53,7 +53,7 @@ exports a typed config class and a driver implementation.
       :link: mysql
       :link-type: doc
 
-      MySQL via mysql-connector, PyMySQL, and asyncmy.
+      MySQL via mysql-connector, PyMySQL, asyncmy, and aiomysql.
 
    .. grid-item-card:: BigQuery
       :link: bigquery
@@ -146,6 +146,12 @@ Feature Comparison
      -
      -
    * - asyncmy
+     -
+     - Yes
+     - Yes
+     -
+     -
+   * - aiomysql
      -
      - Yes
      - Yes

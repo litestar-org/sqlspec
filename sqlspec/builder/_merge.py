@@ -475,7 +475,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
             builder = cast("QueryBuilder", self)
             dialect_name = builder.dialect_name
             if dialect_name == "oracle":
-                update_expression.set("where", condition_expr)
+                update_expression.set("where", exp.Where(this=condition_expr))
             else:
                 when_kwargs["condition"] = condition_expr
 
@@ -819,5 +819,5 @@ class Merge(
                 continue
             then_expr = when_expr.args.get("then")
             if isinstance(then_expr, exp.Update):
-                then_expr.set("where", condition_expr)
+                then_expr.set("where", exp.Where(this=condition_expr))
                 when_expr.set("condition", None)

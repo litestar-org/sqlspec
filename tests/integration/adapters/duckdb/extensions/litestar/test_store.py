@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -27,20 +28,22 @@ async def duckdb_store(tmp_path: Path, worker_id: str) -> AsyncGenerator[DuckdbS
         objects for each thread, we must use a file-based database to ensure
         all threads share the same data.
 
-        Worker ID ensures parallel pytest-xdist workers use separate database
-        files, preventing file locking conflicts.
+        A unique database filename per test keeps DuckDB's derived attach
+        name distinct even if a prior pool has not yet released the file
+        (DuckDB rejects ATTACH when any live connection already claims the
+        same logical database name).
     """
-    db_path = tmp_path / f"test_sessions_{worker_id}.duckdb"
+    db_path = tmp_path / f"test_sessions_{worker_id}_{uuid4().hex}.duckdb"
+    config = DuckDBConfig(
+        connection_config={"database": str(db_path)}, extension_config={"litestar": {"session_table": "test_sessions"}}
+    )
     try:
-        config = DuckDBConfig(
-            connection_config={"database": str(db_path)},
-            extension_config={"litestar": {"session_table": "test_sessions"}},
-        )
         store = DuckdbStore(config)
         await store.create_table()
         yield store
         await store.delete_all()
     finally:
+        config._close_pool()
         if db_path.exists():
             db_path.unlink()
 

@@ -758,7 +758,10 @@ class QueryBuilder(ABC):
 
         try:
             optimized = optimize(
-                expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
+                expression,
+                schema=cast("dict[str, object] | None", self.schema),
+                dialect=self.dialect_name,
+                optimizer_settings=optimizer_settings,
             )
             cache.put_optimized(cache_key, optimized)
         except Exception:
