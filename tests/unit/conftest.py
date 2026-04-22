@@ -189,7 +189,7 @@ def statement_config_mysql(parameter_style_config_basic: ParameterStyleConfig) -
 @pytest.fixture
 def cache_config_enabled() -> LRUCache:
     """Cache configuration with caching enabled."""
-    return LRUCache(capacity=100)
+    return LRUCache(max_size=100)
 
 
 @pytest.fixture
@@ -201,7 +201,7 @@ def cache_config_disabled() -> None:
 @pytest.fixture
 def mock_lru_cache() -> LRUCache:
     """Mock LRU cache for testing cache operations."""
-    return LRUCache(capacity=10)
+    return LRUCache(max_size=10)
 
 
 @pytest.fixture

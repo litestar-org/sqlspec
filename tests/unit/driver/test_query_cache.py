@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.core import SQL, OperationProfile, ParameterProfile, ProcessedState
+from sqlspec.core import SQL, OperationProfile, OperationType, ParameterProfile, ProcessedState
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.exceptions import SQLSpecError
 
@@ -14,7 +14,7 @@ from sqlspec.exceptions import SQLSpecError
 def _make_cached(
     compiled_sql: str = "SELECT 1",
     param_count: int = 0,
-    operation_type: str = "SELECT",
+    operation_type: OperationType = "SELECT",
     column_names: list[str] | None = None,
     operation_profile: OperationProfile | None = None,
     processed_state: ProcessedState | None = None,
