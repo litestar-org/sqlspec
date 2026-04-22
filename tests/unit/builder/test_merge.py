@@ -176,6 +176,24 @@ def test_merge_when_matched_update_with_condition() -> None:
 
     assert "WHEN MATCHED" in stmt.sql.upper()
     assert "UPDATE" in stmt.sql.upper()
+    upper_sql = " ".join(stmt.sql.upper().split())
+    assert "AND" in upper_sql or "WHERE" in upper_sql
+
+
+def test_merge_when_matched_update_with_condition_oracle() -> None:
+    """Oracle MERGE UPDATE condition renders as UPDATE SET ... WHERE predicate."""
+    query = (
+        sql
+        .merge(dialect="oracle")
+        .into("products", alias="t")
+        .using({"id": 1, "new_price": 5.00}, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update({"price": "src.new_price"}, condition="src.new_price < t.price")
+    )
+    stmt = query.build()
+
+    rendered = " ".join(stmt.sql.split())
+    assert "UPDATE SET price = src.new_price WHERE src.new_price < t.price" in rendered
 
 
 def test_merge_when_matched_update_no_values_error() -> None:
