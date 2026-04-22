@@ -39,6 +39,8 @@ def test_litestar_offset_pagination_serialization() -> None:
 
 def test_litestar_offset_pagination_openapi_schema() -> None:
     """OffsetPagination[T] must register T as an OpenAPI component (regression for #419)."""
+    from typing import Any, cast
+
     import msgspec
 
     class Item(msgspec.Struct):
@@ -54,10 +56,12 @@ def test_litestar_offset_pagination_openapi_schema() -> None:
     app = Litestar(route_handlers=[list_items], plugins=[SQLSpecPlugin(sqlspec=sql)])
 
     schema = app.openapi_schema
+    assert schema.components.schemas is not None
     component_names = set(schema.components.schemas.keys())
     assert any("Item" in name for name in component_names), f"Item not in OpenAPI components: {component_names}"
 
-    response = schema.paths["/items"].get.responses["200"]
+    paths = cast("dict[str, Any]", schema.paths)
+    response = paths["/items"].get.responses["200"]
     media = response.content["application/json"]
     assert media.schema is not None, "response media schema is None"
 
@@ -68,8 +72,9 @@ def test_litestar_offset_pagination_openapi_schema() -> None:
         (body for name, body in schema.components.schemas.items() if name.startswith("OffsetPagination")), None
     )
     assert pagination_component is not None, "OffsetPagination component missing"
-    component_dict = (
-        pagination_component.to_schema() if hasattr(pagination_component, "to_schema") else pagination_component
+    component_dict = cast(
+        "dict[str, Any]",
+        pagination_component.to_schema() if hasattr(pagination_component, "to_schema") else pagination_component,
     )
     assert set(component_dict.get("required", [])) == {"items", "limit", "offset", "total"}
     assert set(component_dict.get("properties", {}).keys()) == {"items", "limit", "offset", "total"}
