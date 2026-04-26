@@ -4,8 +4,15 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import SanicConfigState
-from sqlspec.extensions.sanic._utils import get_context_value, get_or_create_session
+from sqlspec.extensions.sanic._utils import (
+    get_context_value,
+    get_or_create_session,
+    has_context_value,
+    pop_context_value,
+    set_context_value,
+)
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from sanic import Sanic
@@ -49,7 +56,7 @@ class SQLSpecPlugin:
         db_ext = SQLSpecPlugin(sqlspec, app)
     """
 
-    __slots__ = ("_config_states", "_sqlspec")
+    __slots__ = ("_config_states", "_lifecycle_listeners_added", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, app: "Sanic[Any, Any] | None" = None) -> None:
         """Initialize SQLSpec Sanic extension.
@@ -60,6 +67,7 @@ class SQLSpecPlugin:
         """
         self._sqlspec = sqlspec
         self._config_states: list[SanicConfigState] = []
+        self._lifecycle_listeners_added = False
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_sanic_settings(cfg)
@@ -152,6 +160,90 @@ class SQLSpecPlugin:
         """
         self._validate_unique_keys()
         setattr(app.ctx, "sqlspec_plugin", self)
+        self._add_lifecycle_listeners(app)
+
+    def _add_lifecycle_listeners(self, app: "Sanic[Any, Any]") -> None:
+        """Register Sanic server lifecycle listeners.
+
+        Args:
+            app: Sanic application instance.
+        """
+        if self._lifecycle_listeners_added:
+            return
+
+        app.before_server_start(self._before_server_start)
+        app.after_server_stop(self._after_server_stop)
+        self._lifecycle_listeners_added = True
+
+    async def _before_server_start(self, app: Any, *_: Any) -> None:
+        """Create configured connection pools before the worker starts.
+
+        Args:
+            app: Sanic application instance.
+            *_: Optional Sanic listener arguments.
+        """
+        for config_state in self._config_states:
+            if not config_state.config.supports_connection_pooling:
+                continue
+            if has_context_value(app.ctx, config_state.pool_key):
+                continue
+
+            try:
+                pool = await ensure_async_(config_state.config.create_pool)()
+                set_context_value(app.ctx, config_state.pool_key, pool)
+            except Exception:
+                log_with_context(
+                    logger,
+                    logging.ERROR,
+                    "pool.create.failed",
+                    framework="sanic",
+                    pool_key=config_state.pool_key,
+                    session_key=config_state.session_key,
+                )
+                raise
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.create",
+                framework="sanic",
+                pool_key=config_state.pool_key,
+                session_key=config_state.session_key,
+            )
+
+    async def _after_server_stop(self, app: Any, *_: Any) -> None:
+        """Close configured connection pools after the worker stops.
+
+        Args:
+            app: Sanic application instance.
+            *_: Optional Sanic listener arguments.
+        """
+        for config_state in self._config_states:
+            if not config_state.config.supports_connection_pooling:
+                continue
+            if not has_context_value(app.ctx, config_state.pool_key):
+                continue
+
+            try:
+                await ensure_async_(config_state.config.close_pool)()
+            except Exception:
+                log_with_context(
+                    logger,
+                    logging.ERROR,
+                    "pool.close.failed",
+                    framework="sanic",
+                    pool_key=config_state.pool_key,
+                    session_key=config_state.session_key,
+                )
+                raise
+            pop_context_value(app.ctx, config_state.pool_key)
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.close",
+                framework="sanic",
+                pool_key=config_state.pool_key,
+                session_key=config_state.session_key,
+            )
 
     def _validate_unique_keys(self) -> None:
         """Validate that all context keys are unique across configs.
