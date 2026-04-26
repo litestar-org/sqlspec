@@ -12,7 +12,7 @@ from sqlspec.extensions.sanic._utils import (
     set_context_value,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.sync_tools import ensure_async_
+from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
     from sanic import Sanic
@@ -25,6 +25,9 @@ DEFAULT_COMMIT_MODE = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
+HTTP_200_OK = 200
+HTTP_300_MULTIPLE_CHOICES = 300
+HTTP_400_BAD_REQUEST = 400
 
 
 class SQLSpecPlugin:
@@ -56,7 +59,7 @@ class SQLSpecPlugin:
         db_ext = SQLSpecPlugin(sqlspec, app)
     """
 
-    __slots__ = ("_config_states", "_lifecycle_listeners_added", "_sqlspec")
+    __slots__ = ("_config_states", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, app: "Sanic[Any, Any] | None" = None) -> None:
         """Initialize SQLSpec Sanic extension.
@@ -68,6 +71,7 @@ class SQLSpecPlugin:
         self._sqlspec = sqlspec
         self._config_states: list[SanicConfigState] = []
         self._lifecycle_listeners_added = False
+        self._request_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_sanic_settings(cfg)
@@ -161,6 +165,7 @@ class SQLSpecPlugin:
         self._validate_unique_keys()
         setattr(app.ctx, "sqlspec_plugin", self)
         self._add_lifecycle_listeners(app)
+        self._add_request_middleware(app)
 
     def _add_lifecycle_listeners(self, app: "Sanic[Any, Any]") -> None:
         """Register Sanic server lifecycle listeners.
@@ -174,6 +179,159 @@ class SQLSpecPlugin:
         app.before_server_start(self._before_server_start)
         app.after_server_stop(self._after_server_stop)
         self._lifecycle_listeners_added = True
+
+    def _add_request_middleware(self, app: "Sanic[Any, Any]") -> None:
+        """Register Sanic request and response middleware.
+
+        Args:
+            app: Sanic application instance.
+        """
+        if self._request_middleware_added or all(state.disable_di for state in self._config_states):
+            return
+
+        app.on_request(self._on_request)
+        app.on_response(self._on_response)
+        self._request_middleware_added = True
+
+    async def _on_request(self, request: Any) -> None:
+        """Acquire request-scoped connections.
+
+        Args:
+            request: Sanic request instance.
+        """
+        acquired_states: list[SanicConfigState] = []
+        try:
+            for config_state in self._config_states:
+                if config_state.disable_di:
+                    continue
+                await self._acquire_request_connection(request, config_state)
+                acquired_states.append(config_state)
+        except Exception:
+            for config_state in reversed(acquired_states):
+                await self._release_request_connection(request, config_state)
+            raise
+
+    async def _on_response(self, request: Any, response: Any) -> None:
+        """Finalize request-scoped connections.
+
+        Args:
+            request: Sanic request instance.
+            response: Sanic response instance.
+        """
+        for config_state in reversed(self._config_states):
+            if config_state.disable_di:
+                continue
+            await self._finalize_request_connection(request, response, config_state)
+
+    async def _acquire_request_connection(self, request: Any, config_state: SanicConfigState) -> None:
+        """Acquire and store a connection for one config state.
+
+        Args:
+            request: Sanic request instance.
+            config_state: Configuration state.
+        """
+        config = config_state.config
+
+        if config.supports_connection_pooling:
+            pool = get_context_value(request.app.ctx, config_state.pool_key)
+            connection_manager = with_ensure_async_(config.provide_connection(pool))  # type: ignore[union-attr]
+            connection = await connection_manager.__aenter__()
+            set_context_value(request.ctx, self._connection_manager_key(config_state), connection_manager)
+        else:
+            connection = await ensure_async_(config.create_connection)()
+
+        set_context_value(request.ctx, config_state.connection_key, connection)
+
+    async def _finalize_request_connection(self, request: Any, response: Any, config_state: SanicConfigState) -> None:
+        """Commit or rollback, then release one request connection.
+
+        Args:
+            request: Sanic request instance.
+            response: Sanic response instance.
+            config_state: Configuration state.
+        """
+        connection = get_context_value(request.ctx, config_state.connection_key, None)
+        if connection is None:
+            return
+
+        try:
+            if config_state.commit_mode != "manual":
+                status_code = self._response_status_code(response)
+                if self._should_commit(config_state, status_code):
+                    await ensure_async_(connection.commit)()
+                else:
+                    await ensure_async_(connection.rollback)()
+        finally:
+            await self._release_request_connection(request, config_state)
+
+    async def _release_request_connection(self, request: Any, config_state: SanicConfigState) -> None:
+        """Release and clear one request connection.
+
+        Args:
+            request: Sanic request instance.
+            config_state: Configuration state.
+        """
+        connection = pop_context_value(request.ctx, config_state.connection_key)
+        pop_context_value(request.ctx, f"{config_state.session_key}_instance")
+
+        if connection is None:
+            pop_context_value(request.ctx, self._connection_manager_key(config_state))
+            return
+
+        if config_state.config.supports_connection_pooling:
+            connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
+            if connection_manager is not None:
+                await connection_manager.__aexit__(None, None, None)
+            return
+
+        await ensure_async_(connection.close)()
+
+    def _should_commit(self, config_state: SanicConfigState, status_code: int) -> bool:
+        """Determine whether a response status should commit.
+
+        Args:
+            config_state: Configuration state.
+            status_code: HTTP response status.
+
+        Returns:
+            ``True`` when the transaction should commit.
+        """
+        extra_commit = config_state.extra_commit_statuses or set()
+        extra_rollback = config_state.extra_rollback_statuses or set()
+
+        if status_code in extra_commit:
+            return True
+        if status_code in extra_rollback:
+            return False
+
+        if HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES:
+            return True
+        return bool(
+            config_state.commit_mode == "autocommit_include_redirect"
+            and HTTP_300_MULTIPLE_CHOICES <= status_code < HTTP_400_BAD_REQUEST
+        )
+
+    def _response_status_code(self, response: Any) -> int:
+        """Return a Sanic response status code.
+
+        Args:
+            response: Sanic response instance.
+
+        Returns:
+            HTTP status code.
+        """
+        return int(getattr(response, "status", getattr(response, "status_code", 500)))
+
+    def _connection_manager_key(self, config_state: SanicConfigState) -> str:
+        """Return the request context key for a connection manager.
+
+        Args:
+            config_state: Configuration state.
+
+        Returns:
+            Request context key.
+        """
+        return f"{config_state.connection_key}_context_manager"
 
     async def _before_server_start(self, app: Any, *_: Any) -> None:
         """Create configured connection pools before the worker starts.
