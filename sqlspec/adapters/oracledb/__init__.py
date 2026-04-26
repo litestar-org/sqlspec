@@ -1,4 +1,14 @@
+import sqlspec.adapters.oracledb._json_handlers as json_handlers
 import sqlspec.adapters.oracledb._numpy_handlers as numpy_handlers
+from sqlspec.adapters.oracledb._json_handlers import (
+    json_converter_in_blob,
+    json_converter_in_clob,
+    json_converter_out_blob,
+    json_converter_out_clob,
+    json_input_type_handler,
+    json_output_type_handler,
+    register_json_handlers,
+)
 from sqlspec.adapters.oracledb._numpy_handlers import (
     DTYPE_TO_ARRAY_CODE,
     numpy_converter_in,
@@ -51,11 +61,19 @@ __all__ = (
     "OracleSyncDriver",
     "OracleSyncExceptionHandler",
     "default_statement_config",
+    "json_converter_in_blob",
+    "json_converter_in_clob",
+    "json_converter_out_blob",
+    "json_converter_out_clob",
+    "json_handlers",
+    "json_input_type_handler",
+    "json_output_type_handler",
     "numpy_converter_in",
     "numpy_converter_out",
     "numpy_handlers",
     "numpy_input_type_handler",
     "numpy_output_type_handler",
+    "register_json_handlers",
     "register_numpy_handlers",
     "register_uuid_handlers",
     "uuid_converter_in",
