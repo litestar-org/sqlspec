@@ -56,6 +56,7 @@ __all__ = (
     "NoPoolSyncConfig",
     "OpenTelemetryConfig",
     "PrometheusConfig",
+    "SanicConfig",
     "StarletteConfig",
     "SyncConfigT",
     "SyncDatabaseConfig",
@@ -404,6 +405,71 @@ class FastAPIConfig(StarletteConfig):
             }
         )
     """
+
+
+class SanicConfig(TypedDict):
+    """Configuration options for Sanic SQLSpec extension.
+
+    All fields are optional with sensible defaults. Use in ``extension_config["sanic"]``.
+
+    Example:
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+        config = AsyncpgConfig(
+            connection_config={"dsn": "postgresql://localhost/mydb"},
+            extension_config={
+                "sanic": {
+                    "commit_mode": "autocommit",
+                    "session_key": "db"
+                }
+            }
+        )
+
+    Notes:
+        This TypedDict provides type safety for extension config.
+        Sanic extension uses ``app.ctx`` for pools and ``request.ctx`` for
+        request-scoped connections and sessions.
+    """
+
+    connection_key: NotRequired[str]
+    """Key for storing connection in request.ctx. Default: 'db_connection'"""
+
+    pool_key: NotRequired[str]
+    """Key for storing connection pool in app.ctx. Default: 'db_pool'"""
+
+    session_key: NotRequired[str]
+    """Key for storing session in request.ctx. Default: 'db_session'"""
+
+    commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
+    """Transaction commit mode. Default: 'manual'
+
+    - manual: No automatic commit/rollback
+    - autocommit: Commit on 2xx, rollback otherwise
+    - autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise
+    """
+
+    extra_commit_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger commit. Default: set()"""
+
+    extra_rollback_statuses: NotRequired[set[int]]
+    """Additional HTTP status codes that trigger rollback. Default: set()"""
+
+    disable_di: NotRequired[bool]
+    """Disable built-in dependency injection. Default: False.
+    When True, the Sanic extension will not register request middleware for
+    managing database connections and sessions. Users are responsible for
+    managing the database lifecycle manually via their own DI solution.
+    """
+
+    enable_sqlcommenter_middleware: NotRequired[bool]
+    """Control automatic SQLCommenter middleware registration. Default: True.
+    When the driver's :class:`~sqlspec.core.statement.StatementConfig` has
+    ``enable_sqlcommenter=True``, the middleware is registered automatically.
+    Set to ``False`` to explicitly disable middleware registration.
+    """
+
+    sqlcommenter_framework: NotRequired[str]
+    """Framework name for SQLCommenter attributes. Default: 'sanic'."""
 
 
 class ADKPartitionConfig(TypedDict):
@@ -983,6 +1049,7 @@ ExtensionConfigs: TypeAlias = dict[
     | LitestarConfig
     | FastAPIConfig
     | StarletteConfig
+    | SanicConfig
     | FlaskConfig
     | ADKConfig
     | EventsConfig
