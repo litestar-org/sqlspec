@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.exceptions import ImproperConfigurationError
+
 if TYPE_CHECKING:
     from sqlspec.extensions.sanic._state import SanicConfigState
 
@@ -81,8 +83,18 @@ def get_connection_from_request(request: Any, config_state: "SanicConfigState") 
 
     Returns:
         Database connection object.
+
+    Raises:
+        ImproperConfigurationError: If SQLSpec request middleware has not stored a connection.
     """
-    return get_context_value(request.ctx, config_state.connection_key)
+    try:
+        return get_context_value(request.ctx, config_state.connection_key)
+    except AttributeError as exc:
+        msg = (
+            f"Sanic request context does not contain SQLSpec connection '{config_state.connection_key}'. "
+            "Ensure SQLSpecPlugin is initialized and its request middleware runs before accessing sessions."
+        )
+        raise ImproperConfigurationError(msg) from exc
 
 
 def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any:
