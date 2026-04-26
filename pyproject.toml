@@ -209,6 +209,7 @@ include = [
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
+  "sqlspec/adapters/oracledb/_param_types.py", # Slot-based LOB/JSON parameter wrappers
   "sqlspec/utils/text.py",                 # Text utilities
   "sqlspec/utils/sync_tools.py",           # Synchronous utility functions
   "sqlspec/utils/type_guards.py",          # Type guard utilities
