@@ -2,6 +2,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.base import SQLSpec
+from sqlspec.core import CorrelationExtractor
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
@@ -11,6 +13,7 @@ from sqlspec.extensions.sanic._utils import (
     pop_context_value,
     set_context_value,
 )
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
@@ -186,7 +189,7 @@ class SQLSpecPlugin:
         Args:
             app: Sanic application instance.
         """
-        if self._request_middleware_added or all(state.disable_di for state in self._config_states):
+        if self._request_middleware_added or not self._needs_request_middleware():
             return
 
         app.on_request(self._on_request)
@@ -199,6 +202,7 @@ class SQLSpecPlugin:
         Args:
             request: Sanic request instance.
         """
+        self._set_observability_contexts(request)
         acquired_states: list[SanicConfigState] = []
         try:
             for config_state in self._config_states:
@@ -209,6 +213,7 @@ class SQLSpecPlugin:
         except Exception:
             for config_state in reversed(acquired_states):
                 await self._release_request_connection(request, config_state)
+            self._restore_observability_contexts(request, None)
             raise
 
     async def _on_response(self, request: Any, response: Any) -> None:
@@ -218,10 +223,183 @@ class SQLSpecPlugin:
             request: Sanic request instance.
             response: Sanic response instance.
         """
-        for config_state in reversed(self._config_states):
-            if config_state.disable_di:
-                continue
-            await self._finalize_request_connection(request, response, config_state)
+        try:
+            for config_state in reversed(self._config_states):
+                if config_state.disable_di:
+                    continue
+                await self._finalize_request_connection(request, response, config_state)
+        finally:
+            self._restore_observability_contexts(request, response)
+
+    def _needs_request_middleware(self) -> bool:
+        """Return whether this plugin should register request middleware.
+
+        Returns:
+            ``True`` when connection management or observability middleware is enabled.
+        """
+        return any(
+            not state.disable_di or state.enable_correlation_middleware or self._state_enables_sqlcommenter(state)
+            for state in self._config_states
+        )
+
+    def _set_observability_contexts(self, request: Any) -> None:
+        """Set request-scoped observability contexts.
+
+        Args:
+            request: Sanic request instance.
+        """
+        self._set_correlation_context(request)
+        self._set_sqlcommenter_context(request)
+
+    def _restore_observability_contexts(self, request: Any, response: Any | None) -> None:
+        """Restore request-scoped observability contexts.
+
+        Args:
+            request: Sanic request instance.
+            response: Sanic response instance, if one is available.
+        """
+        self._restore_sqlcommenter_context(request)
+        self._restore_correlation_context(request, response)
+
+    def _set_correlation_context(self, request: Any) -> None:
+        """Set CorrelationContext for this request when enabled.
+
+        Args:
+            request: Sanic request instance.
+        """
+        config_state = self._first_correlation_state()
+        if config_state is None:
+            return
+
+        extractor = CorrelationExtractor(
+            primary_header=config_state.correlation_header,
+            additional_headers=config_state.correlation_headers,
+            auto_trace_headers=config_state.auto_trace_headers,
+        )
+        correlation_id = extractor.extract(lambda header: request.headers.get(header))
+        set_context_value(request.ctx, "_sqlspec_previous_correlation_id", CorrelationContext.get())
+        set_context_value(request.ctx, "_sqlspec_correlation_id", correlation_id)
+        set_context_value(request.ctx, "correlation_id", correlation_id)
+        CorrelationContext.set(correlation_id)
+
+    def _restore_correlation_context(self, request: Any, response: Any | None) -> None:
+        """Restore CorrelationContext after this request.
+
+        Args:
+            request: Sanic request instance.
+            response: Sanic response instance, if one is available.
+        """
+        if not has_context_value(request.ctx, "_sqlspec_previous_correlation_id"):
+            return
+
+        correlation_id = pop_context_value(request.ctx, "_sqlspec_correlation_id")
+        if response is not None and correlation_id is not None and hasattr(response, "headers"):
+            response.headers["X-Correlation-ID"] = correlation_id
+
+        previous = pop_context_value(request.ctx, "_sqlspec_previous_correlation_id")
+        pop_context_value(request.ctx, "correlation_id")
+        CorrelationContext.set(previous)
+
+    def _set_sqlcommenter_context(self, request: Any) -> None:
+        """Set SQLCommenterContext for this request when enabled.
+
+        Args:
+            request: Sanic request instance.
+        """
+        config_state = self._first_sqlcommenter_state()
+        if config_state is None:
+            return
+
+        attrs = {"framework": config_state.sqlcommenter_framework, "route": self._request_route(request)}
+        action = self._request_action(request)
+        if action is not None:
+            attrs["action"] = action
+
+        set_context_value(request.ctx, "_sqlspec_previous_sqlcommenter", SQLCommenterContext.get())
+        SQLCommenterContext.set(attrs)
+
+    def _restore_sqlcommenter_context(self, request: Any) -> None:
+        """Restore SQLCommenterContext after this request.
+
+        Args:
+            request: Sanic request instance.
+        """
+        if not has_context_value(request.ctx, "_sqlspec_previous_sqlcommenter"):
+            return
+        previous = pop_context_value(request.ctx, "_sqlspec_previous_sqlcommenter")
+        SQLCommenterContext.set(previous)
+
+    def _first_correlation_state(self) -> SanicConfigState | None:
+        """Return the first config state with correlation enabled.
+
+        Returns:
+            Matching configuration state, if any.
+        """
+        for config_state in self._config_states:
+            if config_state.enable_correlation_middleware:
+                return config_state
+        return None
+
+    def _first_sqlcommenter_state(self) -> SanicConfigState | None:
+        """Return the first config state with SQLCommenter enabled.
+
+        Returns:
+            Matching configuration state, if any.
+        """
+        for config_state in self._config_states:
+            if self._state_enables_sqlcommenter(config_state):
+                return config_state
+        return None
+
+    def _state_enables_sqlcommenter(self, config_state: SanicConfigState) -> bool:
+        """Return whether one config state enables SQLCommenter middleware.
+
+        Args:
+            config_state: Configuration state.
+
+        Returns:
+            ``True`` when SQLCommenter middleware should run.
+        """
+        statement_config = config_state.config.statement_config
+        return bool(
+            config_state.enable_sqlcommenter_middleware and getattr(statement_config, "enable_sqlcommenter", False)
+        )
+
+    def _request_route(self, request: Any) -> str:
+        """Return the best available Sanic route template.
+
+        Args:
+            request: Sanic request instance.
+
+        Returns:
+            Route template or path.
+        """
+        return str(getattr(request, "uri_template", None) or getattr(request, "path", ""))
+
+    def _request_action(self, request: Any) -> str | None:
+        """Return the best available Sanic handler action.
+
+        Args:
+            request: Sanic request instance.
+
+        Returns:
+            Handler/action name when available.
+        """
+        endpoint = getattr(request, "endpoint", None)
+        if isinstance(endpoint, str) and endpoint:
+            return endpoint.rsplit(".", 1)[-1]
+        if endpoint is not None and hasattr(endpoint, "__name__"):
+            return endpoint.__name__
+
+        route = getattr(request, "route", None)
+        handler = getattr(route, "handler", None)
+        if handler is not None and hasattr(handler, "__name__"):
+            return handler.__name__
+
+        name = getattr(request, "name", None)
+        if isinstance(name, str) and name:
+            return name.rsplit(".", 1)[-1]
+        return None
 
     async def _acquire_request_connection(self, request: Any, config_state: SanicConfigState) -> None:
         """Acquire and store a connection for one config state.
