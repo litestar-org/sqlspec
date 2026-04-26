@@ -461,6 +461,18 @@ class SanicConfig(TypedDict):
     managing the database lifecycle manually via their own DI solution.
     """
 
+    enable_correlation_middleware: NotRequired[bool]
+    """Enable request correlation ID middleware. Default: False."""
+
+    correlation_header: NotRequired[str]
+    """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``."""
+
+    correlation_headers: NotRequired[tuple[str, ...] | list[str]]
+    """Additional HTTP headers to read as correlation ID fallbacks."""
+
+    auto_trace_headers: NotRequired[bool]
+    """Read standard trace context headers as correlation ID fallbacks. Default: True."""
+
     enable_sqlcommenter_middleware: NotRequired[bool]
     """Control automatic SQLCommenter middleware registration. Default: True.
     When the driver's :class:`~sqlspec.core.statement.StatementConfig` has

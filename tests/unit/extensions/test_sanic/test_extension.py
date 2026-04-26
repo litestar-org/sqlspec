@@ -13,6 +13,10 @@ def test_sanic_config_typing_is_exported() -> None:
     assert "pool_key" in SanicConfig.__annotations__
     assert "session_key" in SanicConfig.__annotations__
     assert "commit_mode" in SanicConfig.__annotations__
+    assert "enable_correlation_middleware" in SanicConfig.__annotations__
+    assert "correlation_header" in SanicConfig.__annotations__
+    assert "correlation_headers" in SanicConfig.__annotations__
+    assert "auto_trace_headers" in SanicConfig.__annotations__
 
 
 def test_sanic_public_api_imports_without_sanic_dependency() -> None:
