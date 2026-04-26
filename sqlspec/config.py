@@ -313,7 +313,7 @@ class LitestarConfig(TypedDict):
 
 
 class StarletteConfig(TypedDict):
-    """Configuration options for Starlette and FastAPI extensions.
+    """Configuration options for Starlette SQLSpec extension.
 
     All fields are optional with sensible defaults. Use in extension_config["starlette"]:
 
@@ -331,7 +331,6 @@ class StarletteConfig(TypedDict):
         )
 
     Notes:
-        Both Starlette and FastAPI extensions use the "starlette" key.
         This TypedDict provides type safety for extension config.
     """
 
@@ -389,7 +388,8 @@ class StarletteConfig(TypedDict):
 class FastAPIConfig(StarletteConfig):
     """Configuration options for FastAPI SQLSpec extension.
 
-    All fields are optional with sensible defaults. Use in extension_config["fastapi"]:
+    All fields are optional with sensible defaults. Use in ``extension_config["fastapi"]``.
+    SQLCommenter defaults the framework attribute to ``"fastapi"``.
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -402,6 +402,7 @@ class FastAPIConfig(StarletteConfig):
                     "session_key": "db"
                 }
             }
+        )
     """
 
 

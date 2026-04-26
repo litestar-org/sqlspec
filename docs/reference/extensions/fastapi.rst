@@ -2,8 +2,8 @@
 FastAPI
 ======
 
-FastAPI integration extending the Starlette plugin with dependency injection
-helpers for FastAPI's ``Depends()`` system, including filter dependency builders.
+FastAPI integration with dependency injection helpers for FastAPI's ``Depends()``
+system, including filter dependency builders.
 
 Plugin
 ======

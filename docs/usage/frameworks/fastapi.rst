@@ -42,7 +42,7 @@ Basic Setup
 
 Create a SQLSpec instance, register your database config, and attach the plugin to your
 FastAPI app. The plugin provides a ``provide_session`` dependency that yields a session
-for each request.
+for each request. Configure FastAPI-specific options under ``extension_config["fastapi"]``.
 
 .. literalinclude:: /examples/frameworks/fastapi/basic_setup.py
    :language: python
