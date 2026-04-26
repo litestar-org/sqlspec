@@ -138,7 +138,8 @@ async def test_threshold_override_keeps_string_as_varchar2(
 
             result = await session.execute("SELECT content FROM smart_lob_extended WHERE id = :id", {"id": 1})
             rows = result.get_data() if hasattr(result, "get_data") else result.data
-            value = rows[0]["content"] if isinstance(rows[0], dict) else rows[0][0]
+            fetched = rows[0]
+            value = fetched["content"] if isinstance(fetched, dict) else fetched[0]
             assert value == payload
     finally:
         if config.connection_instance:
@@ -173,7 +174,8 @@ async def test_json_bytes_payload_no_manual_createlob_needed(oracle_async_sessio
 
     result = await oracle_async_session.execute("SELECT payload FROM smart_lob_json_bytes WHERE id = :id", {"id": 1})
     rows = result.get_data() if hasattr(result, "get_data") else result.data
-    value = rows[0]["payload"] if isinstance(rows[0], dict) else rows[0][0]
+    fetched = rows[0]
+    value = fetched["payload"] if isinstance(fetched, dict) else fetched[0]
     assert value["workaround_eliminated"] is True
     assert value["blob"] == payload["blob"]
 
@@ -192,7 +194,8 @@ def test_oracle_clob_wrapper_round_trip_sync(oracle_sync_session: "OracleSyncDri
 
     result = oracle_sync_session.execute("SELECT content FROM smart_lob_clob_sync WHERE id = :id", {"id": 1})
     rows = result.get_data() if hasattr(result, "get_data") else result.data
-    value = rows[0]["content"] if isinstance(rows[0], dict) else rows[0][0]
+    fetched = rows[0]
+    value = fetched["content"] if isinstance(fetched, dict) else fetched[0]
     assert value == _LARGE_CLOB_TEXT
 
 
@@ -210,7 +213,8 @@ def test_oracle_blob_wrapper_round_trip_sync(oracle_sync_session: "OracleSyncDri
 
     result = oracle_sync_session.execute("SELECT data FROM smart_lob_blob_sync WHERE id = :id", {"id": 1})
     rows = result.get_data() if hasattr(result, "get_data") else result.data
-    value = rows[0]["data"] if isinstance(rows[0], dict) else rows[0][0]
+    fetched = rows[0]
+    value = fetched["data"] if isinstance(fetched, dict) else fetched[0]
     assert bytes(value) == _LARGE_BLOB_BYTES
 
 
