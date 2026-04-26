@@ -10,6 +10,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.starlette import SQLSpecPlugin
 
@@ -150,6 +151,48 @@ def test_starlette_autocommit_rolls_back_on_error() -> None:
             response = client.get("/data")
             assert response.status_code == 200
             assert response.json() == {"count": 0}
+
+
+def test_starlette_sync_sqlite_autocommit_commit_and_rollback() -> None:
+    """Test sync SQLite works through Starlette request middleware."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = SqliteConfig(
+            connection_config={"database": tmp.name},
+            extension_config={"starlette": {"commit_mode": "autocommit", "session_key": "db"}},
+        )
+        sql.add_config(config)
+        db_ext = SQLSpecPlugin(sql)
+
+        async def setup(request: Request) -> Response:
+            session = db_ext.get_session(request)
+            session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            session.execute("INSERT INTO test (name) VALUES (?)", ("committed",))
+            return JSONResponse({"created": True})
+
+        async def insert_error(request: Request) -> Response:
+            session = db_ext.get_session(request)
+            session.execute("INSERT INTO test (name) VALUES (?)", ("rolled-back",))
+            return JSONResponse({"error": "failed"}, status_code=500)
+
+        async def get_data(request: Request) -> Response:
+            session = db_ext.get_session(request)
+            rows = session.execute("SELECT * FROM test ORDER BY id").all()
+            return JSONResponse({"names": [row["name"] for row in rows]})
+
+        app = Starlette(routes=[Route("/setup", setup), Route("/insert-error", insert_error), Route("/data", get_data)])
+        db_ext.init_app(app)
+
+        with TestClient(app) as client:
+            response = client.get("/setup")
+            assert response.status_code == 200
+
+            response = client.get("/insert-error")
+            assert response.status_code == 500
+
+            response = client.get("/data")
+            assert response.status_code == 200
+            assert response.json() == {"names": ["committed"]}
 
 
 def test_starlette_session_caching() -> None:

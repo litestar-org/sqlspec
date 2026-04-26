@@ -12,6 +12,7 @@ from sqlspec.extensions.starlette.middleware import (
     SQLSpecManualMiddleware,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -297,7 +298,7 @@ class SQLSpecPlugin:
         """
         for config_state in self._config_states:
             if config_state.config.supports_connection_pooling:
-                pool = await config_state.config.create_pool()
+                pool = await ensure_async_(config_state.config.create_pool)()
                 setattr(app.state, config_state.pool_key, pool)
                 log_with_context(
                     logger,
@@ -313,9 +314,7 @@ class SQLSpecPlugin:
         finally:
             for config_state in self._config_states:
                 if config_state.config.supports_connection_pooling:
-                    close_result = config_state.config.close_pool()
-                    if close_result is not None:
-                        await close_result
+                    await ensure_async_(config_state.config.close_pool)()
                     log_with_context(
                         logger,
                         logging.DEBUG,
