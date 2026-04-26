@@ -221,7 +221,7 @@ pre-commit:                                        ## Run pre-commit hooks
 .PHONY: slotscheck
 slotscheck:                                        ## Run slotscheck
 	@echo "${INFO} Running slotscheck... 🔍"
-	@uv run slotscheck sqlspec/
+	@PYTHONWARNINGS="ignore:::google.adk.features._feature_decorator" uv run slotscheck sqlspec/
 	@echo "${OK} Slotscheck complete ✨"
 
 .PHONY: fix
