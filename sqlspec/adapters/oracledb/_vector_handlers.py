@@ -13,6 +13,7 @@ import array
 import sys
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 
@@ -155,19 +156,17 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     if not _is_vector_payload(value):
         return None
 
-    import oracledb
-
     if NUMPY_INSTALLED:
         import numpy as np
 
         if isinstance(value, np.ndarray):
-            return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
+            return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
 
     if isinstance(value, array.array):
-        return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize)
+        return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize)
 
     packed = _pack_python_sequence(value)
-    return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize, inconverter=lambda _v: packed)
+    return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=lambda _v: packed)
 
 
 def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
@@ -179,9 +178,7 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     ``"list"`` otherwise so consumers without the connection-level setting
     still get sensible behavior.
     """
-    import oracledb
-
-    if metadata.type_code is not oracledb.DB_TYPE_VECTOR:
+    if metadata.type_code is not DB_TYPE_VECTOR:
         return None
 
     fmt = getattr(cursor.connection, "_sqlspec_vector_return_format", None)

@@ -30,6 +30,7 @@ handler returns ``None`` for values it does not own.
 
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -101,27 +102,23 @@ def _is_json_payload(value: Any) -> bool:
 
 def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
     """Oracle input type handler for JSON-shaped Python values."""
-    import oracledb
-
     if not _is_json_payload(value):
         return None
 
     server_major = getattr(cursor.connection, "_sqlspec_oracle_major", None)
 
     if server_major is None or server_major >= _NATIVE_JSON_MIN_MAJOR:
-        return cursor.var(oracledb.DB_TYPE_JSON, arraysize=arraysize)
+        return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
     if server_major >= _BLOB_IS_JSON_MIN_MAJOR:
-        return cursor.var(oracledb.DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
-    return cursor.var(oracledb.DB_TYPE_CLOB, arraysize=arraysize, inconverter=json_converter_in_clob)
+        return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
+    return cursor.var(DB_TYPE_CLOB, arraysize=arraysize, inconverter=json_converter_in_clob)
 
 
 def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     """Oracle output type handler for JSON-bearing column reads."""
-    import oracledb
-
     type_code = getattr(metadata, "type_code", None)
 
-    if type_code is oracledb.DB_TYPE_JSON:
+    if type_code is DB_TYPE_JSON:
         # Native JSON: python-oracledb returns dict/list directly. No conversion.
         return None
 
@@ -129,10 +126,10 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     if _JSON_TYPE_NAME_MARKER not in type_name:
         return None
 
-    if type_code is oracledb.DB_TYPE_BLOB:
-        return cursor.var(oracledb.DB_TYPE_BLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
-    if type_code is oracledb.DB_TYPE_CLOB:
-        return cursor.var(oracledb.DB_TYPE_CLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
+    if type_code is DB_TYPE_BLOB:
+        return cursor.var(DB_TYPE_BLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
+    if type_code is DB_TYPE_CLOB:
+        return cursor.var(DB_TYPE_CLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
     return None
 
 

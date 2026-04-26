@@ -7,7 +7,16 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
-from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from oracledb import (
+    DB_TYPE_BLOB,
+    DB_TYPE_CLOB,
+    DB_TYPE_JSON,
+    DB_TYPE_RAW,
+    AsyncConnection,
+    AsyncCursor,
+    Connection,
+    Cursor,
+)
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
 if TYPE_CHECKING:
@@ -217,6 +226,10 @@ class OracleAsyncSessionContext:
 
 
 __all__ = (
+    "DB_TYPE_BLOB",
+    "DB_TYPE_CLOB",
+    "DB_TYPE_JSON",
+    "DB_TYPE_RAW",
     "DB_TYPE_VECTOR",
     "OracleAsyncConnection",
     "OracleAsyncConnectionPool",
