@@ -44,6 +44,7 @@ class TestCoerceLargeParametersSync:
         assert result is None
 
     def test_list_parameters_passthrough(self, sync_connection: MagicMock) -> None:
+        """A list whose values need no coercion round-trips through value-equal."""
         params = ["a", "b"]
         result = coerce_large_parameters_sync(
             sync_connection,
@@ -53,7 +54,8 @@ class TestCoerceLargeParametersSync:
             varchar2_byte_limit=VARCHAR2_LIMIT,
             raw_byte_limit=RAW_LIMIT,
         )
-        assert result is params  # unchanged
+        assert result == ["a", "b"]
+        sync_connection.createlob.assert_not_called()
 
     def test_string_under_threshold_no_coercion(self, sync_connection: MagicMock) -> None:
         params = {"name": "x" * 100}
@@ -260,6 +262,98 @@ class TestCoerceLargeParametersSync:
         assert result["v"] is long_str
         sync_connection.createlob.assert_not_called()
 
+    def test_oracle_clob_wrapper_unwrapped_in_positional_tuple(self, sync_connection: MagicMock) -> None:
+        """OracleClob inside a positional tuple is unwrapped + routed to CLOB."""
+        from sqlspec.adapters.oracledb import OracleClob
+
+        params = (1, OracleClob("payload"))
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(CLOB_TYPE, "payload")
+        assert result[0] == 1
+        assert result[1] is sync_connection.createlob.return_value
+
+    def test_oracle_blob_wrapper_unwrapped_in_positional_list(self, sync_connection: MagicMock) -> None:
+        """OracleBlob inside a positional list is unwrapped + routed to BLOB."""
+        from sqlspec.adapters.oracledb import OracleBlob
+
+        params = [1, OracleBlob(b"bytes")]
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(BLOB_TYPE, b"bytes")
+        assert result[0] == 1
+        assert result[1] is sync_connection.createlob.return_value
+
+    def test_oracle_json_wrapper_unwrapped_in_positional_tuple(self, sync_connection: MagicMock) -> None:
+        """OracleJson inside a positional tuple is unwrapped to its inner value."""
+        from sqlspec.adapters.oracledb import OracleJson
+
+        params = (1, OracleJson({"a": 1}))
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_not_called()
+        assert result[1] == {"a": 1}
+
+    def test_positional_tuple_str_over_threshold_becomes_clob(self, sync_connection: MagicMock) -> None:
+        """Plain str above threshold inside a positional tuple still routes to CLOB."""
+        long_str = "x" * 5000
+        params = (1, long_str)
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(CLOB_TYPE, long_str)
+        assert result[1] is sync_connection.createlob.return_value
+
+    def test_positional_tuple_bytes_under_threshold_unchanged(self, sync_connection: MagicMock) -> None:
+        """Small bytes inside a positional tuple are left alone."""
+        params = (1, b"short")
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_not_called()
+        assert tuple(result) == params
+
+    def test_positional_empty_tuple_passthrough(self, sync_connection: MagicMock) -> None:
+        """An empty tuple short-circuits like ``None`` / empty dict."""
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            (),
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        assert result == ()
+        sync_connection.createlob.assert_not_called()
+
 
 # --- Async Tests ---
 
@@ -413,3 +507,66 @@ class TestCoerceLargeParametersAsync:
         )
         assert result["v"] is long_str
         async_connection.createlob.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_oracle_clob_wrapper_unwrapped_in_positional_tuple(self, async_connection: AsyncMock) -> None:
+        """OracleClob inside a positional tuple is unwrapped + routed to CLOB."""
+        from sqlspec.adapters.oracledb import OracleClob
+
+        result = await coerce_large_parameters_async(
+            async_connection,
+            (1, OracleClob("payload")),
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(CLOB_TYPE, "payload")
+        assert result[0] == 1
+
+    @pytest.mark.anyio
+    async def test_oracle_blob_wrapper_unwrapped_in_positional_list(self, async_connection: AsyncMock) -> None:
+        """OracleBlob inside a positional list is unwrapped + routed to BLOB."""
+        from sqlspec.adapters.oracledb import OracleBlob
+
+        result = await coerce_large_parameters_async(
+            async_connection,
+            [1, OracleBlob(b"bytes")],
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(BLOB_TYPE, b"bytes")
+        assert result[0] == 1
+
+    @pytest.mark.anyio
+    async def test_oracle_json_wrapper_unwrapped_in_positional_tuple(self, async_connection: AsyncMock) -> None:
+        """OracleJson inside a positional tuple is unwrapped to its inner value."""
+        from sqlspec.adapters.oracledb import OracleJson
+
+        result = await coerce_large_parameters_async(
+            async_connection,
+            (1, OracleJson({"a": 1})),
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_not_called()
+        assert result[1] == {"a": 1}
+
+    @pytest.mark.anyio
+    async def test_positional_tuple_str_over_threshold_becomes_clob(self, async_connection: AsyncMock) -> None:
+        """Plain str above threshold inside a positional tuple still routes to CLOB."""
+        long_str = "x" * 5000
+        result = await coerce_large_parameters_async(
+            async_connection,
+            (1, long_str),
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(CLOB_TYPE, long_str)
+        assert result[0] == 1

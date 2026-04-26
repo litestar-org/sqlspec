@@ -212,3 +212,41 @@ def test_oracle_blob_wrapper_round_trip_sync(oracle_sync_session: "OracleSyncDri
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     value = rows[0]["data"] if isinstance(rows[0], dict) else rows[0][0]
     assert bytes(value) == _LARGE_BLOB_BYTES
+
+
+async def test_oracle_clob_wrapper_positional_bind(oracle_async_session: "OracleAsyncDriver") -> None:
+    """Positional (tuple) binds also unwrap OracleClob — sqlspec-205 fix coverage."""
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE smart_lob_clob_pos'; "
+        "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("CREATE TABLE smart_lob_clob_pos (id NUMBER PRIMARY KEY, content CLOB)")
+    await oracle_async_session.execute(
+        "INSERT INTO smart_lob_clob_pos (id, content) VALUES (:1, :2)", (1, OracleClob(_LARGE_CLOB_TEXT))
+    )
+
+    result = await oracle_async_session.execute("SELECT content FROM smart_lob_clob_pos WHERE id = :1", (1,))
+    rows = result.get_data() if hasattr(result, "get_data") else result.data
+    fetched = rows[0]
+    value = fetched["content"] if isinstance(fetched, dict) else fetched[0]
+    assert value == _LARGE_CLOB_TEXT
+
+
+async def test_oracle_json_wrapper_positional_bind(oracle_async_session: "OracleAsyncDriver") -> None:
+    """Positional (tuple) bind with OracleJson defers to the C1 native handler."""
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE smart_lob_json_pos'; "
+        "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("CREATE TABLE smart_lob_json_pos (id NUMBER PRIMARY KEY, payload JSON)")
+    payload = {"positional": True, "n": 7}
+    await oracle_async_session.execute(
+        "INSERT INTO smart_lob_json_pos (id, payload) VALUES (:1, :2)", (1, OracleJson(payload))
+    )
+
+    result = await oracle_async_session.execute("SELECT payload FROM smart_lob_json_pos WHERE id = :1", (1,))
+    rows = result.get_data() if hasattr(result, "get_data") else result.data
+    fetched = rows[0]
+    value = fetched["payload"] if isinstance(fetched, dict) else fetched[0]
+    assert value["positional"] is True
+    assert value["n"] == 7

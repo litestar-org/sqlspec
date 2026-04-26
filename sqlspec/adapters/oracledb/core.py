@@ -186,6 +186,52 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
     return parameters
 
 
+def _coerce_value_sync(
+    connection: Any, value: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
+) -> Any:
+    """Route a single parameter value through wrapper-aware coercion (sync)."""
+    if isinstance(value, OracleClob):
+        inner = value.value
+        if isinstance(inner, bytes):
+            inner = inner.decode("utf-8")
+        return connection.createlob(clob_type, inner)
+    if isinstance(value, OracleBlob):
+        inner = value.value
+        if isinstance(inner, str):
+            inner = inner.encode("utf-8")
+        return connection.createlob(blob_type, inner)
+    if isinstance(value, OracleJson):
+        return value.value
+    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+        return connection.createlob(clob_type, value)
+    if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
+        return connection.createlob(blob_type, bytes(value))
+    return value
+
+
+async def _coerce_value_async(
+    connection: Any, value: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
+) -> Any:
+    """Async mirror of :func:`_coerce_value_sync`."""
+    if isinstance(value, OracleClob):
+        inner = value.value
+        if isinstance(inner, bytes):
+            inner = inner.decode("utf-8")
+        return await connection.createlob(clob_type, inner)
+    if isinstance(value, OracleBlob):
+        inner = value.value
+        if isinstance(inner, str):
+            inner = inner.encode("utf-8")
+        return await connection.createlob(blob_type, inner)
+    if isinstance(value, OracleJson):
+        return value.value
+    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+        return await connection.createlob(clob_type, value)
+    if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
+        return await connection.createlob(blob_type, bytes(value))
+    return value
+
+
 def coerce_large_parameters_sync(
     connection: Any, parameters: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
 ) -> Any:
@@ -196,6 +242,10 @@ def coerce_large_parameters_sync(
            intent, length-thresholds bypassed.
         2. Plain ``str`` whose UTF-8 encoding exceeds ``varchar2_byte_limit`` → CLOB.
         3. Plain ``bytes``/``bytearray`` longer than ``raw_byte_limit`` → BLOB.
+
+    Handles ``dict`` (named binds), ``tuple`` and ``list`` (positional binds).
+    Tuples are returned as new lists when any value is rewritten so the driver's
+    ``cast(... | tuple | list | dict)`` contract is preserved.
 
     Args:
         connection: Oracle database connection.
@@ -208,25 +258,31 @@ def coerce_large_parameters_sync(
     Returns:
         Parameters payload with values routed to the correct LOB / native type.
     """
-    if not parameters or not isinstance(parameters, dict):
+    if not parameters:
         return parameters
-    for param_name, param_value in parameters.items():
-        if isinstance(param_value, OracleClob):
-            inner = param_value.value
-            if isinstance(inner, bytes):
-                inner = inner.decode("utf-8")
-            parameters[param_name] = connection.createlob(clob_type, inner)
-        elif isinstance(param_value, OracleBlob):
-            inner = param_value.value
-            if isinstance(inner, str):
-                inner = inner.encode("utf-8")
-            parameters[param_name] = connection.createlob(blob_type, inner)
-        elif isinstance(param_value, OracleJson):
-            parameters[param_name] = param_value.value
-        elif isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
-            parameters[param_name] = connection.createlob(clob_type, param_value)
-        elif isinstance(param_value, (bytes, bytearray)) and len(param_value) > raw_byte_limit:
-            parameters[param_name] = connection.createlob(blob_type, bytes(param_value))
+    if isinstance(parameters, dict):
+        for param_name, param_value in parameters.items():
+            parameters[param_name] = _coerce_value_sync(
+                connection,
+                param_value,
+                clob_type=clob_type,
+                blob_type=blob_type,
+                varchar2_byte_limit=varchar2_byte_limit,
+                raw_byte_limit=raw_byte_limit,
+            )
+        return parameters
+    if isinstance(parameters, (list, tuple)):
+        return [
+            _coerce_value_sync(
+                connection,
+                value,
+                clob_type=clob_type,
+                blob_type=blob_type,
+                varchar2_byte_limit=varchar2_byte_limit,
+                raw_byte_limit=raw_byte_limit,
+            )
+            for value in parameters
+        ]
     return parameters
 
 
@@ -238,25 +294,31 @@ async def coerce_large_parameters_async(
     Identical routing order; ``connection.createlob`` is awaited for the async
     Oracle driver.
     """
-    if not parameters or not isinstance(parameters, dict):
+    if not parameters:
         return parameters
-    for param_name, param_value in parameters.items():
-        if isinstance(param_value, OracleClob):
-            inner = param_value.value
-            if isinstance(inner, bytes):
-                inner = inner.decode("utf-8")
-            parameters[param_name] = await connection.createlob(clob_type, inner)
-        elif isinstance(param_value, OracleBlob):
-            inner = param_value.value
-            if isinstance(inner, str):
-                inner = inner.encode("utf-8")
-            parameters[param_name] = await connection.createlob(blob_type, inner)
-        elif isinstance(param_value, OracleJson):
-            parameters[param_name] = param_value.value
-        elif isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
-            parameters[param_name] = await connection.createlob(clob_type, param_value)
-        elif isinstance(param_value, (bytes, bytearray)) and len(param_value) > raw_byte_limit:
-            parameters[param_name] = await connection.createlob(blob_type, bytes(param_value))
+    if isinstance(parameters, dict):
+        for param_name, param_value in parameters.items():
+            parameters[param_name] = await _coerce_value_async(
+                connection,
+                param_value,
+                clob_type=clob_type,
+                blob_type=blob_type,
+                varchar2_byte_limit=varchar2_byte_limit,
+                raw_byte_limit=raw_byte_limit,
+            )
+        return parameters
+    if isinstance(parameters, (list, tuple)):
+        return [
+            await _coerce_value_async(
+                connection,
+                value,
+                clob_type=clob_type,
+                blob_type=blob_type,
+                varchar2_byte_limit=varchar2_byte_limit,
+                raw_byte_limit=raw_byte_limit,
+            )
+            for value in parameters
+        ]
     return parameters
 
 
