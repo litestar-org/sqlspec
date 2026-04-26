@@ -2,6 +2,9 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette import SQLSpecConfigState
 
 
@@ -48,6 +51,25 @@ def test_config_state_with_extra_statuses() -> None:
 
     assert state.extra_commit_statuses == extra_commit
     assert state.extra_rollback_statuses == extra_rollback
+
+
+def test_config_state_rejects_conflicting_extra_statuses() -> None:
+    """Test extra commit and rollback statuses cannot overlap."""
+    mock_config = MagicMock()
+
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        SQLSpecConfigState(
+            config=mock_config,
+            connection_key="conn",
+            pool_key="pool",
+            session_key="session",
+            commit_mode="autocommit",
+            extra_commit_statuses={418},
+            extra_rollback_statuses={418},
+            disable_di=False,
+        )
+
+    assert "must not share" in str(exc_info.value)
 
 
 def test_config_state_commit_modes() -> None:

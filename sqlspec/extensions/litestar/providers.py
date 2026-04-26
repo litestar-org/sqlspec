@@ -11,6 +11,7 @@ from typing import Any, Literal, NamedTuple, TypedDict, cast
 from uuid import UUID
 
 from litestar.di import Provide
+from litestar.exceptions import ValidationException
 from litestar.params import Dependency, Parameter
 from typing_extensions import NotRequired
 
@@ -38,6 +39,7 @@ __all__ = (
     "HashableType",
     "HashableValue",
     "IntOrNone",
+    "SortField",
     "SortOrder",
     "SortOrderOrNone",
     "StringOrNone",
@@ -53,6 +55,7 @@ IntOrNone = int | None
 BooleanOrNone = bool | None
 SortOrder = Literal["asc", "desc"]
 SortOrderOrNone = SortOrder | None
+SortField = str | set[str] | list[str]
 HashableValue = str | int | float | bool | None
 HashableType = HashableValue | tuple[Any, ...] | tuple[tuple[str, Any], ...] | tuple[HashableValue, ...]
 
@@ -83,7 +86,7 @@ class FilterConfig(TypedDict):
 
     id_filter: NotRequired[type[UUID | int | str]]
     id_field: NotRequired[str]
-    sort_field: NotRequired[str]
+    sort_field: NotRequired[SortField]
     sort_order: NotRequired[SortOrder]
     pagination_type: NotRequired[Literal["limit_offset"]]
     pagination_size: NotRequired[int]
@@ -156,6 +159,13 @@ def _make_hashable(value: Any) -> HashableType:
     if isinstance(value, (str, int, float, bool, type(None))):
         return value
     return str(value)
+
+
+def _resolve_sort_fields(sort_field: SortField) -> tuple[str, set[str]]:
+    if isinstance(sort_field, str):
+        return sort_field, {sort_field}
+    fields = tuple(sorted(sort_field)) if isinstance(sort_field, set) else tuple(sort_field)
+    return fields[0], set(fields)
 
 
 def _create_statement_filters(  # noqa: C901
@@ -237,16 +247,23 @@ def _create_statement_filters(  # noqa: C901
         filters[dep_defaults.SEARCH_FILTER_DEPENDENCY_KEY] = Provide(provide_search_filter, sync_to_thread=False)
 
     if sort_field := config.get("sort_field"):
+        default_field, allowed_fields = _resolve_sort_fields(sort_field)
+        allowed_field_names = ", ".join(sorted(allowed_fields))
+        sort_order_default = config.get("sort_order", "desc")
 
         def provide_order_by(
             field_name: StringOrNone = Parameter(
-                title="Order by field", query="orderBy", default=sort_field, required=False
+                title="Order by field", query="orderBy", default=default_field, required=False
             ),
             sort_order: SortOrderOrNone = Parameter(
-                title="Field to search", query="sortOrder", default=config.get("sort_order", "desc"), required=False
+                title="Field to search", query="sortOrder", default=sort_order_default, required=False
             ),
         ) -> OrderByFilter:
-            return OrderByFilter(field_name=field_name, sort_order=sort_order)  # type: ignore[arg-type]
+            resolved_field = field_name or default_field
+            if resolved_field not in allowed_fields:
+                msg = f"Invalid orderBy field '{resolved_field}'. Allowed fields: {allowed_field_names}"
+                raise ValidationException(detail=msg)
+            return OrderByFilter(field_name=resolved_field, sort_order=sort_order or sort_order_default)
 
         filters[dep_defaults.ORDER_BY_FILTER_DEPENDENCY_KEY] = Provide(provide_order_by, sync_to_thread=False)
 

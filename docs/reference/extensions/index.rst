@@ -3,7 +3,7 @@ Extensions
 ==========
 
 SQLSpec extensions integrate the registry with frameworks, event systems,
-and services such as Litestar, FastAPI, Flask, Starlette, and Google ADK.
+and services such as Litestar, FastAPI, Flask, Sanic, Starlette, and Google ADK.
 
 .. grid:: 2
 
@@ -31,6 +31,12 @@ and services such as Litestar, FastAPI, Flask, Starlette, and Google ADK.
 
       Middleware-based session management and connection pooling lifecycle.
 
+   .. grid-item-card:: Sanic
+      :link: sanic
+      :link-type: doc
+
+      App/request context integration with lifecycle listeners and middleware.
+
    .. grid-item-card:: Google ADK
       :link: adk
       :link-type: doc
@@ -49,6 +55,7 @@ and services such as Litestar, FastAPI, Flask, Starlette, and Google ADK.
    litestar
    fastapi
    flask
+   sanic
    starlette
    adk
    events

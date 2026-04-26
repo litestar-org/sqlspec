@@ -11,7 +11,7 @@ def show_filter_dependencies() -> None:
     user_filters: FilterConfig = {
         "id_filter": str,  # Filter by user IDs
         "id_field": "id",  # Column name for ID filter
-        "sort_field": "created_at",  # Default sort column
+        "sort_field": ["created_at", "name"],  # Allowed sort columns
         "sort_order": "desc",  # Default sort direction
         "pagination_type": "limit_offset",  # Enable pagination
         "pagination_size": 20,  # Default page size

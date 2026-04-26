@@ -23,7 +23,7 @@ def test_fastapi_multi_database() -> None:
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
-                "starlette": {"session_key": "db", "connection_key": "db_connection", "pool_key": "db_pool"}
+                "fastapi": {"session_key": "db", "connection_key": "db_connection", "pool_key": "db_pool"}
             },
         )
     )
@@ -33,7 +33,7 @@ def test_fastapi_multi_database() -> None:
         SqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
-                "starlette": {"session_key": "etl_db", "connection_key": "etl_connection", "pool_key": "etl_pool"}
+                "fastapi": {"session_key": "etl_db", "connection_key": "etl_connection", "pool_key": "etl_pool"}
             },
         )
     )

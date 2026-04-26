@@ -4,10 +4,11 @@ import tempfile
 from typing import Annotated, Any
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Response
 from fastapi.testclient import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteConnection, AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 
@@ -20,7 +21,7 @@ def test_fastapi_dependency_injection() -> None:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -46,7 +47,7 @@ def test_fastapi_connection_dependency() -> None:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -75,7 +76,7 @@ def test_fastapi_manual_commit() -> None:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -114,7 +115,7 @@ def test_fastapi_autocommit_mode() -> None:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "autocommit", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "autocommit", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -144,13 +145,59 @@ def test_fastapi_autocommit_mode() -> None:
             assert response.json() == {"count": 1}
 
 
+def test_fastapi_sync_sqlite_autocommit_commit_and_rollback() -> None:
+    """Test sync SQLite works through FastAPI request middleware."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = SqliteConfig(
+            connection_config={"database": tmp.name},
+            extension_config={"fastapi": {"commit_mode": "autocommit", "session_key": "db"}},
+        )
+        sql.add_config(config)
+
+        app = FastAPI()
+        db_ext = SQLSpecPlugin(sql, app=app)
+
+        @app.post("/setup")
+        async def setup(db: Annotated[SqliteDriver, Depends(db_ext.provide_session(config))]) -> dict[str, bool]:
+            db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            db.execute("INSERT INTO test (name) VALUES (?)", ("committed",))
+            return {"created": True}
+
+        @app.post("/insert-error")
+        async def insert_error(
+            db: Annotated[SqliteDriver, Depends(db_ext.provide_session(config))], response: Response
+        ) -> dict[str, str]:
+            db.execute("INSERT INTO test (name) VALUES (?)", ("rolled-back",))
+            response.status_code = 500
+            return {"error": "failed"}
+
+        @app.get("/data")
+        async def get_data(
+            db: Annotated[SqliteDriver, Depends(db_ext.provide_session(config))],
+        ) -> dict[str, list[str]]:
+            rows = db.execute("SELECT * FROM test ORDER BY id").all()
+            return {"names": [row["name"] for row in rows]}
+
+        with TestClient(app) as client:
+            response = client.post("/setup")
+            assert response.status_code == 200
+
+            response = client.post("/insert-error")
+            assert response.status_code == 500
+
+            response = client.get("/data")
+            assert response.status_code == 200
+            assert response.json() == {"names": ["committed"]}
+
+
 def test_fastapi_session_caching_across_dependencies() -> None:
     """Test session is cached across multiple dependencies in same request."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -176,7 +223,7 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -232,13 +279,13 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
             assert len(data["user_posts"]) == 2
 
 
-def test_fastapi_inherits_starlette_behavior() -> None:
-    """Test FastAPI extension behaves identically to Starlette for basic operations."""
+def test_fastapi_basic_operations() -> None:
+    """Test FastAPI extension handles basic operations."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
         config = AiosqliteConfig(
             connection_config={"database": tmp.name},
-            extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+            extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
         )
         sql.add_config(config)
 
@@ -265,7 +312,7 @@ def test_fastapi_default_session_key() -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sql = SQLSpec()
-        config = AiosqliteConfig(connection_config={"database": tmp.name}, extension_config={"starlette": {}})
+        config = AiosqliteConfig(connection_config={"database": tmp.name}, extension_config={"fastapi": {}})
         sql.add_config(config)
 
         app = FastAPI()

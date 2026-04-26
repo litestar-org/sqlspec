@@ -7,7 +7,7 @@ markers for Sphinx `literalinclude` directives.
 Structure overview:
 
 - `quickstart/`: First-time setup and configuration.
-- `frameworks/`: Litestar, FastAPI, Flask, and Starlette integration examples.
+- `frameworks/`: Litestar, FastAPI, Flask, Sanic, and Starlette integration examples.
 - `drivers/`: Adapter configuration and execution patterns.
 - `querying/`: Core SQL execution helpers.
 - `sql_files/`: SQL file loader and named query examples.

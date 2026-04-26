@@ -6,16 +6,17 @@ from sqlspec.exceptions import ImproperConfigurationError
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
 
-__all__ = ("CommitMode", "SQLSpecConfigState")
+__all__ = ("CommitMode", "SanicConfigState")
 
 CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 
 
 @dataclass
-class SQLSpecConfigState:
-    """Internal state for each database configuration.
+class SanicConfigState:
+    """Internal state for a Sanic database configuration.
 
-    Tracks all configuration parameters needed for middleware and session management.
+    Tracks the keys and behavior needed to bind one SQLSpec config into a
+    Sanic app and its request context.
     """
 
     config: "DatabaseConfigProtocol[Any, Any, Any]"
@@ -31,7 +32,7 @@ class SQLSpecConfigState:
     correlation_headers: "tuple[str, ...] | None" = None
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
-    sqlcommenter_framework: str = "starlette"
+    sqlcommenter_framework: str = "sanic"
 
     def __post_init__(self) -> None:
         """Validate status configuration."""

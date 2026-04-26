@@ -12,6 +12,7 @@ from sqlspec.extensions.starlette.middleware import (
     SQLSpecManualMiddleware,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -78,7 +79,7 @@ class SQLSpecPlugin:
         self._sqlcommenter_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
-            settings = self._extract_starlette_settings(cfg)
+            settings = self._extract_extension_settings(cfg)
             state = self._create_config_state(cfg, settings)
             self._config_states.append(state)
 
@@ -93,7 +94,7 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
-    def _extract_starlette_settings(self, config: Any) -> "dict[str, Any]":
+    def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Starlette settings from config.extension_config.
 
         Args:
@@ -140,7 +141,7 @@ class SQLSpecPlugin:
 
         Args:
             config: Database configuration instance.
-            settings: Extracted Starlette settings.
+            settings: Extracted framework settings.
 
         Returns:
             Configuration state instance.
@@ -297,7 +298,7 @@ class SQLSpecPlugin:
         """
         for config_state in self._config_states:
             if config_state.config.supports_connection_pooling:
-                pool = await config_state.config.create_pool()
+                pool = await ensure_async_(config_state.config.create_pool)()
                 setattr(app.state, config_state.pool_key, pool)
                 log_with_context(
                     logger,
@@ -313,9 +314,7 @@ class SQLSpecPlugin:
         finally:
             for config_state in self._config_states:
                 if config_state.config.supports_connection_pooling:
-                    close_result = config_state.config.close_pool()
-                    if close_result is not None:
-                        await close_result
+                    await ensure_async_(config_state.config.close_pool)()
                     log_with_context(
                         logger,
                         logging.DEBUG,

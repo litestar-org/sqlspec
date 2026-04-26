@@ -45,8 +45,8 @@ def test_provide_connection_method_exists() -> None:
     assert not hasattr(plugin, "connection_dependency")
 
 
-def test_uses_starlette_default_session_key() -> None:
-    """FastAPI inherits from Starlette and should use same DEFAULT_SESSION_KEY."""
+def test_uses_default_session_key() -> None:
+    """FastAPI should default to DEFAULT_SESSION_KEY."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
@@ -59,11 +59,11 @@ def test_uses_starlette_default_session_key() -> None:
 
 
 def test_respects_custom_session_key() -> None:
-    """Plugin should respect custom session_key via starlette config."""
+    """Plugin should respect custom session_key via fastapi config."""
     custom_key = "custom_db"
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": custom_key}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"session_key": custom_key}}
     )
     sqlspec.add_config(config)
 
@@ -73,11 +73,67 @@ def test_respects_custom_session_key() -> None:
     assert plugin._config_states[0].session_key == custom_key  # pyright: ignore[reportPrivateUsage]
 
 
+def test_respects_fastapi_extension_config_key() -> None:
+    """Plugin should respect FastAPI-specific extension_config."""
+    custom_key = "fastapi_db"
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"session_key": custom_key}}
+    )
+    sqlspec.add_config(config)
+
+    plugin = SQLSpecPlugin(sqlspec)
+
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == custom_key  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ignores_starlette_extension_config_key() -> None:
+    """FastAPI plugin should not read Starlette extension config."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": "starlette_db"}}
+    )
+    sqlspec.add_config(config)
+
+    plugin = SQLSpecPlugin(sqlspec)
+
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY  # pyright: ignore[reportPrivateUsage]
+
+
+def test_fastapi_extension_config_takes_fastapi_config() -> None:
+    """FastAPI-specific config should own FastAPI settings."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"starlette": {"session_key": "starlette_db"}, "fastapi": {"session_key": "fastapi_db"}},
+    )
+    sqlspec.add_config(config)
+
+    plugin = SQLSpecPlugin(sqlspec)
+
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == "fastapi_db"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_fastapi_sqlcommenter_framework_defaults_to_fastapi() -> None:
+    """FastAPI plugin should report FastAPI to SQLCommenter by default."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    sqlspec.add_config(config)
+
+    plugin = SQLSpecPlugin(sqlspec)
+
+    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].sqlcommenter_framework == "fastapi"  # pyright: ignore[reportPrivateUsage]
+
+
 def test_provide_session_works_in_route() -> None:
     """Test that provide_session() works correctly in FastAPI routes."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
 

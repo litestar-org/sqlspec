@@ -371,7 +371,7 @@ forwarded through the service to the driver:
        dependencies = create_filter_dependencies({
            "pagination_type": "limit_offset",
            "pagination_size": 20,
-           "sort_field": "created_at",
+           "sort_field": ["created_at", "name"],
            "sort_order": "desc",
            "search": "name,email",
        })

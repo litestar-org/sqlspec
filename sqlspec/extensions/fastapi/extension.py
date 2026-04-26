@@ -45,7 +45,7 @@ class SQLSpecPlugin(_StarlettePlugin):
             AsyncpgConfig(
                 connection_config={"dsn": "postgresql://localhost/mydb"},
                 extension_config={
-                    "starlette": {  # FastAPI uses the "starlette" key
+                    "fastapi": {
                         "commit_mode": "autocommit",
                         "session_key": "db"
                     }
@@ -70,6 +70,45 @@ class SQLSpecPlugin(_StarlettePlugin):
             app: Optional FastAPI application to initialize immediately.
         """
         super().__init__(sqlspec, app)
+
+    def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
+        """Extract FastAPI settings from config.extension_config.
+
+        Args:
+            config: Database configuration instance.
+
+        Returns:
+            Dictionary of FastAPI-specific settings.
+        """
+        fastapi_config = config.extension_config.get("fastapi", {})
+
+        connection_key = fastapi_config.get("connection_key", "db_connection")
+        pool_key = fastapi_config.get("pool_key", "db_pool")
+        session_key = fastapi_config.get("session_key", "db_session")
+        commit_mode = fastapi_config.get("commit_mode", "manual")
+
+        if not config.supports_connection_pooling and pool_key == "db_pool":
+            pool_key = f"_db_pool_{id(config)}"
+
+        correlation_headers = fastapi_config.get("correlation_headers")
+        if correlation_headers is not None:
+            correlation_headers = tuple(correlation_headers)
+
+        return {
+            "connection_key": connection_key,
+            "pool_key": pool_key,
+            "session_key": session_key,
+            "commit_mode": commit_mode,
+            "extra_commit_statuses": fastapi_config.get("extra_commit_statuses"),
+            "extra_rollback_statuses": fastapi_config.get("extra_rollback_statuses"),
+            "disable_di": fastapi_config.get("disable_di", False),
+            "enable_correlation_middleware": fastapi_config.get("enable_correlation_middleware", False),
+            "correlation_header": fastapi_config.get("correlation_header", "x-request-id"),
+            "correlation_headers": correlation_headers,
+            "auto_trace_headers": fastapi_config.get("auto_trace_headers", True),
+            "enable_sqlcommenter_middleware": fastapi_config.get("enable_sqlcommenter_middleware", True),
+            "sqlcommenter_framework": fastapi_config.get("sqlcommenter_framework", "fastapi"),
+        }
 
     @overload
     def provide_session(

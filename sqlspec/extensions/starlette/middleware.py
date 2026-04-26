@@ -6,6 +6,7 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -52,19 +53,20 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
 
         if config.supports_connection_pooling:
             pool = get_state_value(request.app.state, self.config_state.pool_key)
-            async with config.provide_connection(pool) as connection:  # type: ignore[union-attr]
+            async with with_ensure_async_(config.provide_connection(pool)) as connection:
                 set_state_value(request.state, connection_key, connection)
                 try:
                     return await call_next(request)
                 finally:
                     pop_state_value(request.state, connection_key)
         else:
-            connection = await config.create_connection()
+            connection = await ensure_async_(config.create_connection)()
             set_state_value(request.state, connection_key, connection)
             try:
                 return await call_next(request)
             finally:
-                await connection.close()
+                pop_state_value(request.state, connection_key)
+                await ensure_async_(connection.close)()
 
 
 class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
@@ -100,39 +102,40 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
 
         if config.supports_connection_pooling:
             pool = get_state_value(request.app.state, self.config_state.pool_key)
-            async with config.provide_connection(pool) as connection:  # type: ignore[union-attr]
+            async with with_ensure_async_(config.provide_connection(pool)) as connection:
                 set_state_value(request.state, connection_key, connection)
                 try:
                     response = await call_next(request)
 
                     if self._should_commit(response.status_code):
-                        await connection.commit()
+                        await ensure_async_(connection.commit)()
                     else:
-                        await connection.rollback()
+                        await ensure_async_(connection.rollback)()
                 except Exception:
-                    await connection.rollback()
+                    await ensure_async_(connection.rollback)()
                     raise
                 else:
                     return response
                 finally:
                     pop_state_value(request.state, connection_key)
         else:
-            connection = await config.create_connection()
+            connection = await ensure_async_(config.create_connection)()
             set_state_value(request.state, connection_key, connection)
             try:
                 response = await call_next(request)
 
                 if self._should_commit(response.status_code):
-                    await connection.commit()
+                    await ensure_async_(connection.commit)()
                 else:
-                    await connection.rollback()
+                    await ensure_async_(connection.rollback)()
             except Exception:
-                await connection.rollback()
+                await ensure_async_(connection.rollback)()
                 raise
             else:
                 return response
             finally:
-                await connection.close()
+                pop_state_value(request.state, connection_key)
+                await ensure_async_(connection.close)()
 
     def _should_commit(self, status_code: int) -> bool:
         """Determine if response status code should trigger commit.

@@ -30,7 +30,7 @@ def test_fastapi_id_filter_dependency() -> None:
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
         connection_config={"database": ":memory:"},
-        extension_config={"starlette": {"commit_mode": "manual", "session_key": "db"}},
+        extension_config={"fastapi": {"commit_mode": "manual", "session_key": "db"}},
     )
     sqlspec.add_config(config)
 
@@ -63,7 +63,7 @@ def test_fastapi_search_filter_dependency() -> None:
     """Test search filter dependency with actual HTTP request."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -102,7 +102,7 @@ def test_fastapi_pagination_filter_dependency() -> None:
     """Test pagination filter dependency with actual HTTP request."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -144,7 +144,7 @@ def test_fastapi_order_by_filter_dependency() -> None:
     """Test order by filter dependency with actual HTTP request."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -153,7 +153,7 @@ def test_fastapi_order_by_filter_dependency() -> None:
 
     @app.get("/users")
     async def list_users(
-        filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"sort_field": "created_at"}))],
+        filters: Annotated[list[FilterTypes], Depends(db_ext.provide_filters({"sort_field": {"created_at", "name"}}))],
     ) -> dict[str, Any]:
         order_by = next((f for f in filters if isinstance(f, OrderByFilter)), None)
         if order_by:
@@ -166,7 +166,7 @@ def test_fastapi_order_by_filter_dependency() -> None:
         assert response.status_code == 200
         assert response.json() == {"field": "created_at", "order": "desc"}
 
-        # Custom field
+        # Allowed custom field
         response = client.get("/users?orderBy=name")
         assert response.status_code == 200
         assert response.json() == {"field": "name", "order": "desc"}
@@ -176,17 +176,16 @@ def test_fastapi_order_by_filter_dependency() -> None:
         assert response.status_code == 200
         assert response.json() == {"field": "created_at", "order": "asc"}
 
-        # Both custom
-        response = client.get("/users?orderBy=email&sortOrder=asc")
-        assert response.status_code == 200
-        assert response.json() == {"field": "email", "order": "asc"}
+        # Disallowed custom field
+        response = client.get("/users?orderBy=password_hash&sortOrder=asc")
+        assert response.status_code == 422
 
 
 def test_fastapi_date_range_filter_dependency() -> None:
     """Test date range filter dependency with actual HTTP request."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -239,7 +238,7 @@ def test_fastapi_multiple_filters_combined() -> None:
     """Test combining multiple filter types in one request."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -255,7 +254,7 @@ def test_fastapi_multiple_filters_combined() -> None:
                     "id_filter": UUID,
                     "search": "name",
                     "pagination_type": "limit_offset",
-                    "sort_field": "created_at",
+                    "sort_field": {"created_at", "name"},
                 })
             ),
         ],
@@ -285,7 +284,7 @@ def test_fastapi_filter_with_actual_query_execution() -> None:
     """Test filters applied to actual SQL query execution."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
 
@@ -305,7 +304,11 @@ def test_fastapi_filter_with_actual_query_execution() -> None:
         filters: Annotated[
             list[FilterTypes],
             Depends(
-                db_ext.provide_filters({"pagination_type": "limit_offset", "sort_field": "name", "sort_order": "desc"})
+                db_ext.provide_filters({
+                    "pagination_type": "limit_offset",
+                    "sort_field": ["name", "age"],
+                    "sort_order": "desc",
+                })
             ),
         ],
         db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
@@ -338,7 +341,7 @@ def test_fastapi_openapi_schema_includes_filter_params() -> None:
     """Test that OpenAPI schema includes filter query parameters."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -372,7 +375,7 @@ def test_fastapi_filter_validation_error() -> None:
     """Test that invalid filter values return proper validation errors."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -399,7 +402,7 @@ def test_fastapi_in_fields_filter_dependency() -> None:
     """Test in_fields filter dependency with actual HTTP request (issue #405)."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -443,7 +446,7 @@ def test_fastapi_not_in_fields_filter_dependency() -> None:
     """Test not_in_fields filter dependency with actual HTTP request (issue #405)."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "manual"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
     )
     sqlspec.add_config(config)
 
@@ -487,7 +490,7 @@ def test_fastapi_in_fields_with_query_execution() -> None:
     """Test in_fields filter applied to actual SQL query execution (issue #405)."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"starlette": {"commit_mode": "autocommit"}}
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "autocommit"}}
     )
     sqlspec.add_config(config)
 
