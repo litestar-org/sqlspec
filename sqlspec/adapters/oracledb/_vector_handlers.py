@@ -40,6 +40,14 @@ _TYPECODE_INT8 = "b"
 _TYPECODE_INT16 = "h"
 _TYPECODE_INT32 = "i"
 
+_INT8_MIN = -128
+_INT8_MAX = 127
+
+_VECTOR_RETURN_NUMPY = "numpy"
+_VECTOR_RETURN_LIST = "list"
+_VECTOR_RETURN_ARRAY = "array"
+_VECTOR_RETURN_FORMATS = frozenset({_VECTOR_RETURN_NUMPY, _VECTOR_RETURN_LIST, _VECTOR_RETURN_ARRAY})
+
 DTYPE_TO_ARRAY_CODE: "dict[str, str]" = {
     "float64": _TYPECODE_FLOAT64,
     "float32": _TYPECODE_FLOAT32,
@@ -97,8 +105,43 @@ def numpy_converter_out(value: "array.array[Any]") -> Any:
     return np.array(value, copy=True, dtype=value.typecode)
 
 
+def _is_vector_payload(value: Any) -> bool:
+    """Return True if the value should be claimed by the vector input handler.
+
+    Mirrors the C1 ``_is_json_payload`` predicate but inverted: claims sequences
+    of numbers (vector embeddings); rejects ``dict`` / ``list[dict]`` which the
+    JSON handler owns. ``bool`` is excluded explicitly because it is a subclass
+    of ``int`` but is owned by the JSON path.
+    """
+    if isinstance(value, array.array):
+        return True
+    if NUMPY_INSTALLED:
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            return True
+    if isinstance(value, (list, tuple)) and value:
+        first = value[0]
+        if isinstance(first, bool):
+            return False
+        return isinstance(first, (int, float))
+    return False
+
+
+def _pack_python_sequence(value: "list[Any] | tuple[Any, ...]") -> "array.array[Any]":
+    """Pack a Python sequence into an ``array.array`` for VECTOR binding.
+
+    Integer sequences entirely within ``[-128, 127]`` use the int8 typecode for
+    a cheaper bind; everything else falls back to float32 (the 23ai default and
+    the most common LLM embedding dtype).
+    """
+    if all(isinstance(v, int) and not isinstance(v, bool) and _INT8_MIN <= v <= _INT8_MAX for v in value):
+        return array.array(_TYPECODE_INT8, value)
+    return array.array(_TYPECODE_FLOAT32, [float(v) for v in value])
+
+
 def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-    """Oracle input type handler for NumPy arrays.
+    """Oracle input type handler for vector payloads.
 
     Args:
         cursor: Oracle cursor (sync or async).
@@ -106,60 +149,80 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
         arraysize: Array size for the cursor variable.
 
     Returns:
-        Cursor variable with NumPy converter if value is ndarray, None otherwise.
+        Cursor variable for VECTOR binding when ``value`` is a vector payload,
+        otherwise ``None`` so the next handler in the chain can claim it.
     """
-    if not NUMPY_INSTALLED:
+    if not _is_vector_payload(value):
         return None
 
-    import numpy as np
     import oracledb
 
-    if isinstance(value, np.ndarray):
-        return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
-    return None
+    if NUMPY_INSTALLED:
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
+
+    if isinstance(value, array.array):
+        return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize)
+
+    packed = _pack_python_sequence(value)
+    return cursor.var(oracledb.DB_TYPE_VECTOR, arraysize=arraysize, inconverter=lambda _v: packed)
 
 
 def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     """Oracle output type handler for VECTOR columns.
 
-    Args:
-        cursor: Oracle cursor (sync or async).
-        metadata: Column metadata from Oracle.
-
-    Returns:
-        Cursor variable with NumPy converter if column is VECTOR, None otherwise.
+    Reads ``connection._sqlspec_vector_return_format`` (set by the session
+    callback in ``config._init_connection``) to dispatch to the requested
+    return type. Falls back to ``"numpy"`` when NumPy is installed and
+    ``"list"`` otherwise so consumers without the connection-level setting
+    still get sensible behavior.
     """
-    if not NUMPY_INSTALLED:
-        return None
-
     import oracledb
 
-    if metadata.type_code is oracledb.DB_TYPE_VECTOR:
+    if metadata.type_code is not oracledb.DB_TYPE_VECTOR:
+        return None
+
+    fmt = getattr(cursor.connection, "_sqlspec_vector_return_format", None)
+    if fmt is None:
+        fmt = _VECTOR_RETURN_NUMPY if NUMPY_INSTALLED else _VECTOR_RETURN_LIST
+
+    if fmt == _VECTOR_RETURN_NUMPY:
+        if not NUMPY_INSTALLED:
+            msg = (
+                "vector_return_format='numpy' requires numpy; install with "
+                "`pip install sqlspec[oracle,numpy]` or set vector_return_format='list'."
+            )
+            raise RuntimeError(msg)
         return cursor.var(metadata.type_code, arraysize=cursor.arraysize, outconverter=numpy_converter_out)
-    return None
+    if fmt == _VECTOR_RETURN_LIST:
+        return cursor.var(metadata.type_code, arraysize=cursor.arraysize, outconverter=list)
+    if fmt == _VECTOR_RETURN_ARRAY:
+        return None
+
+    msg = f"Invalid vector_return_format: {fmt!r}; expected one of {sorted(_VECTOR_RETURN_FORMATS)}"
+    raise ValueError(msg)
 
 
 def numpy_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-    """Public input type handler for NumPy arrays."""
+    """Public input type handler for vector payloads."""
     return _input_type_handler(cursor, value, arraysize)
 
 
 def numpy_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Public output type handler for NumPy VECTOR columns."""
+    """Public output type handler for VECTOR columns."""
     return _output_type_handler(cursor, metadata)
 
 
 def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
-    """Register NumPy type handlers on Oracle connection.
+    """Register vector type handlers on an Oracle connection.
 
-    Enables automatic conversion between NumPy arrays and Oracle VECTOR types.
-    Works for both sync and async connections.
+    Enables automatic conversion between Python sequence types and Oracle
+    VECTOR columns. Works for both sync and async connections.
 
     Args:
         connection: Oracle connection (sync or async).
     """
-    if not NUMPY_INSTALLED:
-        return
-
     connection.inputtypehandler = numpy_input_type_handler
     connection.outputtypehandler = numpy_output_type_handler

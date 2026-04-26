@@ -178,11 +178,12 @@ def test_input_type_handler_returns_none_for_non_numpy() -> None:
 
 
 def test_output_type_handler_registers_numpy_converter() -> None:
-    """Test output type handler correctly registers NumPy converter."""
+    """Test output type handler correctly registers NumPy converter when format='numpy'."""
     from sqlspec.adapters.oracledb import numpy_output_type_handler
 
     mock_cursor = MagicMock()
     mock_cursor.arraysize = 10
+    mock_cursor.connection._sqlspec_vector_return_format = "numpy"
     mock_var = MagicMock()
     mock_cursor.var.return_value = mock_var
 
@@ -232,15 +233,21 @@ def test_register_numpy_handlers_sets_connection_handlers() -> None:
     assert callable(mock_connection.outputtypehandler)
 
 
-def test_register_numpy_handlers_with_numpy_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test register_numpy_handlers gracefully handles NumPy not installed."""
+def test_register_numpy_handlers_registers_even_when_numpy_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``register_numpy_handlers`` always wires the handlers regardless of NumPy install state.
+
+    Per chapter-3/spec.md §2: the handlers register unconditionally with the
+    numpy paths gated internally on ``NUMPY_INSTALLED``. This closes the
+    pure-Python fallback hole for ``list[float]`` binding.
+    """
     import sqlspec.adapters.oracledb as oracledb_module
 
     monkeypatch.setattr(oracledb_module.vector_handlers, "NUMPY_INSTALLED", False)
 
     from sqlspec.adapters.oracledb import register_numpy_handlers
 
-    mock_connection = MagicMock(spec=[])
+    mock_connection = MagicMock()
     register_numpy_handlers(mock_connection)
 
-    assert len(mock_connection.method_calls) == 0
+    assert mock_connection.inputtypehandler is not None
+    assert mock_connection.outputtypehandler is not None

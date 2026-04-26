@@ -291,22 +291,24 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
         """Initialize connection with type handlers and cached server metadata.
 
-        Registers NumPy vector, JSON, and UUID handlers. JSON registration is
-        unconditional (no flag) — native ``DB_TYPE_JSON`` is the correct path
-        for any modern Oracle. NumPy and UUID registration remain gated for
+        Registers vector, JSON, and UUID handlers. Vector and JSON handlers run
+        unconditionally — both gate any optional dependencies (NumPy in the
+        vector case) internally. UUID registration remains gated for
         backwards compatibility with existing user configurations.
 
         Caches ``connection._sqlspec_oracle_major`` so the JSON input handler
         can pick the right binding path (``DB_TYPE_JSON`` on 21c+, OSON-encoded
         ``DB_TYPE_BLOB`` on 19c-20c, JSON-string ``DB_TYPE_CLOB`` on 12c-18c)
-        without re-querying server metadata on every bind.
+        without re-querying server metadata on every bind. Caches
+        ``connection._sqlspec_vector_return_format`` so the vector output
+        handler can dispatch to ``numpy`` / ``list`` / ``array`` without
+        re-reading driver-feature defaults on every fetch.
 
         Args:
             connection: Oracle connection to initialize.
             tag: Connection tag for session state.
         """
-        if self.driver_features.get("enable_numpy_vectors", False):
-            register_numpy_handlers(connection)
+        register_numpy_handlers(connection)
 
         register_json_handlers(connection)
 
@@ -316,6 +318,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         # Stash detected major version on the connection so the JSON input handler
         # can pick the right binding path without per-bind metadata queries.
         setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
+        # Stash the vector-read format so the VECTOR output handler can
+        # dispatch without re-reading driver-feature defaults on every fetch.
+        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
@@ -477,17 +482,20 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
         """Initialize async connection with type handlers and cached server metadata.
 
-        Registers NumPy vector, JSON, and UUID handlers. JSON registration is
-        unconditional. Caches ``connection._sqlspec_oracle_major`` so the JSON
-        input handler can pick the right binding path on every bind without
-        round-tripping server metadata.
+        Registers vector, JSON, and UUID handlers. Vector and JSON registration
+        is unconditional — both gate any optional dependencies (NumPy in the
+        vector case) internally. Caches ``connection._sqlspec_oracle_major`` so
+        the JSON input handler can pick the right binding path on every bind
+        without round-tripping server metadata. Caches
+        ``connection._sqlspec_vector_return_format`` so the vector output
+        handler dispatches to the user-selected return type without re-reading
+        driver-feature defaults on every fetch.
 
         Args:
             connection: Oracle async connection to initialize.
             tag: Connection tag for session state.
         """
-        if self.driver_features.get("enable_numpy_vectors", False):
-            register_numpy_handlers(connection)
+        register_numpy_handlers(connection)
 
         register_json_handlers(connection)
 
@@ -497,6 +505,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         # Stash detected major version on the connection so the JSON input handler
         # can pick the right binding path without per-bind metadata queries.
         setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
+        # Stash the vector-read format so the VECTOR output handler can
+        # dispatch without re-reading driver-feature defaults on every fetch.
+        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
