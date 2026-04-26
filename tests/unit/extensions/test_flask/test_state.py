@@ -1,5 +1,8 @@
 """Tests for Flask configuration state."""
 
+import pytest
+
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask import FlaskConfigState
 
 
@@ -107,6 +110,23 @@ def test_should_commit_extra_rollback_statuses() -> None:
 
     assert state.should_commit(200)
     assert not state.should_commit(201)
+
+
+def test_config_state_rejects_conflicting_extra_statuses() -> None:
+    """Test extra commit and rollback statuses cannot overlap."""
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        FlaskConfigState(
+            config=None,  # type: ignore[arg-type]
+            connection_key="conn",
+            session_key="db",
+            commit_mode="autocommit",
+            extra_commit_statuses={418},
+            extra_rollback_statuses={418},
+            is_async=False,
+            disable_di=False,
+        )
+
+    assert "must not share" in str(exc_info.value)
 
 
 def test_should_rollback_manual_mode() -> None:
