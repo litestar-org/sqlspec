@@ -58,7 +58,7 @@ Choose a topic
       :link: framework_integrations
       :link-type: doc
 
-      Plug SQLSpec into Litestar, FastAPI, Flask, or Starlette.
+      Plug SQLSpec into Litestar, FastAPI, Flask, Sanic, or Starlette.
 
    .. grid-item-card:: Observability
       :link: observability
@@ -98,7 +98,7 @@ Recommended Path
 3. **Execute queries** using :doc:`drivers_and_querying` for transaction and parameter patterns.
 4. **Build queries safely** with the :doc:`query_builder` for programmatic SQL construction.
 5. **Organize SQL** in files using :doc:`sql_files` when your project grows.
-6. **Integrate with your framework** via :doc:`framework_integrations` for Litestar, FastAPI, Flask, or Starlette.
+6. **Integrate with your framework** via :doc:`framework_integrations` for Litestar, FastAPI, Flask, Sanic, or Starlette.
 
 .. toctree::
    :hidden:

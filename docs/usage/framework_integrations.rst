@@ -41,6 +41,12 @@ Supported frameworks
          :align: center
          :alt: Flask
 
+   .. grid-item-card:: Sanic
+      :link: frameworks/sanic
+      :link-type: doc
+
+      Sanic-native ``app.ctx`` pools and ``request.ctx`` sessions.
+
    .. grid-item-card:: Starlette
       :link: frameworks/starlette
       :link-type: doc
@@ -65,4 +71,5 @@ Supported frameworks
    frameworks/litestar/index
    frameworks/fastapi
    frameworks/flask
+   frameworks/sanic
    frameworks/starlette
