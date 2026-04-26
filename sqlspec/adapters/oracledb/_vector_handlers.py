@@ -10,7 +10,6 @@ as a follow-up.
 """
 
 import array
-import sys
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
@@ -57,7 +56,11 @@ DTYPE_TO_ARRAY_CODE: "dict[str, str]" = {
     "int16": _TYPECODE_INT16,
     "int32": _TYPECODE_INT32,
 }
-if sys.version_info >= (3, 13):
+try:
+    array.array(_TYPECODE_FLOAT16)
+except ValueError:
+    pass
+else:
     DTYPE_TO_ARRAY_CODE["float16"] = _TYPECODE_FLOAT16
 
 

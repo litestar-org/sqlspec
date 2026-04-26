@@ -1,7 +1,6 @@
 """Unit tests for Oracle NumPy vector type handlers."""
 
 import array
-import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -15,15 +14,17 @@ def test_dtype_to_array_code_mapping() -> None:
     """Test dtype to array code mapping constant.
 
     The map covers the array.array typecodes Oracle's DB_TYPE_VECTOR accepts.
-    float16 ('e') is only available in Python 3.13+, so it is gated.
+    float16 ('e') is included only when supported by the runtime.
     """
     from sqlspec.adapters.oracledb import DTYPE_TO_ARRAY_CODE
 
     base_expected = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b", "int16": "h", "int32": "i"}
-    if sys.version_info >= (3, 13):
-        expected = {**base_expected, "float16": "e"}
-    else:
+    try:
+        array.array("e")
+    except ValueError:
         expected = base_expected
+    else:
+        expected = {**base_expected, "float16": "e"}
     assert DTYPE_TO_ARRAY_CODE == expected
 
 
