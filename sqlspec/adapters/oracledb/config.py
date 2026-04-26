@@ -6,6 +6,7 @@ import oracledb
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
@@ -47,6 +48,27 @@ __all__ = (
     "OraclePoolParams",
     "OracleSyncConfig",
 )
+
+
+def _extract_oracle_major(connection: Any) -> "int | None":
+    """Read the major version digit from ``connection.version``.
+
+    Used by ``_init_connection`` to cache server major on the connection so the
+    JSON input handler can route bind paths without per-bind metadata queries.
+    Returns ``None`` when the version string is missing or unparsable; callers
+    treat ``None`` as "assume 21c+ (modern default)".
+    """
+    try:
+        version_str = connection.version
+    except AttributeError:
+        return None
+    if not version_str:
+        return None
+    head = version_str.split(".", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
 
 
 class OracleConnectionParams(TypedDict):
@@ -261,11 +283,17 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return oracledb.create_pool(**config)
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
-        """Initialize connection with optional type handlers and user callback.
+        """Initialize connection with type handlers and cached server metadata.
 
-        Registers NumPy vector handlers and UUID binary handlers when enabled.
-        Registration order ensures handler chaining works correctly.
-        User callback is called after internal setup.
+        Registers NumPy vector, JSON, and UUID handlers. JSON registration is
+        unconditional (no flag) — native ``DB_TYPE_JSON`` is the correct path
+        for any modern Oracle. NumPy and UUID registration remain gated for
+        backwards compatibility with existing user configurations.
+
+        Caches ``connection._sqlspec_oracle_major`` so the JSON input handler
+        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, OSON-encoded
+        ``DB_TYPE_BLOB`` on 19c-20c, JSON-string ``DB_TYPE_CLOB`` on 12c-18c)
+        without re-querying server metadata on every bind.
 
         Args:
             connection: Oracle connection to initialize.
@@ -274,8 +302,14 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if self.driver_features.get("enable_numpy_vectors", False):
             register_numpy_handlers(connection)
 
+        register_json_handlers(connection)
+
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
+
+        # Stash detected major version on the connection so the JSON input handler
+        # can pick the right binding path without per-bind metadata queries.
+        setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
@@ -435,11 +469,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         return oracledb.create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
-        """Initialize async connection with optional type handlers and user callback.
+        """Initialize async connection with type handlers and cached server metadata.
 
-        Registers NumPy vector handlers and UUID binary handlers when enabled.
-        Registration order ensures handler chaining works correctly.
-        User callback is called after internal setup.
+        Registers NumPy vector, JSON, and UUID handlers. JSON registration is
+        unconditional. Caches ``connection._sqlspec_oracle_major`` so the JSON
+        input handler can pick the right binding path on every bind without
+        round-tripping server metadata.
 
         Args:
             connection: Oracle async connection to initialize.
@@ -448,8 +483,14 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if self.driver_features.get("enable_numpy_vectors", False):
             register_numpy_handlers(connection)
 
+        register_json_handlers(connection)
+
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
+
+        # Stash detected major version on the connection so the JSON input handler
+        # can pick the right binding path without per-bind metadata queries.
+        setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:

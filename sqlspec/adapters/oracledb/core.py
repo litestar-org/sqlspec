@@ -373,10 +373,15 @@ def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[
 
 
 def requires_session_callback(driver_features: "dict[str, Any]") -> bool:
-    """Return True when the session callback should be installed."""
-    enable_numpy_vectors = bool(driver_features.get("enable_numpy_vectors", False))
-    enable_uuid_binary = bool(driver_features.get("enable_uuid_binary", False))
-    return enable_numpy_vectors or enable_uuid_binary
+    """Return True when the session callback should be installed.
+
+    The JSON input/output handlers are always-on (no driver-feature flag), so
+    the session callback is always required for an Oracle pool to bind ``dict``
+    / ``list`` parameters via the native ``DB_TYPE_JSON`` / OSON-encoded BLOB /
+    JSON-string CLOB paths and to cache ``connection._sqlspec_oracle_major``.
+    """
+    del driver_features  # always-on; preserved for signature compatibility
+    return True
 
 
 def _description_requires_lob_coercion(description: "list[Any]") -> bool:
@@ -706,7 +711,7 @@ def build_profile() -> "DriverParameterProfile":
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
+        json_serializer_strategy="driver",
         custom_type_coercions={**build_uuid_coercions()},
         default_dialect="oracle",
     )
