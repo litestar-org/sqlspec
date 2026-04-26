@@ -1,6 +1,7 @@
 """Unit tests for Oracle NumPy vector type handlers."""
 
 import array
+import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -11,11 +12,28 @@ pytestmark = pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed
 
 
 def test_dtype_to_array_code_mapping() -> None:
-    """Test dtype to array code mapping constant."""
+    """Test dtype to array code mapping constant.
+
+    The map covers the array.array typecodes Oracle's DB_TYPE_VECTOR accepts.
+    float16 ('e') is only available in Python 3.13+, so it is gated.
+    """
     from sqlspec.adapters.oracledb import DTYPE_TO_ARRAY_CODE
 
-    expected = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b"}
+    base_expected = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b", "int16": "h", "int32": "i"}
+    if sys.version_info >= (3, 13):
+        expected = {**base_expected, "float16": "e"}
+    else:
+        expected = base_expected
     assert DTYPE_TO_ARRAY_CODE == expected
+
+
+def test_vector_handlers_module_alias_exposed() -> None:
+    """The package re-exports the module under the new ``vector_handlers`` alias."""
+    import sqlspec.adapters.oracledb as oracledb_module
+
+    assert hasattr(oracledb_module, "vector_handlers")
+    # Old alias is gone — internal-only module rename per PRD constraint #2.
+    assert not hasattr(oracledb_module, "numpy_handlers")
 
 
 def test_numpy_converter_in_float32() -> None:
@@ -218,7 +236,7 @@ def test_register_numpy_handlers_with_numpy_not_installed(monkeypatch: pytest.Mo
     """Test register_numpy_handlers gracefully handles NumPy not installed."""
     import sqlspec.adapters.oracledb as oracledb_module
 
-    monkeypatch.setattr(oracledb_module.numpy_handlers, "NUMPY_INSTALLED", False)
+    monkeypatch.setattr(oracledb_module.vector_handlers, "NUMPY_INSTALLED", False)
 
     from sqlspec.adapters.oracledb import register_numpy_handlers
 

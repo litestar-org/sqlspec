@@ -1,5 +1,5 @@
 import sqlspec.adapters.oracledb._json_handlers as json_handlers
-import sqlspec.adapters.oracledb._numpy_handlers as numpy_handlers
+import sqlspec.adapters.oracledb._vector_handlers as vector_handlers
 from sqlspec.adapters.oracledb._json_handlers import (
     json_converter_in_blob,
     json_converter_in_clob,
@@ -8,14 +8,6 @@ from sqlspec.adapters.oracledb._json_handlers import (
     json_input_type_handler,
     json_output_type_handler,
     register_json_handlers,
-)
-from sqlspec.adapters.oracledb._numpy_handlers import (
-    DTYPE_TO_ARRAY_CODE,
-    numpy_converter_in,
-    numpy_converter_out,
-    numpy_input_type_handler,
-    numpy_output_type_handler,
-    register_numpy_handlers,
 )
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
@@ -29,6 +21,14 @@ from sqlspec.adapters.oracledb._uuid_handlers import (
     uuid_converter_out,
     uuid_input_type_handler,
     uuid_output_type_handler,
+)
+from sqlspec.adapters.oracledb._vector_handlers import (
+    DTYPE_TO_ARRAY_CODE,
+    numpy_converter_in,
+    numpy_converter_out,
+    numpy_input_type_handler,
+    numpy_output_type_handler,
+    register_numpy_handlers,
 )
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
@@ -70,7 +70,6 @@ __all__ = (
     "json_output_type_handler",
     "numpy_converter_in",
     "numpy_converter_out",
-    "numpy_handlers",
     "numpy_input_type_handler",
     "numpy_output_type_handler",
     "register_json_handlers",
@@ -80,4 +79,5 @@ __all__ = (
     "uuid_converter_out",
     "uuid_input_type_handler",
     "uuid_output_type_handler",
+    "vector_handlers",
 )

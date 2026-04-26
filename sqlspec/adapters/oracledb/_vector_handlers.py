@@ -1,10 +1,16 @@
-"""Oracle NumPy vector type handlers for VECTOR data type support.
+"""Oracle vector type handlers for the DB_TYPE_VECTOR data type.
 
-Provides automatic conversion between NumPy arrays and Oracle VECTOR types
-via connection type handlers. Requires Oracle Database 23ai or higher.
+Provides automatic conversion between Python sequence-of-numbers
+(``numpy.ndarray``, ``array.array``, ``list``, ``tuple``) and Oracle VECTOR
+columns. Requires Oracle Database 23ai or higher.
+
+Public symbols keep the historical ``numpy_*`` prefix for backwards-compat with
+sqlspec ``__all__`` consumers; the user-facing rename to ``vector_*`` is tracked
+as a follow-up.
 """
 
 import array
+import sys
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import NUMPY_INSTALLED
@@ -14,6 +20,7 @@ if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 __all__ = (
+    "DTYPE_TO_ARRAY_CODE",
     "numpy_converter_in",
     "numpy_converter_out",
     "numpy_input_type_handler",
@@ -25,7 +32,24 @@ __all__ = (
 logger = get_logger(__name__)
 
 
-DTYPE_TO_ARRAY_CODE: "dict[str, str]" = {"float64": "d", "float32": "f", "uint8": "B", "int8": "b"}
+_TYPECODE_FLOAT64 = "d"
+_TYPECODE_FLOAT32 = "f"
+_TYPECODE_FLOAT16 = "e"
+_TYPECODE_UINT8 = "B"
+_TYPECODE_INT8 = "b"
+_TYPECODE_INT16 = "h"
+_TYPECODE_INT32 = "i"
+
+DTYPE_TO_ARRAY_CODE: "dict[str, str]" = {
+    "float64": _TYPECODE_FLOAT64,
+    "float32": _TYPECODE_FLOAT32,
+    "uint8": _TYPECODE_UINT8,
+    "int8": _TYPECODE_INT8,
+    "int16": _TYPECODE_INT16,
+    "int32": _TYPECODE_INT32,
+}
+if sys.version_info >= (3, 13):
+    DTYPE_TO_ARRAY_CODE["float16"] = _TYPECODE_FLOAT16
 
 
 def numpy_converter_in(value: Any) -> "array.array[Any]":

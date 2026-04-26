@@ -7,7 +7,6 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
-from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -19,6 +18,7 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncSessionContext,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
+from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
