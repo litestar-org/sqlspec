@@ -4,6 +4,7 @@ import re
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -188,26 +189,41 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
 def coerce_large_parameters_sync(
     connection: Any, parameters: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
 ) -> Any:
-    """Coerce large string/bytes parameters into CLOBs/BLOBs.
+    """Coerce large string/bytes parameters into CLOBs/BLOBs with wrapper-aware routing.
 
-    Strings whose UTF-8 encoding exceeds ``varchar2_byte_limit`` are bound as
-    CLOBs.  Bytes values longer than ``raw_byte_limit`` are bound as BLOBs.
+    Routing order:
+        1. ``OracleClob`` / ``OracleBlob`` / ``OracleJson`` wrappers — explicit user
+           intent, length-thresholds bypassed.
+        2. Plain ``str`` whose UTF-8 encoding exceeds ``varchar2_byte_limit`` → CLOB.
+        3. Plain ``bytes``/``bytearray`` longer than ``raw_byte_limit`` → BLOB.
 
     Args:
         connection: Oracle database connection.
         parameters: Prepared parameters payload.
         clob_type: Oracle CLOB DB type (``oracledb.DB_TYPE_CLOB``).
         blob_type: Oracle BLOB DB type (``oracledb.DB_TYPE_BLOB``).
-        varchar2_byte_limit: Byte-length threshold for CLOB conversion.
-        raw_byte_limit: Byte-length threshold for BLOB conversion.
+        varchar2_byte_limit: Byte-length threshold for implicit CLOB conversion.
+        raw_byte_limit: Byte-length threshold for implicit BLOB conversion.
 
     Returns:
-        Parameters payload with large values converted to LOBs.
+        Parameters payload with values routed to the correct LOB / native type.
     """
     if not parameters or not isinstance(parameters, dict):
         return parameters
     for param_name, param_value in parameters.items():
-        if isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
+        if isinstance(param_value, OracleClob):
+            inner = param_value.value
+            if isinstance(inner, bytes):
+                inner = inner.decode("utf-8")
+            parameters[param_name] = connection.createlob(clob_type, inner)
+        elif isinstance(param_value, OracleBlob):
+            inner = param_value.value
+            if isinstance(inner, str):
+                inner = inner.encode("utf-8")
+            parameters[param_name] = connection.createlob(blob_type, inner)
+        elif isinstance(param_value, OracleJson):
+            parameters[param_name] = param_value.value
+        elif isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
             parameters[param_name] = connection.createlob(clob_type, param_value)
         elif isinstance(param_value, (bytes, bytearray)) and len(param_value) > raw_byte_limit:
             parameters[param_name] = connection.createlob(blob_type, bytes(param_value))
@@ -217,26 +233,27 @@ def coerce_large_parameters_sync(
 async def coerce_large_parameters_async(
     connection: Any, parameters: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
 ) -> Any:
-    """Coerce large string/bytes parameters into CLOBs/BLOBs for async Oracle drivers.
+    """Async mirror of :func:`coerce_large_parameters_sync`.
 
-    Strings whose UTF-8 encoding exceeds ``varchar2_byte_limit`` are bound as
-    CLOBs.  Bytes values longer than ``raw_byte_limit`` are bound as BLOBs.
-
-    Args:
-        connection: Oracle database connection.
-        parameters: Prepared parameters payload.
-        clob_type: Oracle CLOB DB type (``oracledb.DB_TYPE_CLOB``).
-        blob_type: Oracle BLOB DB type (``oracledb.DB_TYPE_BLOB``).
-        varchar2_byte_limit: Byte-length threshold for CLOB conversion.
-        raw_byte_limit: Byte-length threshold for BLOB conversion.
-
-    Returns:
-        Parameters payload with large values converted to LOBs.
+    Identical routing order; ``connection.createlob`` is awaited for the async
+    Oracle driver.
     """
     if not parameters or not isinstance(parameters, dict):
         return parameters
     for param_name, param_value in parameters.items():
-        if isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
+        if isinstance(param_value, OracleClob):
+            inner = param_value.value
+            if isinstance(inner, bytes):
+                inner = inner.decode("utf-8")
+            parameters[param_name] = await connection.createlob(clob_type, inner)
+        elif isinstance(param_value, OracleBlob):
+            inner = param_value.value
+            if isinstance(inner, str):
+                inner = inner.encode("utf-8")
+            parameters[param_name] = await connection.createlob(blob_type, inner)
+        elif isinstance(param_value, OracleJson):
+            parameters[param_name] = param_value.value
+        elif isinstance(param_value, str) and len(param_value.encode("utf-8")) > varchar2_byte_limit:
             parameters[param_name] = await connection.createlob(clob_type, param_value)
         elif isinstance(param_value, (bytes, bytearray)) and len(param_value) > raw_byte_limit:
             parameters[param_name] = await connection.createlob(blob_type, bytes(param_value))

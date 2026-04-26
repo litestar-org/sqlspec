@@ -9,6 +9,7 @@ from sqlspec.adapters.oracledb._json_handlers import (
     json_output_type_handler,
     register_json_handlers,
 )
+from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncCursor,
@@ -52,8 +53,11 @@ __all__ = (
     "OracleAsyncCursor",
     "OracleAsyncDriver",
     "OracleAsyncExceptionHandler",
+    "OracleBlob",
+    "OracleClob",
     "OracleConnectionParams",
     "OracleDriverFeatures",
+    "OracleJson",
     "OraclePoolParams",
     "OracleSyncConfig",
     "OracleSyncConnection",

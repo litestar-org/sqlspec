@@ -168,6 +168,98 @@ class TestCoerceLargeParametersSync:
         assert params["number"] == 42
         assert sync_connection.createlob.call_count == 2
 
+    def test_oracle_clob_wrapper_short_value_routed_to_clob(self, sync_connection: MagicMock) -> None:
+        """OracleClob bypasses length threshold — explicit user intent."""
+        from sqlspec.adapters.oracledb import OracleClob
+
+        params = {"v": OracleClob("short text")}
+        coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(CLOB_TYPE, "short text")
+        assert params["v"] is sync_connection.createlob.return_value
+
+    def test_oracle_clob_wrapper_bytes_decoded_to_str(self, sync_connection: MagicMock) -> None:
+        """OracleClob(bytes) is utf-8 decoded before createlob."""
+        from sqlspec.adapters.oracledb import OracleClob
+
+        params = {"v": OracleClob(b"some bytes")}
+        coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(CLOB_TYPE, "some bytes")
+
+    def test_oracle_blob_wrapper_short_value_routed_to_blob(self, sync_connection: MagicMock) -> None:
+        """OracleBlob bypasses length threshold — explicit user intent."""
+        from sqlspec.adapters.oracledb import OracleBlob
+
+        params = {"v": OracleBlob(b"short")}
+        coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(BLOB_TYPE, b"short")
+
+    def test_oracle_blob_wrapper_str_encoded_to_bytes(self, sync_connection: MagicMock) -> None:
+        """OracleBlob(str) is utf-8 encoded before createlob."""
+        from sqlspec.adapters.oracledb import OracleBlob
+
+        params = {"v": OracleBlob("text")}
+        coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        sync_connection.createlob.assert_called_once_with(BLOB_TYPE, b"text")
+
+    def test_oracle_json_wrapper_unwrapped_to_value(self, sync_connection: MagicMock) -> None:
+        """OracleJson unwraps so the C1 input handler can claim the value."""
+        from sqlspec.adapters.oracledb import OracleJson
+
+        params = {"v": OracleJson({"a": 1})}
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        assert result["v"] == {"a": 1}
+        sync_connection.createlob.assert_not_called()
+
+    def test_threshold_override_keeps_5000_byte_str_as_varchar2(self, sync_connection: MagicMock) -> None:
+        """varchar2_byte_limit=32767 (EXTENDED mode) keeps a 5000-byte str as VARCHAR2."""
+        long_str = "x" * 5000
+        params = {"v": long_str}
+        result = coerce_large_parameters_sync(
+            sync_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=32767,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        assert result["v"] is long_str
+        sync_connection.createlob.assert_not_called()
+
 
 # --- Async Tests ---
 
@@ -224,3 +316,100 @@ class TestCoerceLargeParametersAsync:
             raw_byte_limit=RAW_LIMIT,
         )
         async_connection.createlob.assert_called_once_with(CLOB_TYPE, value)
+
+    @pytest.mark.anyio
+    async def test_oracle_clob_wrapper_short_value_routed_to_clob(self, async_connection: AsyncMock) -> None:
+        """OracleClob bypasses length threshold \u2014 explicit user intent."""
+        from sqlspec.adapters.oracledb import OracleClob
+
+        params = {"v": OracleClob("short text")}
+        await coerce_large_parameters_async(
+            async_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(CLOB_TYPE, "short text")
+
+    @pytest.mark.anyio
+    async def test_oracle_clob_wrapper_bytes_decoded_to_str(self, async_connection: AsyncMock) -> None:
+        """OracleClob(bytes) is utf-8 decoded before createlob."""
+        from sqlspec.adapters.oracledb import OracleClob
+
+        params = {"v": OracleClob(b"some bytes")}
+        await coerce_large_parameters_async(
+            async_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(CLOB_TYPE, "some bytes")
+
+    @pytest.mark.anyio
+    async def test_oracle_blob_wrapper_short_value_routed_to_blob(self, async_connection: AsyncMock) -> None:
+        """OracleBlob bypasses length threshold \u2014 explicit user intent."""
+        from sqlspec.adapters.oracledb import OracleBlob
+
+        params = {"v": OracleBlob(b"short")}
+        await coerce_large_parameters_async(
+            async_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(BLOB_TYPE, b"short")
+
+    @pytest.mark.anyio
+    async def test_oracle_blob_wrapper_str_encoded_to_bytes(self, async_connection: AsyncMock) -> None:
+        """OracleBlob(str) is utf-8 encoded before createlob."""
+        from sqlspec.adapters.oracledb import OracleBlob
+
+        params = {"v": OracleBlob("text")}
+        await coerce_large_parameters_async(
+            async_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        async_connection.createlob.assert_called_once_with(BLOB_TYPE, b"text")
+
+    @pytest.mark.anyio
+    async def test_oracle_json_wrapper_unwrapped_to_value(self, async_connection: AsyncMock) -> None:
+        """OracleJson unwraps so the C1 input handler can claim the value."""
+        from sqlspec.adapters.oracledb import OracleJson
+
+        params = {"v": OracleJson({"a": 1})}
+        result = await coerce_large_parameters_async(
+            async_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        assert result["v"] == {"a": 1}
+        async_connection.createlob.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_threshold_override_keeps_5000_byte_str_as_varchar2(self, async_connection: AsyncMock) -> None:
+        """varchar2_byte_limit=32767 (EXTENDED mode) keeps a 5000-byte str as VARCHAR2."""
+        long_str = "x" * 5000
+        params = {"v": long_str}
+        result = await coerce_large_parameters_async(
+            async_connection,
+            params,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=32767,
+            raw_byte_limit=RAW_LIMIT,
+        )
+        assert result["v"] is long_str
+        async_connection.createlob.assert_not_called()
