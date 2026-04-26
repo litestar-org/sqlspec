@@ -79,7 +79,7 @@ class SQLSpecPlugin:
         self._sqlcommenter_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
-            settings = self._extract_starlette_settings(cfg)
+            settings = self._extract_extension_settings(cfg)
             state = self._create_config_state(cfg, settings)
             self._config_states.append(state)
 
@@ -94,7 +94,7 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
-    def _extract_starlette_settings(self, config: Any) -> "dict[str, Any]":
+    def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Starlette settings from config.extension_config.
 
         Args:
@@ -141,7 +141,7 @@ class SQLSpecPlugin:
 
         Args:
             config: Database configuration instance.
-            settings: Extracted Starlette settings.
+            settings: Extracted framework settings.
 
         Returns:
             Configuration state instance.

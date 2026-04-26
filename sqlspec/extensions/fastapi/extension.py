@@ -71,7 +71,7 @@ class SQLSpecPlugin(_StarlettePlugin):
         """
         super().__init__(sqlspec, app)
 
-    def _extract_starlette_settings(self, config: Any) -> "dict[str, Any]":
+    def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract FastAPI settings from config.extension_config.
 
         Args:

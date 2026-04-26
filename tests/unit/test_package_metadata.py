@@ -1,8 +1,9 @@
+import sys
 from pathlib import Path
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib
-except ImportError:  # pragma: no cover
+else:
     import tomli as tomllib
 
 

@@ -193,7 +193,7 @@ class SQLSpecPlugin:
             return
 
         app.on_request(self._on_request)
-        app.on_response(self._on_response)
+        app.on_response(self._on_response)  # type: ignore[no-untyped-call]
         self._request_middleware_added = True
 
     async def _on_request(self, request: Any) -> None:
@@ -388,13 +388,15 @@ class SQLSpecPlugin:
         endpoint = getattr(request, "endpoint", None)
         if isinstance(endpoint, str) and endpoint:
             return endpoint.rsplit(".", 1)[-1]
-        if endpoint is not None and hasattr(endpoint, "__name__"):
-            return endpoint.__name__
+        endpoint_name = getattr(endpoint, "__name__", None)
+        if isinstance(endpoint_name, str) and endpoint_name:
+            return endpoint_name
 
         route = getattr(request, "route", None)
         handler = getattr(route, "handler", None)
-        if handler is not None and hasattr(handler, "__name__"):
-            return handler.__name__
+        handler_name = getattr(handler, "__name__", None)
+        if isinstance(handler_name, str) and handler_name:
+            return handler_name
 
         name = getattr(request, "name", None)
         if isinstance(name, str) and name:
@@ -412,7 +414,7 @@ class SQLSpecPlugin:
 
         if config.supports_connection_pooling:
             pool = get_context_value(request.app.ctx, config_state.pool_key)
-            connection_manager = with_ensure_async_(config.provide_connection(pool))  # type: ignore[union-attr]
+            connection_manager = with_ensure_async_(config.provide_connection(pool))
             connection = await connection_manager.__aenter__()
             set_context_value(request.ctx, self._connection_manager_key(config_state), connection_manager)
         else:

@@ -53,7 +53,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
 
         if config.supports_connection_pooling:
             pool = get_state_value(request.app.state, self.config_state.pool_key)
-            async with with_ensure_async_(config.provide_connection(pool)) as connection:  # type: ignore[union-attr]
+            async with with_ensure_async_(config.provide_connection(pool)) as connection:
                 set_state_value(request.state, connection_key, connection)
                 try:
                     return await call_next(request)
@@ -102,7 +102,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
 
         if config.supports_connection_pooling:
             pool = get_state_value(request.app.state, self.config_state.pool_key)
-            async with with_ensure_async_(config.provide_connection(pool)) as connection:  # type: ignore[union-attr]
+            async with with_ensure_async_(config.provide_connection(pool)) as connection:
                 set_state_value(request.state, connection_key, connection)
                 try:
                     response = await call_next(request)

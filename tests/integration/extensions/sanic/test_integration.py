@@ -281,7 +281,9 @@ def test_sanic_disable_di_preserves_pool_lifecycle() -> None:
             async with config.provide_connection(pool) as connection:
                 db = config.driver_type(connection=connection, statement_config=config.statement_config)
                 result = await db.execute("SELECT 1 as value")
-                return response.json({"value": result.get_first()["value"]})
+                data = result.get_first()
+                assert data is not None
+                return response.json({"value": data["value"]})
 
         plugin.init_app(app)
 
