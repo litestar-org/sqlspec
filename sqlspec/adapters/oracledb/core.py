@@ -448,7 +448,13 @@ def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
     features.setdefault("enable_lowercase_column_names", True)
     features.setdefault("enable_uuid_binary", True)
-    features.setdefault("vector_return_format", "numpy" if NUMPY_INSTALLED else "list")
+    if "vector_return_format" not in features:
+        if not NUMPY_INSTALLED:
+            features["vector_return_format"] = "list"
+        elif features["enable_numpy_vectors"]:
+            features["vector_return_format"] = "numpy"
+        else:
+            features["vector_return_format"] = "array"
     features.setdefault("oracle_varchar2_byte_limit", 4000)
     features.setdefault("oracle_raw_byte_limit", 2000)
     return features

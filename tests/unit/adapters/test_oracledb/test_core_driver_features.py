@@ -41,6 +41,13 @@ def test_apply_driver_features_preserves_user_array_return_format() -> None:
     assert features["vector_return_format"] == "array"
 
 
+def test_apply_driver_features_honors_numpy_vectors_opt_out() -> None:
+    """``enable_numpy_vectors=False`` keeps the driver-native VECTOR return type."""
+    features = apply_driver_features({"enable_numpy_vectors": False})
+
+    assert features["vector_return_format"] == "array"
+
+
 def test_oracle_driver_features_typeddict_advertises_vector_return_format() -> None:
     """``OracleDriverFeatures`` exposes ``vector_return_format`` as a NotRequired field."""
     from sqlspec.adapters.oracledb.config import OracleDriverFeatures

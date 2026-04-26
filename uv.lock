@@ -21,7 +21,10 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "mysql-connector-python", marker = "python_full_version >= '3.12'", specifier = "<9.7.0" }]
+overrides = [
+    { name = "mysql-connector-python", marker = "python_full_version < '3.12'" },
+    { name = "mysql-connector-python", marker = "python_full_version >= '3.12'", specifier = "<9.7.0" },
+]
 
 [[package]]
 name = "adbc-driver-bigquery"
@@ -5701,7 +5704,7 @@ minio = [
     { name = "minio" },
 ]
 mysql = [
-    { name = "mysql-connector-python", marker = "python_full_version >= '3.12'" },
+    { name = "mysql-connector-python" },
 ]
 oracle = [
     { name = "oracledb" },
@@ -6993,7 +6996,7 @@ mypyc = [
     { name = "sqlglot", extra = ["c"] },
 ]
 mysql-connector = [
-    { name = "mysql-connector-python", marker = "python_full_version >= '3.12'" },
+    { name = "mysql-connector-python" },
 ]
 nanoid = [
     { name = "fastnanoid" },
