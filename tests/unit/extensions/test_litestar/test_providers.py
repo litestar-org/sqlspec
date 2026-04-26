@@ -3,8 +3,9 @@
 from typing import Any
 
 import pytest
+from litestar.exceptions import ValidationException
 
-from sqlspec.core import InCollectionFilter, NotInCollectionFilter
+from sqlspec.core import InCollectionFilter, NotInCollectionFilter, OrderByFilter
 from sqlspec.extensions.litestar.providers import (
     FieldNameType,
     FilterConfig,
@@ -121,3 +122,28 @@ def test_in_fields_with_string_config() -> None:
     result = provider.dependency(values=["active"])
     assert isinstance(result, InCollectionFilter)
     assert result.field_name == "status"
+
+
+def test_order_by_provider_allows_configured_sort_field() -> None:
+    """orderBy provider allows fields configured in sort_field."""
+    config = FilterConfig(sort_field={"created_at", "name"})
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    result = provider.dependency(field_name="name", sort_order="asc")
+
+    assert isinstance(result, OrderByFilter)
+    assert result.field_name == "name"
+    assert result.sort_order == "asc"
+
+
+def test_order_by_provider_rejects_unconfigured_sort_field() -> None:
+    """orderBy provider rejects fields outside the configured allowlist."""
+    config = FilterConfig(sort_field={"created_at", "name"})
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    with pytest.raises(ValidationException) as exc_info:
+        provider.dependency(field_name="password_hash", sort_order="asc")
+
+    assert "Invalid orderBy field" in str(exc_info.value)

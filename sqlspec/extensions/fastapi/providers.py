@@ -40,6 +40,7 @@ __all__ = (
     "HashableType",
     "HashableValue",
     "IntOrNone",
+    "SortField",
     "SortOrder",
     "SortOrderOrNone",
     "StringOrNone",
@@ -55,6 +56,7 @@ IntOrNone = int | None
 BooleanOrNone = bool | None
 SortOrder = Literal["asc", "desc"]
 SortOrderOrNone = SortOrder | None
+SortField = str | set[str] | list[str]
 HashableValue = str | int | float | bool | None
 HashableType = HashableValue | tuple[Any, ...] | tuple[tuple[str, Any], ...] | tuple[HashableValue, ...]
 
@@ -90,8 +92,8 @@ class FilterConfig(TypedDict):
     """Type of ID filter to enable (UUID, int, or str). When set, enables collection filtering by IDs."""
     id_field: NotRequired[str]
     """Field name for ID filtering. Defaults to 'id'."""
-    sort_field: NotRequired[str | set[str]]
-    """Default field(s) to use for sorting."""
+    sort_field: NotRequired[SortField]
+    """Allowed field(s) to use for sorting."""
     sort_order: NotRequired[SortOrder]
     """Default sort order ('asc' or 'desc'). Defaults to 'desc'."""
     pagination_type: NotRequired[Literal["limit_offset"]]
@@ -148,6 +150,13 @@ dep_cache = DependencyCache()
 
 def _empty_filter_list() -> "list[FilterTypes]":
     return []
+
+
+def _resolve_sort_fields(sort_field: SortField) -> tuple[str, set[str]]:
+    if isinstance(sort_field, str):
+        return sort_field, {sort_field}
+    fields = tuple(sorted(sort_field)) if isinstance(sort_field, set) else tuple(sort_field)
+    return fields[0], set(fields)
 
 
 def provide_filters(
@@ -443,7 +452,8 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
 
     if sort_field := config.get("sort_field"):
         sort_order_default = config.get("sort_order", "desc")
-        default_field = sort_field if isinstance(sort_field, str) else next(iter(sort_field))
+        default_field, allowed_fields = _resolve_sort_fields(sort_field)
+        allowed_field_names = ", ".join(sorted(allowed_fields))
 
         def provide_order_by(
             field_name: Annotated[str, Query(alias="orderBy", description="Field to order by.")] = default_field,
@@ -451,6 +461,9 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 SortOrder | None, Query(alias="sortOrder", description="Sort order ('asc' or 'desc').")
             ] = sort_order_default,
         ) -> OrderByFilter:
+            if field_name not in allowed_fields:
+                msg = f"Invalid orderBy field '{field_name}'. Allowed fields: {allowed_field_names}"
+                raise RequestValidationError(errors=[{"loc": ("query", "orderBy"), "msg": msg, "type": "value_error"}])
             return OrderByFilter(field_name=field_name, sort_order=sort_order or sort_order_default)
 
         param_name = dep_defaults.ORDER_BY_FILTER_DEPENDENCY_KEY

@@ -59,7 +59,7 @@ Using filters in a Litestar handler:
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
         "pagination_size": 20,
-        "sort_field": "created_at",
+        "sort_field": ["created_at", "name"],
         "sort_order": "desc",
         "search": "name,email",
     })
@@ -73,7 +73,7 @@ Using filters in a Litestar handler:
         data, total = await db_session.select_with_total(query, *filters)
         return {"data": data, "total": total}
 
-The generated dependencies automatically handle query parameters like
+The generated dependencies automatically handle query parameters for configured fields like
 ``?currentPage=2&pageSize=10&searchString=alice&orderBy=name&sortOrder=asc``.
 
 Related Guides
