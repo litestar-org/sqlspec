@@ -51,7 +51,10 @@ fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
 mypyc = ["sqlglot[c]>=30.0.0"]
-mysql-connector = ["mysql-connector-python"]
+mysql-connector = [
+  "mysql-connector-python; python_version < '3.12'",
+  "mysql-connector-python<9.7.0; python_version >= '3.12'",
+]
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
 opentelemetry = ["opentelemetry-instrumentation"]
@@ -156,6 +159,12 @@ sqlspec = "sqlspec.__main__:run_cli"
 [project.entry-points."pygments.styles"]
 sqlspec-dark = "tools.sphinx_ext.pygments_styles:SQLSpecDarkStyle"
 sqlspec-light = "tools.sphinx_ext.pygments_styles:SQLSpecLightStyle"
+
+[tool.uv]
+# mysql-connector-python 9.7.0 dropped cp312/cp313/cp314 wheels (regression vs 9.6.0).
+# Force the cap on Python >=3.12 so transitive pulls (e.g., pytest-databases[mysql])
+# resolve to a wheel that exists for the running interpreter.
+override-dependencies = ["mysql-connector-python<9.7.0; python_version >= '3.12'"]
 
 [build-system]
 build-backend = "hatchling.build"
