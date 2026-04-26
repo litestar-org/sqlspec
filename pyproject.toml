@@ -67,6 +67,7 @@ pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
+starlette = ["starlette"]
 uuid = ["uuid-utils"]
 
 [dependency-groups]

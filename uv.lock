@@ -1454,7 +1454,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -6971,6 +6971,9 @@ pymysql = [
 spanner = [
     { name = "google-cloud-spanner" },
 ]
+starlette = [
+    { name = "starlette" },
+]
 uuid = [
     { name = "uuid-utils" },
 ]
@@ -7184,11 +7187,12 @@ requires-dist = [
     { name = "rich-click", specifier = ">=1.9.0" },
     { name = "sqlglot", specifier = ">=30.0.0" },
     { name = "sqlglot", extras = ["c"], marker = "extra == 'mypyc'", specifier = ">=30.0.0" },
+    { name = "starlette", marker = "extra == 'starlette'" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'" },
 ]
-provides-extras = ["adbc", "adk", "aiomysql", "aioodbc", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cloud-sql", "cockroachdb", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "mysql-connector", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
+provides-extras = ["adbc", "adk", "aiomysql", "aioodbc", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cloud-sql", "cockroachdb", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "mysql-connector", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "starlette", "uuid"]
 
 [package.metadata.requires-dev]
 benchmarks = [
