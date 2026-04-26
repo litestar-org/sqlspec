@@ -69,10 +69,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Oracle-specific constants
-# Oracle SQL-context limits (in bytes)
-ORACLE_VARCHAR2_BYTE_LIMIT = 4000  # VARCHAR2 max in SQL context
-ORACLE_RAW_BYTE_LIMIT = 2000  # RAW max in SQL context
+# Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
+# on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
+# core.apply_driver_features and read at the dispatch_execute call sites below.
 
 __all__ = (
     "OracleAsyncDriver",
@@ -327,8 +326,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             prepared_parameters,
             clob_type=oracledb.DB_TYPE_CLOB,
             blob_type=oracledb.DB_TYPE_BLOB,
-            varchar2_byte_limit=ORACLE_VARCHAR2_BYTE_LIMIT,
-            raw_byte_limit=ORACLE_RAW_BYTE_LIMIT,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
@@ -823,8 +822,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             prepared_parameters,
             clob_type=oracledb.DB_TYPE_CLOB,
             blob_type=oracledb.DB_TYPE_BLOB,
-            varchar2_byte_limit=ORACLE_VARCHAR2_BYTE_LIMIT,
-            raw_byte_limit=ORACLE_RAW_BYTE_LIMIT,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 

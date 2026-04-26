@@ -47,3 +47,49 @@ def test_oracle_driver_features_typeddict_advertises_vector_return_format() -> N
 
     annotations = OracleDriverFeatures.__annotations__
     assert "vector_return_format" in annotations
+
+
+def test_apply_driver_features_sets_varchar2_byte_limit_default() -> None:
+    """``oracle_varchar2_byte_limit`` defaults to 4000 (Oracle SQL VARCHAR2 limit)."""
+    features = apply_driver_features({})
+
+    assert features["oracle_varchar2_byte_limit"] == 4000
+
+
+def test_apply_driver_features_sets_raw_byte_limit_default() -> None:
+    """``oracle_raw_byte_limit`` defaults to 2000 (Oracle SQL RAW limit)."""
+    features = apply_driver_features({})
+
+    assert features["oracle_raw_byte_limit"] == 2000
+
+
+def test_apply_driver_features_preserves_user_varchar2_byte_limit() -> None:
+    """User-supplied ``oracle_varchar2_byte_limit`` is not overwritten by the default.
+
+    MAX_STRING_SIZE=EXTENDED databases may set this to 32767 to keep larger
+    strings as VARCHAR2 instead of auto-coercing to CLOB.
+    """
+    features = apply_driver_features({"oracle_varchar2_byte_limit": 32767})
+
+    assert features["oracle_varchar2_byte_limit"] == 32767
+
+
+def test_apply_driver_features_preserves_user_raw_byte_limit() -> None:
+    """User-supplied ``oracle_raw_byte_limit`` is not overwritten by the default."""
+    features = apply_driver_features({"oracle_raw_byte_limit": 100})
+
+    assert features["oracle_raw_byte_limit"] == 100
+
+
+def test_oracle_driver_features_typeddict_advertises_varchar2_byte_limit() -> None:
+    """``OracleDriverFeatures`` exposes ``oracle_varchar2_byte_limit``."""
+    from sqlspec.adapters.oracledb.config import OracleDriverFeatures
+
+    assert "oracle_varchar2_byte_limit" in OracleDriverFeatures.__annotations__
+
+
+def test_oracle_driver_features_typeddict_advertises_raw_byte_limit() -> None:
+    """``OracleDriverFeatures`` exposes ``oracle_raw_byte_limit``."""
+    from sqlspec.adapters.oracledb.config import OracleDriverFeatures
+
+    assert "oracle_raw_byte_limit" in OracleDriverFeatures.__annotations__

@@ -133,6 +133,13 @@ class OracleDriverFeatures(TypedDict):
         - "list": list[float|int], best for code that expects native Python sequences.
         - "array": array.array, zero-copy oracledb passthrough.
         Defaults to "numpy" when NumPy is installed, otherwise "list".
+    oracle_varchar2_byte_limit: Threshold (in UTF-8 bytes) above which ``str``
+        parameters are auto-coerced to ``DB_TYPE_CLOB``. Defaults to 4000 (the
+        Oracle SQL VARCHAR2 limit). Databases with ``MAX_STRING_SIZE=EXTENDED``
+        may set this to 32767 to keep larger strings as VARCHAR2.
+    oracle_raw_byte_limit: Threshold (in bytes) above which ``bytes`` parameters
+        are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
+        RAW limit).
     on_connection_create: Callback executed when a connection is acquired from pool.
         For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
         For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
@@ -152,6 +159,8 @@ class OracleDriverFeatures(TypedDict):
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
     vector_return_format: NotRequired[str]
+    oracle_varchar2_byte_limit: NotRequired[int]
+    oracle_raw_byte_limit: NotRequired[int]
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
