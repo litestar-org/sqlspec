@@ -369,6 +369,7 @@ def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
     features.setdefault("enable_lowercase_column_names", True)
     features.setdefault("enable_uuid_binary", True)
+    features.setdefault("vector_return_format", "numpy" if NUMPY_INSTALLED else "list")
     return features
 
 

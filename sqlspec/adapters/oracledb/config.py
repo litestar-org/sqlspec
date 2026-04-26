@@ -128,6 +128,11 @@ class OracleDriverFeatures(TypedDict):
         Applies only to RAW(16) columns; other RAW sizes remain unchanged.
         Uses Python's stdlib uuid module (no external dependencies).
         Defaults to True for improved type safety and storage efficiency.
+    vector_return_format: Return type for VECTOR column reads. One of:
+        - "numpy" (default when NumPy is installed): np.ndarray, zero-copy compute path.
+        - "list": list[float|int], best for code that expects native Python sequences.
+        - "array": array.array, zero-copy oracledb passthrough.
+        Defaults to "numpy" when NumPy is installed, otherwise "list".
     on_connection_create: Callback executed when a connection is acquired from pool.
         For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
         For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
@@ -146,6 +151,7 @@ class OracleDriverFeatures(TypedDict):
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
+    vector_return_format: NotRequired[str]
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
