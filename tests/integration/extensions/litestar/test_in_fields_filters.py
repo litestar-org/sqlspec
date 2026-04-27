@@ -277,12 +277,15 @@ def test_litestar_order_by_openapi_schema() -> None:
     paths = schema.paths
     assert paths is not None
 
-    # Check parameters for /ordered
-    params = paths["/ordered"].get.parameters
+    operation = paths["/ordered"].get
+    assert operation is not None
+    params = operation.parameters
     assert params is not None
 
-    # orderBy and sortOrder should be there
-    order_by_param = next((p for p in params if p.name == "orderBy"), None)
+    def _named_param(name: str) -> Any:
+        return next((p for p in params if getattr(p, "name", None) == name), None)
+
+    order_by_param = _named_param("orderBy")
     assert order_by_param is not None
 
     # In newer Litestar, types can be a list or a single value, and might be in one_of
@@ -300,6 +303,6 @@ def test_litestar_order_by_openapi_schema() -> None:
 
     assert is_string_type(order_by_param.schema)
 
-    sort_order_param = next((p for p in params if p.name == "sortOrder"), None)
+    sort_order_param = _named_param("sortOrder")
     assert sort_order_param is not None
     assert is_string_type(sort_order_param.schema)

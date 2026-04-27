@@ -7,8 +7,10 @@ ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql as sql_builder
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -204,7 +206,7 @@ def test_filter_with_empty_values() -> None:
 
 def test_search_filter_multiple_fields() -> None:
     """Test SearchFilter with multiple field names."""
-    fields = {"first_name", "last_name", "email"}
+    fields: set[str | exp.Expression] = {"first_name", "last_name", "email"}
     filter_obj = SearchFilter(fields, "john")
 
     positional, named = filter_obj.extract_parameters()
@@ -893,13 +895,12 @@ def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() ->
 
 def test_order_by_filter_with_expression_appends_to_statement_correctly() -> None:
     """Test that OrderByFilter with a SQLGlot expression appends to statement correctly."""
-    from sqlglot import exp
-
     from sqlspec.core import SQL
 
     statement = SQL("SELECT id, lines, occurrences FROM stats")
-    # COALESCE(lines, occurrences, 0)
-    coalesce_expr = exp.func("COALESCE", exp.column("lines"), exp.column("occurrences"), exp.Literal.number(0))
+    coalesce_expr = exp.Coalesce(
+        this=exp.column("lines"), expressions=[exp.column("occurrences"), exp.Literal.number(0)]
+    )
     filter_obj = OrderByFilter(field_name=coalesce_expr, sort_order="desc")
 
     result = apply_filter(statement, filter_obj)
@@ -910,14 +911,12 @@ def test_order_by_filter_with_expression_appends_to_statement_correctly() -> Non
 
 def test_search_filter_with_expression_in_set_appends_to_statement_correctly() -> None:
     """Test that SearchFilter with a SQLGlot expression in a set appends to statement correctly."""
-    from sqlglot import exp
-
     from sqlspec.core import SQL
 
     statement = SQL("SELECT name, email FROM users")
-    # UPPER(name)
-    upper_name = exp.func("UPPER", exp.column("name"))
-    filter_obj = SearchFilter(field_name={upper_name, "email"}, value="john")
+    upper_name = exp.Upper(this=exp.column("name"))
+    fields: set[str | exp.Expression] = {upper_name, "email"}
+    filter_obj = SearchFilter(field_name=fields, value="john")
 
     result = apply_filter(statement, filter_obj)
 
@@ -1110,20 +1109,17 @@ async def test_service_begin_transaction_commits_and_rolls_back() -> None:
 
 def test_search_filter_raises_typeerror_on_invalid_field_name() -> None:
     """SearchFilter raises TypeError instead of silently dropping the WHERE."""
-    from sqlspec.core.filters import SearchFilter as _SF
-
     sql_stmt = SQL("SELECT * FROM things")
-    bad: object = 123
-    f = _SF(field_name=bad, value="x")
+    bad: Any = 123
+    f = SearchFilter(field_name=bad, value="x")
     with pytest.raises(TypeError, match="field_name must be"):
         f.append_to_statement(sql_stmt)
 
 
 def test_not_in_search_filter_raises_typeerror_on_invalid_field_name() -> None:
     """NotInSearchFilter raises TypeError instead of silently dropping the WHERE."""
-
     sql_stmt = SQL("SELECT * FROM things")
-    bad: object = 123
+    bad: Any = 123
     f = NotInSearchFilter(field_name=bad, value="x")
     with pytest.raises(TypeError, match="field_name must be"):
         f.append_to_statement(sql_stmt)
@@ -1131,10 +1127,8 @@ def test_not_in_search_filter_raises_typeerror_on_invalid_field_name() -> None:
 
 def test_search_filter_accepts_expression_field_name() -> None:
     """SearchFilter applies a WHERE clause when given a SQLGlot expression."""
-    from sqlglot import exp
-
     sql_stmt = SQL("SELECT id, name FROM things")
-    f = SearchFilter(field_name=exp.func("LOWER", exp.column("name")), value="foo")
+    f = SearchFilter(field_name=exp.Lower(this=exp.column("name")), value="foo")
     result = f.append_to_statement(sql_stmt)
     assert "WHERE" in result.sql.upper()
     assert "LOWER" in result.sql.upper()
@@ -1143,10 +1137,8 @@ def test_search_filter_accepts_expression_field_name() -> None:
 
 def test_not_in_search_filter_accepts_expression_field_name() -> None:
     """NotInSearchFilter applies WHERE NOT LIKE when given a SQLGlot expression."""
-    from sqlglot import exp
-
     sql_stmt = SQL("SELECT id, name FROM things")
-    f = NotInSearchFilter(field_name=exp.func("LOWER", exp.column("name")), value="foo")
+    f = NotInSearchFilter(field_name=exp.Lower(this=exp.column("name")), value="foo")
     result = f.append_to_statement(sql_stmt)
     sql_upper = result.sql.upper()
     assert "WHERE" in sql_upper
