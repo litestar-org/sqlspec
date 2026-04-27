@@ -1043,8 +1043,8 @@ async def test_service_exists_works() -> None:
 
 
 @pytest.mark.anyio
-async def test_service_get_or_404_returns_row_or_raises() -> None:
-    """get_or_404 returns the row when present and raises NotFoundError otherwise."""
+async def test_service_get_one_returns_row_or_raises() -> None:
+    """get_one returns the row when present and raises NotFoundError otherwise."""
     from sqlspec.exceptions import NotFoundError
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
@@ -1063,14 +1063,14 @@ async def test_service_get_or_404_returns_row_or_raises() -> None:
 
             service = UserService(session)
 
-            row = await service.get_or_404(
+            row = await service.get_one(
                 sql_builder.select("id", "name").from_("users").where_eq("name", "alice"), schema_type=User
             )
             assert isinstance(row, User)
             assert row.name == "alice"
 
             with pytest.raises(NotFoundError, match="missing user"):
-                await service.get_or_404(
+                await service.get_one(
                     sql_builder.select("id", "name").from_("users").where_eq("name", "ghost"),
                     schema_type=User,
                     error_message="missing user",

@@ -1,12 +1,14 @@
 """Service base classes for SQLSpec application services."""
 
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Generic
+from typing import TYPE_CHECKING, Any, Generic, cast
 
 from typing_extensions import TypeVar
 
 from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.filters import LimitOffsetFilter
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import NotFoundError
 from sqlspec.typing import SchemaT
 
@@ -21,10 +23,11 @@ if TYPE_CHECKING:
 
 __all__ = ("SQLSpecAsyncService", "SQLSpecSyncService")
 
-DriverT = TypeVar("DriverT")
+AsyncDriverT = TypeVar("AsyncDriverT", bound=AsyncDriverAdapterBase, default=AsyncDriverAdapterBase)
+SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase, default=SyncDriverAdapterBase)
 
 
-class SQLSpecAsyncService(Generic[DriverT]):
+class SQLSpecAsyncService(Generic[AsyncDriverT]):
     """Base class for asynchronous SQLSpec services.
 
     Provides common database operations and pagination support using a driver session.
@@ -35,16 +38,16 @@ class SQLSpecAsyncService(Generic[DriverT]):
 
     __slots__ = ("_session",)
 
-    def __init__(self, session: DriverT) -> None:
+    def __init__(self, session: AsyncDriverT) -> None:
         self._session = session
 
     @property
-    def session(self) -> DriverT:
+    def session(self) -> AsyncDriverT:
         """Return the driver session."""
         return self._session
 
     @property
-    def driver(self) -> DriverT:
+    def driver(self) -> AsyncDriverT:
         """Alias for :attr:`session` matching the recipe-doc terminology."""
         return self._session
 
@@ -69,21 +72,20 @@ class SQLSpecAsyncService(Generic[DriverT]):
         Returns:
             An OffsetPagination instance containing items and total count.
         """
-        session: Any = self.session
-        limit_offset: LimitOffsetFilter | None = session.find_filter(LimitOffsetFilter, parameters)
+        limit_offset: LimitOffsetFilter | None = self._session.find_filter(LimitOffsetFilter, parameters)
 
-        items, total = await session.select_with_total(
+        items, total = await self._session.select_with_total(
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
         )
 
         return OffsetPagination(
-            items=items,
+            items=cast("list[SchemaT]", items),
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
         )
 
-    async def get_or_404(
+    async def get_one(
         self,
         statement: "Statement | QueryBuilder",
         /,
@@ -93,6 +95,11 @@ class SQLSpecAsyncService(Generic[DriverT]):
         **kwargs: Any,
     ) -> "SchemaT | dict[str, Any]":
         """Fetch one row or raise :class:`~sqlspec.exceptions.NotFoundError`.
+
+        HTTP status mapping (e.g. translating ``NotFoundError`` to a 404 response)
+        is the responsibility of the calling framework integration. The Litestar
+        extension registers a default mapping; other framework integrations do
+        not.
 
         Args:
             statement: The SQL statement or QueryBuilder instance.
@@ -107,11 +114,10 @@ class SQLSpecAsyncService(Generic[DriverT]):
         Raises:
             NotFoundError: If the query returns zero rows.
         """
-        session: Any = self.session
-        result = await session.select_one_or_none(statement, *parameters, schema_type=schema_type, **kwargs)
+        result = await self._session.select_one_or_none(statement, *parameters, schema_type=schema_type, **kwargs)
         if result is None:
             raise NotFoundError(error_message or "Record not found")
-        return result  # type: ignore[no-any-return]
+        return result
 
     async def exists(
         self,
@@ -130,26 +136,22 @@ class SQLSpecAsyncService(Generic[DriverT]):
         Returns:
             True if at least one row exists, False otherwise.
         """
-        session: Any = self.session
-        return await session.select_one_or_none(statement, *parameters, **kwargs) is not None
+        return await self._session.select_one_or_none(statement, *parameters, **kwargs) is not None
 
     async def begin(self) -> None:
         """Begin a database transaction on the underlying session."""
-        session: Any = self.session
-        await session.begin()
+        await self._session.begin()
 
     async def commit(self) -> None:
         """Commit the current database transaction."""
-        session: Any = self.session
-        await session.commit()
+        await self._session.commit()
 
     async def rollback(self) -> None:
         """Roll back the current database transaction."""
-        session: Any = self.session
-        await session.rollback()
+        await self._session.rollback()
 
     @asynccontextmanager
-    async def begin_transaction(self) -> "AsyncIterator[DriverT]":
+    async def begin_transaction(self) -> "AsyncIterator[AsyncDriverT]":
         """Context manager that commits on success and rolls back on error.
 
         Yields:
@@ -165,7 +167,7 @@ class SQLSpecAsyncService(Generic[DriverT]):
             await self.commit()
 
 
-class SQLSpecSyncService(Generic[DriverT]):
+class SQLSpecSyncService(Generic[SyncDriverT]):
     """Base class for synchronous SQLSpec services.
 
     Provides common database operations and pagination support using a driver session.
@@ -176,16 +178,16 @@ class SQLSpecSyncService(Generic[DriverT]):
 
     __slots__ = ("_session",)
 
-    def __init__(self, session: DriverT) -> None:
+    def __init__(self, session: SyncDriverT) -> None:
         self._session = session
 
     @property
-    def session(self) -> DriverT:
+    def session(self) -> SyncDriverT:
         """Return the driver session."""
         return self._session
 
     @property
-    def driver(self) -> DriverT:
+    def driver(self) -> SyncDriverT:
         """Alias for :attr:`session` matching the recipe-doc terminology."""
         return self._session
 
@@ -210,21 +212,20 @@ class SQLSpecSyncService(Generic[DriverT]):
         Returns:
             An OffsetPagination instance containing items and total count.
         """
-        session: Any = self.session
-        limit_offset: LimitOffsetFilter | None = session.find_filter(LimitOffsetFilter, parameters)
+        limit_offset: LimitOffsetFilter | None = self._session.find_filter(LimitOffsetFilter, parameters)
 
-        items, total = session.select_with_total(
+        items, total = self._session.select_with_total(
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
         )
 
         return OffsetPagination(
-            items=items,
+            items=cast("list[SchemaT]", items),
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
         )
 
-    def get_or_404(
+    def get_one(
         self,
         statement: "Statement | QueryBuilder",
         /,
@@ -234,6 +235,11 @@ class SQLSpecSyncService(Generic[DriverT]):
         **kwargs: Any,
     ) -> "SchemaT | dict[str, Any]":
         """Fetch one row or raise :class:`~sqlspec.exceptions.NotFoundError`.
+
+        HTTP status mapping (e.g. translating ``NotFoundError`` to a 404 response)
+        is the responsibility of the calling framework integration. The Litestar
+        extension registers a default mapping; other framework integrations do
+        not.
 
         Args:
             statement: The SQL statement or QueryBuilder instance.
@@ -248,11 +254,10 @@ class SQLSpecSyncService(Generic[DriverT]):
         Raises:
             NotFoundError: If the query returns zero rows.
         """
-        session: Any = self.session
-        result = session.select_one_or_none(statement, *parameters, schema_type=schema_type, **kwargs)
+        result = self._session.select_one_or_none(statement, *parameters, schema_type=schema_type, **kwargs)
         if result is None:
             raise NotFoundError(error_message or "Record not found")
-        return result  # type: ignore[no-any-return]
+        return result
 
     def exists(
         self,
@@ -271,26 +276,22 @@ class SQLSpecSyncService(Generic[DriverT]):
         Returns:
             True if at least one row exists, False otherwise.
         """
-        session: Any = self.session
-        return session.select_one_or_none(statement, *parameters, **kwargs) is not None
+        return self._session.select_one_or_none(statement, *parameters, **kwargs) is not None
 
     def begin(self) -> None:
         """Begin a database transaction on the underlying session."""
-        session: Any = self.session
-        session.begin()
+        self._session.begin()
 
     def commit(self) -> None:
         """Commit the current database transaction."""
-        session: Any = self.session
-        session.commit()
+        self._session.commit()
 
     def rollback(self) -> None:
         """Roll back the current database transaction."""
-        session: Any = self.session
-        session.rollback()
+        self._session.rollback()
 
     @contextmanager
-    def begin_transaction(self) -> "Iterator[DriverT]":
+    def begin_transaction(self) -> "Iterator[SyncDriverT]":
         """Context manager that commits on success and rolls back on error.
 
         Yields:

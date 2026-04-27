@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 from litestar.di import Provide
+from litestar.exceptions import NotFoundException
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
 
@@ -21,7 +22,7 @@ from sqlspec.config import (
 )
 from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from contextlib import AbstractAsyncContextManager
 
-    from litestar import Litestar
+    from litestar import Litestar, Request
     from litestar._openapi.schema_generation.schema import SchemaCreator
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
@@ -89,7 +90,19 @@ __all__ = (
     "PluginConfigState",
     "SQLSpecPlugin",
     "_OffsetPaginationSchemaPlugin",
+    "not_found_error_handler",
 )
+
+
+def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundError) -> NoReturn:
+    """Translate :class:`sqlspec.exceptions.NotFoundError` into Litestar's HTTP 404.
+
+    Re-raised as :class:`litestar.exceptions.NotFoundException` so the standard
+    Litestar exception-handler chain renders it (including any RFC 7807 handler
+    the user has registered) and the OpenAPI 404 schema stays consistent.
+    """
+    detail = str(exc) or "Not Found"
+    raise NotFoundException(detail=detail) from exc
 
 
 class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
@@ -455,6 +468,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if not any(isinstance(p, _OffsetPaginationSchemaPlugin) for p in existing_plugins):
             existing_plugins.append(_OffsetPaginationSchemaPlugin())
             app_config.plugins = existing_plugins
+
+        if app_config.exception_handlers is None:
+            app_config.exception_handlers = {}
+        app_config.exception_handlers.setdefault(NotFoundError, not_found_error_handler)
 
         if NUMPY_INSTALLED:
             import numpy as np
