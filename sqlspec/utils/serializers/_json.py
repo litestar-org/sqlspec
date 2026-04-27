@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any, Final, Literal, Protocol, overload
 
-from sqlspec.core.filters import OffsetPagination
+from sqlspec.core._pagination import OffsetPagination
 from sqlspec.typing import (
     MSGSPEC_INSTALLED,
     NUMPY_INSTALLED,

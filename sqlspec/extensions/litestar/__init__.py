@@ -11,6 +11,7 @@ from sqlspec.extensions.litestar.plugin import (
     SQLSpecPlugin,
 )
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 __all__ = (
     "DEFAULT_COMMIT_MODE",
@@ -20,8 +21,10 @@ __all__ = (
     "BaseSQLSpecStore",
     "CommitMode",
     "LitestarConfig",
+    "SQLSpecAsyncService",
     "SQLSpecChannelsBackend",
     "SQLSpecPlugin",
+    "SQLSpecSyncService",
     "database_group",
     "get_sqlspec_scope_state",
     "set_sqlspec_scope_state",

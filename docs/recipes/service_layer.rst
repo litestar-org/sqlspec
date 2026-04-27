@@ -39,7 +39,7 @@ Base Service
 
 
          class SQLSpecAsyncService(Generic[AsyncDriverT]):
-             """Base async service with pagination, get-or-404, and transactions."""
+             """Base async service with pagination, get-one, and transactions."""
 
              def __init__(self, driver: AsyncDriverT) -> None:
                  self.driver = driver
@@ -88,7 +88,7 @@ Base Service
                      total=total,
                  )
 
-             async def get_or_404(
+             async def get_one(
                  self,
                  statement: Statement | QueryBuilder,
                  /,
@@ -160,7 +160,7 @@ Base Service
 
 
          class SQLSpecSyncService(Generic[SyncDriverT]):
-             """Base sync service with pagination, get-or-404, and transactions."""
+             """Base sync service with pagination, get-one, and transactions."""
 
              def __init__(self, driver: SyncDriverT) -> None:
                  self.driver = driver
@@ -209,7 +209,7 @@ Base Service
                      total=total,
                  )
 
-             def get_or_404(
+             def get_one(
                  self,
                  statement: Statement | QueryBuilder,
                  /,
@@ -294,7 +294,7 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
                  )
 
              async def get_user(self, user_id: UUID) -> User:
-                 return await self.get_or_404(
+                 return await self.get_one(
                      sql.select("id", "email", "name").from_("users").where_eq("id", user_id),
                      schema_type=User,
                      error_message=f"User {user_id} not found",
@@ -338,7 +338,7 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
                  )
 
              def get_user(self, user_id: UUID) -> User:
-                 return self.get_or_404(
+                 return self.get_one(
                      sql.select("id", "email", "name").from_("users").where_eq("id", user_id),
                      schema_type=User,
                      error_message=f"User {user_id} not found",

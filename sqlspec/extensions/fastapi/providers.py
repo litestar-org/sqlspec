@@ -30,6 +30,8 @@ from sqlspec.utils.text import camelize
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from sqlglot import exp
+
 __all__ = (
     "DEPENDENCY_DEFAULTS",
     "BooleanOrNone",
@@ -432,7 +434,9 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
                 bool | None, Query(alias="searchIgnoreCase", description="Whether search should be case-insensitive.")
             ] = config.get("search_ignore_case", False),
         ) -> "SearchFilter | None":
-            field_names = set(search_fields.split(",")) if isinstance(search_fields, str) else search_fields
+            field_names: set[str | exp.Expression] = (
+                set(search_fields.split(",")) if isinstance(search_fields, str) else set(search_fields)
+            )
 
             return (
                 SearchFilter(field_name=field_names, value=search_string, ignore_case=ignore_case or False)

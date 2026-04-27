@@ -1,5 +1,7 @@
 """Unit tests for SELECT builder methods."""
 
+from typing import cast
+
 import pytest
 
 from sqlspec import sql
@@ -60,3 +62,44 @@ def test_select_only_not_available_on_update() -> None:
     # The method shouldn't exist on Update builder, so AttributeError is expected
     with pytest.raises(AttributeError):
         query.select_only("id")  # type: ignore
+
+
+def test_order_by_raw_trailing_desc_emits_descending_sort() -> None:
+    """sql.raw with trailing DESC must produce ORDER BY ... DESC, not an alias."""
+    from sqlglot import exp
+
+    raw_desc = cast("exp.Ordered", sql.raw("COALESCE(a, b, 0) DESC"))
+    builder = sql.select("a", "b").from_("things").order_by(raw_desc)
+    expr = builder._expression
+    assert expr is not None
+    order = expr.args.get("order")
+    assert order is not None
+    assert any(isinstance(o, exp.Ordered) and o.args.get("desc") for o in order.expressions)
+
+    sql_text = builder.to_sql()
+    assert "DESC" in sql_text
+    assert 'AS "desc"' not in sql_text.lower()
+
+
+def test_order_by_raw_trailing_asc_emits_ascending_sort() -> None:
+    """sql.raw with trailing ASC must produce an ascending Ordered expression."""
+    from sqlglot import exp
+
+    raw_asc = cast("exp.Ordered", sql.raw("LOWER(a) ASC"))
+    builder = sql.select("a").from_("things").order_by(raw_asc)
+    expr = builder._expression
+    assert expr is not None
+    order = expr.args.get("order")
+    assert order is not None
+    assert all(isinstance(o, exp.Ordered) and o.args.get("desc") is False for o in order.expressions)
+
+
+def test_order_by_raw_function_without_direction_unchanged() -> None:
+    """sql.raw without trailing direction must continue to work as a sort key."""
+    from sqlglot import exp
+
+    raw_expr = cast("exp.Ordered", sql.raw("COALESCE(a, b, 0)"))
+    builder = sql.select("a").from_("things").order_by(raw_expr)
+    sql_text = builder.to_sql()
+    assert "COALESCE" in sql_text.upper()
+    assert "ORDER BY" in sql_text.upper()

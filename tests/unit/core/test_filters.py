@@ -4,10 +4,17 @@ This module tests the filter system that provides dynamic WHERE clauses,
 ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming.
 """
 
+import tempfile
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 import pytest
+from sqlglot import exp
 
+from sqlspec import sql as sql_builder
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.base import SQLSpec
 from sqlspec.core import (
     SQL,
     AnyCollectionFilter,
@@ -23,6 +30,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import NotInSearchFilter
 from sqlspec.driver import CommonDriverAttributesMixin
+from sqlspec.service import SQLSpecAsyncService
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -198,7 +206,7 @@ def test_filter_with_empty_values() -> None:
 
 def test_search_filter_multiple_fields() -> None:
     """Test SearchFilter with multiple field names."""
-    fields = {"first_name", "last_name", "email"}
+    fields: set[str | exp.Expression] = {"first_name", "last_name", "email"}
     filter_obj = SearchFilter(fields, "john")
 
     positional, named = filter_obj.extract_parameters()
@@ -834,6 +842,99 @@ def test_query_builder_apply_filters_empty() -> None:
     assert "WHERE" not in result.sql.upper()
 
 
+def test_search_filter_with_qualified_name_uses_sanitized_parameters() -> None:
+    """Test that SearchFilter with a dotted name uses sanitized parameter names."""
+    filter_obj = SearchFilter("users.name", "john")
+
+    positional, named = filter_obj.extract_parameters()
+
+    assert positional == []
+    assert "users_name_search" in named
+    assert named["users_name_search"] == "%john%"
+
+
+def test_search_filter_with_qualified_name_appends_to_statement_correctly() -> None:
+    """Test that SearchFilter with a dotted name appends to statement with qualified column."""
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id")
+    filter_obj = SearchFilter("u.name", "john")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "U.NAME LIKE" in sql_upper or '"U"."NAME" LIKE' in sql_upper or 'U."NAME" LIKE' in sql_upper
+    assert "u_name_search" in result.named_parameters
+    assert result.named_parameters["u_name_search"] == "%john%"
+
+
+def test_in_collection_filter_with_qualified_name_uses_sanitized_parameters() -> None:
+    """Test that InCollectionFilter with a dotted name uses sanitized parameter names."""
+    values = ["active", "pending"]
+    filter_obj = InCollectionFilter("u.status", values)
+
+    positional, named = filter_obj.extract_parameters()
+
+    assert positional == []
+    assert "u_status_in_0" in named
+    assert "u_status_in_1" in named
+
+
+def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() -> None:
+    """Test that OrderByFilter with a dotted name appends to statement correctly."""
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id")
+    filter_obj = OrderByFilter("u.created_at", "desc")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "ORDER BY U.CREATED_AT DESC" in sql_upper or 'ORDER BY "U"."CREATED_AT" DESC' in sql_upper
+
+
+def test_order_by_filter_with_expression_appends_to_statement_correctly() -> None:
+    """Test that OrderByFilter with a SQLGlot expression appends to statement correctly."""
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT id, lines, occurrences FROM stats")
+    coalesce_expr = exp.Coalesce(
+        this=exp.column("lines"), expressions=[exp.column("occurrences"), exp.Literal.number(0)]
+    )
+    filter_obj = OrderByFilter(field_name=coalesce_expr, sort_order="desc")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "ORDER BY COALESCE(LINES, OCCURRENCES, 0) DESC" in sql_upper
+
+
+def test_search_filter_with_expression_in_set_appends_to_statement_correctly() -> None:
+    """Test that SearchFilter with a SQLGlot expression in a set appends to statement correctly."""
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT name, email FROM users")
+    upper_name = exp.Upper(this=exp.column("name"))
+    fields: set[str | exp.Expression] = {upper_name, "email"}
+    filter_obj = SearchFilter(field_name=fields, value="john")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "UPPER(NAME) LIKE" in sql_upper
+    assert "EMAIL LIKE" in sql_upper
+    assert "OR" in sql_upper
+
+
+def test_search_filter_like_pattern() -> None:
+    """Test that SearchFilter.like_pattern returns the correct pattern."""
+    filter_obj = SearchFilter("name", "john")
+    assert filter_obj.like_pattern == "%john%"
+
+    filter_no_value = SearchFilter("name", None)
+    assert filter_no_value.like_pattern is None
+
+
 def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
     """QueryBuilder.apply_filters produces SQL that can be used with prepare_statement (issue #405).
 
@@ -859,3 +960,198 @@ def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
     assert result.parameters["status_in_1"] == "pending"
     assert result.parameters["limit"] == 10
     assert result.parameters["offset"] == 0
+
+
+@dataclass
+class User:
+    id: int
+    name: str
+
+
+class UserService(SQLSpecAsyncService):
+    pass
+
+
+@pytest.mark.anyio
+async def test_service_paginate_works() -> None:
+    """Test that the base service paginate helper works correctly."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO users (id, name) VALUES (1, 'alice');
+                INSERT INTO users (id, name) VALUES (2, 'bob');
+                INSERT INTO users (id, name) VALUES (3, 'charlie');
+            """)
+            await session.commit()
+
+            service = UserService(session)
+
+            # Query all
+            query = sql_builder.select("*").from_("users")
+
+            # Paginate first 2
+            pagination_filter = LimitOffsetFilter(limit=2, offset=0)
+            result = await service.paginate(query, pagination_filter, schema_type=User)
+
+            assert len(result.items) == 2
+            assert result.total == 3
+            assert result.limit == 2
+            assert result.offset == 0
+            assert result.items[0].name == "alice"
+            assert result.items[1].name == "bob"
+
+            # Paginate next
+            pagination_filter2 = LimitOffsetFilter(limit=2, offset=2)
+            result2 = await service.paginate(query, pagination_filter2, schema_type=User)
+
+            assert len(result2.items) == 1
+            assert result2.total == 3
+            assert result2.limit == 2
+            assert result2.offset == 2
+            assert result2.items[0].name == "charlie"
+
+
+@pytest.mark.anyio
+async def test_service_exists_works() -> None:
+    """Test that the base service exists helper works correctly."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO users (id, name) VALUES (1, 'alice');
+            """)
+            await session.commit()
+
+            service = UserService(session)
+
+            # Exists
+            query = sql_builder.select("*").from_("users").where_eq("name", "alice")
+            assert await service.exists(query) is True
+
+            # Does not exist
+            query2 = sql_builder.select("*").from_("users").where_eq("name", "bob")
+            assert await service.exists(query2) is False
+
+
+@pytest.mark.anyio
+async def test_service_get_one_returns_row_or_raises() -> None:
+    """get_one returns the row when present and raises NotFoundError otherwise."""
+    from sqlspec.exceptions import NotFoundError
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script(
+                """
+                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO users (id, name) VALUES (1, 'alice');
+                """
+            )
+            await session.commit()
+
+            service = UserService(session)
+
+            row = await service.get_one(
+                sql_builder.select("id", "name").from_("users").where_eq("name", "alice"), schema_type=User
+            )
+            assert isinstance(row, User)
+            assert row.name == "alice"
+
+            with pytest.raises(NotFoundError, match="missing user"):
+                await service.get_one(
+                    sql_builder.select("id", "name").from_("users").where_eq("name", "ghost"),
+                    schema_type=User,
+                    error_message="missing user",
+                )
+
+
+@pytest.mark.anyio
+async def test_service_begin_transaction_commits_and_rolls_back() -> None:
+    """begin_transaction commits on success and rolls back on exception."""
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            await session.commit()
+
+            service = UserService(session)
+
+            async with service.begin_transaction():
+                await session.execute(sql_builder.insert("users").columns("id", "name").values(1, "alice"))
+
+            count_after_commit = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
+            assert count_after_commit.one()["n"] == 1
+
+            with pytest.raises(RuntimeError, match="boom"):
+                async with service.begin_transaction():
+                    await session.execute(sql_builder.insert("users").columns("id", "name").values(2, "bob"))
+                    raise RuntimeError("boom")
+
+            count_after_rollback = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
+            assert count_after_rollback.one()["n"] == 1
+
+
+def test_search_filter_raises_typeerror_on_invalid_field_name() -> None:
+    """SearchFilter raises TypeError instead of silently dropping the WHERE."""
+    sql_stmt = SQL("SELECT * FROM things")
+    bad: Any = 123
+    f = SearchFilter(field_name=bad, value="x")
+    with pytest.raises(TypeError, match="field_name must be"):
+        f.append_to_statement(sql_stmt)
+
+
+def test_not_in_search_filter_raises_typeerror_on_invalid_field_name() -> None:
+    """NotInSearchFilter raises TypeError instead of silently dropping the WHERE."""
+    sql_stmt = SQL("SELECT * FROM things")
+    bad: Any = 123
+    f = NotInSearchFilter(field_name=bad, value="x")
+    with pytest.raises(TypeError, match="field_name must be"):
+        f.append_to_statement(sql_stmt)
+
+
+def test_search_filter_accepts_expression_field_name() -> None:
+    """SearchFilter applies a WHERE clause when given a SQLGlot expression."""
+    sql_stmt = SQL("SELECT id, name FROM things")
+    f = SearchFilter(field_name=exp.Lower(this=exp.column("name")), value="foo")
+    result = f.append_to_statement(sql_stmt)
+    assert "WHERE" in result.sql.upper()
+    assert "LOWER" in result.sql.upper()
+    assert any(v == "%foo%" for v in result.parameters.values())
+
+
+def test_not_in_search_filter_accepts_expression_field_name() -> None:
+    """NotInSearchFilter applies WHERE NOT LIKE when given a SQLGlot expression."""
+    sql_stmt = SQL("SELECT id, name FROM things")
+    f = NotInSearchFilter(field_name=exp.Lower(this=exp.column("name")), value="foo")
+    result = f.append_to_statement(sql_stmt)
+    sql_upper = result.sql.upper()
+    assert "WHERE" in sql_upper
+    assert "NOT" in sql_upper and "LIKE" in sql_upper
+
+
+def test_search_filter_escape_like_value() -> None:
+    """escape_like_value escapes backslash, percent, and underscore."""
+
+    assert SearchFilter.escape_like_value("plain") == "plain"
+    assert SearchFilter.escape_like_value("50% off") == "50\\% off"
+    assert SearchFilter.escape_like_value("a_b") == "a\\_b"
+    assert SearchFilter.escape_like_value("a\\b") == "a\\\\b"
+    # Backslash escapes apply first, so "%" inside an already-backslashed string
+    # is escaped exactly once.
+    assert SearchFilter.escape_like_value("\\%_") == "\\\\\\%\\_"

@@ -425,7 +425,13 @@ class OrderByClauseMixin:
                     order_item = order_item.desc()
             else:
                 extracted_item = extract_expression(item)
-                order_item = extracted_item.desc() if desc and not isinstance(item, exp.Ordered) else extracted_item
+                if isinstance(extracted_item, exp.Alias):
+                    alias_name = (extracted_item.alias or "").lower()
+                    if alias_name in {"asc", "desc"}:
+                        extracted_item = exp.Ordered(this=extracted_item.this, desc=alias_name == "desc")
+                order_item = (
+                    extracted_item.desc() if desc and not isinstance(extracted_item, exp.Ordered) else extracted_item
+                )
             current_expr = current_expr.order_by(order_item, copy=False)
         builder.set_expression(current_expr)
         return cast("Self", builder)
