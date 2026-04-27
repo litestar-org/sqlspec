@@ -7,6 +7,7 @@ via connection type handlers. Uses stdlib uuid (no external dependencies).
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -76,10 +77,8 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     Returns:
         Cursor variable with UUID converter if value is UUID, None otherwise.
     """
-    import oracledb
-
     if isinstance(value, uuid.UUID):
-        return cursor.var(oracledb.DB_TYPE_RAW, arraysize=arraysize, inconverter=uuid_converter_in)
+        return cursor.var(DB_TYPE_RAW, arraysize=arraysize, inconverter=uuid_converter_in)
     return None
 
 
@@ -95,11 +94,9 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     Returns:
         Cursor variable with UUID converter if column is RAW(16), None otherwise.
     """
-    import oracledb
-
     _name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
 
-    if type_code is oracledb.DB_TYPE_RAW and internal_size == UUID_BINARY_SIZE:
+    if type_code is DB_TYPE_RAW and internal_size == UUID_BINARY_SIZE:
         return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=uuid_converter_out)
     return None
 

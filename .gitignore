@@ -73,3 +73,4 @@ tools/scripts/profiles/*.prof
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key
+.codex

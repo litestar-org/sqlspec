@@ -51,7 +51,10 @@ fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
 mypyc = ["sqlglot[c]>=30.0.0"]
-mysql-connector = ["mysql-connector-python"]
+mysql-connector = [
+  "mysql-connector-python; python_version < '3.12'",
+  "mysql-connector-python<9.7.0; python_version >= '3.12'",
+]
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
 opentelemetry = ["opentelemetry-instrumentation"]
@@ -157,6 +160,16 @@ sqlspec = "sqlspec.__main__:run_cli"
 sqlspec-dark = "tools.sphinx_ext.pygments_styles:SQLSpecDarkStyle"
 sqlspec-light = "tools.sphinx_ext.pygments_styles:SQLSpecLightStyle"
 
+[tool.uv]
+# mysql-connector-python 9.7.0 dropped cp312/cp313/cp314 wheels (regression vs 9.6.0).
+# Override dependency metadata for every source that requests mysql-connector-python.
+# Keep the uncapped dependency on Python <3.12, and force the cap on Python >=3.12
+# so transitive pulls (e.g., pytest-databases[mysql]) resolve to an existing wheel.
+override-dependencies = [
+  "mysql-connector-python; python_version < '3.12'",
+  "mysql-connector-python<9.7.0; python_version >= '3.12'",
+]
+
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling", "hatch-mypyc"]
@@ -209,6 +222,10 @@ include = [
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
+  "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers
+  "sqlspec/adapters/oracledb/_json_handlers.py",   # Native JSON inputtypehandler / outputtypehandler chain
+  "sqlspec/adapters/oracledb/_uuid_handlers.py",   # UUID ↔ RAW(16) inputtypehandler / outputtypehandler chain
+  "sqlspec/adapters/oracledb/_vector_handlers.py", # DB_TYPE_VECTOR inputtypehandler / outputtypehandler dispatch
   "sqlspec/utils/text.py",                 # Text utilities
   "sqlspec/utils/sync_tools.py",           # Synchronous utility functions
   "sqlspec/utils/type_guards.py",          # Type guard utilities

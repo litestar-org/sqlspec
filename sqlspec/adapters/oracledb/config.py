@@ -6,7 +6,7 @@ import oracledb
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb._numpy_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
+from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -18,6 +18,7 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncSessionContext,
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
+from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
@@ -47,6 +48,27 @@ __all__ = (
     "OraclePoolParams",
     "OracleSyncConfig",
 )
+
+
+def _extract_oracle_major(connection: Any) -> "int | None":
+    """Read the major version digit from ``connection.version``.
+
+    Used by ``_init_connection`` to cache server major on the connection so the
+    JSON input handler can route bind paths without per-bind metadata queries.
+    Returns ``None`` when the version string is missing or unparsable; callers
+    treat ``None`` as "assume 21c+ (modern default)".
+    """
+    try:
+        version_str = connection.version
+    except AttributeError:
+        return None
+    if not version_str:
+        return None
+    head = version_str.split(".", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
 
 
 class OracleConnectionParams(TypedDict):
@@ -106,6 +128,18 @@ class OracleDriverFeatures(TypedDict):
         Applies only to RAW(16) columns; other RAW sizes remain unchanged.
         Uses Python's stdlib uuid module (no external dependencies).
         Defaults to True for improved type safety and storage efficiency.
+    vector_return_format: Return type for VECTOR column reads. One of:
+        - "numpy" (default when NumPy is installed): np.ndarray, zero-copy compute path.
+        - "list": list[float|int], best for code that expects native Python sequences.
+        - "array": array.array, zero-copy oracledb passthrough.
+        Defaults to "numpy" when NumPy is installed, otherwise "list".
+    oracle_varchar2_byte_limit: Threshold (in UTF-8 bytes) above which ``str``
+        parameters are auto-coerced to ``DB_TYPE_CLOB``. Defaults to 4000 (the
+        Oracle SQL VARCHAR2 limit). Databases with ``MAX_STRING_SIZE=EXTENDED``
+        may set this to 32767 to keep larger strings as VARCHAR2.
+    oracle_raw_byte_limit: Threshold (in bytes) above which ``bytes`` parameters
+        are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
+        RAW limit).
     on_connection_create: Callback executed when a connection is acquired from pool.
         For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
         For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
@@ -124,6 +158,9 @@ class OracleDriverFeatures(TypedDict):
     enable_numpy_vectors: NotRequired[bool]
     enable_lowercase_column_names: NotRequired[bool]
     enable_uuid_binary: NotRequired[bool]
+    vector_return_format: NotRequired[str]
+    oracle_varchar2_byte_limit: NotRequired[int]
+    oracle_raw_byte_limit: NotRequired[int]
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
@@ -261,21 +298,38 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return oracledb.create_pool(**config)
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
-        """Initialize connection with optional type handlers and user callback.
+        """Initialize connection with type handlers and cached server metadata.
 
-        Registers NumPy vector handlers and UUID binary handlers when enabled.
-        Registration order ensures handler chaining works correctly.
-        User callback is called after internal setup.
+        Registers vector, JSON, and UUID handlers. Vector and JSON handlers run
+        unconditionally — both gate any optional dependencies (NumPy in the
+        vector case) internally. UUID registration remains gated for
+        backwards compatibility with existing user configurations.
+
+        Caches ``connection._sqlspec_oracle_major`` so the JSON input handler
+        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, OSON-encoded
+        ``DB_TYPE_BLOB`` on 19c-20c, JSON-string ``DB_TYPE_CLOB`` on 12c-18c)
+        without re-querying server metadata on every bind. Caches
+        ``connection._sqlspec_vector_return_format`` so the vector output
+        handler can dispatch to ``numpy`` / ``list`` / ``array`` without
+        re-reading driver-feature defaults on every fetch.
 
         Args:
             connection: Oracle connection to initialize.
             tag: Connection tag for session state.
         """
-        if self.driver_features.get("enable_numpy_vectors", False):
-            register_numpy_handlers(connection)
+        register_numpy_handlers(connection)
+
+        register_json_handlers(connection)
 
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
+
+        # Stash detected major version on the connection so the JSON input handler
+        # can pick the right binding path without per-bind metadata queries.
+        setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
+        # Stash the vector-read format so the VECTOR output handler can
+        # dispatch without re-reading driver-feature defaults on every fetch.
+        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
@@ -435,21 +489,34 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         return oracledb.create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
-        """Initialize async connection with optional type handlers and user callback.
+        """Initialize async connection with type handlers and cached server metadata.
 
-        Registers NumPy vector handlers and UUID binary handlers when enabled.
-        Registration order ensures handler chaining works correctly.
-        User callback is called after internal setup.
+        Registers vector, JSON, and UUID handlers. Vector and JSON registration
+        is unconditional — both gate any optional dependencies (NumPy in the
+        vector case) internally. Caches ``connection._sqlspec_oracle_major`` so
+        the JSON input handler can pick the right binding path on every bind
+        without round-tripping server metadata. Caches
+        ``connection._sqlspec_vector_return_format`` so the vector output
+        handler dispatches to the user-selected return type without re-reading
+        driver-feature defaults on every fetch.
 
         Args:
             connection: Oracle async connection to initialize.
             tag: Connection tag for session state.
         """
-        if self.driver_features.get("enable_numpy_vectors", False):
-            register_numpy_handlers(connection)
+        register_numpy_handlers(connection)
+
+        register_json_handlers(connection)
 
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
+
+        # Stash detected major version on the connection so the JSON input handler
+        # can pick the right binding path without per-bind metadata queries.
+        setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
+        # Stash the vector-read format so the VECTOR output handler can
+        # dispatch without re-reading driver-feature defaults on every fetch.
+        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
 
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
