@@ -120,6 +120,33 @@ class StatementFilter(ABC):
 
         return resolved_names
 
+    def _get_column_expression(self, field_name: str) -> exp.Column:
+        """Parse field name into a qualified column if dotted, else bare column.
+
+        Args:
+            field_name: Field name string (e.g. "name" or "users.name")
+
+        Returns:
+            exp.Column: SQLGlot column expression
+        """
+        if "." in field_name:
+            # Use maybe_parse for dotted names to get qualified columns
+            parsed = exp.maybe_parse(field_name)
+            if isinstance(parsed, exp.Column):
+                return parsed
+        return exp.column(field_name)
+
+    def _sanitize_param_name(self, name: str) -> str:
+        """Sanitize field name for use as a parameter name by replacing dots with underscores.
+
+        Args:
+            name: Original parameter name string
+
+        Returns:
+            str: Sanitized parameter name
+        """
+        return name.replace(".", "_")
+
     @abstractmethod
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return a cache key for this filter's configuration.
@@ -157,10 +184,11 @@ class BeforeAfterFilter(StatementFilter):
     def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         names = []
+        sanitized_field = self._sanitize_param_name(self.field_name)
         if self.before:
-            names.append(f"{self.field_name}_before")
+            names.append(f"{sanitized_field}_before")
         if self.after:
-            names.append(f"{self.field_name}_after")
+            names.append(f"{sanitized_field}_after")
         return names
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -178,7 +206,7 @@ class BeforeAfterFilter(StatementFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply filter to SQL expression only."""
         conditions: list[Condition] = []
-        col_expr = exp.column(self.field_name)
+        col_expr = self._get_column_expression(self.field_name)
 
         proposed_names = self.get_param_names()
         if not proposed_names:
@@ -239,10 +267,11 @@ class OnBeforeAfterFilter(StatementFilter):
     def get_param_names(self) -> "list[str]":
         """Get parameter names without storing them."""
         names = []
+        sanitized_field = self._sanitize_param_name(self.field_name)
         if self.on_or_before:
-            names.append(f"{self.field_name}_on_or_before")
+            names.append(f"{sanitized_field}_on_or_before")
         if self.on_or_after:
-            names.append(f"{self.field_name}_on_or_after")
+            names.append(f"{sanitized_field}_on_or_after")
         return names
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -259,6 +288,7 @@ class OnBeforeAfterFilter(StatementFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
+        col_expr = self._get_column_expression(self.field_name)
 
         proposed_names = self.get_param_names()
         if not proposed_names:
@@ -271,16 +301,12 @@ class OnBeforeAfterFilter(StatementFilter):
         if self.on_or_before:
             before_param_name = resolved_names[param_idx]
             param_idx += 1
-            conditions.append(
-                exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=before_param_name))
-            )
+            conditions.append(exp.LTE(this=col_expr, expression=exp.Placeholder(this=before_param_name)))
             result = result.add_named_parameter(before_param_name, self.on_or_before)
 
         if self.on_or_after:
             after_param_name = resolved_names[param_idx]
-            conditions.append(
-                exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=after_param_name))
-            )
+            conditions.append(exp.GTE(this=col_expr, expression=exp.Placeholder(this=after_param_name)))
             result = result.add_named_parameter(after_param_name, self.on_or_after)
 
         final_condition = conditions[0]
@@ -326,7 +352,8 @@ class InCollectionFilter(InAnyFilter[T]):
         """Get parameter names without storing them."""
         if not self.values:
             return []
-        return [f"{self.field_name}_in_{i}" for i, _ in enumerate(self.values)]
+        sanitized_field = self._sanitize_param_name(self.field_name)
+        return [f"{sanitized_field}_in_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
@@ -344,13 +371,14 @@ class InCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
+        col_expr = self._get_column_expression(self.field_name)
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Placeholder] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
-        result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
+        result = statement.where(exp.In(this=col_expr, expressions=placeholder_expressions))
 
         for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
@@ -386,7 +414,8 @@ class NotInCollectionFilter(InAnyFilter[T]):
         """Get parameter names without storing them."""
         if not self.values:
             return []
-        return [f"{self.field_name}_notin_{i}" for i, _ in enumerate(self.values)]
+        sanitized_field = self._sanitize_param_name(self.field_name)
+        return [f"{sanitized_field}_notin_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
@@ -401,15 +430,14 @@ class NotInCollectionFilter(InAnyFilter[T]):
         if self.values is None or not self.values:
             return statement
 
+        col_expr = self._get_column_expression(self.field_name)
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Placeholder] = [
             exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
-        result = statement.where(
-            exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
-        )
+        result = statement.where(exp.Not(this=exp.In(this=col_expr, expressions=placeholder_expressions)))
 
         for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
@@ -445,7 +473,8 @@ class AnyCollectionFilter(InAnyFilter[T]):
         """Get parameter names without storing them."""
         if not self.values:
             return []
-        return [f"{self.field_name}_any_{i}" for i, _ in enumerate(self.values)]
+        sanitized_field = self._sanitize_param_name(self.field_name)
+        return [f"{sanitized_field}_any_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
@@ -463,12 +492,13 @@ class AnyCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
+        col_expr = self._get_column_expression(self.field_name)
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
-        result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
+        result = statement.where(exp.EQ(this=col_expr, expression=exp.Any(this=array_expr)))
 
         for resolved_name, value in zip(resolved_names, self.values, strict=False):
             result = result.add_named_parameter(resolved_name, value)
@@ -504,7 +534,8 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         """Get parameter names without storing them."""
         if not self.values:
             return []
-        return [f"{self.field_name}_not_any_{i}" for i, _ in enumerate(self.values)]
+        sanitized_field = self._sanitize_param_name(self.field_name)
+        return [f"{sanitized_field}_not_any_{i}" for i, _ in enumerate(self.values)]
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
@@ -519,12 +550,13 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         if self.values is None or not self.values:
             return statement
 
+        col_expr = self._get_column_expression(self.field_name)
         resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
 
         placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
-        condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
+        condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
 
         for resolved_name, value in zip(resolved_names, self.values, strict=False):
@@ -640,7 +672,7 @@ class OrderByFilter(StatementFilter):
         if converted_sort_order not in {"asc", "desc"}:
             converted_sort_order = "asc"
 
-        col_expr = exp.column(self.field_name)
+        col_expr = self._get_column_expression(self.field_name)
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
         # Prefer cached expression to avoid re-parsing
@@ -699,7 +731,8 @@ class SearchFilter(StatementFilter):
         if not self.value:
             return None
         if isinstance(self.field_name, str):
-            return f"{self.field_name}_search"
+            sanitized_field = self._sanitize_param_name(self.field_name)
+            return f"{sanitized_field}_search"
         return "search_value"
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -722,12 +755,11 @@ class SearchFilter(StatementFilter):
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
-            result = statement.where(
-                like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name))
-            )
+            col_expr = self._get_column_expression(self.field_name)
+            result = statement.where(like_op(this=col_expr, expression=exp.Placeholder(this=param_name)))
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
-                like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name))
+                like_op(this=self._get_column_expression(field), expression=exp.Placeholder(this=param_name))
                 for field in self.field_name
             ]
             if not field_conditions:
@@ -773,7 +805,7 @@ class NullFilter(StatementFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply IS NULL filter to SQL expression."""
-        col_expr = exp.column(self.field_name)
+        col_expr = self._get_column_expression(self.field_name)
         is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
         return statement.where(is_null_condition)
 
@@ -806,7 +838,7 @@ class NotNullFilter(StatementFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply IS NOT NULL filter to SQL expression."""
-        col_expr = exp.column(self.field_name)
+        col_expr = self._get_column_expression(self.field_name)
         is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
         is_not_null_condition = exp.Not(this=is_null_condition)
         return statement.where(is_not_null_condition)
@@ -827,7 +859,8 @@ class NotInSearchFilter(SearchFilter):
         if not self.value:
             return None
         if isinstance(self.field_name, str):
-            return f"{self.field_name}_not_search"
+            sanitized_field = self._sanitize_param_name(self.field_name)
+            return f"{sanitized_field}_not_search"
         return "not_search_value"
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -851,12 +884,13 @@ class NotInSearchFilter(SearchFilter):
 
         result = statement
         if isinstance(self.field_name, str):
-            result = statement.where(
-                exp.Not(this=like_op(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
-            )
+            col_expr = self._get_column_expression(self.field_name)
+            result = statement.where(exp.Not(this=like_op(this=col_expr, expression=exp.Placeholder(this=param_name))))
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
-                exp.Not(this=like_op(this=exp.column(field), expression=exp.Placeholder(this=param_name)))
+                exp.Not(
+                    this=like_op(this=self._get_column_expression(field), expression=exp.Placeholder(this=param_name))
+                )
                 for field in self.field_name
             ]
             if not field_conditions:
@@ -867,6 +901,8 @@ class NotInSearchFilter(SearchFilter):
                 for cond in field_conditions[1:]:
                     final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
+        else:
+            result = statement
 
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)

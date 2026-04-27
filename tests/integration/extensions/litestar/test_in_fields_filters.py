@@ -6,8 +6,9 @@ from typing import Any
 import pytest
 from litestar import Litestar, get
 from litestar.params import Dependency
-from litestar.testing import TestClient
+from litestar.testing import AsyncTestClient, TestClient
 
+from sqlspec import sql as sql_builder
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import FilterTypes, InCollectionFilter, NotInCollectionFilter
@@ -165,3 +166,92 @@ def test_litestar_in_fields_single_value() -> None:
             assert data["filter_count"] == 1
             assert data["field_name"] == "status"
             assert data["values"] == ["active"]
+
+
+@pytest.mark.anyio
+async def test_litestar_qualified_column_search_filter() -> None:
+    """Verify that filtering on a qualified column name in a JOIN works correctly with SearchFilter."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sql.add_config(config)
+
+        # Setup tables with overlapping column names
+        async with sql.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT);
+                CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT);
+                INSERT INTO parent (id, name) VALUES (1, 'parent1');
+                INSERT INTO child (id, parent_id, name) VALUES (1, 1, 'child1');
+            """)
+            await session.commit()
+
+        # We want to search on 'p.name'. This should now work!
+        filter_deps = create_filter_dependencies({"search": "p.name"})
+
+        @get("/joined", dependencies=filter_deps)
+        async def joined_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+            async with sql.provide_session(config) as session:
+                query = (
+                    sql_builder
+                    .select("p.name as parent_name", "c.name as child_name")
+                    .from_("parent p")
+                    .join("child c", "p.id = c.parent_id")
+                )
+                results = await session.select(query, *filters)
+                return {"items": results}
+
+        app = Litestar(route_handlers=[joined_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+        async with AsyncTestClient(app=app) as client:
+            response = await client.get("/joined", params={"searchString": "parent"})
+
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["items"]) == 1
+            assert data["items"][0]["parent_name"] == "parent1"
+
+
+@pytest.mark.anyio
+async def test_litestar_qualified_column_order_by_filter() -> None:
+    """Verify that filtering on a qualified column name in a JOIN works correctly with OrderByFilter."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sql.add_config(config)
+
+        # Setup tables
+        async with sql.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO parent (id, name) VALUES (1, 'b');
+                INSERT INTO parent (id, name) VALUES (2, 'a');
+            """)
+            await session.commit()
+
+        # We want to order by 'p.name'
+        filter_deps = create_filter_dependencies({"sort_field": "p.name"})
+
+        @get("/ordered", dependencies=filter_deps)
+        async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+            async with sql.provide_session(config) as session:
+                query = sql_builder.select("p.name").from_("parent p")
+                results = await session.select(query, *filters)
+                return {"items": results}
+
+        app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+        async with AsyncTestClient(app=app) as client:
+            # Ascending
+            response = await client.get("/ordered", params={"orderBy": "p.name", "sortOrder": "asc"})
+            assert response.status_code == 200
+            items = response.json()["items"]
+            assert items[0]["name"] == "a"
+            assert items[1]["name"] == "b"
+
+            # Descending
+            response = await client.get("/ordered", params={"orderBy": "p.name", "sortOrder": "desc"})
+            assert response.status_code == 200
+            items = response.json()["items"]
+            assert items[0]["name"] == "b"
+            assert items[1]["name"] == "a"

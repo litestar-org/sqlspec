@@ -834,6 +834,57 @@ def test_query_builder_apply_filters_empty() -> None:
     assert "WHERE" not in result.sql.upper()
 
 
+def test_search_filter_with_qualified_name_uses_sanitized_parameters() -> None:
+    """Test that SearchFilter with a dotted name uses sanitized parameter names."""
+    filter_obj = SearchFilter("users.name", "john")
+
+    positional, named = filter_obj.extract_parameters()
+
+    assert positional == []
+    assert "users_name_search" in named
+    assert named["users_name_search"] == "%john%"
+
+
+def test_search_filter_with_qualified_name_appends_to_statement_correctly() -> None:
+    """Test that SearchFilter with a dotted name appends to statement with qualified column."""
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id")
+    filter_obj = SearchFilter("u.name", "john")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "U.NAME LIKE" in sql_upper or '"U"."NAME" LIKE' in sql_upper or 'U."NAME" LIKE' in sql_upper
+    assert "u_name_search" in result.named_parameters
+    assert result.named_parameters["u_name_search"] == "%john%"
+
+
+def test_in_collection_filter_with_qualified_name_uses_sanitized_parameters() -> None:
+    """Test that InCollectionFilter with a dotted name uses sanitized parameter names."""
+    values = ["active", "pending"]
+    filter_obj = InCollectionFilter("u.status", values)
+
+    positional, named = filter_obj.extract_parameters()
+
+    assert positional == []
+    assert "u_status_in_0" in named
+    assert "u_status_in_1" in named
+
+
+def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() -> None:
+    """Test that OrderByFilter with a dotted name appends to statement correctly."""
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id")
+    filter_obj = OrderByFilter("u.created_at", "desc")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "ORDER BY U.CREATED_AT DESC" in sql_upper or 'ORDER BY "U"."CREATED_AT" DESC' in sql_upper
+
+
 def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
     """QueryBuilder.apply_filters produces SQL that can be used with prepare_statement (issue #405).
 
