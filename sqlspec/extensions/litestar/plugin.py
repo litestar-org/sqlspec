@@ -19,7 +19,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.core.filters import OffsetPagination
+from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (

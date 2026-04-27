@@ -59,6 +59,7 @@ __all__ = (
     "apply_filter",
     "canonicalize_filters",
     "create_filters",
+    "find_filter",
 )
 
 T = TypeVar("T")
@@ -742,6 +743,15 @@ class SearchFilter(StatementFilter):
     def ignore_case(self) -> bool | None:
         return self._ignore_case
 
+    @property
+    def like_pattern(self) -> str | None:
+        """Return the search value wrapped in LIKE wildcards.
+
+        Returns:
+            The pattern for a LIKE operation, or None if no value.
+        """
+        return f"%{self.value}%" if self.value else None
+
     def get_param_name(self) -> str | None:
         """Get parameter name without storing it."""
         if not self.value:
@@ -756,8 +766,7 @@ class SearchFilter(StatementFilter):
         named_parameters = {}
         param_name = self.get_param_name()
         if self.value and param_name:
-            search_value_with_wildcards = f"%{self.value}%"
-            named_parameters[param_name] = search_value_with_wildcards
+            named_parameters[param_name] = self.like_pattern
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -788,8 +797,7 @@ class SearchFilter(StatementFilter):
         else:
             result = statement
 
-        search_value_with_wildcards = f"%{self.value}%"
-        return result.add_named_parameter(param_name, search_value_with_wildcards)
+        return result.add_named_parameter(param_name, self.like_pattern)
 
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
@@ -884,8 +892,7 @@ class NotInSearchFilter(SearchFilter):
         named_parameters = {}
         param_name = self.get_param_name()
         if self.value and param_name:
-            search_value_with_wildcards = f"%{self.value}%"
-            named_parameters[param_name] = search_value_with_wildcards
+            named_parameters[param_name] = self.like_pattern
         return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -920,8 +927,7 @@ class NotInSearchFilter(SearchFilter):
         else:
             result = statement
 
-        search_value_with_wildcards = f"%{self.value}%"
-        return result.add_named_parameter(param_name, search_value_with_wildcards)
+        return result.add_named_parameter(param_name, self.like_pattern)
 
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
@@ -940,6 +946,22 @@ def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":
         The modified query object.
     """
     return filter_obj.append_to_statement(statement)
+
+
+def find_filter(filter_type: type[FilterTypeT], filters: abc.Sequence[StatementFilter | Any]) -> FilterTypeT | None:
+    """Get the filter specified by filter type from the filters.
+
+    Args:
+        filter_type: The type of filter to find.
+        filters: Filters to search through.
+
+    Returns:
+        The match filter instance or None.
+    """
+    for filter_ in filters:
+        if isinstance(filter_, filter_type):
+            return filter_
+    return None
 
 
 FilterTypes: TypeAlias = (

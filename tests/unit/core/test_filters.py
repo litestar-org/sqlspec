@@ -4,10 +4,15 @@ This module tests the filter system that provides dynamic WHERE clauses,
 ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming.
 """
 
+import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 
 import pytest
 
+from sqlspec import sql as sql_builder
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.base import SQLSpec
 from sqlspec.core import (
     SQL,
     AnyCollectionFilter,
@@ -23,6 +28,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import NotInSearchFilter
 from sqlspec.driver import CommonDriverAttributesMixin
+from sqlspec.service import SQLSpecAsyncService
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -921,6 +927,15 @@ def test_search_filter_with_expression_in_set_appends_to_statement_correctly() -
     assert "OR" in sql_upper
 
 
+def test_search_filter_like_pattern() -> None:
+    """Test that SearchFilter.like_pattern returns the correct pattern."""
+    filter_obj = SearchFilter("name", "john")
+    assert filter_obj.like_pattern == "%john%"
+
+    filter_no_value = SearchFilter("name", None)
+    assert filter_no_value.like_pattern is None
+
+
 def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
     """QueryBuilder.apply_filters produces SQL that can be used with prepare_statement (issue #405).
 
@@ -946,3 +961,83 @@ def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
     assert result.parameters["status_in_1"] == "pending"
     assert result.parameters["limit"] == 10
     assert result.parameters["offset"] == 0
+
+
+@dataclass
+class User:
+    id: int
+    name: str
+
+
+class UserService(SQLSpecAsyncService):
+    pass
+
+
+@pytest.mark.anyio
+async def test_service_paginate_works() -> None:
+    """Test that the base service paginate helper works correctly."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO users (id, name) VALUES (1, 'alice');
+                INSERT INTO users (id, name) VALUES (2, 'bob');
+                INSERT INTO users (id, name) VALUES (3, 'charlie');
+            """)
+            await session.commit()
+
+            service = UserService(session)
+
+            # Query all
+            query = sql_builder.select("*").from_("users")
+
+            # Paginate first 2
+            pagination_filter = LimitOffsetFilter(limit=2, offset=0)
+            result = await service.paginate(query, pagination_filter, schema_type=User)
+
+            assert len(result.items) == 2
+            assert result.total == 3
+            assert result.limit == 2
+            assert result.offset == 0
+            assert result.items[0].name == "alice"
+            assert result.items[1].name == "bob"
+
+            # Paginate next
+            pagination_filter2 = LimitOffsetFilter(limit=2, offset=2)
+            result2 = await service.paginate(query, pagination_filter2, schema_type=User)
+
+            assert len(result2.items) == 1
+            assert result2.total == 3
+            assert result2.limit == 2
+            assert result2.offset == 2
+            assert result2.items[0].name == "charlie"
+
+
+@pytest.mark.anyio
+async def test_service_exists_works() -> None:
+    """Test that the base service exists helper works correctly."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO users (id, name) VALUES (1, 'alice');
+            """)
+            await session.commit()
+
+            service = UserService(session)
+
+            # Exists
+            query = sql_builder.select("*").from_("users").where_eq("name", "alice")
+            assert await service.exists(query) is True
+
+            # Does not exist
+            query2 = sql_builder.select("*").from_("users").where_eq("name", "bob")
+            assert await service.exists(query2) is False

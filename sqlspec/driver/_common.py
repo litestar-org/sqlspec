@@ -26,6 +26,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
+from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
 from sqlspec.core.statement import ProcessedState
@@ -51,7 +52,8 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    import abc
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
 
     from sqlspec.core import FilterTypeT, StatementFilter
@@ -2005,7 +2007,7 @@ class CommonDriverAttributesMixin:
     @staticmethod
     def find_filter(
         filter_type: "type[FilterTypeT]",
-        filters: "Sequence[StatementFilter | StatementParameters] | Sequence[StatementFilter]",
+        filters: "abc.Sequence[StatementFilter | StatementParameters] | abc.Sequence[StatementFilter]",
     ) -> "FilterTypeT | None":
         """Get the filter specified by filter type from the filters.
 
@@ -2017,10 +2019,7 @@ class CommonDriverAttributesMixin:
             The match filter instance or None
 
         """
-        for filter_ in filters:
-            if isinstance(filter_, filter_type):
-                return filter_
-        return None
+        return _find_filter_impl(filter_type, filters)
 
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
         """Create a COUNT query from the original SQL statement.
