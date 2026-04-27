@@ -1,7 +1,7 @@
 """Service base classes for SQLSpec application services."""
 
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Generic, cast
+from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
 from typing_extensions import TypeVar
 
@@ -51,6 +51,28 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         """Alias for :attr:`session` matching the recipe-doc terminology."""
         return self._session
 
+    @overload
+    async def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> OffsetPagination[SchemaT]: ...
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> OffsetPagination[dict[str, Any]]: ...
+
     async def paginate(
         self,
         statement: "Statement | QueryBuilder",
@@ -59,7 +81,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         schema_type: "type[SchemaT] | None" = None,
         count_with_window: bool = False,
         **kwargs: Any,
-    ) -> OffsetPagination[SchemaT]:
+    ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]":
         """Execute a paginated query and return an OffsetPagination container.
 
         Args:
@@ -78,12 +100,42 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
         )
 
+        if schema_type is None:
+            return OffsetPagination(
+                items=cast("list[dict[str, Any]]", items),
+                limit=limit_offset.limit if limit_offset is not None else len(items),
+                offset=limit_offset.offset if limit_offset is not None else 0,
+                total=total,
+            )
+
         return OffsetPagination(
             items=cast("list[SchemaT]", items),
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
         )
+
+    @overload
+    async def get_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> SchemaT: ...
+
+    @overload
+    async def get_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]: ...
 
     async def get_one(
         self,
@@ -191,6 +243,28 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         """Alias for :attr:`session` matching the recipe-doc terminology."""
         return self._session
 
+    @overload
+    def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> OffsetPagination[SchemaT]: ...
+
+    @overload
+    def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> OffsetPagination[dict[str, Any]]: ...
+
     def paginate(
         self,
         statement: "Statement | QueryBuilder",
@@ -199,7 +273,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         schema_type: "type[SchemaT] | None" = None,
         count_with_window: bool = False,
         **kwargs: Any,
-    ) -> OffsetPagination[SchemaT]:
+    ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]":
         """Execute a paginated query and return an OffsetPagination container.
 
         Args:
@@ -218,12 +292,42 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
         )
 
+        if schema_type is None:
+            return OffsetPagination(
+                items=cast("list[dict[str, Any]]", items),
+                limit=limit_offset.limit if limit_offset is not None else len(items),
+                offset=limit_offset.offset if limit_offset is not None else 0,
+                total=total,
+            )
+
         return OffsetPagination(
             items=cast("list[SchemaT]", items),
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
         )
+
+    @overload
+    def get_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> SchemaT: ...
+
+    @overload
+    def get_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]: ...
 
     def get_one(
         self,

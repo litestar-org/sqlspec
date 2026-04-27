@@ -7,10 +7,11 @@ ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from sqlglot import exp
+from typing_extensions import assert_type
 
 from sqlspec import sql as sql_builder
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -28,9 +29,16 @@ from sqlspec.core import (
     SearchFilter,
     apply_filter,
 )
+from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.filters import NotInSearchFilter
 from sqlspec.driver import CommonDriverAttributesMixin
-from sqlspec.service import SQLSpecAsyncService
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+
+if TYPE_CHECKING:
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core.statement import Statement
 
 pytestmark = pytest.mark.xdist_group("core")
 
@@ -968,6 +976,98 @@ class User:
     name: str
 
 
+class _AsyncRawPaginateSession:
+    @staticmethod
+    def find_filter(filter_type: type[LimitOffsetFilter], parameters: tuple[Any, ...]) -> LimitOffsetFilter | None:
+        for parameter in parameters:
+            if isinstance(parameter, filter_type):
+                return parameter
+        return None
+
+    async def select_with_total(
+        self,
+        statement: Any,
+        *parameters: Any,
+        schema_type: type[Any] | None = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> tuple[list[dict[str, Any]], int]:
+        assert statement is not None
+        assert parameters
+        assert schema_type is None
+        assert count_with_window is False
+        assert kwargs == {}
+        return ([{"id": 1, "name": "alice"}], 1)
+
+
+class _SyncRawPaginateSession:
+    @staticmethod
+    def find_filter(filter_type: type[LimitOffsetFilter], parameters: tuple[Any, ...]) -> LimitOffsetFilter | None:
+        for parameter in parameters:
+            if isinstance(parameter, filter_type):
+                return parameter
+        return None
+
+    def select_with_total(
+        self,
+        statement: Any,
+        *parameters: Any,
+        schema_type: type[Any] | None = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> tuple[list[dict[str, Any]], int]:
+        assert statement is not None
+        assert parameters
+        assert schema_type is None
+        assert count_with_window is False
+        assert kwargs == {}
+        return ([{"id": 1, "name": "alice"}], 1)
+
+
+async def _assert_async_service_overloads(
+    service: SQLSpecAsyncService[AsyncDriverAdapterBase], statement: "Statement | QueryBuilder"
+) -> None:
+    typed_page = await service.paginate(statement, schema_type=User)
+    assert_type(typed_page, OffsetPagination[User])
+
+    raw_page = await service.paginate(statement)
+    assert_type(raw_page, OffsetPagination[dict[str, Any]])
+
+    explicit_raw_page = await service.paginate(statement, schema_type=None)
+    assert_type(explicit_raw_page, OffsetPagination[dict[str, Any]])
+
+    typed_row = await service.get_one(statement, schema_type=User)
+    assert_type(typed_row, User)
+
+    raw_row = await service.get_one(statement)
+    assert_type(raw_row, dict[str, Any])
+
+    explicit_raw_row = await service.get_one(statement, schema_type=None)
+    assert_type(explicit_raw_row, dict[str, Any])
+
+
+def _assert_sync_service_overloads(
+    service: SQLSpecSyncService[SyncDriverAdapterBase], statement: "Statement | QueryBuilder"
+) -> None:
+    typed_page = service.paginate(statement, schema_type=User)
+    assert_type(typed_page, OffsetPagination[User])
+
+    raw_page = service.paginate(statement)
+    assert_type(raw_page, OffsetPagination[dict[str, Any]])
+
+    explicit_raw_page = service.paginate(statement, schema_type=None)
+    assert_type(explicit_raw_page, OffsetPagination[dict[str, Any]])
+
+    typed_row = service.get_one(statement, schema_type=User)
+    assert_type(typed_row, User)
+
+    raw_row = service.get_one(statement)
+    assert_type(raw_row, dict[str, Any])
+
+    explicit_raw_row = service.get_one(statement, schema_type=None)
+    assert_type(explicit_raw_row, dict[str, Any])
+
+
 class UserService(SQLSpecAsyncService):
     pass
 
@@ -1014,6 +1114,29 @@ async def test_service_paginate_works() -> None:
             assert result2.limit == 2
             assert result2.offset == 2
             assert result2.items[0].name == "charlie"
+
+
+@pytest.mark.anyio
+async def test_service_paginate_returns_raw_rows_without_schema_type() -> None:
+    service = SQLSpecAsyncService(cast(Any, _AsyncRawPaginateSession()))
+
+    result = await service.paginate(sql_builder.select("*").from_("users"), LimitOffsetFilter(limit=1, offset=0))
+
+    assert result.items == [{"id": 1, "name": "alice"}]
+    assert result.limit == 1
+    assert result.offset == 0
+    assert result.total == 1
+
+
+def test_sync_service_paginate_returns_raw_rows_without_schema_type() -> None:
+    service = SQLSpecSyncService(cast(Any, _SyncRawPaginateSession()))
+
+    result = service.paginate(sql_builder.select("*").from_("users"), LimitOffsetFilter(limit=1, offset=0))
+
+    assert result.items == [{"id": 1, "name": "alice"}]
+    assert result.limit == 1
+    assert result.offset == 0
+    assert result.total == 1
 
 
 @pytest.mark.anyio
