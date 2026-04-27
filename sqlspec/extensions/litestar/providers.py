@@ -7,7 +7,7 @@ This module contains functions to create dependency providers for services and f
 import datetime
 import inspect
 from collections.abc import Callable
-from typing import Any, Literal, NamedTuple, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict, cast
 from uuid import UUID
 
 from litestar.di import Provide
@@ -28,6 +28,9 @@ from sqlspec.core import (
 )
 from sqlspec.utils.singleton import SingletonMeta
 from sqlspec.utils.text import camelize
+
+if TYPE_CHECKING:
+    from sqlglot import exp
 
 __all__ = (
     "DEPENDENCY_DEFAULTS",
@@ -241,7 +244,9 @@ def _create_statement_filters(  # noqa: C901
                 required=False,
             ),
         ) -> SearchFilter:
-            field_names = set(search_fields.split(",")) if isinstance(search_fields, str) else set(search_fields)
+            field_names: set[str | exp.Expression] = (
+                set(search_fields.split(",")) if isinstance(search_fields, str) else set(search_fields)
+            )
             return SearchFilter(field_name=field_names, value=search_string, ignore_case=ignore_case or False)
 
         filters[dep_defaults.SEARCH_FILTER_DEPENDENCY_KEY] = Provide(provide_search_filter, sync_to_thread=False)

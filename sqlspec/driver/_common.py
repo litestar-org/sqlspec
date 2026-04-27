@@ -52,7 +52,7 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    import abc
+    from collections import abc
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 

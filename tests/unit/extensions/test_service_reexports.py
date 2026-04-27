@@ -21,19 +21,17 @@ pytestmark = pytest.mark.xdist_group("extensions")
         "sqlspec.extensions.fastapi",
         "sqlspec.extensions.starlette",
         "sqlspec.extensions.sanic",
+        "sqlspec.extensions.flask",
     ],
 )
 def test_async_and_sync_service_reexports(module_name: str) -> None:
-    """Async + sync framework packages re-export both service base classes."""
+    """Every framework package re-exports both service base classes.
+
+    Flask is included because its plugin can portal an async driver, so
+    consumers need access to the async service even from a sync framework.
+    """
     module = importlib.import_module(module_name)
     assert module.SQLSpecAsyncService is SQLSpecAsyncService
     assert module.SQLSpecSyncService is SQLSpecSyncService
     assert "SQLSpecAsyncService" in module.__all__
-    assert "SQLSpecSyncService" in module.__all__
-
-
-def test_flask_reexports_sync_only() -> None:
-    """Flask is sync-only, so it re-exports the sync service base."""
-    module = importlib.import_module("sqlspec.extensions.flask")
-    assert module.SQLSpecSyncService is SQLSpecSyncService
     assert "SQLSpecSyncService" in module.__all__

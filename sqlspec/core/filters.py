@@ -135,7 +135,7 @@ class StatementFilter(ABC):
 
         if "." in field_name:
             # Use maybe_parse for dotted names to get qualified columns
-            parsed = exp.maybe_parse(field_name)
+            parsed: exp.Expression | None = exp.maybe_parse(field_name)
             if isinstance(parsed, exp.Column):
                 return parsed
         return exp.column(field_name)

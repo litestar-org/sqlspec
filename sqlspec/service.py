@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core.filters import StatementFilter
-    from sqlspec.core.parameters import StatementParameters
     from sqlspec.core.statement import Statement
+    from sqlspec.typing import StatementParameters
 
 
 __all__ = ("SQLSpecAsyncService", "SQLSpecSyncService")
@@ -150,7 +150,11 @@ class SQLSpecAsyncService(Generic[DriverT]):
 
     @asynccontextmanager
     async def begin_transaction(self) -> "AsyncIterator[DriverT]":
-        """Context manager that commits on success and rolls back on error."""
+        """Context manager that commits on success and rolls back on error.
+
+        Yields:
+            The underlying driver session bound to the active transaction.
+        """
         await self.begin()
         try:
             yield self._session
@@ -287,7 +291,11 @@ class SQLSpecSyncService(Generic[DriverT]):
 
     @contextmanager
     def begin_transaction(self) -> "Iterator[DriverT]":
-        """Context manager that commits on success and rolls back on error."""
+        """Context manager that commits on success and rolls back on error.
+
+        Yields:
+            The underlying driver session bound to the active transaction.
+        """
         self.begin()
         try:
             yield self._session
