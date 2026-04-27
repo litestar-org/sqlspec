@@ -752,6 +752,22 @@ class SearchFilter(StatementFilter):
         """
         return f"%{self.value}%" if self.value else None
 
+    @staticmethod
+    def escape_like_value(value: str) -> str:
+        r"""Escape ``%`` and ``_`` metacharacters for safe LIKE/ILIKE pattern matching.
+
+        Backslash is the default LIKE escape character in PostgreSQL (with
+        ``standard_conforming_strings`` on), SQLite, and MySQL, so the produced
+        pattern is safe without an explicit ``ESCAPE`` clause on those engines.
+
+        Args:
+            value: Raw user input to escape before wrapping in wildcards.
+
+        Returns:
+            The input with ``\``, ``%``, and ``_`` escaped using ``\``.
+        """
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     def get_param_name(self) -> str | None:
         """Get parameter name without storing it."""
         if not self.value:
@@ -759,6 +775,8 @@ class SearchFilter(StatementFilter):
         if isinstance(self.field_name, str):
             sanitized_field = self._sanitize_param_name(self.field_name)
             return f"{sanitized_field}_search"
+        if isinstance(self.field_name, exp.Expression):
+            return f"{self._sanitize_param_name(self.field_name)}_search"
         return "search_value"
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -782,6 +800,8 @@ class SearchFilter(StatementFilter):
         if isinstance(self.field_name, str):
             col_expr = self._get_column_expression(self.field_name)
             result = statement.where(like_op(this=col_expr, expression=exp.Placeholder(this=param_name)))
+        elif isinstance(self.field_name, exp.Expression):
+            result = statement.where(like_op(this=self.field_name, expression=exp.Placeholder(this=param_name)))
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
                 like_op(this=self._get_column_expression(field), expression=exp.Placeholder(this=param_name))
@@ -794,14 +814,27 @@ class SearchFilter(StatementFilter):
             for cond in field_conditions[1:]:
                 final_condition = exp.Or(this=final_condition, expression=cond)
             result = statement.where(final_condition)
+        elif isinstance(self.field_name, set):
+            return statement
         else:
-            result = statement
+            msg = (
+                f"SearchFilter.field_name must be str, exp.Expression, or set thereof; "
+                f"got {type(self.field_name).__name__}"
+            )
+            raise TypeError(msg)
 
         return result.add_named_parameter(param_name, self.like_pattern)
 
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
-        field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
+        if isinstance(self.field_name, set):
+            field_names: Any = tuple(
+                sorted(item.sql() if isinstance(item, exp.Expression) else item for item in self.field_name)
+            )
+        elif isinstance(self.field_name, exp.Expression):
+            field_names = self.field_name.sql()
+        else:
+            field_names = self.field_name
         return ("SearchFilter", field_names, self.value, self.ignore_case)
 
 
@@ -885,6 +918,8 @@ class NotInSearchFilter(SearchFilter):
         if isinstance(self.field_name, str):
             sanitized_field = self._sanitize_param_name(self.field_name)
             return f"{sanitized_field}_not_search"
+        if isinstance(self.field_name, exp.Expression):
+            return f"{self._sanitize_param_name(self.field_name)}_not_search"
         return "not_search_value"
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -905,10 +940,13 @@ class NotInSearchFilter(SearchFilter):
 
         like_op = exp.ILike if self.ignore_case else exp.Like
 
-        result = statement
         if isinstance(self.field_name, str):
             col_expr = self._get_column_expression(self.field_name)
             result = statement.where(exp.Not(this=like_op(this=col_expr, expression=exp.Placeholder(this=param_name))))
+        elif isinstance(self.field_name, exp.Expression):
+            result = statement.where(
+                exp.Not(this=like_op(this=self.field_name, expression=exp.Placeholder(this=param_name)))
+            )
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions: list[Condition] = [
                 exp.Not(
@@ -924,14 +962,27 @@ class NotInSearchFilter(SearchFilter):
                 for cond in field_conditions[1:]:
                     final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
+        elif isinstance(self.field_name, set):
+            return statement
         else:
-            result = statement
+            msg = (
+                f"NotInSearchFilter.field_name must be str, exp.Expression, or set thereof; "
+                f"got {type(self.field_name).__name__}"
+            )
+            raise TypeError(msg)
 
         return result.add_named_parameter(param_name, self.like_pattern)
 
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
-        field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
+        if isinstance(self.field_name, set):
+            field_names: Any = tuple(
+                sorted(item.sql() if isinstance(item, exp.Expression) else item for item in self.field_name)
+            )
+        elif isinstance(self.field_name, exp.Expression):
+            field_names = self.field_name.sql()
+        else:
+            field_names = self.field_name
         return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
 
 

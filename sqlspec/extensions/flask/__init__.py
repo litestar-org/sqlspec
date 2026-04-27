@@ -33,5 +33,6 @@ Example:
 
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask.extension import SQLSpecPlugin
+from sqlspec.service import SQLSpecSyncService
 
-__all__ = ("FlaskConfigState", "SQLSpecPlugin")
+__all__ = ("FlaskConfigState", "SQLSpecPlugin", "SQLSpecSyncService")

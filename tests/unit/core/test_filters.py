@@ -1041,3 +1041,125 @@ async def test_service_exists_works() -> None:
             # Does not exist
             query2 = sql_builder.select("*").from_("users").where_eq("name", "bob")
             assert await service.exists(query2) is False
+
+
+@pytest.mark.anyio
+async def test_service_get_or_404_returns_row_or_raises() -> None:
+    """get_or_404 returns the row when present and raises NotFoundError otherwise."""
+    from sqlspec.exceptions import NotFoundError
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script(
+                """
+                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO users (id, name) VALUES (1, 'alice');
+                """
+            )
+            await session.commit()
+
+            service = UserService(session)
+
+            row = await service.get_or_404(
+                sql_builder.select("id", "name").from_("users").where_eq("name", "alice"), schema_type=User
+            )
+            assert isinstance(row, User)
+            assert row.name == "alice"
+
+            with pytest.raises(NotFoundError, match="missing user"):
+                await service.get_or_404(
+                    sql_builder.select("id", "name").from_("users").where_eq("name", "ghost"),
+                    schema_type=User,
+                    error_message="missing user",
+                )
+
+
+@pytest.mark.anyio
+async def test_service_begin_transaction_commits_and_rolls_back() -> None:
+    """begin_transaction commits on success and rolls back on exception."""
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            await session.commit()
+
+            service = UserService(session)
+
+            async with service.begin_transaction():
+                await session.execute(sql_builder.insert("users").columns("id", "name").values(1, "alice"))
+
+            count_after_commit = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
+            assert count_after_commit.one()["n"] == 1
+
+            with pytest.raises(RuntimeError, match="boom"):
+                async with service.begin_transaction():
+                    await session.execute(sql_builder.insert("users").columns("id", "name").values(2, "bob"))
+                    raise RuntimeError("boom")
+
+            count_after_rollback = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
+            assert count_after_rollback.one()["n"] == 1
+
+
+def test_search_filter_raises_typeerror_on_invalid_field_name() -> None:
+    """SearchFilter raises TypeError instead of silently dropping the WHERE."""
+    from sqlspec.core.filters import SearchFilter as _SF
+
+    sql_stmt = SQL("SELECT * FROM things")
+    bad: object = 123
+    f = _SF(field_name=bad, value="x")
+    with pytest.raises(TypeError, match="field_name must be"):
+        f.append_to_statement(sql_stmt)
+
+
+def test_not_in_search_filter_raises_typeerror_on_invalid_field_name() -> None:
+    """NotInSearchFilter raises TypeError instead of silently dropping the WHERE."""
+
+    sql_stmt = SQL("SELECT * FROM things")
+    bad: object = 123
+    f = NotInSearchFilter(field_name=bad, value="x")
+    with pytest.raises(TypeError, match="field_name must be"):
+        f.append_to_statement(sql_stmt)
+
+
+def test_search_filter_accepts_expression_field_name() -> None:
+    """SearchFilter applies a WHERE clause when given a SQLGlot expression."""
+    from sqlglot import exp
+
+    sql_stmt = SQL("SELECT id, name FROM things")
+    f = SearchFilter(field_name=exp.func("LOWER", exp.column("name")), value="foo")
+    result = f.append_to_statement(sql_stmt)
+    assert "WHERE" in result.sql.upper()
+    assert "LOWER" in result.sql.upper()
+    assert any(v == "%foo%" for v in result.parameters.values())
+
+
+def test_not_in_search_filter_accepts_expression_field_name() -> None:
+    """NotInSearchFilter applies WHERE NOT LIKE when given a SQLGlot expression."""
+    from sqlglot import exp
+
+    sql_stmt = SQL("SELECT id, name FROM things")
+    f = NotInSearchFilter(field_name=exp.func("LOWER", exp.column("name")), value="foo")
+    result = f.append_to_statement(sql_stmt)
+    sql_upper = result.sql.upper()
+    assert "WHERE" in sql_upper
+    assert "NOT" in sql_upper and "LIKE" in sql_upper
+
+
+def test_search_filter_escape_like_value() -> None:
+    """escape_like_value escapes backslash, percent, and underscore."""
+
+    assert SearchFilter.escape_like_value("plain") == "plain"
+    assert SearchFilter.escape_like_value("50% off") == "50\\% off"
+    assert SearchFilter.escape_like_value("a_b") == "a\\_b"
+    assert SearchFilter.escape_like_value("a\\b") == "a\\\\b"
+    # Backslash escapes apply first, so "%" inside an already-backslashed string
+    # is escaped exactly once.
+    assert SearchFilter.escape_like_value("\\%_") == "\\\\\\%\\_"
