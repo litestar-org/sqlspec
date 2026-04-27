@@ -469,7 +469,9 @@ def test_module_all_exports() -> None:
     """Test that __all__ contains the expected exports."""
 
     expected = {
+        "DEFAULT_TYPE_ENCODERS",
         "SchemaSerializer",
+        "TypeEncodersMap",
         "from_json",
         "get_collection_serializer",
         "get_serializer_metrics",
