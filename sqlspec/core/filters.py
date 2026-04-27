@@ -120,15 +120,18 @@ class StatementFilter(ABC):
 
         return resolved_names
 
-    def _get_column_expression(self, field_name: str) -> exp.Column:
+    def _get_column_expression(self, field_name: "str | exp.Expression") -> exp.Column | exp.Expression:
         """Parse field name into a qualified column if dotted, else bare column.
 
         Args:
-            field_name: Field name string (e.g. "name" or "users.name")
+            field_name: Field name string (e.g. "name" or "users.name") or SQLGlot expression
 
         Returns:
-            exp.Column: SQLGlot column expression
+            exp.Column | exp.Expression: SQLGlot column expression or provided expression
         """
+        if isinstance(field_name, exp.Expression):
+            return field_name
+
         if "." in field_name:
             # Use maybe_parse for dotted names to get qualified columns
             parsed = exp.maybe_parse(field_name)
@@ -136,15 +139,18 @@ class StatementFilter(ABC):
                 return parsed
         return exp.column(field_name)
 
-    def _sanitize_param_name(self, name: str) -> str:
+    def _sanitize_param_name(self, name: "str | exp.Expression") -> str:
         """Sanitize field name for use as a parameter name by replacing dots with underscores.
 
         Args:
-            name: Original parameter name string
+            name: Original parameter name string or expression
 
         Returns:
             str: Sanitized parameter name
         """
+        if isinstance(name, exp.Expression):
+            # For expressions, we use a hash or a generic name since we can't easily sanitize
+            return f"expr_{str(hash(name)).replace('-', '')[:8]}"
         return name.replace(".", "_")
 
     @abstractmethod
@@ -164,13 +170,15 @@ class BeforeAfterFilter(StatementFilter):
 
     __slots__ = ("_after", "_before", "_field_name")
 
-    def __init__(self, field_name: str, before: datetime | None = None, after: datetime | None = None) -> None:
+    def __init__(
+        self, field_name: "str | exp.Expression", before: datetime | None = None, after: datetime | None = None
+    ) -> None:
         self._field_name = field_name
         self._before = before
         self._after = after
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -246,14 +254,17 @@ class OnBeforeAfterFilter(StatementFilter):
     __slots__ = ("_field_name", "_on_or_after", "_on_or_before")
 
     def __init__(
-        self, field_name: str, on_or_before: datetime | None = None, on_or_after: datetime | None = None
+        self,
+        field_name: "str | exp.Expression",
+        on_or_before: datetime | None = None,
+        on_or_after: datetime | None = None,
     ) -> None:
         self._field_name = field_name
         self._on_or_before = on_or_before
         self._on_or_after = on_or_after
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -336,12 +347,12 @@ class InCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
+    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -398,12 +409,12 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
+    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -457,12 +468,12 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
+    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -518,12 +529,12 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_field_name", "_values")
 
-    def __init__(self, field_name: str, values: abc.Collection[T] | None = None) -> None:
+    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
         self._field_name = field_name
         self._values = values
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -651,12 +662,12 @@ class OrderByFilter(StatementFilter):
 
     __slots__ = ("_field_name", "_sort_order")
 
-    def __init__(self, field_name: str, sort_order: Literal["asc", "desc"] = "asc") -> None:
+    def __init__(self, field_name: "str | exp.Expression", sort_order: Literal["asc", "desc"] = "asc") -> None:
         self._field_name = field_name
         self._sort_order = sort_order
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     @property
@@ -709,13 +720,18 @@ class SearchFilter(StatementFilter):
 
     __slots__ = ("_field_name", "_ignore_case", "_value")
 
-    def __init__(self, field_name: str | set[str], value: str | None, ignore_case: bool | None = False) -> None:
+    def __init__(
+        self,
+        field_name: "str | exp.Expression | set[str | exp.Expression]",
+        value: str | None,
+        ignore_case: bool | None = False,
+    ) -> None:
         self._field_name = field_name
         self._value = value
         self._ignore_case = ignore_case if ignore_case is not None else False
 
     @property
-    def field_name(self) -> "str | set[str]":
+    def field_name(self) -> "str | exp.Expression | set[str | exp.Expression]":
         return self._field_name
 
     @property
@@ -789,11 +805,11 @@ class NullFilter(StatementFilter):
 
     __slots__ = ("_field_name",)
 
-    def __init__(self, field_name: str) -> None:
+    def __init__(self, field_name: "str | exp.Expression") -> None:
         self._field_name = field_name
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
@@ -822,11 +838,11 @@ class NotNullFilter(StatementFilter):
 
     __slots__ = ("_field_name",)
 
-    def __init__(self, field_name: str) -> None:
+    def __init__(self, field_name: "str | exp.Expression") -> None:
         self._field_name = field_name
 
     @property
-    def field_name(self) -> str:
+    def field_name(self) -> "str | exp.Expression":
         return self._field_name
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":

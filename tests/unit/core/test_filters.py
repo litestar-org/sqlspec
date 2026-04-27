@@ -885,6 +885,42 @@ def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() ->
     assert "ORDER BY U.CREATED_AT DESC" in sql_upper or 'ORDER BY "U"."CREATED_AT" DESC' in sql_upper
 
 
+def test_order_by_filter_with_expression_appends_to_statement_correctly() -> None:
+    """Test that OrderByFilter with a SQLGlot expression appends to statement correctly."""
+    from sqlglot import exp
+
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT id, lines, occurrences FROM stats")
+    # COALESCE(lines, occurrences, 0)
+    coalesce_expr = exp.func("COALESCE", exp.column("lines"), exp.column("occurrences"), exp.Literal.number(0))
+    filter_obj = OrderByFilter(field_name=coalesce_expr, sort_order="desc")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "ORDER BY COALESCE(LINES, OCCURRENCES, 0) DESC" in sql_upper
+
+
+def test_search_filter_with_expression_in_set_appends_to_statement_correctly() -> None:
+    """Test that SearchFilter with a SQLGlot expression in a set appends to statement correctly."""
+    from sqlglot import exp
+
+    from sqlspec.core import SQL
+
+    statement = SQL("SELECT name, email FROM users")
+    # UPPER(name)
+    upper_name = exp.func("UPPER", exp.column("name"))
+    filter_obj = SearchFilter(field_name={upper_name, "email"}, value="john")
+
+    result = apply_filter(statement, filter_obj)
+
+    sql_upper = result.sql.upper()
+    assert "UPPER(NAME) LIKE" in sql_upper
+    assert "EMAIL LIKE" in sql_upper
+    assert "OR" in sql_upper
+
+
 def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
     """QueryBuilder.apply_filters produces SQL that can be used with prepare_statement (issue #405).
 
