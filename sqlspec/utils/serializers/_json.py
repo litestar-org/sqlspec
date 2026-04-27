@@ -109,6 +109,14 @@ def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
     if _UUID_UTILS_TYPE is not None:
         encoders[_UUID_UTILS_TYPE] = str
 
+    with contextlib.suppress(ImportError):
+        # asyncpg returns UUIDs as `pgproto.UUID`, distinct from stdlib uuid.UUID.
+        # Registered here (not in the Litestar plugin) so every framework
+        # consumer — and direct sqlspec users — handles asyncpg results.
+        from asyncpg.pgproto import pgproto  # pyright: ignore[reportMissingImports]
+
+        encoders[pgproto.UUID] = str
+
     if NUMPY_INSTALLED:
         import numpy as np
 
@@ -143,11 +151,11 @@ def _resolve_structural_encoder(value: Any) -> Any:
 def _create_enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "Callable[[Any], Any]":
     """Build an MRO-walking enc_hook bound to the supplied registry.
 
-    The hook walks ``value.__class__.__mro__[:-1]`` (skipping ``object``) and
-    returns the first matching encoder. Unmatched values fall through to
-    structural probes (dataclass/attrs/msgspec.Struct) before raising
-    ``TypeError`` — this preserves sqlspec's strict semantics rather than
-    advanced-alchemy's ``str()`` fallback.
+    Walks ``value.__class__.__mro__[:-1]`` (skipping ``object``) and returns
+    the first matching encoder. Falls through to structural probes
+    (dataclass / attrs / msgspec.Struct), then raises
+    ``TypeError("unsupported JSON value: ...")`` — strict sqlspec semantics,
+    divergent from advanced-alchemy's ``str`` fallback.
     """
 
     def enc_hook(value: Any) -> Any:
