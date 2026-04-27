@@ -17,7 +17,6 @@ to get both the page data and the total matching count.
    :end-before: # end-example
    :dedent: 4
    :no-upgrade:
-
 Core Filter Types
 -----------------
 
@@ -25,7 +24,7 @@ SQLSpec defines filter types in ``sqlspec.core`` that can be used independently
 or with framework integrations:
 
 - ``LimitOffsetFilter(limit, offset)`` -- pagination
-- ``OrderByFilter(field_name, sort_order)`` -- sorting
+- ``OrderByFilter(field_name, sort_order)`` -- sorting (supports expression mode)
 - ``SearchFilter(field_name, value, ignore_case)`` -- text search
 - ``BeforeAfterFilter(field_name, before, after)`` -- date range
 - ``InCollectionFilter(field_name, values)`` -- set membership
@@ -33,7 +32,44 @@ or with framework integrations:
 - ``NullFilter(field_name)`` -- IS NULL check
 - ``NotNullFilter(field_name)`` -- IS NOT NULL check
 
+Qualified Field Names
+~~~~~~~~~~~~~~~~~~~~~
+
+Every field-name-bearing filter supports table-qualified field names (e.g. ``p.name``).
+SQLSpec correctly parses these into qualified SQLGlot column references and sanitizes
+generated parameter names (e.g. ``p_name_search``), making filters safe to use in
+joined queries.
+
+.. code-block:: python
+
+    # Disambiguate columns in a JOIN
+    query = sql.select("p.name", "c.name").from_("parent p").join("child c", "p.id = c.parent_id")
+    filter_obj = SearchFilter(field_name="p.name", value="alice")
+    # Results in: WHERE p.name LIKE :p_name_search
+
+Expression Mode
+~~~~~~~~~~~~~~~
+
+Filters like ``OrderByFilter`` support passing a SQLGlot expression instead of a
+string field name. This allows complex sorting and filtering logic:
+
+.. code-block:: python
+
+    from sqlglot import exp
+
+    # Sort by COALESCE(lines, 0)
+    expr = exp.func("COALESCE", exp.column("lines"), exp.Literal.number(0))
+    filter_obj = OrderByFilter(field_name=expr, sort_order="desc")
+
+Search Patterns
+~~~~~~~~~~~~~~~
+
+``SearchFilter`` and ``NotInSearchFilter`` expose a ``like_pattern`` property
+that returns the percent-wrapped search value (e.g. ``%alice%``). This is useful
+when you need to use the pattern construction logic outside of the filter system.
+
 Litestar Filter Dependencies
+
 -----------------------------
 
 When using the Litestar extension, ``create_filter_dependencies()`` auto-generates
@@ -75,6 +111,27 @@ Using filters in a Litestar handler:
 
 The generated dependencies automatically handle query parameters for configured fields like
 ``?currentPage=2&pageSize=10&searchString=alice&orderBy=name&sortOrder=asc``.
+
+Service Layer
+-------------
+
+For common database operations and pagination in application services, SQLSpec provides
+base classes ``SQLSpecAsyncService`` and ``SQLSpecSyncService`` in ``sqlspec.service``.
+
+.. code-block:: python
+
+    from sqlspec.service import SQLSpecAsyncService
+    from sqlspec.core.filters import LimitOffsetFilter
+
+    class UserService(SQLSpecAsyncService):
+        async def list_users(self, filters: list[StatementFilter]) -> OffsetPagination[User]:
+            query = sql.select("*").from_("users")
+            return await self.paginate(query, *filters, schema_type=User)
+
+    async def some_handler(db_session: AsyncDriver, filters: list[StatementFilter]):
+        service = UserService(db_session)
+        page = await service.list_users(filters)
+        return page  # Returns OffsetPagination container
 
 Related Guides
 --------------

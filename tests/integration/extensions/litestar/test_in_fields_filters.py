@@ -255,3 +255,51 @@ async def test_litestar_qualified_column_order_by_filter() -> None:
             items = response.json()["items"]
             assert items[0]["name"] == "b"
             assert items[1]["name"] == "a"
+
+
+def test_litestar_order_by_openapi_schema() -> None:
+    """OrderByFilter must appear as a string in OpenAPI even with expression support."""
+    from typing import Any
+
+    sql = SQLSpec()
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    sql.add_config(config)
+
+    filter_deps = create_filter_dependencies({"sort_field": "p.name"})
+
+    @get("/ordered", dependencies=filter_deps)
+    async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"items": []}
+
+    app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+    schema = app.openapi_schema
+    paths = schema.paths
+    assert paths is not None
+
+    # Check parameters for /ordered
+    params = paths["/ordered"].get.parameters
+    assert params is not None
+
+    # orderBy and sortOrder should be there
+    order_by_param = next((p for p in params if p.name == "orderBy"), None)
+    assert order_by_param is not None
+
+    # In newer Litestar, types can be a list or a single value, and might be in one_of
+    def is_string_type(schema: Any) -> bool:
+        if not schema:
+            return False
+        stype = schema.type
+        if isinstance(stype, list):
+            return any("string" in str(t).lower() for t in stype)
+        if stype:
+            return "string" in str(stype).lower()
+        if schema.one_of:
+            return any(is_string_type(s) for s in schema.one_of)
+        return False
+
+    assert is_string_type(order_by_param.schema)
+
+    sort_order_param = next((p for p in params if p.name == "sortOrder"), None)
+    assert sort_order_param is not None
+    assert is_string_type(sort_order_param.schema)
