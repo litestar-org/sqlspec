@@ -325,7 +325,7 @@ def test_litestar_in_fields_two_str_fields_do_not_cross_bind() -> None:
 
     @get("/x", dependencies=filter_deps)
     async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
-        return {"got": [(f.field_name, sorted(f.values)) for f in filters if isinstance(f, InCollectionFilter)]}
+        return {"got": [(f.field_name, sorted(f.values or ())) for f in filters if isinstance(f, InCollectionFilter)]}
 
     app = Litestar(route_handlers=[handler])
     with TestClient(app=app) as client:
@@ -344,7 +344,9 @@ def test_litestar_in_fields_mixed_types_do_not_400() -> None:
     @get("/x", dependencies=filter_deps)
     async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
         return {
-            "got": [(f.field_name, [str(v) for v in f.values]) for f in filters if isinstance(f, InCollectionFilter)]
+            "got": [
+                (f.field_name, [str(v) for v in (f.values or ())]) for f in filters if isinstance(f, InCollectionFilter)
+            ]
         }
 
     app = Litestar(route_handlers=[handler])
@@ -368,7 +370,9 @@ def test_litestar_not_in_fields_two_fields_do_not_cross_bind() -> None:
 
     @get("/x", dependencies=filter_deps)
     async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
-        return {"got": [(f.field_name, sorted(f.values)) for f in filters if isinstance(f, NotInCollectionFilter)]}
+        return {
+            "got": [(f.field_name, sorted(f.values or ())) for f in filters if isinstance(f, NotInCollectionFilter)]
+        }
 
     app = Litestar(route_handlers=[handler])
     with TestClient(app=app) as client:
@@ -384,7 +388,7 @@ def test_litestar_null_fields_two_fields_do_not_cross_bind() -> None:
 
     @get("/x", dependencies=filter_deps)
     async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
-        return {"fields": sorted(f.field_name for f in filters if isinstance(f, NullFilter))}
+        return {"fields": sorted(str(f.field_name) for f in filters if isinstance(f, NullFilter))}
 
     app = Litestar(route_handlers=[handler])
     with TestClient(app=app) as client:
@@ -407,7 +411,7 @@ def test_litestar_not_null_fields_two_fields_do_not_cross_bind() -> None:
 
     @get("/x", dependencies=filter_deps)
     async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
-        return {"fields": sorted(f.field_name for f in filters if isinstance(f, NotNullFilter))}
+        return {"fields": sorted(str(f.field_name) for f in filters if isinstance(f, NotNullFilter))}
 
     app = Litestar(route_handlers=[handler])
     with TestClient(app=app) as client:

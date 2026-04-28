@@ -183,7 +183,7 @@ def _build_in_collection_provider(field: FieldNameType, *, negated: bool) -> Cal
     field_name = field.name
     param_name = f"{field_name}_values"
     alias = camelize(f"{field_name}_{'not_in' if negated else 'in'}")
-    filter_cls: type[Any] = NotInCollectionFilter if negated else InCollectionFilter
+    filter_cls: Any = NotInCollectionFilter if negated else InCollectionFilter
     annotation = list[type_hint] | None  # type: ignore[valid-type]
     return_annotation = filter_cls[type_hint] | None
 

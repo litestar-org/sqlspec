@@ -509,7 +509,9 @@ def test_fastapi_multi_in_fields_mixed_types_do_not_cross_bind() -> None:
         ],
     ) -> dict[str, Any]:
         return {
-            "got": [(f.field_name, [str(v) for v in f.values]) for f in filters if isinstance(f, InCollectionFilter)]
+            "got": [
+                (f.field_name, [str(v) for v in (f.values or ())]) for f in filters if isinstance(f, InCollectionFilter)
+            ]
         }
 
     valid_uuid = "11111111-2222-3333-4444-555555555555"
