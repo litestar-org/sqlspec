@@ -708,8 +708,8 @@ def test_numpy_serialization_with_to_json() -> None:
     assert decoded_list == [1.0, 2.0, 3.0]
 
 
-class TestSchemaDumpDefault:
-    """Default wire_format=False emits Python attribute names across all schema libs."""
+class TestSchemaDumpWireFormatOptOut:
+    """``wire_format=False`` opts msgspec into Python attribute names (ignores rename=)."""
 
     @pytest.fixture(autouse=True)
     def _reset_cache(self) -> "Any":
@@ -717,7 +717,7 @@ class TestSchemaDumpDefault:
         yield
         reset_serializer_cache()
 
-    def test_msgspec_rename_camel_default_emits_python_names(self) -> None:
+    def test_msgspec_rename_camel_python_names_opt_in(self) -> None:
         import msgspec
 
         class _User(msgspec.Struct, rename="camel"):
@@ -725,16 +725,28 @@ class TestSchemaDumpDefault:
             display_name: str
 
         obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
+        assert schema_dump(obj, wire_format=False) == {"user_id": "abc", "display_name": "Cody"}
 
-    def test_msgspec_rename_kebab_default_emits_python_names(self) -> None:
+    def test_msgspec_rename_kebab_python_names_opt_in(self) -> None:
         import msgspec
 
         class _User(msgspec.Struct, rename="kebab"):
             user_id: str
 
         obj = _User(user_id="abc")
-        assert schema_dump(obj) == {"user_id": "abc"}
+        assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
+
+    def test_wire_format_cache_isolation(self) -> None:
+        """Cache must distinguish wire_format=True from =False for the same Struct type."""
+        import msgspec
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj) == {"userId": "abc"}
+        assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
+        assert schema_dump(obj) == {"userId": "abc"}
 
 
 class TestSchemaDumpRename:

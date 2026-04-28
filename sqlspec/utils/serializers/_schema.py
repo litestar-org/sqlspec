@@ -162,8 +162,8 @@ def _dump_dataclass(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
     return dataclass_to_dict(value, exclude_empty=exclude_unset)
 
 
-def _dump_pydantic(value: Any, *, exclude_unset: bool, wire_format: bool) -> "dict[str, Any]":
-    return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset, by_alias=wire_format))
+def _dump_pydantic(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
+    return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
 
 
 def _dump_attrs(value: Any) -> "dict[str, Any]":
@@ -184,10 +184,7 @@ def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) ->
     if is_dataclass_instance(sample):
         return cast("Callable[[Any], dict[str, Any]]", partial(_dump_dataclass, exclude_unset=exclude_unset))
     if is_pydantic_model(sample):
-        return cast(
-            "Callable[[Any], dict[str, Any]]",
-            partial(_dump_pydantic, exclude_unset=exclude_unset, wire_format=wire_format),
-        )
+        return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
         if wire_format:
             if exclude_unset:
@@ -204,7 +201,7 @@ def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) ->
 
 
 def get_collection_serializer(
-    sample: Any, *, exclude_unset: bool = True, wire_format: bool = False
+    sample: Any, *, exclude_unset: bool = True, wire_format: bool = True
 ) -> "SchemaSerializer":
     """Return cached serializer pipeline for the provided sample object."""
     key = _make_serializer_key(sample, exclude_unset, wire_format)
@@ -222,7 +219,7 @@ def get_collection_serializer(
 
 
 def serialize_collection(
-    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = False
+    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = True
 ) -> "list[Any]":
     """Serialize a collection using cached pipelines keyed by item type."""
     serialized: list[Any] = []
@@ -257,7 +254,7 @@ def get_serializer_metrics() -> "dict[str, int]":
         return metrics
 
 
-def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = False) -> Any:
+def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = True) -> Any:
     """Dump a schema model or dict to a plain representation.
 
     Args:
@@ -265,11 +262,11 @@ def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = Fa
             or plain dict / primitive.
         exclude_unset: If True, exclude fields that were never set (msgspec UNSET, Pydantic
             model_fields_set semantics). No-op for attrs (attrs has no unset concept).
-        wire_format: If True, emit wire-aligned names: msgspec uses ``field.encode_name``
-            (honours ``rename=``), Pydantic uses ``model_dump(by_alias=True)``. dataclass
-            and attrs are unchanged (no alias concept). Default False — Python attribute
-            names for cross-library consistency. For wire-shaped JSON output, prefer
-            ``to_json`` / ``encode_json`` which always emit aliased keys.
+        wire_format: msgspec-only knob. Default True keeps the historical behavior of
+            emitting ``field.encode_name`` (honours ``rename=`` on the Struct). Pass
+            ``wire_format=False`` to opt msgspec into Python attribute names (``field.name``)
+            for cross-library consistency. Pydantic, dataclass, and attrs branches always
+            use Python attribute names regardless of this flag.
     """
     if is_dict(data):
         return data
