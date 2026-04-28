@@ -757,7 +757,7 @@ class TestSchemaDumpWireFormatOptOut:
 
             model_config = pydantic.ConfigDict(populate_by_name=True)
 
-        obj = _User(user_id="abc")
+        obj = _User(userId="abc")  # construct via alias to keep type-checkers happy
         assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
         assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
 
