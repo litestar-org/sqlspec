@@ -137,6 +137,17 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         **kwargs: Any,
     ) -> dict[str, Any]: ...
 
+    @overload
+    async def get_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any]": ...
+
     async def get_one(
         self,
         statement: "Statement | QueryBuilder",
@@ -328,6 +339,17 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         error_message: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]: ...
+
+    @overload
+    def get_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any]": ...
 
     def get_one(
         self,
