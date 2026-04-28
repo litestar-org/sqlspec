@@ -10,6 +10,23 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+schema_dump wire_format Opt-Out (Unreleased)
+---------------------------------------------
+
+**Added:**
+
+* ``sqlspec.utils.serializers.schema_dump`` (and its helpers
+  ``serialize_collection`` / ``get_collection_serializer``) now accept a
+  ``wire_format: bool = True`` keyword. The default preserves existing output:
+  ``msgspec.Struct`` instances continue to emit wire-aligned names (honouring
+  ``rename=`` via ``field.encode_name``); Pydantic, dataclass, and attrs
+  branches continue to emit Python attribute names. Pass ``wire_format=False``
+  to opt the msgspec branch into Python attribute names (``field.name``) for
+  cross-library consistency. The kwarg is a no-op for non-msgspec inputs.
+
+* The internal serializer cache key now includes ``wire_format`` so that
+  ``True`` and ``False`` calls for the same Struct type cannot collide.
+
 Schema Wire Correctness (Unreleased)
 -------------------------------------
 

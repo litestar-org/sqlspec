@@ -748,6 +748,42 @@ class TestSchemaDumpWireFormatOptOut:
         assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
         assert schema_dump(obj) == {"userId": "abc"}
 
+    def test_pydantic_unaffected_by_wire_format(self) -> None:
+        pytest.importorskip("pydantic")
+        import pydantic
+
+        class _User(pydantic.BaseModel):
+            user_id: str = pydantic.Field(alias="userId")
+
+            model_config = pydantic.ConfigDict(populate_by_name=True)
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
+
+    def test_dataclass_unaffected_by_wire_format(self) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class _User:
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
+
+    def test_attrs_unaffected_by_wire_format(self) -> None:
+        pytest.importorskip("attrs")
+        import attrs
+
+        @attrs.define
+        class _User:
+            user_id: str = attrs.field(alias="userId")
+
+        obj = _User(userId="abc")  # attrs alias= is for __init__ only
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
+
 
 class TestSchemaDumpRename:
     """Regression suite for GitHub #418 — schema_dump must honor msgspec rename meta."""
