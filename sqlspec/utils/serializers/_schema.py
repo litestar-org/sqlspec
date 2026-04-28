@@ -88,12 +88,12 @@ class SchemaSerializer:
 
     __slots__ = ("_dump", "_key")
 
-    def __init__(self, key: "tuple[type[Any] | None, bool]", dump: "Callable[[Any], dict[str, Any]]") -> None:
+    def __init__(self, key: "tuple[type[Any] | None, bool, bool]", dump: "Callable[[Any], dict[str, Any]]") -> None:
         self._key = key
         self._dump = dump
 
     @property
-    def key(self) -> "tuple[type[Any] | None, bool]":
+    def key(self) -> "tuple[type[Any] | None, bool, bool]":
         return self._key
 
     def dump_one(self, item: Any) -> "dict[str, Any]":
@@ -110,14 +110,14 @@ class SchemaSerializer:
 
 
 _SERIALIZER_LOCK: RLock = RLock()
-_SCHEMA_SERIALIZERS: dict[tuple[type[Any] | None, bool], SchemaSerializer] = {}
+_SCHEMA_SERIALIZERS: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
 _SERIALIZER_METRICS = _SerializerCacheMetrics()
 
 
-def _make_serializer_key(sample: Any, exclude_unset: bool) -> "tuple[type[Any] | None, bool]":
+def _make_serializer_key(sample: Any, exclude_unset: bool, wire_format: bool) -> "tuple[type[Any] | None, bool, bool]":
     if sample is None or isinstance(sample, dict):
-        return (None, exclude_unset)
-    return (type(sample), exclude_unset)
+        return (None, exclude_unset, wire_format)
+    return (type(sample), exclude_unset, wire_format)
 
 
 def _dump_identity_dict(value: Any) -> "dict[str, Any]":
@@ -135,6 +135,24 @@ def _dump_msgspec_excluding_unset(value: Any) -> "dict[str, Any]":
 
     return {
         field.encode_name: field_value
+        for field in structs.fields(type(value))
+        if (field_value := value.__getattribute__(field.name)) != UNSET
+    }
+
+
+def _dump_msgspec_fields_python(value: Any) -> "dict[str, Any]":
+    """Dump msgspec Struct keyed by Python attribute names (ignores rename=)."""
+    from msgspec import structs
+
+    return {field.name: value.__getattribute__(field.name) for field in structs.fields(type(value))}
+
+
+def _dump_msgspec_excluding_unset_python(value: Any) -> "dict[str, Any]":
+    """Dump msgspec Struct (Python names, exclude UNSET fields)."""
+    from msgspec import structs
+
+    return {
+        field.name: field_value
         for field in structs.fields(type(value))
         if (field_value := value.__getattribute__(field.name)) != UNSET
     }
@@ -160,7 +178,7 @@ def _dump_mapping(value: Any) -> "dict[str, Any]":
     return dict(value)
 
 
-def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], dict[str, Any]]":
+def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
     if sample is None or isinstance(sample, dict):
         return _dump_identity_dict
     if is_dataclass_instance(sample):
@@ -168,9 +186,13 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
     if is_pydantic_model(sample):
         return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
+        if wire_format:
+            if exclude_unset:
+                return _dump_msgspec_excluding_unset
+            return _dump_msgspec_fields
         if exclude_unset:
-            return _dump_msgspec_excluding_unset
-        return _dump_msgspec_fields
+            return _dump_msgspec_excluding_unset_python
+        return _dump_msgspec_fields_python
     if is_attrs_instance(sample):
         return _dump_attrs
     if has_dict_attribute(sample):
@@ -178,36 +200,40 @@ def _build_dump_function(sample: Any, exclude_unset: bool) -> "Callable[[Any], d
     return _dump_mapping
 
 
-def get_collection_serializer(sample: Any, *, exclude_unset: bool = True) -> "SchemaSerializer":
+def get_collection_serializer(
+    sample: Any, *, exclude_unset: bool = True, wire_format: bool = True
+) -> "SchemaSerializer":
     """Return cached serializer pipeline for the provided sample object."""
-    key = _make_serializer_key(sample, exclude_unset)
+    key = _make_serializer_key(sample, exclude_unset, wire_format)
     with _SERIALIZER_LOCK:
         pipeline = _SCHEMA_SERIALIZERS.get(key)
         if pipeline is not None:
             _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
             return pipeline
 
-        dump = _build_dump_function(sample, exclude_unset)
+        dump = _build_dump_function(sample, exclude_unset, wire_format)
         pipeline = SchemaSerializer(key, dump)
         _SCHEMA_SERIALIZERS[key] = pipeline
         _SERIALIZER_METRICS.record_miss(len(_SCHEMA_SERIALIZERS))
         return pipeline
 
 
-def serialize_collection(items: "Iterable[Any]", *, exclude_unset: bool = True) -> "list[Any]":
+def serialize_collection(
+    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = True
+) -> "list[Any]":
     """Serialize a collection using cached pipelines keyed by item type."""
     serialized: list[Any] = []
-    cache: dict[tuple[type[Any] | None, bool], SchemaSerializer] = {}
+    cache: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
 
     for item in items:
         if isinstance(item, _PRIMITIVE_TYPES) or item is None or isinstance(item, dict):
             serialized.append(item)
             continue
 
-        key = _make_serializer_key(item, exclude_unset)
+        key = _make_serializer_key(item, exclude_unset, wire_format)
         pipeline = cache.get(key)
         if pipeline is None:
-            pipeline = get_collection_serializer(item, exclude_unset=exclude_unset)
+            pipeline = get_collection_serializer(item, exclude_unset=exclude_unset, wire_format=wire_format)
             cache[key] = pipeline
         serialized.append(pipeline.dump_one(item))
     return serialized
@@ -228,12 +254,24 @@ def get_serializer_metrics() -> "dict[str, int]":
         return metrics
 
 
-def schema_dump(data: Any, *, exclude_unset: bool = True) -> Any:
-    """Dump a schema model or dict to a plain representation."""
+def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = True) -> Any:
+    """Dump a schema model or dict to a plain representation.
+
+    Args:
+        data: A schema instance (msgspec.Struct, Pydantic BaseModel, dataclass, attrs class)
+            or plain dict / primitive.
+        exclude_unset: If True, exclude fields that were never set (msgspec UNSET, Pydantic
+            model_fields_set semantics). No-op for attrs (attrs has no unset concept).
+        wire_format: msgspec-only knob. Default True keeps the historical behavior of
+            emitting ``field.encode_name`` (honours ``rename=`` on the Struct). Pass
+            ``wire_format=False`` to opt msgspec into Python attribute names (``field.name``)
+            for cross-library consistency. Pydantic, dataclass, and attrs branches always
+            use Python attribute names regardless of this flag.
+    """
     if is_dict(data):
         return data
     if isinstance(data, _PRIMITIVE_TYPES) or data is None:
         return data
 
-    serializer = get_collection_serializer(data, exclude_unset=exclude_unset)
+    serializer = get_collection_serializer(data, exclude_unset=exclude_unset, wire_format=wire_format)
     return serializer.dump_one(data)

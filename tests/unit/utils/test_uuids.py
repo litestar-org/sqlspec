@@ -179,16 +179,24 @@ def test_uuid4_is_version_4() -> None:
     assert result.version == 4
 
 
-@pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid-utils not installed")
 def test_uuid6_is_version_6() -> None:
-    """Test uuid6 returns a version 6 UUID when uuid-utils is installed."""
+    """Test uuid6 returns a version 6 UUID when time-ordered generation is available."""
+    import uuid as _uuid_mod
+
+    if not UUID_UTILS_INSTALLED and not hasattr(_uuid_mod, "uuid6"):
+        pytest.skip("Time-ordered UUID v6 generation not available (no uuid-utils and Python < 3.14)")
+
     result = uuid6()
     assert result.version == 6
 
 
-@pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid-utils not installed")
 def test_uuid7_is_version_7() -> None:
-    """Test uuid7 returns a version 7 UUID when uuid-utils is installed."""
+    """Test uuid7 returns a version 7 UUID when time-ordered generation is available."""
+    import uuid as _uuid_mod
+
+    if not UUID_UTILS_INSTALLED and not hasattr(_uuid_mod, "uuid7"):
+        pytest.skip("Time-ordered UUID v7 generation not available (no uuid-utils and Python < 3.14)")
+
     result = uuid7()
     assert result.version == 7
 
@@ -306,7 +314,12 @@ def test_nanoid_url_safe_characters() -> None:
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")
 def test_uuid6_warning_without_uuid_utils() -> None:
-    """Test uuid6 emits warning when uuid-utils is not installed."""
+    """Test uuid6 emits warning when uuid-utils and native support are missing."""
+    import uuid as _uuid_mod
+
+    if hasattr(_uuid_mod, "uuid6"):
+        pytest.skip("Python 3.14+ has native uuid6 support")
+
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid6()
@@ -320,7 +333,12 @@ def test_uuid6_warning_without_uuid_utils() -> None:
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")
 def test_uuid7_warning_without_uuid_utils() -> None:
-    """Test uuid7 emits warning when uuid-utils is not installed."""
+    """Test uuid7 emits warning when uuid-utils and native support are missing."""
+    import uuid as _uuid_mod
+
+    if hasattr(_uuid_mod, "uuid7"):
+        pytest.skip("Python 3.14+ has native uuid7 support")
+
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid7()
@@ -348,7 +366,12 @@ def test_nanoid_warning_without_fastnanoid() -> None:
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")
 def test_uuid6_warning_each_call() -> None:
-    """Test uuid6 emits warning per call when uuid-utils is not installed."""
+    """Test uuid6 emits warning per call when uuid-utils and native support are missing."""
+    import uuid as _uuid_mod
+
+    if hasattr(_uuid_mod, "uuid6"):
+        pytest.skip("Python 3.14+ has native uuid6 support")
+
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid6()
@@ -360,7 +383,12 @@ def test_uuid6_warning_each_call() -> None:
 
 @pytest.mark.skipif(bool(UUID_UTILS_INSTALLED), reason="Test requires uuid-utils NOT installed")
 def test_uuid7_warning_each_call() -> None:
-    """Test uuid7 emits warning per call when uuid-utils is not installed."""
+    """Test uuid7 emits warning per call when uuid-utils and native support are missing."""
+    import uuid as _uuid_mod
+
+    if hasattr(_uuid_mod, "uuid7"):
+        pytest.skip("Python 3.14+ has native uuid7 support")
+
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid7()
@@ -404,9 +432,13 @@ def test_nanoid_fallback_returns_32_char_hex() -> None:
     assert all(c in "0123456789abcdef" for c in result)
 
 
-@pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid-utils not installed")
-def test_uuid6_no_warning_with_uuid_utils() -> None:
-    """Test uuid6 does not emit warning when uuid-utils is installed."""
+def test_uuid6_no_warning_with_time_ordered_generation() -> None:
+    """Test uuid6 does not emit warning when time-ordered generation is available."""
+    import uuid as _uuid_mod
+
+    if not UUID_UTILS_INSTALLED and not hasattr(_uuid_mod, "uuid6"):
+        pytest.skip("Time-ordered UUID v6 generation not available (no uuid-utils and Python < 3.14)")
+
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid6()
@@ -415,9 +447,13 @@ def test_uuid6_no_warning_with_uuid_utils() -> None:
         assert len(uuid6_warnings) == 0
 
 
-@pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid-utils not installed")
-def test_uuid7_no_warning_with_uuid_utils() -> None:
-    """Test uuid7 does not emit warning when uuid-utils is installed."""
+def test_uuid7_no_warning_with_time_ordered_generation() -> None:
+    """Test uuid7 does not emit warning when time-ordered generation is available."""
+    import uuid as _uuid_mod
+
+    if not UUID_UTILS_INSTALLED and not hasattr(_uuid_mod, "uuid7"):
+        pytest.skip("Time-ordered UUID v7 generation not available (no uuid-utils and Python < 3.14)")
+
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         uuid7()

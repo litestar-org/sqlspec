@@ -152,51 +152,67 @@ def uuid5(name: str, namespace: "UUID | None" = None) -> "UUID":
 def uuid6() -> "UUID":
     """Generate a time-ordered UUID (version 6).
 
-    Uses uuid-utils when available. When uuid-utils is not installed,
-    falls back to uuid4() with a warning.
+    Uses uuid-utils when available, falls back to Python 3.14+ native
+    uuid.uuid6() or uuid4() with a warning.
 
     UUIDv6 is lexicographically sortable by timestamp, making it
     suitable for database primary keys. It is a reordering of UUIDv1
     fields to improve database performance.
 
     Returns:
-        A time-ordered UUID, or a random UUID if uuid-utils unavailable.
+        A time-ordered UUID, or a random UUID if time-ordered generation unavailable.
     """
     module = _load_uuid_utils()
-    if module is None:
-        warnings.warn(
-            "uuid-utils not installed, falling back to uuid4 for UUID v6 generation. "
-            "Install with: pip install sqlspec[uuid]",
-            UserWarning,
-            stacklevel=2,
-        )
-        return _stdlib_uuid4()
-    return cast("UUID", module.uuid6())
+    if module is not None:
+        return cast("UUID", module.uuid6())
+
+    # Try Python 3.14+ native support
+    import uuid as _uuid_mod
+
+    native_uuid6 = getattr(_uuid_mod, "uuid6", None)
+    if native_uuid6 is not None:
+        return cast("UUID", native_uuid6())
+
+    warnings.warn(
+        "uuid-utils not installed and Python < 3.14, falling back to uuid4 for UUID v6 generation. "
+        "Install with: pip install sqlspec[uuid]",
+        UserWarning,
+        stacklevel=2,
+    )
+    return _stdlib_uuid4()
 
 
 def uuid7() -> "UUID":
     """Generate a time-ordered UUID (version 7).
 
-    Uses uuid-utils when available. When uuid-utils is not installed,
-    falls back to uuid4() with a warning.
+    Uses uuid-utils when available, falls back to Python 3.14+ native
+    uuid.uuid7() or uuid4() with a warning.
 
     UUIDv7 is the recommended time-ordered UUID format per RFC 9562,
     providing millisecond precision timestamps. It is designed for
     modern distributed systems and database primary keys.
 
     Returns:
-        A time-ordered UUID, or a random UUID if uuid-utils unavailable.
+        A time-ordered UUID, or a random UUID if time-ordered generation unavailable.
     """
     module = _load_uuid_utils()
-    if module is None:
-        warnings.warn(
-            "uuid-utils not installed, falling back to uuid4 for UUID v7 generation. "
-            "Install with: pip install sqlspec[uuid]",
-            UserWarning,
-            stacklevel=2,
-        )
-        return _stdlib_uuid4()
-    return cast("UUID", module.uuid7())
+    if module is not None:
+        return cast("UUID", module.uuid7())
+
+    # Try Python 3.14+ native support
+    import uuid as _uuid_mod
+
+    native_uuid7 = getattr(_uuid_mod, "uuid7", None)
+    if native_uuid7 is not None:
+        return cast("UUID", native_uuid7())
+
+    warnings.warn(
+        "uuid-utils not installed and Python < 3.14, falling back to uuid4 for UUID v7 generation. "
+        "Install with: pip install sqlspec[uuid]",
+        UserWarning,
+        stacklevel=2,
+    )
+    return _stdlib_uuid4()
 
 
 def nanoid() -> str:

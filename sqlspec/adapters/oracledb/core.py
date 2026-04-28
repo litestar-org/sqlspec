@@ -800,7 +800,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="driver",
-        custom_type_coercions={**build_uuid_coercions()},
+        custom_type_coercions={**build_uuid_coercions(native=True)},
         default_dialect="oracle",
     )
 

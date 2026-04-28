@@ -39,7 +39,7 @@ from sqlspec.extensions.litestar.handlers import (
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.serializers import numpy_array_dec_hook, numpy_array_enc_hook, numpy_array_predicate
+from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook, numpy_array_predicate
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -177,6 +177,23 @@ def _build_correlation_headers(*, primary: str, configured: list[str], auto_trac
     if auto_trace_headers:
         header_order.extend(TRACE_CONTEXT_FALLBACK_HEADERS)
     return tuple(_dedupe_headers(header_order))
+
+
+def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]]":
+    """Build the Litestar-specific ``type_decoders`` list.
+
+    Decoders are predicate-tuples consumed by Litestar's request-body parsing,
+    not part of sqlspec's serializer registry — so they live here rather than
+    in :data:`sqlspec.utils.serializers.DEFAULT_TYPE_ENCODERS`.
+    """
+    decoders: list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]] = []
+    if NUMPY_INSTALLED:
+        decoders.append((numpy_array_predicate, numpy_array_dec_hook))
+    with suppress(ImportError):
+        import uuid_utils  # pyright: ignore[reportMissingImports]
+
+        decoders.append((lambda t: t is uuid_utils.UUID, lambda t, v: t(str(v))))
+    return decoders
 
 
 class CorrelationMiddleware:
@@ -467,28 +484,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         existing_plugins = list(app_config.plugins or [])
         if not any(isinstance(p, _OffsetPaginationSchemaPlugin) for p in existing_plugins):
             existing_plugins.append(_OffsetPaginationSchemaPlugin())
-            app_config.plugins = existing_plugins
+        app_config.plugins = existing_plugins
 
         if app_config.exception_handlers is None:
             app_config.exception_handlers = {}
         app_config.exception_handlers.setdefault(NotFoundError, not_found_error_handler)
 
-        if NUMPY_INSTALLED:
-            import numpy as np
-
-            if app_config.type_encoders is None:
-                app_config.type_encoders = {np.ndarray: numpy_array_enc_hook}
-            else:
-                encoders_dict = dict(app_config.type_encoders)
-                encoders_dict[np.ndarray] = numpy_array_enc_hook
-                app_config.type_encoders = encoders_dict
-
-            if app_config.type_decoders is None:
-                app_config.type_decoders = [(numpy_array_predicate, numpy_array_dec_hook)]
-            else:
-                decoders_list = list(app_config.type_decoders)
-                decoders_list.append((numpy_array_predicate, numpy_array_dec_hook))
-                app_config.type_decoders = decoders_list
+        # Inject sqlspec's DEFAULT_TYPE_ENCODERS into Litestar's response serializer
+        # (user-supplied encoders win on conflict). Litestar's per-handler
+        # resolve_type_encoders() merges these with route/controller/router-level
+        # overrides automatically — no bidirectional thread needed.
+        app_config.type_encoders = {**DEFAULT_TYPE_ENCODERS, **(app_config.type_encoders or {})}
+        sqlspec_decoders = _build_litestar_type_decoders()
+        if sqlspec_decoders:
+            app_config.type_decoders = [*(app_config.type_decoders or []), *sqlspec_decoders]
 
         if self._correlation_headers:
             middleware = DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers)

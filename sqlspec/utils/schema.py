@@ -79,6 +79,7 @@ def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
 
     Returns:
         Converted key if conversion succeeds, original key otherwise.
+
     """
     if not isinstance(key, str):
         return key
@@ -132,6 +133,7 @@ def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]
                 {"itemId": 2, "itemName": "Product B"}
             ]
         }
+
     """
     if isinstance(data, dict):
         return _transform_dict(data, converter)
@@ -149,6 +151,7 @@ def _transform_dict(data: dict, converter: Callable[[str], str]) -> dict:
 
     Returns:
         Dictionary with transformed keys and recursively transformed values.
+
     """
     transformed = {}
 
@@ -169,6 +172,7 @@ def _transform_list(data: list, converter: Callable[[str], str]) -> list:
 
     Returns:
         List with recursively transformed elements.
+
     """
     return [transform_dict_keys(item, converter) for item in data]
 
@@ -209,6 +213,7 @@ def _detect_schema_type(schema_type: type) -> "str | None":
 
     Returns:
         Type identifier string or None if unsupported
+
     """
     return (
         "typed_dict"
@@ -339,6 +344,7 @@ def _default_msgspec_deserializer(
 
     Returns:
         Converted value or original value if conversion not applicable
+
     """
     if NUMPY_INSTALLED:
         import numpy as np
@@ -393,6 +399,7 @@ def _convert_numpy_recursive(obj: Any) -> Any:
 
     Returns:
         Object with all numpy arrays converted to lists
+
     """
     if not NUMPY_INSTALLED:
         return obj
@@ -494,6 +501,7 @@ def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | Non
 
     Returns:
         Converter function if schema_type is a supported schema, None otherwise.
+
     """
     try:
         return _SCHEMA_CONVERTER_CACHE[schema_type]
@@ -546,6 +554,7 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
 
     Raises:
         SQLSpecError: If schema_type is not a supported type
+
     """
     if schema_type is None:
         return data
@@ -575,6 +584,7 @@ def _ensure_json_parsed(value: Any) -> Any:
 
     Returns:
         Parsed JSON object if value was a valid JSON string, otherwise the original value.
+
     """
     if isinstance(value, str):
         try:
@@ -592,6 +602,7 @@ def _try_parse_json(value: str) -> Any:
 
     Returns:
         Parsed JSON value, or None if parsing fails.
+
     """
     try:
         return from_json(value)
@@ -619,6 +630,7 @@ def _convert_to_int(value: Any) -> int:
 
     Raises:
         TypeError: If value cannot be converted to int.
+
     """
     if isinstance(value, bool):
         return int(value)
@@ -648,6 +660,7 @@ def _convert_to_float(value: Any) -> float:
 
     Raises:
         TypeError: If value cannot be converted to float.
+
     """
     if isinstance(value, bool):
         return float(value)
@@ -673,6 +686,7 @@ def _convert_to_bool(value: Any) -> bool:
 
     Raises:
         TypeError: If value cannot be converted to bool.
+
     """
     if isinstance(value, bool):
         return value
@@ -695,6 +709,7 @@ def _convert_to_datetime(value: Any) -> datetime.datetime:
 
     Raises:
         TypeError: If value cannot be converted to datetime.
+
     """
     if isinstance(value, datetime.datetime):
         return value
@@ -720,6 +735,7 @@ def _convert_to_date(value: Any) -> datetime.date:
 
     Raises:
         TypeError: If value cannot be converted to date.
+
     """
     if isinstance(value, datetime.datetime):
         return value.date()
@@ -750,6 +766,7 @@ def _convert_to_time(value: Any) -> datetime.time:
 
     Raises:
         TypeError: If value cannot be converted to time.
+
     """
     if isinstance(value, datetime.datetime):
         return value.time()
@@ -775,6 +792,7 @@ def _convert_to_decimal(value: Any) -> Decimal:
 
     Raises:
         TypeError: If value cannot be converted to Decimal.
+
     """
     if isinstance(value, Decimal):
         return value
@@ -798,6 +816,7 @@ def _convert_to_uuid(value: Any) -> UUID:
 
     Raises:
         TypeError: If value cannot be converted to UUID.
+
     """
     if isinstance(value, UUID):
         return value
@@ -826,6 +845,7 @@ def _convert_to_path(value: Any) -> Path:
 
     Raises:
         TypeError: If value cannot be converted to Path.
+
     """
     if isinstance(value, Path):
         return value
@@ -849,6 +869,7 @@ def _convert_to_dict(value: Any) -> dict[str, Any]:
 
     Raises:
         TypeError: If value cannot be converted to dict.
+
     """
     if isinstance(value, dict):
         return value
@@ -877,6 +898,7 @@ def _convert_to_list(value: Any) -> list[Any]:
 
     Raises:
         TypeError: If value cannot be converted to list.
+
     """
     if isinstance(value, list):
         return value
@@ -968,6 +990,7 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
         1
         >>> to_value_type(False, int)
         0
+
     """
     # Fast path: already correct type (handles ~90% of cases)
     # Uses strict type() identity which correctly handles subclass gotchas:

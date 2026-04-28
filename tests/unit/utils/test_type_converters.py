@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from sqlspec._typing import UUID_UTILS_INSTALLED
-from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
+from sqlspec.utils.type_converters import _uuid_to_string, build_nested_decimal_normalizer, build_uuid_coercions
 
 pytestmark = pytest.mark.xdist_group("utils")
 
@@ -83,11 +83,28 @@ def test_build_uuid_coercions_native_returns_stdlib_uuid() -> None:
     assert str(result) == str(u)
 
 
-@pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid_utils not installed")
-def test_build_uuid_coercions_does_not_include_stdlib_uuid() -> None:
-    """Neither mode should include uuid.UUID as a key."""
-    assert uuid.UUID not in build_uuid_coercions()
+def test_build_uuid_coercions_includes_stdlib_uuid_when_not_native() -> None:
+    """Standard library uuid.UUID should be included in coercions when native=False."""
+    coercions = build_uuid_coercions(native=False)
+    assert uuid.UUID in coercions
+    assert coercions[uuid.UUID] is _uuid_to_string
+
+
+def test_build_uuid_coercions_excludes_stdlib_uuid_when_native() -> None:
+    """Standard library uuid.UUID should NOT be included in coercions when native=True."""
     assert uuid.UUID not in build_uuid_coercions(native=True)
+
+
+@pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid_utils not installed")
+def test_build_uuid_coercions_includes_uuid_utils_when_installed() -> None:
+    """uuid_utils.UUID should be included in coercions when installed."""
+    import uuid_utils
+
+    coercions_default = build_uuid_coercions(native=False)
+    assert uuid_utils.UUID in coercions_default
+
+    coercions_native = build_uuid_coercions(native=True)
+    assert uuid_utils.UUID in coercions_native
 
 
 @pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid_utils not installed")

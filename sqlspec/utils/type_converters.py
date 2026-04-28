@@ -187,11 +187,10 @@ def _uuid_utils_to_stdlib(value: Any) -> Any:
 
 
 def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[Any], Any]]":
-    """Return coercions for ``uuid_utils.UUID`` parameter binding.
+    """Return coercions for UUID parameter binding.
 
-    When ``uuid_utils`` is installed, returns a dict mapping its UUID type
-    to either ``str`` or ``uuid.UUID`` depending on the *native* flag.
-    When not installed, returns an empty dict.
+    Includes coercions for ``uuid_utils.UUID`` (if installed) and standard
+    library ``uuid.UUID``.
 
     Args:
         native: When ``True``, convert ``uuid_utils.UUID`` → ``uuid.UUID``
@@ -199,10 +198,19 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
             When ``False`` (default), convert to ``str`` (for drivers that
             need a plain string, e.g. DuckDB/SQLite).
     """
+    import uuid as _uuid_mod
+
+    coercions: dict[type[Any], Callable[[Any], Any]] = {}
+
+    if not native:
+        coercions[_uuid_mod.UUID] = _uuid_to_string
+
     try:
         import uuid_utils as _uuid_utils_mod  # pyright: ignore[reportMissingImports]
-    except ImportError:
-        return {}
 
-    converter = _uuid_utils_to_stdlib if native else _uuid_to_string
-    return {_uuid_utils_mod.UUID: converter}
+        converter = _uuid_utils_to_stdlib if native else _uuid_to_string
+        coercions[_uuid_utils_mod.UUID] = converter
+    except ImportError:
+        pass
+
+    return coercions

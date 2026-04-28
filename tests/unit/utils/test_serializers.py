@@ -469,7 +469,9 @@ def test_module_all_exports() -> None:
     """Test that __all__ contains the expected exports."""
 
     expected = {
+        "DEFAULT_TYPE_ENCODERS",
         "SchemaSerializer",
+        "TypeEncodersMap",
         "from_json",
         "get_collection_serializer",
         "get_serializer_metrics",
@@ -704,6 +706,83 @@ def test_numpy_serialization_with_to_json() -> None:
 
     decoded_list = from_json(json_str)
     assert decoded_list == [1.0, 2.0, 3.0]
+
+
+class TestSchemaDumpWireFormatOptOut:
+    """``wire_format=False`` opts msgspec into Python attribute names (ignores rename=)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self) -> "Any":
+        reset_serializer_cache()
+        yield
+        reset_serializer_cache()
+
+    def test_msgspec_rename_camel_python_names_opt_in(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc", display_name="Cody")
+        assert schema_dump(obj, wire_format=False) == {"user_id": "abc", "display_name": "Cody"}
+
+    def test_msgspec_rename_kebab_python_names_opt_in(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="kebab"):
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
+
+    def test_wire_format_cache_isolation(self) -> None:
+        """Cache must distinguish wire_format=True from =False for the same Struct type."""
+        import msgspec
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj) == {"userId": "abc"}
+        assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
+        assert schema_dump(obj) == {"userId": "abc"}
+
+    def test_pydantic_unaffected_by_wire_format(self) -> None:
+        pytest.importorskip("pydantic")
+        import pydantic
+
+        class _User(pydantic.BaseModel):
+            user_id: str = pydantic.Field(alias="userId")
+
+            model_config = pydantic.ConfigDict(populate_by_name=True)
+
+        obj = _User(userId="abc")  # construct via alias to keep type-checkers happy
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
+
+    def test_dataclass_unaffected_by_wire_format(self) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class _User:
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
+
+    def test_attrs_unaffected_by_wire_format(self) -> None:
+        pytest.importorskip("attrs")
+        import attrs
+
+        @attrs.define
+        class _User:
+            user_id: str = attrs.field(alias="userId")
+
+        obj = _User(userId="abc")  # attrs alias= is for __init__ only
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
 
 
 class TestSchemaDumpRename:
