@@ -171,7 +171,103 @@ def _resolve_sort_fields(sort_field: SortField) -> tuple[str, set[str]]:
     return fields[0], set(fields)
 
 
-def _create_statement_filters(  # noqa: C901
+def _build_in_collection_provider(field: FieldNameType, *, negated: bool) -> Callable[..., Any]:
+    """Build a per-field `IN` / `NOT IN` filter provider with a unique parameter name.
+
+    Litestar's dependency resolver collapses parameters across distinct ``Provide()``
+    instances by Python parameter name, ignoring per-instance ``Parameter(query=...)``
+    aliases. Giving each provider a unique parameter name (via ``__signature__``)
+    prevents siblings in the same family from cross-binding (issue #435).
+    """
+    type_hint = field.type_hint
+    field_name = field.name
+    param_name = f"{field_name}_values"
+    alias = camelize(f"{field_name}_{'not_in' if negated else 'in'}")
+    filter_cls: type[Any] = NotInCollectionFilter if negated else InCollectionFilter
+    annotation = list[type_hint] | None  # type: ignore[valid-type]
+    return_annotation = filter_cls[type_hint] | None
+
+    def provide(**kwargs: Any) -> Any:
+        values = kwargs.get(param_name)
+        return filter_cls[type_hint](field_name=field_name, values=values) if values else None
+
+    provide.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        parameters=[
+            inspect.Parameter(
+                param_name,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=Parameter(query=alias, default=None, required=False),
+                annotation=annotation,
+            )
+        ],
+        return_annotation=return_annotation,
+    )
+    provide.__annotations__ = {param_name: annotation, "return": return_annotation}
+    return provide
+
+
+def _build_null_provider(field_name: str, *, negated: bool) -> Callable[..., Any]:
+    """Build a per-field ``IS NULL`` / ``IS NOT NULL`` provider with a unique parameter name (issue #435)."""
+    suffix = "is_not_null" if negated else "is_null"
+    param_name = f"{field_name}_{suffix}"
+    alias = camelize(f"{field_name}_{suffix}")
+    filter_cls: type[Any] = NotNullFilter if negated else NullFilter
+    annotation = bool | None
+    return_annotation = filter_cls | None
+
+    def provide(**kwargs: Any) -> Any:
+        flag = kwargs.get(param_name)
+        return filter_cls(field_name=field_name) if flag else None
+
+    provide.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        parameters=[
+            inspect.Parameter(
+                param_name,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=Parameter(query=alias, default=None, required=False),
+                annotation=annotation,
+            )
+        ],
+        return_annotation=return_annotation,
+    )
+    provide.__annotations__ = {param_name: annotation, "return": return_annotation}
+    return provide
+
+
+def _build_before_after_provider(field_name: str, before_alias: str, after_alias: str) -> Callable[..., Any]:
+    """Build a ``BeforeAfterFilter`` provider with unique ``before``/``after`` parameter names (issue #435).
+
+    ``created_at`` and ``updated_at`` providers both used ``before``/``after``, so when
+    enabled together they cross-bound to whichever query alias Litestar resolved first.
+    """
+    before_param = f"{field_name}_before"
+    after_param = f"{field_name}_after"
+
+    def provide(**kwargs: Any) -> BeforeAfterFilter:
+        return BeforeAfterFilter(field_name, kwargs.get(before_param), kwargs.get(after_param))
+
+    provide.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        parameters=[
+            inspect.Parameter(
+                before_param,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=Parameter(query=before_alias, default=None, required=False),
+                annotation=DTorNone,
+            ),
+            inspect.Parameter(
+                after_param,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=Parameter(query=after_alias, default=None, required=False),
+                annotation=DTorNone,
+            ),
+        ],
+        return_annotation=BeforeAfterFilter,
+    )
+    provide.__annotations__ = {before_param: DTorNone, after_param: DTorNone, "return": BeforeAfterFilter}
+    return provide
+
+
+def _create_statement_filters(
     config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS
 ) -> dict[str, Provide]:
     """Create filter dependencies based on configuration.
@@ -195,24 +291,14 @@ def _create_statement_filters(  # noqa: C901
         filters[dep_defaults.ID_FILTER_DEPENDENCY_KEY] = Provide(provide_id_filter, sync_to_thread=False)  # pyright: ignore[reportUnknownArgumentType]
 
     if config.get("created_at", False):
-
-        def provide_created_filter(
-            before: DTorNone = Parameter(query="createdBefore", default=None, required=False),
-            after: DTorNone = Parameter(query="createdAfter", default=None, required=False),
-        ) -> BeforeAfterFilter:
-            return BeforeAfterFilter("created_at", before, after)
-
-        filters[dep_defaults.CREATED_FILTER_DEPENDENCY_KEY] = Provide(provide_created_filter, sync_to_thread=False)
+        filters[dep_defaults.CREATED_FILTER_DEPENDENCY_KEY] = Provide(
+            _build_before_after_provider("created_at", "createdBefore", "createdAfter"), sync_to_thread=False
+        )
 
     if config.get("updated_at", False):
-
-        def provide_updated_filter(
-            before: DTorNone = Parameter(query="updatedBefore", default=None, required=False),
-            after: DTorNone = Parameter(query="updatedAfter", default=None, required=False),
-        ) -> BeforeAfterFilter:
-            return BeforeAfterFilter("updated_at", before, after)
-
-        filters[dep_defaults.UPDATED_FILTER_DEPENDENCY_KEY] = Provide(provide_updated_filter, sync_to_thread=False)
+        filters[dep_defaults.UPDATED_FILTER_DEPENDENCY_KEY] = Provide(
+            _build_before_after_provider("updated_at", "updatedBefore", "updatedAfter"), sync_to_thread=False
+        )
 
     if config.get("pagination_type") == "limit_offset":
 
@@ -276,85 +362,33 @@ def _create_statement_filters(  # noqa: C901
         not_in_fields = {not_in_fields} if isinstance(not_in_fields, (str, FieldNameType)) else not_in_fields
 
         for field_def in not_in_fields:
-            field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
-
-            def create_not_in_filter_provider(  # pyright: ignore
-                field_name: FieldNameType,
-            ) -> Callable[..., NotInCollectionFilter[field_def.type_hint] | None]:  # type: ignore
-                def provide_not_in_filter(  # pyright: ignore
-                    values: list[field_name.type_hint] | None = Parameter(  # type: ignore
-                        query=camelize(f"{field_name.name}_not_in"), default=None, required=False
-                    ),
-                ) -> NotInCollectionFilter[field_name.type_hint] | None:  # type: ignore
-                    return (
-                        NotInCollectionFilter[field_name.type_hint](field_name=field_name.name, values=values)  # type: ignore
-                        if values
-                        else None
-                    )
-
-                return provide_not_in_filter  # pyright: ignore
-
-            provider = create_not_in_filter_provider(field_def)  # pyright: ignore
-            filters[f"{field_def.name}_not_in_filter"] = Provide(provider, sync_to_thread=False)  # pyright: ignore
+            resolved = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
+            filters[f"{resolved.name}_not_in_filter"] = Provide(
+                _build_in_collection_provider(resolved, negated=True), sync_to_thread=False
+            )
 
     if in_fields := config.get("in_fields"):
         in_fields = {in_fields} if isinstance(in_fields, (str, FieldNameType)) else in_fields
 
         for field_def in in_fields:
-            field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
-
-            def create_in_filter_provider(  # pyright: ignore
-                field_name: FieldNameType,
-            ) -> Callable[..., InCollectionFilter[field_def.type_hint] | None]:  # type: ignore # pyright: ignore
-                def provide_in_filter(  # pyright: ignore
-                    values: list[field_name.type_hint] | None = Parameter(  # type: ignore # pyright: ignore
-                        query=camelize(f"{field_name.name}_in"), default=None, required=False
-                    ),
-                ) -> InCollectionFilter[field_name.type_hint] | None:  # type: ignore # pyright: ignore
-                    return (
-                        InCollectionFilter[field_name.type_hint](field_name=field_name.name, values=values)  # type: ignore  # pyright: ignore
-                        if values
-                        else None
-                    )
-
-                return provide_in_filter  # pyright: ignore
-
-            provider = create_in_filter_provider(field_def)  # type: ignore
-            filters[f"{field_def.name}_in_filter"] = Provide(provider, sync_to_thread=False)  # pyright: ignore
+            resolved = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
+            filters[f"{resolved.name}_in_filter"] = Provide(
+                _build_in_collection_provider(resolved, negated=False), sync_to_thread=False
+            )
 
     if null_fields := config.get("null_fields"):
         null_fields = {null_fields} if isinstance(null_fields, str) else set(null_fields)
-
         for field_name in null_fields:
-
-            def create_null_filter_provider(fname: str) -> Callable[..., NullFilter | None]:
-                def provide_null_filter(
-                    is_null: bool | None = Parameter(query=camelize(f"{fname}_is_null"), default=None, required=False),
-                ) -> NullFilter | None:
-                    return NullFilter(field_name=fname) if is_null else None
-
-                return provide_null_filter
-
-            null_provider = create_null_filter_provider(field_name)
-            filters[f"{field_name}_null_filter"] = Provide(null_provider, sync_to_thread=False)
+            filters[f"{field_name}_null_filter"] = Provide(
+                _build_null_provider(field_name, negated=False), sync_to_thread=False
+            )
 
     if not_null_fields := config.get("not_null_fields"):
         not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else set(not_null_fields)
-
         for field_name in not_null_fields:
-
-            def create_not_null_filter_provider(fname: str) -> Callable[..., NotNullFilter | None]:
-                def provide_not_null_filter(
-                    is_not_null: bool | None = Parameter(
-                        query=camelize(f"{fname}_is_not_null"), default=None, required=False
-                    ),
-                ) -> NotNullFilter | None:
-                    return NotNullFilter(field_name=fname) if is_not_null else None
-
-                return provide_not_null_filter
-
-            not_null_provider = create_not_null_filter_provider(field_name)
-            filters[f"{field_name}_not_null_filter"] = Provide(not_null_provider, sync_to_thread=False)
+            filters[f"{field_name}_not_null_filter"] = Provide(
+                _build_null_provider(field_name, negated=True), sync_to_thread=False
+            )
 
     if filters:
         filters[dep_defaults.FILTERS_DEPENDENCY_KEY] = Provide(

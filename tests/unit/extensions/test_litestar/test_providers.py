@@ -41,7 +41,7 @@ def test_in_fields_provider_returns_filter_when_values_present() -> None:
     deps = _create_statement_filters(config)
 
     provider = deps["status_in_filter"]
-    result = provider.dependency(values=["active", "archived"])
+    result = provider.dependency(**{"status_values": ["active", "archived"]})
 
     assert isinstance(result, InCollectionFilter)
     assert result.field_name == "status"
@@ -54,8 +54,24 @@ def test_in_fields_provider_returns_none_when_no_values() -> None:
     deps = _create_statement_filters(config)
 
     provider = deps["status_in_filter"]
-    result = provider.dependency(values=None)
+    result = provider.dependency(**{"status_values": None})
     assert result is None
+
+
+def test_in_fields_provider_uses_unique_signature_param_per_field() -> None:
+    """Each in_fields provider exposes a unique parameter name to prevent cross-binding (issue #435)."""
+    import inspect as _inspect
+
+    config = FilterConfig(
+        in_fields={FieldNameType(name="status", type_hint=str), FieldNameType(name="role", type_hint=str)}
+    )
+    deps = _create_statement_filters(config)
+
+    status_params = list(_inspect.signature(deps["status_in_filter"].dependency).parameters)
+    role_params = list(_inspect.signature(deps["role_in_filter"].dependency).parameters)
+
+    assert status_params == ["status_values"]
+    assert role_params == ["role_values"]
 
 
 def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
@@ -64,7 +80,7 @@ def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
     deps = _create_statement_filters(config)
 
     provider = deps["status_not_in_filter"]
-    result = provider.dependency(values=["deleted", "archived"])
+    result = provider.dependency(**{"status_values": ["deleted", "archived"]})
 
     assert isinstance(result, NotInCollectionFilter)
     assert result.field_name == "status"
@@ -119,7 +135,7 @@ def test_in_fields_with_string_config() -> None:
     assert "filters" in deps
 
     provider = deps["status_in_filter"]
-    result = provider.dependency(values=["active"])
+    result = provider.dependency(**{"status_values": ["active"]})
     assert isinstance(result, InCollectionFilter)
     assert result.field_name == "status"
 

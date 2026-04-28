@@ -486,6 +486,40 @@ def test_fastapi_not_in_fields_filter_dependency() -> None:
         assert set(data["values"]) == {"deleted", "archived"}
 
 
+def test_fastapi_multi_in_fields_mixed_types_do_not_cross_bind() -> None:
+    """FastAPI sub-`Depends()` are scoped, so siblings with overlapping inner param names must not collide (#435)."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    from sqlspec.extensions.fastapi.providers import FieldNameType, InCollectionFilter
+
+    @app.get("/x")
+    async def handler(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(
+                db_ext.provide_filters({"in_fields": [FieldNameType("role", str), FieldNameType("owner_id", UUID)]})
+            ),
+        ],
+    ) -> dict[str, Any]:
+        return {
+            "got": [(f.field_name, [str(v) for v in f.values]) for f in filters if isinstance(f, InCollectionFilter)]
+        }
+
+    valid_uuid = "11111111-2222-3333-4444-555555555555"
+    with TestClient(app) as client:
+        response = client.get("/x", params={"roleIn": "HR", "ownerIdIn": valid_uuid})
+        assert response.status_code == 200, response.text
+        got = dict(response.json()["got"])
+        assert got == {"role": ["HR"], "owner_id": [valid_uuid]}
+
+
 def test_fastapi_in_fields_with_query_execution() -> None:
     """Test in_fields filter applied to actual SQL query execution (issue #405)."""
     sqlspec = SQLSpec()

@@ -2,6 +2,7 @@
 
 import tempfile
 from typing import Any
+from uuid import UUID
 
 import pytest
 from litestar import Litestar, get
@@ -11,7 +12,14 @@ from litestar.testing import AsyncTestClient, TestClient
 from sqlspec import sql as sql_builder
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
-from sqlspec.core import FilterTypes, InCollectionFilter, NotInCollectionFilter
+from sqlspec.core import (
+    BeforeAfterFilter,
+    FilterTypes,
+    InCollectionFilter,
+    NotInCollectionFilter,
+    NotNullFilter,
+    NullFilter,
+)
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.extensions.litestar.providers import FieldNameType, create_filter_dependencies, dep_cache
 from sqlspec.typing import LITESTAR_INSTALLED
@@ -306,3 +314,134 @@ def test_litestar_order_by_openapi_schema() -> None:
     sort_order_param = _named_param("sortOrder")
     assert sort_order_param is not None
     assert is_string_type(sort_order_param.schema)
+
+
+# Regression tests for issue #435 (cross-binding across providers in the same family).
+
+
+def test_litestar_in_fields_two_str_fields_do_not_cross_bind() -> None:
+    """Two `in_fields` with matching `str` types must not share a value (issue #435)."""
+    filter_deps = create_filter_dependencies({"in_fields": [FieldNameType("a", str), FieldNameType("b", str)]})
+
+    @get("/x", dependencies=filter_deps)
+    async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"got": [(f.field_name, sorted(f.values)) for f in filters if isinstance(f, InCollectionFilter)]}
+
+    app = Litestar(route_handlers=[handler])
+    with TestClient(app=app) as client:
+        response = client.get("/x", params={"aIn": "HR,SYSTEM", "bIn": "ADMIN"})
+        assert response.status_code == 200
+        got = dict(response.json()["got"])
+        assert got == {"a": sorted(["HR,SYSTEM"]), "b": sorted(["ADMIN"])}
+
+
+def test_litestar_in_fields_mixed_types_do_not_400() -> None:
+    """`in_fields` with mixed (`str`, `UUID`) types must bind separately, not 400 (issue #435)."""
+    filter_deps = create_filter_dependencies({
+        "in_fields": [FieldNameType("role", str), FieldNameType("owner_id", UUID)]
+    })
+
+    @get("/x", dependencies=filter_deps)
+    async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {
+            "got": [(f.field_name, [str(v) for v in f.values]) for f in filters if isinstance(f, InCollectionFilter)]
+        }
+
+    app = Litestar(route_handlers=[handler])
+    valid_uuid = "11111111-2222-3333-4444-555555555555"
+    with TestClient(app=app) as client:
+        response = client.get("/x", params={"roleIn": "HR", "ownerIdIn": valid_uuid})
+        assert response.status_code == 200, response.text
+        got = dict(response.json()["got"])
+        assert got == {"role": ["HR"], "owner_id": [valid_uuid]}
+
+        # Sending only the str field should not trigger UUID validation on the other.
+        response = client.get("/x", params={"roleIn": "HR"})
+        assert response.status_code == 200, response.text
+        got = dict(response.json()["got"])
+        assert got == {"role": ["HR"]}
+
+
+def test_litestar_not_in_fields_two_fields_do_not_cross_bind() -> None:
+    """Two `not_in_fields` providers must not share their `values` parameter (issue #435)."""
+    filter_deps = create_filter_dependencies({"not_in_fields": [FieldNameType("a", str), FieldNameType("b", str)]})
+
+    @get("/x", dependencies=filter_deps)
+    async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"got": [(f.field_name, sorted(f.values)) for f in filters if isinstance(f, NotInCollectionFilter)]}
+
+    app = Litestar(route_handlers=[handler])
+    with TestClient(app=app) as client:
+        response = client.get("/x", params={"aNotIn": "HR", "bNotIn": "ADMIN"})
+        assert response.status_code == 200
+        got = dict(response.json()["got"])
+        assert got == {"a": ["HR"], "b": ["ADMIN"]}
+
+
+def test_litestar_null_fields_two_fields_do_not_cross_bind() -> None:
+    """Two `null_fields` providers must not share their `is_null` parameter (issue #435)."""
+    filter_deps = create_filter_dependencies({"null_fields": ["a", "b"]})
+
+    @get("/x", dependencies=filter_deps)
+    async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"fields": sorted(f.field_name for f in filters if isinstance(f, NullFilter))}
+
+    app = Litestar(route_handlers=[handler])
+    with TestClient(app=app) as client:
+        response = client.get("/x", params={"aIsNull": "true"})
+        assert response.status_code == 200
+        assert response.json() == {"fields": ["a"]}
+
+        response = client.get("/x", params={"bIsNull": "true"})
+        assert response.status_code == 200
+        assert response.json() == {"fields": ["b"]}
+
+        response = client.get("/x", params={"aIsNull": "true", "bIsNull": "true"})
+        assert response.status_code == 200
+        assert response.json() == {"fields": ["a", "b"]}
+
+
+def test_litestar_not_null_fields_two_fields_do_not_cross_bind() -> None:
+    """Two `not_null_fields` providers must not share their `is_not_null` parameter (issue #435)."""
+    filter_deps = create_filter_dependencies({"not_null_fields": ["a", "b"]})
+
+    @get("/x", dependencies=filter_deps)
+    async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"fields": sorted(f.field_name for f in filters if isinstance(f, NotNullFilter))}
+
+    app = Litestar(route_handlers=[handler])
+    with TestClient(app=app) as client:
+        response = client.get("/x", params={"aIsNotNull": "true", "bIsNotNull": "true"})
+        assert response.status_code == 200
+        assert response.json() == {"fields": ["a", "b"]}
+
+
+def test_litestar_created_at_and_updated_at_do_not_cross_bind() -> None:
+    """`created_at` + `updated_at` providers share `before`/`after` names; aliases must still be honored."""
+    filter_deps = create_filter_dependencies({"created_at": True, "updated_at": True})
+
+    @get("/x", dependencies=filter_deps)
+    async def handler(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {
+            "got": [
+                (f.field_name, f.before.isoformat() if f.before else None, f.after.isoformat() if f.after else None)
+                for f in filters
+                if isinstance(f, BeforeAfterFilter)
+            ]
+        }
+
+    app = Litestar(route_handlers=[handler])
+    with TestClient(app=app) as client:
+        response = client.get(
+            "/x",
+            params={
+                "createdBefore": "2025-01-01T00:00:00",
+                "createdAfter": "2024-01-01T00:00:00",
+                "updatedBefore": "2025-06-01T00:00:00",
+                "updatedAfter": "2024-06-01T00:00:00",
+            },
+        )
+        assert response.status_code == 200, response.text
+        got = {field: (before, after) for field, before, after in response.json()["got"]}
+        assert got["created_at"] == ("2025-01-01T00:00:00", "2024-01-01T00:00:00")
+        assert got["updated_at"] == ("2025-06-01T00:00:00", "2024-06-01T00:00:00")
