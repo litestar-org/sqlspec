@@ -181,6 +181,51 @@ def test_fastapi_order_by_filter_dependency() -> None:
         assert response.status_code == 422
 
 
+def test_fastapi_order_by_filter_accepts_camelized_alias_dependency() -> None:
+    """Camelized orderBy values normalize to SQL-facing fields."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    @app.get("/users")
+    async def list_users(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(
+                db_ext.provide_filters({
+                    "sort_field": ["created_at", "uploaded_collections"],
+                    "sort_field_camelize": True,
+                })
+            ),
+        ],
+    ) -> dict[str, Any]:
+        order_by = next((f for f in filters if isinstance(f, OrderByFilter)), None)
+        if order_by:
+            return {"field": order_by.field_name, "order": order_by.sort_order}
+        return {"field": None, "order": None}
+
+    with TestClient(app) as client:
+        response = client.get("/users?orderBy=uploadedCollections&sortOrder=asc")
+        assert response.status_code == 200
+        assert response.json() == {"field": "uploaded_collections", "order": "asc"}
+
+        response = client.get("/users?orderBy=uploaded_collections&sortOrder=desc")
+        assert response.status_code == 200
+        assert response.json() == {"field": "uploaded_collections", "order": "desc"}
+
+        response = client.get("/users?orderBy=uploadedCollectionz&sortOrder=asc")
+        assert response.status_code == 422
+        error = response.json()["detail"][0]
+        assert error["loc"] == ["query", "orderBy"]
+        assert "Allowed fields: createdAt, uploadedCollections" in error["msg"]
+        assert "uploaded_collections" not in error["msg"]
+
+
 def test_fastapi_date_range_filter_dependency() -> None:
     """Test date range filter dependency with actual HTTP request."""
     sqlspec = SQLSpec()
@@ -369,6 +414,40 @@ def test_fastapi_openapi_schema_includes_filter_params() -> None:
     assert "searchString" in param_names  # Search
     assert "currentPage" in param_names  # Pagination
     assert "pageSize" in param_names  # Pagination
+
+
+def test_fastapi_openapi_schema_uses_order_by_alias_default() -> None:
+    """Alias mode keeps orderBy string-shaped and exposes the alias default."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    @app.get("/users")
+    async def list_users(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(
+                db_ext.provide_filters({
+                    "sort_field": ["created_at", "uploaded_collections"],
+                    "sort_field_camelize": True,
+                })
+            ),
+        ],
+    ) -> dict[str, Any]:
+        return {"filters": len(filters)}
+
+    openapi_schema = app.openapi()
+    user_endpoint = openapi_schema["paths"]["/users"]["get"]
+    order_by_param = next(param for param in user_endpoint.get("parameters", []) if param["name"] == "orderBy")
+    schema = order_by_param["schema"]
+
+    assert schema["default"] == "createdAt"
+    assert schema["type"] == "string"
 
 
 def test_fastapi_filter_validation_error() -> None:
