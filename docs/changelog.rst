@@ -10,6 +10,26 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
+Framework Filter ``orderBy`` Aliases (Unreleased)
+-------------------------------------------------
+
+**Added:**
+
+* Litestar ``create_filter_dependencies()`` and FastAPI ``provide_filters()``
+  now support opt-in API-facing sort aliases through ``sort_field_aliases`` and
+  ``sort_field_camelize``. This lets endpoints accept values such as
+  ``orderBy=uploadedCollections`` while producing an ``OrderByFilter`` for the
+  SQL-facing field ``uploaded_collections``. Raw configured values remain
+  accepted for compatibility. (`#438
+  <https://github.com/litestar-org/sqlspec/issues/438>`_)
+
+**Safety:**
+
+* Alias normalization is closed over the configured ``sort_field`` allowlist.
+  Unknown aliases and aliases targeting fields outside ``sort_field`` are
+  rejected before SQL construction, preserving the existing identifier
+  allowlist.
+
 schema_dump wire_format Opt-Out (Unreleased)
 ---------------------------------------------
 
