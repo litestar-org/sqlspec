@@ -26,6 +26,7 @@ from sqlspec.core import (
     OrderByFilter,
     SearchFilter,
 )
+from sqlspec.extensions._filter_aliases import resolve_sort_field_aliases
 from sqlspec.utils.singleton import SingletonMeta
 from sqlspec.utils.text import camelize
 
@@ -90,6 +91,8 @@ class FilterConfig(TypedDict):
     id_filter: NotRequired[type[UUID | int | str]]
     id_field: NotRequired[str]
     sort_field: NotRequired[SortField]
+    sort_field_aliases: NotRequired[dict[str, str]]
+    sort_field_camelize: NotRequired[bool]
     sort_order: NotRequired[SortOrder]
     pagination_type: NotRequired[Literal["limit_offset"]]
     pagination_size: NotRequired[int]
@@ -162,13 +165,6 @@ def _make_hashable(value: Any) -> HashableType:
     if isinstance(value, (str, int, float, bool, type(None))):
         return value
     return str(value)
-
-
-def _resolve_sort_fields(sort_field: SortField) -> tuple[str, set[str]]:
-    if isinstance(sort_field, str):
-        return sort_field, {sort_field}
-    fields = tuple(sorted(sort_field)) if isinstance(sort_field, set) else tuple(sort_field)
-    return fields[0], set(fields)
 
 
 def _build_in_collection_provider(field: FieldNameType, *, negated: bool) -> Callable[..., Any]:
@@ -338,21 +334,25 @@ def _create_statement_filters(
         filters[dep_defaults.SEARCH_FILTER_DEPENDENCY_KEY] = Provide(provide_search_filter, sync_to_thread=False)
 
     if sort_field := config.get("sort_field"):
-        default_field, allowed_fields = _resolve_sort_fields(sort_field)
-        allowed_field_names = ", ".join(sorted(allowed_fields))
+        sort_resolution = resolve_sort_field_aliases(
+            sort_field,
+            sort_field_aliases=config.get("sort_field_aliases"),
+            sort_field_camelize=config.get("sort_field_camelize", False),
+        )
+        allowed_field_names = ", ".join(sort_resolution.allowed_display_names)
         sort_order_default = config.get("sort_order", "desc")
 
         def provide_order_by(
             field_name: StringOrNone = Parameter(
-                title="Order by field", query="orderBy", default=default_field, required=False
+                title="Order by field", query="orderBy", default=sort_resolution.default_query_value, required=False
             ),
             sort_order: SortOrderOrNone = Parameter(
                 title="Field to search", query="sortOrder", default=sort_order_default, required=False
             ),
         ) -> OrderByFilter:
-            resolved_field = field_name or default_field
-            if resolved_field not in allowed_fields:
-                msg = f"Invalid orderBy field '{resolved_field}'. Allowed fields: {allowed_field_names}"
+            resolved_field = sort_resolution.normalize(field_name) if field_name else sort_resolution.default_field
+            if resolved_field is None:
+                msg = f"Invalid orderBy field '{field_name}'. Allowed fields: {allowed_field_names}"
                 raise ValidationException(detail=msg)
             return OrderByFilter(field_name=resolved_field, sort_order=sort_order or sort_order_default)
 
