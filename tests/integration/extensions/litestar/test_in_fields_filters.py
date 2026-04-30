@@ -303,6 +303,74 @@ async def test_litestar_order_by_accepts_camelized_sort_field_alias() -> None:
             assert [item["id"] for item in items] == [3, 1, 2]
 
 
+@pytest.mark.anyio
+async def test_litestar_order_by_accepts_dotted_camelized_sort_field_alias() -> None:
+    """Qualified dotted orderBy fields accept dotted camel aliases."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sql.add_config(config)
+
+        async with sql.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT, created_at TEXT);
+                INSERT INTO parent (id, name, created_at) VALUES (1, 'middle', '2024-02-01');
+                INSERT INTO parent (id, name, created_at) VALUES (2, 'first', '2024-01-01');
+                INSERT INTO parent (id, name, created_at) VALUES (3, 'last', '2024-03-01');
+            """)
+            await session.commit()
+
+        filter_deps = create_filter_dependencies({
+            "sort_field": ["p.created_at", "p.name"],
+            "sort_field_camelize": True,
+        })
+
+        @get("/ordered", dependencies=filter_deps)
+        async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+            async with sql.provide_session(config) as session:
+                query = sql_builder.select("p.id", "p.name", "p.created_at").from_("parent p")
+                results = await session.select(query, *filters)
+                return {"items": results}
+
+        app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+        async with AsyncTestClient(app=app) as client:
+            camel_response = await client.get("/ordered", params={"orderBy": "p.createdAt", "sortOrder": "asc"})
+            assert camel_response.status_code == 200
+            assert [item["id"] for item in camel_response.json()["items"]] == [2, 1, 3]
+
+            snake_response = await client.get("/ordered", params={"orderBy": "p.created_at", "sortOrder": "asc"})
+            assert snake_response.status_code == 200
+            assert [item["id"] for item in snake_response.json()["items"]] == [2, 1, 3]
+
+
+@pytest.mark.anyio
+async def test_litestar_order_by_invalid_alias_error_uses_display_aliases() -> None:
+    """Invalid alias errors list wire aliases instead of raw snake_case fields."""
+    sql = SQLSpec()
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    sql.add_config(config)
+
+    filter_deps = create_filter_dependencies({
+        "sort_field": ["created_at", "uploaded_collections"],
+        "sort_field_camelize": True,
+    })
+
+    @get("/ordered", dependencies=filter_deps)
+    async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"items": []}
+
+    app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/ordered", params={"orderBy": "uploadedCollectionz", "sortOrder": "asc"})
+
+    assert response.status_code == 400
+    assert "Invalid orderBy field 'uploadedCollectionz'" in response.text
+    assert "Allowed fields: createdAt, uploadedCollections" in response.text
+    assert "uploaded_collections" not in response.text
+
+
 def test_litestar_order_by_openapi_schema() -> None:
     """OrderByFilter must appear as a string in OpenAPI even with expression support."""
     from typing import Any
@@ -352,6 +420,54 @@ def test_litestar_order_by_openapi_schema() -> None:
     sort_order_param = _named_param("sortOrder")
     assert sort_order_param is not None
     assert is_string_type(sort_order_param.schema)
+
+
+def test_litestar_order_by_openapi_schema_uses_alias_default() -> None:
+    """Alias mode keeps orderBy as a string and exposes the alias-shaped default."""
+    from typing import Any
+
+    sql = SQLSpec()
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    sql.add_config(config)
+
+    filter_deps = create_filter_dependencies({
+        "sort_field": ["created_at", "uploaded_collections"],
+        "sort_field_camelize": True,
+    })
+
+    @get("/ordered", dependencies=filter_deps)
+    async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"items": []}
+
+    app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+    schema = app.openapi_schema
+    paths = schema.paths
+    assert paths is not None
+
+    operation = paths["/ordered"].get
+    assert operation is not None
+    params = operation.parameters
+    assert params is not None
+
+    order_by_param = next((p for p in params if getattr(p, "name", None) == "orderBy"), None)
+    assert order_by_param is not None
+    assert order_by_param.schema is not None
+    assert order_by_param.schema.default == "createdAt"
+
+    def is_string_type(schema: Any) -> bool:
+        if not schema:
+            return False
+        stype = schema.type
+        if isinstance(stype, list):
+            return any("string" in str(t).lower() for t in stype)
+        if stype:
+            return "string" in str(stype).lower()
+        if schema.one_of:
+            return any(is_string_type(s) for s in schema.one_of)
+        return False
+
+    assert is_string_type(order_by_param.schema)
 
 
 # Regression tests for issue #435 (cross-binding across providers in the same family).
