@@ -16,7 +16,20 @@ from sqlspec.core import (
     OrderByFilter,
     SearchFilter,
 )
-from sqlspec.extensions.fastapi.providers import DependencyDefaults, FieldNameType, FilterConfig, provide_filters
+from sqlspec.extensions.fastapi.providers import (
+    DependencyDefaults,
+    FieldNameType,
+    FilterConfig,
+    dep_cache,
+    provide_filters,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_dependency_cache() -> Any:
+    dep_cache.dependencies.clear()
+    yield
+    dep_cache.dependencies.clear()
 
 
 def _get_order_by_dependency(provider: Any) -> Any:
