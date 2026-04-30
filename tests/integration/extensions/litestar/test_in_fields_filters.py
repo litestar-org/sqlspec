@@ -265,6 +265,44 @@ async def test_litestar_qualified_column_order_by_filter() -> None:
             assert items[1]["name"] == "a"
 
 
+@pytest.mark.anyio
+async def test_litestar_order_by_accepts_camelized_sort_field_alias() -> None:
+    """Camelized orderBy values normalize to SQL-facing fields before filtering."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sql.add_config(config)
+
+        async with sql.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE upload_stats (id INTEGER PRIMARY KEY, uploaded_collections INTEGER);
+                INSERT INTO upload_stats (id, uploaded_collections) VALUES (1, 2);
+                INSERT INTO upload_stats (id, uploaded_collections) VALUES (2, 3);
+                INSERT INTO upload_stats (id, uploaded_collections) VALUES (3, 1);
+            """)
+            await session.commit()
+
+        filter_deps = create_filter_dependencies({
+            "sort_field": ["created_at", "uploaded_collections"],
+            "sort_field_camelize": True,
+        })
+
+        @get("/ordered", dependencies=filter_deps)
+        async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
+            async with sql.provide_session(config) as session:
+                query = sql_builder.select("id", "uploaded_collections").from_("upload_stats")
+                results = await session.select(query, *filters)
+                return {"items": results}
+
+        app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+        async with AsyncTestClient(app=app) as client:
+            response = await client.get("/ordered", params={"orderBy": "uploadedCollections", "sortOrder": "asc"})
+            assert response.status_code == 200
+            items = response.json()["items"]
+            assert [item["id"] for item in items] == [3, 1, 2]
+
+
 def test_litestar_order_by_openapi_schema() -> None:
     """OrderByFilter must appear as a string in OpenAPI even with expression support."""
     from typing import Any

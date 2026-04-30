@@ -1,5 +1,6 @@
 """Unit tests for Litestar filter providers (issue #405)."""
 
+import inspect
 from typing import Any
 
 import pytest
@@ -163,3 +164,71 @@ def test_order_by_provider_rejects_unconfigured_sort_field() -> None:
         provider.dependency(field_name="password_hash", sort_order="asc")
 
     assert "Invalid orderBy field" in str(exc_info.value)
+
+
+def test_order_by_provider_accepts_camelized_sort_field_alias() -> None:
+    """orderBy provider accepts camelized aliases when configured."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    result = provider.dependency(field_name="uploadedCollections", sort_order="asc")
+
+    assert isinstance(result, OrderByFilter)
+    assert result.field_name == "uploaded_collections"
+    assert result.sort_order == "asc"
+
+
+def test_order_by_provider_accepts_explicit_sort_field_alias() -> None:
+    """orderBy provider accepts explicit aliases when configured."""
+    config = FilterConfig(
+        sort_field=["created_at", "uploaded_collections"],
+        sort_field_aliases={"uploadedCollections": "uploaded_collections"},
+    )
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    result = provider.dependency(field_name="uploadedCollections", sort_order="asc")
+
+    assert isinstance(result, OrderByFilter)
+    assert result.field_name == "uploaded_collections"
+    assert result.sort_order == "asc"
+
+
+def test_order_by_provider_keeps_snake_case_sort_field_in_alias_mode() -> None:
+    """Alias mode preserves legacy snake_case query values."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    result = provider.dependency(field_name="uploaded_collections", sort_order="desc")
+
+    assert isinstance(result, OrderByFilter)
+    assert result.field_name == "uploaded_collections"
+    assert result.sort_order == "desc"
+
+
+def test_order_by_provider_reports_display_aliases_for_invalid_alias() -> None:
+    """Alias-mode validation errors expose API-facing display values."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    with pytest.raises(ValidationException) as exc_info:
+        provider.dependency(field_name="uploadedCollectionz", sort_order="asc")
+
+    message = str(exc_info.value)
+    assert "Invalid orderBy field 'uploadedCollectionz'" in message
+    assert "Allowed fields: createdAt, uploadedCollections" in message
+    assert "uploaded_collections" not in message
+
+
+def test_order_by_provider_uses_display_alias_as_query_default() -> None:
+    """The orderBy parameter default uses the display alias in alias mode."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    field_param = inspect.signature(provider.dependency).parameters["field_name"]
+
+    assert field_param.default.default == "createdAt"
