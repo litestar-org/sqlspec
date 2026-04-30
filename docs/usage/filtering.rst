@@ -2,7 +2,8 @@ Filtering & Pagination
 ======================
 
 SQLSpec provides filter types and pagination helpers that work with any driver.
-The Litestar extension includes auto-generated filter dependencies for REST APIs.
+The Litestar and FastAPI extensions include auto-generated filter dependencies
+for REST APIs.
 
 Pagination with SQL Objects
 ---------------------------
@@ -68,13 +69,14 @@ Search Patterns
 that returns the percent-wrapped search value (e.g. ``%alice%``). This is useful
 when you need to use the pattern construction logic outside of the filter system.
 
-Litestar Filter Dependencies
-
+Framework Filter Dependencies
 -----------------------------
 
 When using the Litestar extension, ``create_filter_dependencies()`` auto-generates
-Litestar dependency providers from a declarative configuration. These providers
-parse query parameters from incoming requests and produce filter objects.
+Litestar dependency providers from a declarative configuration. FastAPI provides
+the same filter contract through ``SQLSpecPlugin.provide_filters()`` for use with
+``Depends()``. These providers parse query parameters from incoming requests and
+produce filter objects.
 
 .. literalinclude:: /examples/patterns/filter_dependencies.py
    :language: python
@@ -95,7 +97,8 @@ Using filters in a Litestar handler:
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
         "pagination_size": 20,
-        "sort_field": ["created_at", "name"],
+        "sort_field": ["created_at", "uploaded_collections", "name"],
+        "sort_field_camelize": True,
         "sort_order": "desc",
         "search": "name,email",
     })
@@ -110,7 +113,40 @@ Using filters in a Litestar handler:
         return {"data": data, "total": total}
 
 The generated dependencies automatically handle query parameters for configured fields like
-``?currentPage=2&pageSize=10&searchString=alice&orderBy=name&sortOrder=asc``.
+``?currentPage=2&pageSize=10&searchString=alice&orderBy=uploadedCollections&sortOrder=asc``.
+With ``sort_field_camelize=True``, ``orderBy=uploadedCollections`` is normalized
+to the SQL-facing field ``uploaded_collections`` before the ``OrderByFilter`` is
+created. Raw configured values such as ``orderBy=uploaded_collections`` remain
+accepted for compatibility.
+
+Sort aliases are opt-in and closed over the configured ``sort_field`` allowlist.
+Use ``sort_field_aliases`` when the public API name is not a mechanical camel-case
+conversion:
+
+.. code-block:: python
+
+    user_filter_deps = create_filter_dependencies({
+        "sort_field": ["created_at", "uploaded_collections"],
+        "sort_field_aliases": {"lastUpload": "uploaded_collections"},
+    })
+
+``orderBy=lastUpload`` is accepted, but aliases that target fields outside
+``sort_field`` are rejected when the provider is created. Unknown ``orderBy``
+values still fail validation before reaching SQL construction.
+
+For FastAPI, use the same configuration with ``Depends()``:
+
+.. code-block:: python
+
+    filters = Depends(
+        db_ext.provide_filters({
+            "sort_field": ["created_at", "uploaded_collections"],
+            "sort_field_camelize": True,
+        })
+    )
+
+SQLSpec does not ship generated filter providers for Flask, Starlette, or Sanic;
+their integrations do not have a runtime ``orderBy`` alias surface.
 
 Service Layer
 -------------

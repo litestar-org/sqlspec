@@ -15,6 +15,12 @@ Plugin
 Dependency Helpers
 ==================
 
+``provide_filters()`` supports the same opt-in ``orderBy`` alias contract as the
+Litestar provider. Configure ``sort_field_camelize=True`` for camel-case query
+values or ``sort_field_aliases`` for explicit API names. Alias values normalize
+to fields from ``sort_field`` before ``OrderByFilter`` is created, so the
+SQL-facing sort allowlist remains strict.
+
 .. autofunction:: sqlspec.extensions.fastapi.provide_filters
 
 .. autoclass:: sqlspec.extensions.fastapi.DependencyDefaults

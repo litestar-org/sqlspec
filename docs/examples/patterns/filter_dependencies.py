@@ -11,7 +11,9 @@ def show_filter_dependencies() -> None:
     user_filters: FilterConfig = {
         "id_filter": str,  # Filter by user IDs
         "id_field": "id",  # Column name for ID filter
-        "sort_field": ["created_at", "name"],  # Allowed sort columns
+        "sort_field": ["created_at", "uploaded_collections", "name"],  # Allowed sort columns
+        "sort_field_camelize": True,  # Accept orderBy=uploadedCollections
+        "sort_field_aliases": {"lastUpload": "uploaded_collections"},  # Optional non-mechanical aliases
         "sort_order": "desc",  # Default sort direction
         "pagination_type": "limit_offset",  # Enable pagination
         "pagination_size": 20,  # Default page size

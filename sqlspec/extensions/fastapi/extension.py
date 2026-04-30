@@ -374,7 +374,8 @@ class SQLSpecPlugin(_StarlettePlugin):
                         "search": "name,email",
                         "search_ignore_case": True,
                         "pagination_type": "limit_offset",
-                        "sort_field": "created_at",
+                        "sort_field": ["created_at", "uploaded_collections"],
+                        "sort_field_camelize": True,
                     })
                 ),
             ):

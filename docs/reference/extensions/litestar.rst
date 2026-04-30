@@ -36,6 +36,13 @@ Store
 Providers
 =========
 
+``create_filter_dependencies()`` supports opt-in aliases for ``orderBy`` values.
+Configure ``sort_field_camelize=True`` to accept camel-case aliases for every
+field in ``sort_field``, or use ``sort_field_aliases`` to map explicit API names
+to configured SQL-facing fields. Alias values are normalized before
+``OrderByFilter`` is created, and unknown aliases cannot bypass the ``sort_field``
+allowlist.
+
 .. autoclass:: sqlspec.extensions.litestar.providers.DependencyDefaults
    :members:
    :show-inheritance:
