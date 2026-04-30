@@ -86,26 +86,45 @@ class FieldNameType(NamedTuple):
 
 
 class FilterConfig(TypedDict):
-    """Configuration for generating dynamic filters."""
+    """Configuration for generated Litestar filter dependencies.
+
+    All keys are optional. A filter dependency is created only for each enabled
+    key. Field names are SQL-facing allowlist values; generated query parameter
+    names and order-by aliases remain API-facing.
+    """
 
     id_filter: NotRequired[type[UUID | int | str]]
+    """Type of ID filter to enable. When set, creates an ``ids`` collection filter."""
     id_field: NotRequired[str]
+    """SQL-facing field name for ID filtering. Defaults to ``"id"``."""
     sort_field: NotRequired[SortField]
+    """Allowed SQL-facing field or fields for ``orderBy`` sorting."""
     sort_field_aliases: NotRequired[dict[str, str]]
+    """Additional API-facing ``orderBy`` aliases mapped to configured ``sort_field`` values."""
     sort_field_camelize: NotRequired[bool]
+    """Whether to accept camel-case aliases for configured sort fields. Defaults to ``True``."""
     sort_order: NotRequired[SortOrder]
+    """Default sort order. Defaults to ``"desc"``."""
     pagination_type: NotRequired[Literal["limit_offset"]]
+    """Pagination strategy to enable. Currently supports ``"limit_offset"``."""
     pagination_size: NotRequired[int]
+    """Default page size for limit/offset pagination."""
     search: NotRequired[str | set[str] | list[str]]
+    """SQL-facing field or fields to search. Strings may be comma-separated."""
     search_ignore_case: NotRequired[bool]
+    """Whether search filtering is case-insensitive. Defaults to ``False``."""
     created_at: NotRequired[bool]
+    """Whether to enable ``created_at`` before/after range filtering."""
     updated_at: NotRequired[bool]
+    """Whether to enable ``updated_at`` before/after range filtering."""
     not_in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
+    """Field or fields that support ``NOT IN`` collection filtering."""
     in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
+    """Field or fields that support ``IN`` collection filtering."""
     null_fields: NotRequired[str | set[str] | list[str]]
-    """Fields that support IS NULL filtering."""
+    """Field or fields that support ``IS NULL`` filtering."""
     not_null_fields: NotRequired[str | set[str] | list[str]]
-    """Fields that support IS NOT NULL filtering."""
+    """Field or fields that support ``IS NOT NULL`` filtering."""
 
 
 class DependencyCache(metaclass=SingletonMeta):
@@ -337,7 +356,7 @@ def _create_statement_filters(
         sort_resolution = resolve_sort_field_aliases(
             sort_field,
             sort_field_aliases=config.get("sort_field_aliases"),
-            sort_field_camelize=config.get("sort_field_camelize", False),
+            sort_field_camelize=config.get("sort_field_camelize", True),
         )
         allowed_field_names = ", ".join(sort_resolution.allowed_display_names)
         sort_order_default = config.get("sort_order", "desc")

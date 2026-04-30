@@ -195,13 +195,7 @@ def test_fastapi_order_by_filter_accepts_camelized_alias_dependency() -> None:
     @app.get("/users")
     async def list_users(
         filters: Annotated[
-            list[FilterTypes],
-            Depends(
-                db_ext.provide_filters({
-                    "sort_field": ["created_at", "uploaded_collections"],
-                    "sort_field_camelize": True,
-                })
-            ),
+            list[FilterTypes], Depends(db_ext.provide_filters({"sort_field": ["created_at", "uploaded_collections"]}))
         ],
     ) -> dict[str, Any]:
         order_by = next((f for f in filters if isinstance(f, OrderByFilter)), None)
@@ -430,13 +424,7 @@ def test_fastapi_openapi_schema_uses_order_by_alias_default() -> None:
     @app.get("/users")
     async def list_users(
         filters: Annotated[
-            list[FilterTypes],
-            Depends(
-                db_ext.provide_filters({
-                    "sort_field": ["created_at", "uploaded_collections"],
-                    "sort_field_camelize": True,
-                })
-            ),
+            list[FilterTypes], Depends(db_ext.provide_filters({"sort_field": ["created_at", "uploaded_collections"]}))
         ],
     ) -> dict[str, Any]:
         return {"filters": len(filters)}

@@ -282,10 +282,7 @@ async def test_litestar_order_by_accepts_camelized_sort_field_alias() -> None:
             """)
             await session.commit()
 
-        filter_deps = create_filter_dependencies({
-            "sort_field": ["created_at", "uploaded_collections"],
-            "sort_field_camelize": True,
-        })
+        filter_deps = create_filter_dependencies({"sort_field": ["created_at", "uploaded_collections"]})
 
         @get("/ordered", dependencies=filter_deps)
         async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
@@ -320,10 +317,7 @@ async def test_litestar_order_by_accepts_dotted_camelized_sort_field_alias() -> 
             """)
             await session.commit()
 
-        filter_deps = create_filter_dependencies({
-            "sort_field": ["p.created_at", "p.name"],
-            "sort_field_camelize": True,
-        })
+        filter_deps = create_filter_dependencies({"sort_field": ["p.created_at", "p.name"]})
 
         @get("/ordered", dependencies=filter_deps)
         async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
@@ -351,10 +345,7 @@ async def test_litestar_order_by_invalid_alias_error_uses_display_aliases() -> N
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sql.add_config(config)
 
-    filter_deps = create_filter_dependencies({
-        "sort_field": ["created_at", "uploaded_collections"],
-        "sort_field_camelize": True,
-    })
+    filter_deps = create_filter_dependencies({"sort_field": ["created_at", "uploaded_collections"]})
 
     @get("/ordered", dependencies=filter_deps)
     async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:
@@ -430,10 +421,7 @@ def test_litestar_order_by_openapi_schema_uses_alias_default() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     sql.add_config(config)
 
-    filter_deps = create_filter_dependencies({
-        "sort_field": ["created_at", "uploaded_collections"],
-        "sort_field_camelize": True,
-    })
+    filter_deps = create_filter_dependencies({"sort_field": ["created_at", "uploaded_collections"]})
 
     @get("/ordered", dependencies=filter_deps)
     async def ordered_route(filters: list[Any] = Dependency(skip_validation=True)) -> dict[str, Any]:

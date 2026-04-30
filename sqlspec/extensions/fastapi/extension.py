@@ -375,7 +375,6 @@ class SQLSpecPlugin(_StarlettePlugin):
                         "search_ignore_case": True,
                         "pagination_type": "limit_offset",
                         "sort_field": ["created_at", "uploaded_collections"],
-                        "sort_field_camelize": True,
                     })
                 ),
             ):

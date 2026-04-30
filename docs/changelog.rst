@@ -16,11 +16,13 @@ v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
 **Fixed:**
 
 * Litestar ``create_filter_dependencies()`` and FastAPI ``provide_filters()``
-  now support opt-in API-facing sort aliases for ``orderBy`` values through
-  ``sort_field_aliases`` and ``sort_field_camelize``. Endpoints can accept
-  values such as ``orderBy=uploadedCollections`` while producing an
-  ``OrderByFilter`` for the SQL-facing field ``uploaded_collections``. Raw
-  configured values remain accepted for compatibility. (`#438
+  now accept camel-case API-facing sort aliases for configured ``orderBy``
+  fields by default. Endpoints can accept values such as
+  ``orderBy=uploadedCollections`` while producing an ``OrderByFilter`` for the
+  SQL-facing field ``uploaded_collections``. Raw configured values remain
+  accepted for compatibility, explicit aliases can still be added with
+  ``sort_field_aliases``, and ``sort_field_camelize=False`` restores
+  snake_case-only validation. (`#438
   <https://github.com/litestar-org/sqlspec/issues/438>`_)
 
 **Safety:**

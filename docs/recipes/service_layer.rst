@@ -372,7 +372,6 @@ forwarded through the service to the driver:
            "pagination_type": "limit_offset",
            "pagination_size": 20,
            "sort_field": ["created_at", "uploaded_collections", "name"],
-           "sort_field_camelize": True,
            "sort_order": "desc",
            "search": "name,email",
        })
@@ -385,11 +384,12 @@ forwarded through the service to the driver:
        ) -> OffsetPagination[User]:
            return await users_service.list_with_count(*filters)
 
-``sort_field`` remains the SQL-facing allowlist. With
-``sort_field_camelize=True``, clients can request
-``?orderBy=uploadedCollections`` while the service receives an
+``sort_field`` remains the SQL-facing allowlist. Clients can request
+``?orderBy=uploadedCollections`` by default while the service receives an
 ``OrderByFilter`` for ``uploaded_collections``. Existing snake_case values, such
-as ``?orderBy=uploaded_collections``, remain valid for compatibility.
+as ``?orderBy=uploaded_collections``, remain valid for compatibility. Set
+``sort_field_camelize=False`` when an endpoint must accept only raw configured
+``orderBy`` values.
 
 .. seealso::
 

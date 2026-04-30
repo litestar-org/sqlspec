@@ -167,8 +167,8 @@ def test_order_by_provider_rejects_unconfigured_sort_field() -> None:
 
 
 def test_order_by_provider_accepts_camelized_sort_field_alias() -> None:
-    """orderBy provider accepts camelized aliases when configured."""
-    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    """orderBy provider accepts camelized aliases by default."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"])
     deps = _create_statement_filters(config)
 
     provider = deps["order_by_filter"]
@@ -196,8 +196,8 @@ def test_order_by_provider_accepts_explicit_sort_field_alias() -> None:
 
 
 def test_order_by_provider_keeps_snake_case_sort_field_in_alias_mode() -> None:
-    """Alias mode preserves legacy snake_case query values."""
-    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    """Automatic alias mode preserves legacy snake_case query values."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"])
     deps = _create_statement_filters(config)
 
     provider = deps["order_by_filter"]
@@ -209,8 +209,8 @@ def test_order_by_provider_keeps_snake_case_sort_field_in_alias_mode() -> None:
 
 
 def test_order_by_provider_reports_display_aliases_for_invalid_alias() -> None:
-    """Alias-mode validation errors expose API-facing display values."""
-    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    """Validation errors expose API-facing display values by default."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"])
     deps = _create_statement_filters(config)
 
     provider = deps["order_by_filter"]
@@ -224,11 +224,28 @@ def test_order_by_provider_reports_display_aliases_for_invalid_alias() -> None:
 
 
 def test_order_by_provider_uses_display_alias_as_query_default() -> None:
-    """The orderBy parameter default uses the display alias in alias mode."""
-    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=True)
+    """The orderBy parameter default uses the display alias by default."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"])
     deps = _create_statement_filters(config)
 
     provider = deps["order_by_filter"]
     field_param = inspect.signature(provider.dependency).parameters["field_name"]
 
     assert field_param.default.default == "createdAt"
+
+
+def test_order_by_provider_can_disable_camelized_sort_field_aliases() -> None:
+    """sort_field_camelize=False keeps orderBy validation snake_case-only."""
+    config = FilterConfig(sort_field=["created_at", "uploaded_collections"], sort_field_camelize=False)
+    deps = _create_statement_filters(config)
+
+    provider = deps["order_by_filter"]
+    field_param = inspect.signature(provider.dependency).parameters["field_name"]
+
+    assert field_param.default.default == "created_at"
+    with pytest.raises(ValidationException) as exc_info:
+        provider.dependency(field_name="uploadedCollections", sort_order="asc")
+
+    message = str(exc_info.value)
+    assert "Invalid orderBy field 'uploadedCollections'" in message
+    assert "Allowed fields: created_at, uploaded_collections" in message

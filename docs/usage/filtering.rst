@@ -98,7 +98,6 @@ Using filters in a Litestar handler:
         "pagination_type": "limit_offset",
         "pagination_size": 20,
         "sort_field": ["created_at", "uploaded_collections", "name"],
-        "sort_field_camelize": True,
         "sort_order": "desc",
         "search": "name,email",
     })
@@ -114,20 +113,27 @@ Using filters in a Litestar handler:
 
 The generated dependencies automatically handle query parameters for configured fields like
 ``?currentPage=2&pageSize=10&searchString=alice&orderBy=uploadedCollections&sortOrder=asc``.
-With ``sort_field_camelize=True``, ``orderBy=uploadedCollections`` is normalized
-to the SQL-facing field ``uploaded_collections`` before the ``OrderByFilter`` is
-created. Raw configured values such as ``orderBy=uploaded_collections`` remain
-accepted for compatibility.
+Camelized ``orderBy`` values are accepted by default for every configured
+``sort_field`` value, so ``orderBy=uploadedCollections`` is normalized to the
+SQL-facing field ``uploaded_collections`` before the ``OrderByFilter`` is
+created. Raw configured values such as ``orderBy=uploaded_collections`` also
+remain accepted for compatibility.
 
-Sort aliases are opt-in and closed over the configured ``sort_field`` allowlist.
-Use ``sort_field_aliases`` when the public API name is not a mechanical camel-case
-conversion:
+Sort aliases are closed over the configured ``sort_field`` allowlist. Use
+``sort_field_aliases`` when the public API name is not a mechanical camel-case
+conversion, or set ``sort_field_camelize=False`` to require raw configured
+``orderBy`` values only:
 
 .. code-block:: python
 
     user_filter_deps = create_filter_dependencies({
         "sort_field": ["created_at", "uploaded_collections"],
         "sort_field_aliases": {"lastUpload": "uploaded_collections"},
+    })
+
+    snake_case_only_filter_deps = create_filter_dependencies({
+        "sort_field": ["created_at", "uploaded_collections"],
+        "sort_field_camelize": False,
     })
 
 ``orderBy=lastUpload`` is accepted, but aliases that target fields outside
@@ -141,7 +147,6 @@ For FastAPI, use the same configuration with ``Depends()``:
     filters = Depends(
         db_ext.provide_filters({
             "sort_field": ["created_at", "uploaded_collections"],
-            "sort_field_camelize": True,
         })
     )
 

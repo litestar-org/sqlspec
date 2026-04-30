@@ -89,40 +89,45 @@ class FieldNameType(NamedTuple):
 
 
 class FilterConfig(TypedDict):
-    """Configuration for generating dynamic filters for FastAPI."""
+    """Configuration for generated FastAPI filter dependencies.
+
+    All keys are optional. A filter dependency is created only for each enabled
+    key. Field names are SQL-facing allowlist values; generated query parameter
+    names and order-by aliases remain API-facing.
+    """
 
     id_filter: NotRequired[type[UUID | int | str]]
-    """Type of ID filter to enable (UUID, int, or str). When set, enables collection filtering by IDs."""
+    """Type of ID filter to enable. When set, creates an ``ids`` collection filter."""
     id_field: NotRequired[str]
-    """Field name for ID filtering. Defaults to 'id'."""
+    """SQL-facing field name for ID filtering. Defaults to ``"id"``."""
     sort_field: NotRequired[SortField]
-    """Allowed field(s) to use for sorting."""
+    """Allowed SQL-facing field or fields for ``orderBy`` sorting."""
     sort_field_aliases: NotRequired[dict[str, str]]
-    """API-facing aliases mapped to allowed sort fields."""
+    """Additional API-facing ``orderBy`` aliases mapped to configured ``sort_field`` values."""
     sort_field_camelize: NotRequired[bool]
-    """When True, accept camel-case aliases for configured sort fields."""
+    """Whether to accept camel-case aliases for configured sort fields. Defaults to ``True``."""
     sort_order: NotRequired[SortOrder]
-    """Default sort order ('asc' or 'desc'). Defaults to 'desc'."""
+    """Default sort order. Defaults to ``"desc"``."""
     pagination_type: NotRequired[Literal["limit_offset"]]
-    """When set to 'limit_offset', enables pagination with page size and current page parameters."""
+    """Pagination strategy to enable. Currently supports ``"limit_offset"``."""
     pagination_size: NotRequired[int]
-    """Default pagination page size. Defaults to DEFAULT_PAGINATION_SIZE (20)."""
+    """Default page size for limit/offset pagination."""
     search: NotRequired[str | set[str]]
-    """Field(s) to enable search filtering on. Can be comma-separated string or set of field names."""
+    """SQL-facing field or fields to search. Strings may be comma-separated."""
     search_ignore_case: NotRequired[bool]
-    """When True, search is case-insensitive. Defaults to False."""
+    """Whether search filtering is case-insensitive. Defaults to ``False``."""
     created_at: NotRequired[bool]
-    """When True, enables created_at date range filtering. Uses 'created_at' field by default."""
+    """Whether to enable ``created_at`` before/after range filtering."""
     updated_at: NotRequired[bool]
-    """When True, enables updated_at date range filtering. Uses 'updated_at' field by default."""
+    """Whether to enable ``updated_at`` before/after range filtering."""
     not_in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
-    """Fields that support not-in collection filtering. Can be single field or set of fields with type info."""
+    """Field or fields that support ``NOT IN`` collection filtering."""
     in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
-    """Fields that support in-collection filtering. Can be single field or set of fields with type info."""
+    """Field or fields that support ``IN`` collection filtering."""
     null_fields: NotRequired[str | set[str]]
-    """Fields that support IS NULL filtering. Can be single field name or set of field names."""
+    """Field or fields that support ``IS NULL`` filtering."""
     not_null_fields: NotRequired[str | set[str]]
-    """Fields that support IS NOT NULL filtering. Can be single field name or set of field names."""
+    """Field or fields that support ``IS NOT NULL`` filtering."""
 
 
 class DependencyCache(metaclass=SingletonMeta):
@@ -457,7 +462,7 @@ def _create_filter_aggregate_function_fastapi(  # noqa: C901
         sort_resolution = resolve_sort_field_aliases(
             sort_field,
             sort_field_aliases=config.get("sort_field_aliases"),
-            sort_field_camelize=config.get("sort_field_camelize", False),
+            sort_field_camelize=config.get("sort_field_camelize", True),
         )
         allowed_field_names = ", ".join(sort_resolution.allowed_display_names)
 

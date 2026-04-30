@@ -12,7 +12,7 @@ def show_filter_dependencies() -> None:
         "id_filter": str,  # Filter by user IDs
         "id_field": "id",  # Column name for ID filter
         "sort_field": ["created_at", "uploaded_collections", "name"],  # Allowed sort columns
-        "sort_field_camelize": True,  # Accept orderBy=uploadedCollections
+        # orderBy accepts camel aliases like uploadedCollections by default
         "sort_field_aliases": {"lastUpload": "uploaded_collections"},  # Optional non-mechanical aliases
         "sort_order": "desc",  # Default sort direction
         "pagination_type": "limit_offset",  # Enable pagination

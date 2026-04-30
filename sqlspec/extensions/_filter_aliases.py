@@ -44,14 +44,14 @@ class SortFieldResolution(NamedTuple):
 
 
 def resolve_sort_field_aliases(
-    sort_field: SortField, sort_field_aliases: Mapping[str, str] | None = None, sort_field_camelize: bool = False
+    sort_field: SortField, sort_field_aliases: Mapping[str, str] | None = None, sort_field_camelize: bool = True
 ) -> SortFieldResolution:
     """Resolve sort-field aliases to a closed allowlist map.
 
     Args:
         sort_field: Configured SQL-facing sort field or fields.
         sort_field_aliases: Optional API-facing alias to SQL-facing field mapping.
-        sort_field_camelize: Whether to generate camel-case aliases for configured fields.
+        sort_field_camelize: Whether to generate camel-case aliases for configured fields. Defaults to ``True``.
 
     Returns:
         Precomputed alias metadata for framework filter providers.
