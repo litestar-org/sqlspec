@@ -10,17 +10,17 @@ SQLSpec Changelog
 Recent Updates
 ==============
 
-Framework Filter ``orderBy`` Aliases (Unreleased)
--------------------------------------------------
+v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
+-----------------------------------------------------------
 
-**Added:**
+**Fixed:**
 
 * Litestar ``create_filter_dependencies()`` and FastAPI ``provide_filters()``
-  now support opt-in API-facing sort aliases through ``sort_field_aliases`` and
-  ``sort_field_camelize``. This lets endpoints accept values such as
-  ``orderBy=uploadedCollections`` while producing an ``OrderByFilter`` for the
-  SQL-facing field ``uploaded_collections``. Raw configured values remain
-  accepted for compatibility. (`#438
+  now support opt-in API-facing sort aliases for ``orderBy`` values through
+  ``sort_field_aliases`` and ``sort_field_camelize``. Endpoints can accept
+  values such as ``orderBy=uploadedCollections`` while producing an
+  ``OrderByFilter`` for the SQL-facing field ``uploaded_collections``. Raw
+  configured values remain accepted for compatibility. (`#438
   <https://github.com/litestar-org/sqlspec/issues/438>`_)
 
 **Safety:**
@@ -30,7 +30,19 @@ Framework Filter ``orderBy`` Aliases (Unreleased)
   rejected before SQL construction, preserving the existing identifier
   allowlist.
 
-schema_dump wire_format Opt-Out (Unreleased)
+v0.46.1 - Litestar Filter Provider Binding Fix
+----------------------------------------------
+
+**Fixed:**
+
+* Litestar generated filter providers now use unique dependency parameter names
+  for sibling ``IN``, ``NOT IN``, null, not-null, and range filters. This stops
+  sibling providers in the same filter family from cross-binding values while
+  preserving the existing query parameter aliases. (`#435
+  <https://github.com/litestar-org/sqlspec/issues/435>`_, `#436
+  <https://github.com/litestar-org/sqlspec/pull/436>`_)
+
+v0.46.0 - ``schema_dump`` Wire-Format Opt-Out
 ---------------------------------------------
 
 **Added:**
@@ -47,8 +59,8 @@ schema_dump wire_format Opt-Out (Unreleased)
 * The internal serializer cache key now includes ``wire_format`` so that
   ``True`` and ``False`` calls for the same Struct type cannot collide.
 
-Schema Wire Correctness (Unreleased)
--------------------------------------
+v0.44.0 - Schema Wire Correctness
+---------------------------------
 
 **Fixed:**
 
