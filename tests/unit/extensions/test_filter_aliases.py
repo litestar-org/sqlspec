@@ -2,6 +2,7 @@
 
 import pytest
 
+from sqlspec.extensions import _filter_aliases
 from sqlspec.extensions._filter_aliases import resolve_sort_field_aliases
 
 
@@ -75,3 +76,37 @@ def test_resolver_handles_dotted_fields() -> None:
     assert resolution.inbound_aliases["p.createdAt"] == "p.created_at"
     assert resolution.normalize("p.createdAt") == "p.created_at"
     assert resolution.allowed_display_names == ("p.createdAt", "p.name")
+
+
+def test_resolver_normalize_uses_precomputed_alias_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Normalization uses a dictionary lookup after provider creation."""
+    resolution = resolve_sort_field_aliases(["created_at", "uploaded_collections"], sort_field_camelize=True)
+
+    def fail_camelize(_: str) -> str:
+        pytest.fail("normalize() must not camelize values at request time")
+
+    monkeypatch.setattr(_filter_aliases, "camelize", fail_camelize)
+
+    assert resolution.normalize("createdAt") == "created_at"
+    assert resolution.normalize("uploadedCollections") == "uploaded_collections"
+    assert resolution.normalize("unknownField") is None
+
+
+def test_provider_hashes_include_alias_config_fields() -> None:
+    """Existing provider cache keys distinguish the new alias configuration fields."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("litestar")
+    from sqlspec.extensions.fastapi.providers import _make_hashable as fastapi_make_hashable
+    from sqlspec.extensions.litestar.providers import _make_hashable as litestar_make_hashable
+
+    base_config = {"sort_field": ["created_at", "uploaded_collections"]}
+    explicit_alias_config = {
+        "sort_field": ["created_at", "uploaded_collections"],
+        "sort_field_aliases": {"uploadedCollections": "uploaded_collections"},
+    }
+    camel_alias_config = {"sort_field": ["created_at", "uploaded_collections"], "sort_field_camelize": True}
+
+    for make_hashable in (fastapi_make_hashable, litestar_make_hashable):
+        assert make_hashable(base_config) != make_hashable(explicit_alias_config)
+        assert make_hashable(base_config) != make_hashable(camel_alias_config)
+        assert make_hashable(explicit_alias_config) != make_hashable(camel_alias_config)
