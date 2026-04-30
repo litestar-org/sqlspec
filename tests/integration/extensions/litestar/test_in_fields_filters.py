@@ -452,8 +452,9 @@ def test_litestar_order_by_openapi_schema_uses_alias_default() -> None:
 
     order_by_param = next((p for p in params if getattr(p, "name", None) == "orderBy"), None)
     assert order_by_param is not None
-    assert order_by_param.schema is not None
-    assert order_by_param.schema.default == "createdAt"
+    order_by_schema = getattr(order_by_param, "schema", None)
+    assert order_by_schema is not None
+    assert getattr(order_by_schema, "default", None) == "createdAt"
 
     def is_string_type(schema: Any) -> bool:
         if not schema:
@@ -467,7 +468,7 @@ def test_litestar_order_by_openapi_schema_uses_alias_default() -> None:
             return any(is_string_type(s) for s in schema.one_of)
         return False
 
-    assert is_string_type(order_by_param.schema)
+    assert is_string_type(order_by_schema)
 
 
 # Regression tests for issue #435 (cross-binding across providers in the same family).
