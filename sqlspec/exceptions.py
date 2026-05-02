@@ -35,6 +35,7 @@ __all__ = (
     "SQLFileParseError",
     "SQLParsingError",
     "SQLSpecError",
+    "SQLStatementNotFoundError",
     "SerializationConflictError",
     "SerializationError",
     "SquashValidationError",
@@ -321,6 +322,31 @@ class SQLFileNotFoundError(SQLSpecError):
         super().__init__(message)
         self.name = name
         self.path = path
+
+
+class SQLStatementNotFoundError(SQLFileNotFoundError):
+    """Raised when a named SQL statement is not loaded."""
+
+    def __init__(self, name: str, normalized_name: str, query_count: int) -> None:
+        """Initialize the error.
+
+        Args:
+            name: Name requested by the caller.
+            normalized_name: Normalized statement name used for lookup.
+            query_count: Number of SQL statements loaded in the registry.
+        """
+        if query_count == 0:
+            message = f"SQL statement '{name}' not found. No SQL statements are loaded."
+        else:
+            message = (
+                f"SQL statement '{name}' not found. {query_count} SQL statements are loaded. "
+                "Use list_queries() to inspect available statement names."
+            )
+        SQLSpecError.__init__(self, message)
+        self.name = name
+        self.path = None
+        self.normalized_name = normalized_name
+        self.query_count = query_count
 
 
 class SQLFileParseError(SQLSpecError):

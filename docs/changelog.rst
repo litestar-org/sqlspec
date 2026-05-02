@@ -15,6 +15,12 @@ v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
 
 **Fixed:**
 
+* Missing named SQL statements now raise ``SQLStatementNotFoundError``, a
+  ``SQLFileNotFoundError`` subclass with structured lookup context and bounded
+  messages that report the loaded statement count instead of dumping available
+  statement names. (`#437
+  <https://github.com/litestar-org/sqlspec/issues/437>`_)
+
 * Litestar ``create_filter_dependencies()`` and FastAPI ``provide_filters()``
   now accept camel-case API-facing sort aliases for configured ``orderBy``
   fields by default. Endpoints can accept values such as

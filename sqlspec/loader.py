@@ -21,6 +21,7 @@ from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
     SQLFileParseError,
+    SQLStatementNotFoundError,
     StorageOperationFailedError,
 )
 from sqlspec.storage.registry import storage_registry as default_storage_registry
@@ -205,6 +206,18 @@ class SQLFileLoader:
             SQLFileNotFoundError: Always raised.
         """
         raise SQLFileNotFoundError(path)
+
+    def _raise_statement_not_found(self, name: str, normalized_name: str) -> None:
+        """Raise SQLStatementNotFoundError for nonexistent statements.
+
+        Args:
+            name: Name requested by the caller.
+            normalized_name: Normalized statement name used for lookup.
+
+        Raises:
+            SQLStatementNotFoundError: Always raised.
+        """
+        raise SQLStatementNotFoundError(name=name, normalized_name=normalized_name, query_count=len(self._queries))
 
     def _generate_file_cache_key(self, path: str | Path) -> str:
         """Generate cache key for a file path.
@@ -676,11 +689,11 @@ class SQLFileLoader:
             Raw SQL text.
 
         Raises:
-            SQLFileNotFoundError: If query not found.
+            SQLStatementNotFoundError: If query not found.
         """
         safe_name = _normalize_query_name(name)
         if safe_name not in self._queries:
-            raise SQLFileNotFoundError(name)
+            self._raise_statement_not_found(name, safe_name)
         return self._queries[safe_name].sql
 
     def get_sql(self, name: str) -> "SQL":
@@ -694,13 +707,12 @@ class SQLFileLoader:
             SQL object ready for execution.
 
         Raises:
-            SQLFileNotFoundError: If statement name not found.
+            SQLStatementNotFoundError: If statement name not found.
         """
         safe_name = _normalize_query_name(name)
 
         if safe_name not in self._queries:
-            available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
-            raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
+            self._raise_statement_not_found(name, safe_name)
 
         parsed_statement = self._queries[safe_name]
         sqlglot_dialect = None

@@ -7,7 +7,9 @@ from sqlspec.exceptions import (
     NotFoundError,
     NotNullViolationError,
     OperationalError,
+    SQLFileNotFoundError,
     SQLSpecError,
+    SQLStatementNotFoundError,
     StackExecutionError,
     TransactionError,
     UniqueViolationError,
@@ -25,6 +27,7 @@ def test_new_exception_hierarchy() -> None:
     assert issubclass(TransactionError, SQLSpecError)
     assert issubclass(DataError, SQLSpecError)
     assert issubclass(OperationalError, SQLSpecError)
+    assert issubclass(SQLStatementNotFoundError, SQLFileNotFoundError)
 
 
 def test_exception_instantiation() -> None:
@@ -147,6 +150,21 @@ def test_subclass_inherits_args_behavior() -> None:
     assert exc.args == ("item not found",)
     assert exc.detail == "item not found"
     assert str(exc) == "item not found"
+
+
+def test_sql_statement_not_found_exposes_lookup_context() -> None:
+    """Test SQLStatementNotFoundError exposes bounded lookup context."""
+    exc = SQLStatementNotFoundError(name="missing-query", normalized_name="missing_query", query_count=12)
+
+    assert isinstance(exc, SQLFileNotFoundError)
+    assert exc.name == "missing-query"
+    assert exc.path is None
+    assert exc.normalized_name == "missing_query"
+    assert exc.query_count == 12
+    assert str(exc) == (
+        "SQL statement 'missing-query' not found. 12 SQL statements are loaded. "
+        "Use list_queries() to inspect available statement names."
+    )
 
 
 def test_stack_execution_error_preserves_args() -> None:

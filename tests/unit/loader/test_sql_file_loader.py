@@ -10,13 +10,14 @@ Tests for SQLFileLoader core functionality including:
 """
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from sqlspec.core import SQL
-from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
+from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, SQLStatementNotFoundError
 from sqlspec.loader import (
     NamedStatement,
     SQLFile,
@@ -510,6 +511,44 @@ def test_get_query_text_not_found() -> None:
         loader.get_query_text("nonexistent")
 
 
+@pytest.mark.parametrize("accessor", [SQLFileLoader.get_sql, SQLFileLoader.get_query_text])
+def test_missing_statement_empty_loader_message(accessor: Callable[[SQLFileLoader, str], object]) -> None:
+    """Missing statements in an empty loader should return a bounded message."""
+    loader = SQLFileLoader()
+
+    with pytest.raises(SQLStatementNotFoundError) as exc_info:
+        accessor(loader, "missing-secret")
+
+    exc = exc_info.value
+    assert str(exc) == "SQL statement 'missing-secret' not found. No SQL statements are loaded."
+    assert exc.name == "missing-secret"
+    assert exc.normalized_name == "missing_secret"
+    assert exc.query_count == 0
+
+
+@pytest.mark.parametrize("accessor", [SQLFileLoader.get_sql, SQLFileLoader.get_query_text])
+def test_missing_statement_loaded_registry_message_does_not_leak_names(
+    accessor: Callable[[SQLFileLoader, str], object],
+) -> None:
+    """Missing statements should not dump the loaded statement registry."""
+    loader = SQLFileLoader()
+    loaded_query_names = [f"tenant_{index}_private_query" for index in range(20)]
+    for query_name in loaded_query_names:
+        loader.add_named_sql(query_name, "SELECT 1")
+
+    with pytest.raises(SQLStatementNotFoundError) as exc_info:
+        accessor(loader, "missing-secret")
+
+    message = str(exc_info.value)
+    assert message == (
+        "SQL statement 'missing-secret' not found. 20 SQL statements are loaded. "
+        "Use list_queries() to inspect available statement names."
+    )
+    assert "Available statements" not in message
+    for query_name in loaded_query_names:
+        assert query_name not in message
+
+
 def test_clear_cache() -> None:
     """Test clearing loader cache."""
     loader = SQLFileLoader()
@@ -582,7 +621,7 @@ def test_get_sql_not_found() -> None:
     with pytest.raises(SQLFileNotFoundError) as exc_info:
         loader.get_sql("nonexistent")
 
-    assert "Statement 'nonexistent' not found" in str(exc_info.value)
+    assert "SQL statement 'nonexistent' not found" in str(exc_info.value)
 
 
 def test_get_sql_name_normalization() -> None:

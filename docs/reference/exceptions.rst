@@ -165,6 +165,10 @@ SQL Files
    :members:
    :show-inheritance:
 
+.. autoclass:: SQLStatementNotFoundError
+   :members:
+   :show-inheritance:
+
 .. autoclass:: SQLFileParseError
    :members:
    :show-inheritance:
@@ -241,6 +245,7 @@ Inheritance Tree
    |   +-- FileNotFoundInStorageError
    +-- StorageCapabilityError
    +-- SQLFileNotFoundError
+   |   +-- SQLStatementNotFoundError
    +-- SQLFileParseError
    +-- MigrationError
        +-- InvalidVersionFormatError
