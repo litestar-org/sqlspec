@@ -481,10 +481,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)
 
-        existing_plugins = list(app_config.plugins or [])
-        if not any(isinstance(p, _OffsetPaginationSchemaPlugin) for p in existing_plugins):
-            existing_plugins.append(_OffsetPaginationSchemaPlugin())
-        app_config.plugins = existing_plugins
+        if not any(isinstance(p, _OffsetPaginationSchemaPlugin) for p in app_config.plugins):
+            app_config.plugins.append(_OffsetPaginationSchemaPlugin())
 
         if app_config.exception_handlers is None:
             app_config.exception_handlers = {}
