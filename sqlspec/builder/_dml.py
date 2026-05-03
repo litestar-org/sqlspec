@@ -11,6 +11,7 @@ from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
+from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_dict
 
 __all__ = (
@@ -321,6 +322,26 @@ class UpdateSetClauseMixin:
         existing = current_expr.args.get("expressions", [])
         current_expr.set("expressions", existing + assignments)
         return self
+
+    def set_from(self, data: Any, *, exclude_unset: bool = True) -> Self:
+        """Set columns from a dict, dataclass, msgspec.Struct, Pydantic model, or attrs class.
+
+        Schema instances are normalised via :func:`sqlspec.utils.serializers.schema_dump`
+        with ``wire_format=False`` and dispatched to :meth:`set` via keyword unpack. The
+        dict shape uses Python attribute names regardless of msgspec ``rename=`` or
+        Pydantic ``Field(alias=...)``.
+
+        Args:
+            data: A dict, dataclass instance, ``msgspec.Struct``, ``pydantic.BaseModel``,
+                or ``attrs``-decorated class instance.
+            exclude_unset: If True, exclude fields that were never set (msgspec UNSET,
+                Pydantic ``model_fields_set``, dataclass empty defaults). No-op for attrs.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        payload = schema_dump(data, exclude_unset=exclude_unset, wire_format=False)
+        return self.set(**payload)
 
 
 @trait

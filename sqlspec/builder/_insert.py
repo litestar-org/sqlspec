@@ -16,6 +16,7 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
@@ -167,6 +168,56 @@ class Insert(
             self.values(*[row_dict[col] for col in self._columns])
 
         return self
+
+    def values_from(self, data: Any, *, exclude_unset: bool = True) -> "Self":
+        """Add a row of values from a dict, dataclass, msgspec.Struct, Pydantic model, or attrs class.
+
+        Schema instances are normalised via :func:`sqlspec.utils.serializers.schema_dump`
+        with ``wire_format=False`` and dispatched to :meth:`values_from_dict`. The dict
+        shape uses Python attribute names regardless of msgspec ``rename=`` or Pydantic
+        ``Field(alias=...)``; wire-aligned names never make sense for SQL column binding.
+
+        Args:
+            data: A dict, dataclass instance, ``msgspec.Struct``, ``pydantic.BaseModel``,
+                or ``attrs``-decorated class instance.
+            exclude_unset: If True, exclude fields that were never set. Honoured by
+                msgspec (UNSET fields), Pydantic (``model_fields_set``), and dataclass
+                (via empty default-field semantics). No-op for attrs.
+
+        Returns:
+            The current builder instance for method chaining.
+
+        Raises:
+            SQLBuilderError: If ``into()`` has not been called or the dict shape is
+                incompatible with previously set columns.
+        """
+        payload = schema_dump(data, exclude_unset=exclude_unset, wire_format=False)
+        return self.values_from_dict(payload)
+
+    def values_from_many(self, items: "Sequence[Any]", *, exclude_unset: bool = True) -> "Self":
+        """Add multiple rows from a sequence of dicts, dataclasses, msgspec Structs, Pydantic models, or attrs classes.
+
+        Each item is normalised via :func:`sqlspec.utils.serializers.schema_dump` with
+        ``wire_format=False`` and dispatched to :meth:`values_from_dicts`. Mixed schema
+        kinds in the same sequence are supported (each item dispatches independently);
+        however, the resulting dict shapes must agree on key sets.
+
+        Args:
+            items: A sequence of schema instances or dicts.
+            exclude_unset: See :meth:`values_from` for per-library semantics.
+
+        Returns:
+            The current builder instance for method chaining. Empty input returns the
+            builder unchanged.
+
+        Raises:
+            SQLBuilderError: If ``into()`` has not been called or item dict shapes
+                disagree on key sets.
+        """
+        if not items:
+            return self
+        payload = [schema_dump(item, exclude_unset=exclude_unset, wire_format=False) for item in items]
+        return self.values_from_dicts(payload)
 
     def on_conflict(self, *columns: str) -> "ConflictBuilder":
         """Adds an ON CONFLICT clause with specified columns.
