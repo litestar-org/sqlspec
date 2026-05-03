@@ -7,16 +7,12 @@ produce identical Python-attribute-name keys regardless of any wire-rename meta.
 """
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 
 from sqlspec import sql
 from sqlspec.utils.serializers import reset_serializer_cache
-
-if TYPE_CHECKING:
-    pass
-
 
 pytestmark = pytest.mark.xdist_group("builder")
 
@@ -30,7 +26,7 @@ def _reset_serializer_cache() -> "Any":
 
 def test_insert_values_from_msgspec_struct_with_rename_uses_python_names() -> None:
     """Regression: msgspec Struct with rename="camel" must NOT leak camelCase column names."""
-    msgspec = pytest.importorskip("msgspec")
+    import msgspec
 
     class _User(msgspec.Struct, rename="camel"):
         user_id: str
@@ -77,7 +73,7 @@ def test_insert_values_from_many_empty_list_returns_self_unchanged() -> None:
 
 def test_update_set_from_msgspec_struct_with_rename_uses_python_names() -> None:
     """set_from must emit Python attribute names regardless of msgspec rename meta."""
-    msgspec = pytest.importorskip("msgspec")
+    import msgspec
 
     class _UserPatch(msgspec.Struct, rename="camel"):
         display_name: str
@@ -112,7 +108,7 @@ def _make_dataclass() -> "Any":
 
 
 def _make_msgspec_struct_with_rename() -> "Any":
-    msgspec = pytest.importorskip("msgspec")
+    import msgspec
 
     class _User(msgspec.Struct, rename="camel"):
         user_id: str
@@ -146,7 +142,7 @@ def _make_attrs_instance() -> "Any":
     return _User(userId="u1", displayName="Cody")
 
 
-SCHEMA_FACTORIES: "list[pytest.ParameterSet]" = [
+SCHEMA_FACTORIES = [
     pytest.param(_make_dict, id="dict"),
     pytest.param(_make_dataclass, id="dataclass"),
     pytest.param(_make_msgspec_struct_with_rename, id="msgspec_rename"),
@@ -189,7 +185,7 @@ def test_insert_values_from_many_uses_python_names_for_all_schema_kinds(factory:
 
 def test_insert_values_from_msgspec_exclude_unset_filters_unset_fields() -> None:
     """exclude_unset=True must drop UNSET msgspec fields from the resulting INSERT."""
-    msgspec = pytest.importorskip("msgspec")
+    import msgspec
     from msgspec import UNSET
 
     class _UserPatch(msgspec.Struct, rename="camel", omit_defaults=False):
