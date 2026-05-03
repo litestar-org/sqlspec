@@ -17,7 +17,7 @@ from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.deprecation import warn_deprecation
-from sqlspec.utils.serializers import schema_dump
+from sqlspec.utils.serializers import schema_dump, serialize_collection
 from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
@@ -242,7 +242,7 @@ class Insert(
         """
         if not items:
             return self
-        payload = [schema_dump(item, exclude_unset=exclude_unset, wire_format=False) for item in items]
+        payload = serialize_collection(items, exclude_unset=exclude_unset, wire_format=False)
         return self._bind_values_from_dicts(payload)
 
     def on_conflict(self, *columns: str) -> "ConflictBuilder":
