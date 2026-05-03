@@ -201,7 +201,7 @@ def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) ->
 
 
 def get_collection_serializer(
-    sample: Any, *, exclude_unset: bool = True, wire_format: bool = True
+    sample: Any, *, exclude_unset: bool = True, wire_format: bool = False
 ) -> "SchemaSerializer":
     """Return cached serializer pipeline for the provided sample object."""
     key = _make_serializer_key(sample, exclude_unset, wire_format)
@@ -219,7 +219,7 @@ def get_collection_serializer(
 
 
 def serialize_collection(
-    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = True
+    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = False
 ) -> "list[Any]":
     """Serialize a collection using cached pipelines keyed by item type."""
     serialized: list[Any] = []
@@ -254,7 +254,7 @@ def get_serializer_metrics() -> "dict[str, int]":
         return metrics
 
 
-def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = True) -> Any:
+def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = False) -> Any:
     """Dump a schema model or dict to a plain representation.
 
     Args:
@@ -262,11 +262,12 @@ def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = Tr
             or plain dict / primitive.
         exclude_unset: If True, exclude fields that were never set (msgspec UNSET, Pydantic
             model_fields_set semantics). No-op for attrs (attrs has no unset concept).
-        wire_format: msgspec-only knob. Default True keeps the historical behavior of
-            emitting ``field.encode_name`` (honours ``rename=`` on the Struct). Pass
-            ``wire_format=False`` to opt msgspec into Python attribute names (``field.name``)
-            for cross-library consistency. Pydantic, dataclass, and attrs branches always
-            use Python attribute names regardless of this flag.
+        wire_format: msgspec-only knob. Default ``False`` emits Python attribute names
+            (``field.name``) for cross-library consistency — keys match Pydantic, dataclass,
+            and attrs output regardless of the Struct's ``rename=`` meta. Pass
+            ``wire_format=True`` to emit ``field.encode_name`` (honours ``rename=`` on the
+            Struct) for wire-aligned JSON / API payloads. Pydantic, dataclass, and attrs
+            branches always use Python attribute names regardless of this flag.
     """
     if is_dict(data):
         return data

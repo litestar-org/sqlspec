@@ -13,6 +13,19 @@ Recent Updates
 v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
 -----------------------------------------------------------
 
+**Changed (breaking default):**
+
+* ``sqlspec.utils.serializers.schema_dump`` (and its helpers
+  ``serialize_collection`` / ``get_collection_serializer``) now default
+  ``wire_format=False``. Calling ``schema_dump(struct)`` on a ``msgspec.Struct``
+  declared with ``rename=`` now returns Python attribute names by default
+  (matching Pydantic, dataclass, and attrs output) instead of wire-aligned
+  ``field.encode_name`` keys. Pass ``wire_format=True`` explicitly to restore
+  the prior wire-aligned output for JSON / API payloads. This default flip
+  closes the silent footgun where ``sql.update(t).set(**schema_dump(struct))``
+  emitted camelCase column names for snake_case database tables. The kwarg
+  remains a no-op for non-msgspec inputs.
+
 **Fixed:**
 
 * Missing named SQL statements now raise ``SQLStatementNotFoundError``, a

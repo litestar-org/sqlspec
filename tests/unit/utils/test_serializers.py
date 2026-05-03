@@ -744,9 +744,10 @@ class TestSchemaDumpWireFormatOptOut:
             user_id: str
 
         obj = _User(user_id="abc")
-        assert schema_dump(obj) == {"userId": "abc"}
+        assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
         assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
-        assert schema_dump(obj) == {"userId": "abc"}
+        assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
+        assert schema_dump(obj) == {"user_id": "abc"}  # default is wire_format=False
 
     def test_pydantic_unaffected_by_wire_format(self) -> None:
         pytest.importorskip("pydantic")
@@ -786,7 +787,7 @@ class TestSchemaDumpWireFormatOptOut:
 
 
 class TestSchemaDumpRename:
-    """Regression suite for GitHub #418 — schema_dump must honor msgspec rename meta."""
+    """Regression suite for GitHub #418 — schema_dump honors msgspec rename meta when ``wire_format=True``."""
 
     @pytest.fixture(autouse=True)
     def _reset_cache(self) -> "Any":
@@ -802,7 +803,7 @@ class TestSchemaDumpRename:
             display_name: str
 
         obj = _User(user_id="abc-123", display_name="Cody")
-        assert schema_dump(obj) == {"userId": "abc-123", "displayName": "Cody"}
+        assert schema_dump(obj, wire_format=True) == {"userId": "abc-123", "displayName": "Cody"}
 
     def test_rename_kebab(self) -> None:
         import msgspec
@@ -812,7 +813,7 @@ class TestSchemaDumpRename:
             display_name: str
 
         obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj) == {"user-id": "abc", "display-name": "Cody"}
+        assert schema_dump(obj, wire_format=True) == {"user-id": "abc", "display-name": "Cody"}
 
     def test_rename_pascal(self) -> None:
         import msgspec
@@ -822,7 +823,7 @@ class TestSchemaDumpRename:
             display_name: str
 
         obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj) == {"UserId": "abc", "DisplayName": "Cody"}
+        assert schema_dump(obj, wire_format=True) == {"UserId": "abc", "DisplayName": "Cody"}
 
     def test_rename_callable(self) -> None:
         import msgspec
@@ -835,7 +836,7 @@ class TestSchemaDumpRename:
             display_name: str
 
         obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj) == {"USER_ID": "abc", "DISPLAY_NAME": "Cody"}
+        assert schema_dump(obj, wire_format=True) == {"USER_ID": "abc", "DISPLAY_NAME": "Cody"}
 
     def test_no_rename_preserved(self) -> None:
         import msgspec
@@ -856,4 +857,71 @@ class TestSchemaDumpRename:
             display_name: str = UNSET  # type: ignore[assignment]
 
         obj = _User(user_id="abc")
-        assert schema_dump(obj, exclude_unset=True) == {"userId": "abc"}
+        assert schema_dump(obj, exclude_unset=True, wire_format=True) == {"userId": "abc"}
+
+
+class TestSchemaDumpDefaultIsPythonNames:
+    """Default ``schema_dump(struct)`` emits Python attribute names regardless of ``rename=`` meta.
+
+    Cross-library consistency contract: the same call shape on every supported schema kind
+    (msgspec, Pydantic, dataclass, attrs, dict) returns Python-attribute-name keys. Wire-aligned
+    output requires explicit ``wire_format=True``.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self) -> "Any":
+        reset_serializer_cache()
+        yield
+        reset_serializer_cache()
+
+    def test_msgspec_rename_camel_default_emits_python_names(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+            display_name: str
+
+        obj = _User(user_id="abc", display_name="Cody")
+        assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
+
+    def test_msgspec_rename_kebab_default_emits_python_names(self) -> None:
+        import msgspec
+
+        class _User(msgspec.Struct, rename="kebab"):
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj) == {"user_id": "abc"}
+
+    def test_pydantic_alias_default_emits_python_names(self) -> None:
+        pytest.importorskip("pydantic")
+        import pydantic
+
+        class _User(pydantic.BaseModel):
+            user_id: str = pydantic.Field(alias="userId")
+
+            model_config = pydantic.ConfigDict(populate_by_name=True)
+
+        obj = _User(userId="abc")
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+
+    def test_dataclass_default_emits_python_names(self) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class _User:
+            user_id: str
+
+        obj = _User(user_id="abc")
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+
+    def test_attrs_default_emits_python_names(self) -> None:
+        pytest.importorskip("attrs")
+        import attrs
+
+        @attrs.define
+        class _User:
+            user_id: str = attrs.field(alias="userId")
+
+        obj = _User(userId="abc")
+        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
