@@ -16,6 +16,7 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.deprecation import warn_deprecation
 from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.type_guards import has_expression_and_sql
 
@@ -105,21 +106,8 @@ class Insert(
         """Get the insert expression (public API)."""
         return self._get_insert_expression()
 
-    def values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
-        """Adds a row of values from a dictionary.
-
-        This is a convenience method that automatically sets columns based on
-        the dictionary keys and values based on the dictionary values.
-
-        Args:
-            data: A mapping of column names to values.
-
-        Returns:
-            The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If `into()` has not been called to set the table.
-        """
+    def _bind_values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
+        """Bind a single dict row without deprecation warnings (internal)."""
         insert_expr = self._get_insert_expression()
         if insert_expr.args.get("this") is None:
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
@@ -133,21 +121,8 @@ class Insert(
 
         return self.values(*[data[col] for col in self._columns])
 
-    def values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
-        """Adds multiple rows of values from a sequence of dictionaries.
-
-        This is a convenience method for bulk inserts from structured data.
-
-        Args:
-            data: A sequence of mappings, each representing a row of data.
-
-        Returns:
-            The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If `into()` has not been called to set the table,
-                           or if dictionaries have inconsistent keys.
-        """
+    def _bind_values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
+        """Bind many dict rows without deprecation warnings (internal)."""
         if not data:
             return self
 
@@ -169,13 +144,64 @@ class Insert(
 
         return self
 
+    def values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
+        """Adds a row of values from a dictionary.
+
+        .. deprecated:: 0.46.2
+            Use :meth:`values_from` instead — it accepts dicts, msgspec Structs,
+            Pydantic models, dataclasses, and attrs classes.
+
+        Args:
+            data: A mapping of column names to values.
+
+        Returns:
+            The current builder instance for method chaining.
+
+        Raises:
+            SQLBuilderError: If `into()` has not been called to set the table.
+        """
+        warn_deprecation(
+            version="0.46.2",
+            deprecated_name="Insert.values_from_dict",
+            kind="method",
+            alternative="Insert.values_from() — accepts dicts, msgspec Structs, Pydantic models, dataclasses, and attrs classes",
+            removal_in="0.48.0",
+        )
+        return self._bind_values_from_dict(data)
+
+    def values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
+        """Adds multiple rows of values from a sequence of dictionaries.
+
+        .. deprecated:: 0.46.2
+            Use :meth:`values_from_many` instead — it accepts dicts, msgspec Structs,
+            Pydantic models, dataclasses, and attrs classes.
+
+        Args:
+            data: A sequence of mappings, each representing a row of data.
+
+        Returns:
+            The current builder instance for method chaining.
+
+        Raises:
+            SQLBuilderError: If `into()` has not been called to set the table,
+                           or if dictionaries have inconsistent keys.
+        """
+        warn_deprecation(
+            version="0.46.2",
+            deprecated_name="Insert.values_from_dicts",
+            kind="method",
+            alternative="Insert.values_from_many() — accepts dicts, msgspec Structs, Pydantic models, dataclasses, and attrs classes",
+            removal_in="0.48.0",
+        )
+        return self._bind_values_from_dicts(data)
+
     def values_from(self, data: Any, *, exclude_unset: bool = True) -> "Self":
         """Add a row of values from a dict, dataclass, msgspec.Struct, Pydantic model, or attrs class.
 
         Schema instances are normalised via :func:`sqlspec.utils.serializers.schema_dump`
-        with ``wire_format=False`` and dispatched to :meth:`values_from_dict`. The dict
-        shape uses Python attribute names regardless of msgspec ``rename=`` or Pydantic
-        ``Field(alias=...)``; wire-aligned names never make sense for SQL column binding.
+        with ``wire_format=False`` then bound as a single row. The dict shape uses Python
+        attribute names regardless of msgspec ``rename=`` or Pydantic ``Field(alias=...)``;
+        wire-aligned names never make sense for SQL column binding.
 
         Args:
             data: A dict, dataclass instance, ``msgspec.Struct``, ``pydantic.BaseModel``,
@@ -192,15 +218,15 @@ class Insert(
                 incompatible with previously set columns.
         """
         payload = schema_dump(data, exclude_unset=exclude_unset, wire_format=False)
-        return self.values_from_dict(payload)
+        return self._bind_values_from_dict(payload)
 
     def values_from_many(self, items: "Sequence[Any]", *, exclude_unset: bool = True) -> "Self":
         """Add multiple rows from a sequence of dicts, dataclasses, msgspec Structs, Pydantic models, or attrs classes.
 
         Each item is normalised via :func:`sqlspec.utils.serializers.schema_dump` with
-        ``wire_format=False`` and dispatched to :meth:`values_from_dicts`. Mixed schema
-        kinds in the same sequence are supported (each item dispatches independently);
-        however, the resulting dict shapes must agree on key sets.
+        ``wire_format=False`` then bound as a multi-row INSERT. Mixed schema kinds in the
+        same sequence are supported (each item normalises independently); however, the
+        resulting dict shapes must agree on key sets.
 
         Args:
             items: A sequence of schema instances or dicts.
@@ -217,7 +243,7 @@ class Insert(
         if not items:
             return self
         payload = [schema_dump(item, exclude_unset=exclude_unset, wire_format=False) for item in items]
-        return self.values_from_dicts(payload)
+        return self._bind_values_from_dicts(payload)
 
     def on_conflict(self, *columns: str) -> "ConflictBuilder":
         """Adds an ON CONFLICT clause with specified columns.

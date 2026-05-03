@@ -307,7 +307,7 @@ def test_select_method() -> None:
 
 def test_insert_method() -> None:
     """Test sql.insert() method."""
-    query = sql.insert("users").values_from_dict({"name": "John", "email": "john@test.com"})
+    query = sql.insert("users").values_from({"name": "John", "email": "john@test.com"})
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
@@ -1289,9 +1289,9 @@ def test_legacy_on_duplicate_key_update_method() -> None:
 
 
 def test_on_conflict_with_insert_from_dict() -> None:
-    """Test ON CONFLICT with insert using from_dict methods."""
+    """Test ON CONFLICT with insert built from a dict via values_from."""
     data = {"id": 1, "name": "John", "email": "john@test.com"}
-    query = sql.insert("users").values_from_dict(data).on_conflict("id").do_update(name="Updated John")
+    query = sql.insert("users").values_from(data).on_conflict("id").do_update(name="Updated John")
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql

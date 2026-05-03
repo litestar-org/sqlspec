@@ -173,8 +173,8 @@ def test_insert_with_columns_uses_column_names() -> None:
 
 
 def test_insert_values_from_dict_preserves_keys() -> None:
-    """Test that INSERT values_from_dict preserves dictionary keys."""
-    query = sql.insert("orders").values_from_dict({
+    """Test that INSERT values_from preserves dictionary keys."""
+    query = sql.insert("orders").values_from({
         "customer_id": 12345,
         "product_name": "Widget",
         "quantity": 3,
@@ -314,7 +314,7 @@ def test_no_generic_param_names_in_update_operations() -> None:
 def test_no_generic_param_names_in_insert_operations() -> None:
     """Test that INSERT operations use descriptive parameter names."""
     test_cases = [
-        sql.insert("users").values_from_dict({"name": "John", "email": "john@test.com"}),
+        sql.insert("users").values_from({"name": "John", "email": "john@test.com"}),
         sql.insert("posts").columns("title", "content").values("Hello", "World"),
     ]
 

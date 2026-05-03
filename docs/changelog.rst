@@ -26,6 +26,23 @@ v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
   emitted camelCase column names for snake_case database tables. The kwarg
   remains a no-op for non-msgspec inputs.
 
+**Added:**
+
+* ``Insert.values_from(data, *, exclude_unset=True)``,
+  ``Insert.values_from_many(items, *, exclude_unset=True)``, and
+  ``Update.set_from(data, *, exclude_unset=True)`` builder methods. Each accepts
+  any schema kind (dict, dataclass, ``msgspec.Struct``, ``pydantic.BaseModel``,
+  attrs class) and dispatches through ``schema_dump(wire_format=False)`` so SQL
+  column names are always Python attribute names regardless of any wire-rename
+  meta on the source schema.
+
+**Deprecated:**
+
+* ``Insert.values_from_dict`` and ``Insert.values_from_dicts`` now emit a
+  ``DeprecationWarning`` pointing at ``Insert.values_from`` /
+  ``Insert.values_from_many`` respectively. The dict-shaped methods continue to
+  work; they are scheduled for removal in 0.48.0.
+
 **Fixed:**
 
 * Missing named SQL statements now raise ``SQLStatementNotFoundError``, a
