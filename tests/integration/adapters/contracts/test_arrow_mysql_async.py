@@ -1,13 +1,32 @@
-"""Integration tests for aiomysql Arrow query support."""
+"""MySQL async-family Arrow query support contract tests."""
+
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
+from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.aiomysql import AiomysqlDriver
+from tests.integration.adapters.contracts._mysql_async import (
+    MYSQL_ASYNC_ADAPTERS,
+    close_mysql_async_config,
+    mysql_async_config,
+)
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
 
-async def test_select_to_arrow_basic(aiomysql_driver: AiomysqlDriver) -> None:
+@pytest.fixture(params=MYSQL_ASYNC_ADAPTERS)
+async def aiomysql_driver(request: pytest.FixtureRequest, mysql_service: MySQLService) -> AsyncGenerator[Any, None]:
+    """Create a MySQL async-family driver for Arrow tests."""
+    config = mysql_async_config(str(request.param), mysql_service)
+    try:
+        async with config.provide_session() as driver:
+            yield driver
+    finally:
+        await close_mysql_async_config(config)
+
+
+async def test_select_to_arrow_basic(aiomysql_driver: Any) -> None:
     """Test basic select_to_arrow functionality."""
     import pyarrow as pa
 
@@ -28,7 +47,7 @@ async def test_select_to_arrow_basic(aiomysql_driver: AiomysqlDriver) -> None:
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_users")
 
 
-async def test_select_to_arrow_table_format(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_table_format(aiomysql_driver: Any) -> None:
     """Test select_to_arrow with table return format (default)."""
     import pyarrow as pa
 
@@ -44,7 +63,7 @@ async def test_select_to_arrow_table_format(aiomysql_driver: AiomysqlDriver) -> 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_table_test")
 
 
-async def test_select_to_arrow_batch_format(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_batch_format(aiomysql_driver: Any) -> None:
     """Test select_to_arrow with batch return format."""
     import pyarrow as pa
 
@@ -64,7 +83,7 @@ async def test_select_to_arrow_batch_format(aiomysql_driver: AiomysqlDriver) -> 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_batch_test")
 
 
-async def test_select_to_arrow_with_parameters(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_with_parameters(aiomysql_driver: Any) -> None:
     """Test select_to_arrow with query parameters."""
 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_params_test")
@@ -82,7 +101,7 @@ async def test_select_to_arrow_with_parameters(aiomysql_driver: AiomysqlDriver) 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_params_test")
 
 
-async def test_select_to_arrow_empty_result(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_empty_result(aiomysql_driver: Any) -> None:
     """Test select_to_arrow with empty result set."""
 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_empty_test")
@@ -96,7 +115,7 @@ async def test_select_to_arrow_empty_result(aiomysql_driver: AiomysqlDriver) -> 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_empty_test")
 
 
-async def test_select_to_arrow_null_handling(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_null_handling(aiomysql_driver: Any) -> None:
     """Test select_to_arrow with NULL values."""
 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_null_test")
@@ -112,7 +131,7 @@ async def test_select_to_arrow_null_handling(aiomysql_driver: AiomysqlDriver) ->
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_null_test")
 
 
-async def test_select_to_arrow_to_polars(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_to_polars(aiomysql_driver: Any) -> None:
     """Test select_to_arrow conversion to Polars DataFrame."""
     pytest.importorskip("polars")
 
@@ -129,7 +148,7 @@ async def test_select_to_arrow_to_polars(aiomysql_driver: AiomysqlDriver) -> Non
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_polars_test")
 
 
-async def test_select_to_arrow_large_dataset(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_large_dataset(aiomysql_driver: Any) -> None:
     """Test select_to_arrow with larger dataset."""
 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_large_test")
@@ -148,7 +167,7 @@ async def test_select_to_arrow_large_dataset(aiomysql_driver: AiomysqlDriver) ->
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_large_test")
 
 
-async def test_select_to_arrow_type_preservation(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_type_preservation(aiomysql_driver: Any) -> None:
     """Test that MySQL types are properly converted to Arrow types."""
 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_types_test")
@@ -183,7 +202,7 @@ async def test_select_to_arrow_type_preservation(aiomysql_driver: AiomysqlDriver
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_types_test")
 
 
-async def test_select_to_arrow_json_handling(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_select_to_arrow_json_handling(aiomysql_driver: Any) -> None:
     """Test JSON type handling in Arrow results."""
 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_json_test")

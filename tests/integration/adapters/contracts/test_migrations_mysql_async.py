@@ -1,34 +1,33 @@
-"""Integration tests for Asyncmy (MySQL) migration workflow."""
+"""Integration tests for MySQL async-family migration workflows."""
 
 from pathlib import Path
 
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
+from tests.integration.adapters.contracts._mysql_async import (
+    MYSQL_ASYNC_ADAPTERS,
+    close_mysql_async_config,
+    mysql_async_config,
+)
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
 
-async def test_asyncmy_migration_full_workflow(tmp_path: Path, mysql_service: MySQLService) -> None:
-    """Test full Asyncmy migration workflow: init -> create -> upgrade -> downgrade."""
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_migration_full_workflow(adapter: str, tmp_path: Path, mysql_service: MySQLService) -> None:
+    """Test full MySQL async migration workflow: init -> create -> upgrade -> downgrade."""
 
-    test_id = "asyncmy_full_workflow"
+    test_id = f"{adapter}_full_workflow"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
     migration_dir = tmp_path / "migrations"
 
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        },
+    config = mysql_async_config(
+        adapter,
+        mysql_service,
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -89,29 +88,23 @@ def down():
             )
             assert len(result.data) == 0
     finally:
-        if config.connection_instance:
-            await config.close_pool()
+        await close_mysql_async_config(config)
 
 
-async def test_asyncmy_multiple_migrations_workflow(tmp_path: Path, mysql_service: MySQLService) -> None:
-    """Test Asyncmy workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_multiple_migrations_workflow(adapter: str, tmp_path: Path, mysql_service: MySQLService) -> None:
+    """Test MySQL async workflow with multiple migrations and downgrades."""
 
-    test_id = "asyncmy_multiple_workflow"
+    test_id = f"{adapter}_multiple_workflow"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
     posts_table = f"posts_{test_id}"
 
     migration_dir = tmp_path / "migrations"
 
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        },
+    config = mysql_async_config(
+        adapter,
+        mysql_service,
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -208,28 +201,22 @@ def down():
             )
             assert len(users_result.data) == 0
     finally:
-        if config.connection_instance:
-            await config.close_pool()
+        await close_mysql_async_config(config)
 
 
-async def test_asyncmy_migration_current_command(tmp_path: Path, mysql_service: MySQLService) -> None:
-    """Test the current migration command shows correct version for Asyncmy."""
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_migration_current_command(adapter: str, tmp_path: Path, mysql_service: MySQLService) -> None:
+    """Test the current migration command shows the correct version."""
 
-    test_id = "asyncmy_current_cmd"
+    test_id = f"{adapter}_current_cmd"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
     migration_dir = tmp_path / "migrations"
 
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        },
+    config = mysql_async_config(
+        adapter,
+        mysql_service,
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -269,27 +256,21 @@ def down():
         current_version = await commands.current()
         assert current_version is None or current_version == "base"
     finally:
-        if config.connection_instance:
-            await config.close_pool()
+        await close_mysql_async_config(config)
 
 
-async def test_asyncmy_migration_error_handling(tmp_path: Path, mysql_service: MySQLService) -> None:
-    """Test Asyncmy migration error handling."""
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_migration_error_handling(adapter: str, tmp_path: Path, mysql_service: MySQLService) -> None:
+    """Test MySQL async migration error handling."""
 
-    test_id = "asyncmy_error_handling"
+    test_id = f"{adapter}_error_handling"
     migration_table = f"sqlspec_migrations_{test_id}"
 
     migration_dir = tmp_path / "migrations"
 
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        },
+    config = mysql_async_config(
+        adapter,
+        mysql_service,
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -317,28 +298,23 @@ def down():
             count = await driver.select_value(f"SELECT COUNT(*) FROM {migration_table}")
             assert count == 0, f"Expected empty migration table after failed migration, but found {count} records"
     finally:
-        if config.connection_instance:
-            await config.close_pool()
+        await close_mysql_async_config(config)
 
 
-async def test_asyncmy_migration_with_transactions(tmp_path: Path, mysql_service: MySQLService) -> None:
-    """Test Asyncmy migrations work properly with transactions."""
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_migration_with_transactions(adapter: str, tmp_path: Path, mysql_service: MySQLService) -> None:
+    """Test MySQL async migrations work properly with transactions."""
 
-    test_id = "asyncmy_transactions"
+    test_id = f"{adapter}_transactions"
     migration_table = f"sqlspec_migrations_{test_id}"
     users_table = f"users_{test_id}"
 
     migration_dir = tmp_path / "migrations"
 
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": False,
-        },
+    config = mysql_async_config(
+        adapter,
+        mysql_service,
+        autocommit=False,
         migration_config={"script_location": str(migration_dir), "version_table_name": migration_table},
     )
     commands = AsyncMigrationCommands(config)
@@ -401,5 +377,4 @@ def down():
             result = await driver.execute(f"SELECT * FROM {users_table} WHERE name = 'Rollback User'")
             assert len(result.data) == 0
     finally:
-        if config.connection_instance:
-            await config.close_pool()
+        await close_mysql_async_config(config)

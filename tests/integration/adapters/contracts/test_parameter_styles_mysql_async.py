@@ -1,9 +1,9 @@
-"""Test parameter conversion and validation for AsyncMy driver.
+"""MySQL async-family parameter conversion and validation contract tests.
 
 This test suite validates that the SQLTransformer properly converts different
 input parameter styles to the target MySQL PYFORMAT style when necessary.
 
-AsyncMy Parameter Conversion Requirements:
+MySQL async adapter parameter conversion requirements:
 - Input: QMARK (?) -> Output: PYFORMAT (%s)
 - Input: NAMED (%(name)s) -> Output: PYFORMAT (%s)
 - Input: PYFORMAT (%s) -> Output: PYFORMAT (%s) (no conversion)
@@ -13,63 +13,63 @@ This implements MySQL's 2-phase parameter processing.
 
 import math
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_statement_config
 from sqlspec.core import SQL, SQLResult
+from tests.integration.adapters.contracts._mysql_async import (
+    MYSQL_ASYNC_ADAPTERS,
+    close_mysql_async_config,
+    mysql_async_config,
+)
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
 
-@pytest.fixture
-async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
-    """Create an asyncmy session for parameter conversion testing."""
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        },
-        statement_config=default_statement_config,
-    )
+@pytest.fixture(params=MYSQL_ASYNC_ADAPTERS)
+async def aiomysql_parameter_session(
+    request: pytest.FixtureRequest, mysql_service: MySQLService
+) -> AsyncGenerator[Any, None]:
+    """Create a MySQL async-family session for parameter conversion testing."""
+    config = mysql_async_config(str(request.param), mysql_service)
+    try:
+        async with config.provide_session() as session:
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_parameter_conversion (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    value INT DEFAULT 0,
+                    description TEXT
+                )
+            """)
 
-    async with config.provide_session() as session:
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_parameter_conversion (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                value INT DEFAULT 0,
-                description TEXT
+            await session.execute_script("DELETE FROM test_parameter_conversion")
+
+            await session.execute(
+                "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
+                ("test1", 100, "First test"),
             )
-        """)
+            await session.execute(
+                "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
+                ("test2", 200, "Second test"),
+            )
+            await session.execute(
+                "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
+                ("test3", 300, None),
+            )
 
-        await session.execute_script("DELETE FROM test_parameter_conversion")
+            yield session
 
-        await session.execute(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-            ("test1", 100, "First test"),
-        )
-        await session.execute(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-            ("test2", 200, "Second test"),
-        )
-        await session.execute(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)", ("test3", 300, None)
-        )
-
-        yield session
-
-        await session.execute_script("DROP TABLE IF EXISTS test_parameter_conversion")
+            await session.execute_script("DROP TABLE IF EXISTS test_parameter_conversion")
+    finally:
+        await close_mysql_async_config(config)
 
 
-async def test_asyncmy_qmark_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_qmark_to_pyformat_conversion(aiomysql_parameter_session: Any) -> None:
     """Test that ? placeholders get converted to %s placeholders."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     result = await driver.execute("SELECT * FROM test_parameter_conversion WHERE name = ? AND value > ?", ("test1", 50))
 
@@ -81,9 +81,9 @@ async def test_asyncmy_qmark_to_pyformat_conversion(asyncmy_parameter_session: A
     assert result.get_data()[0]["value"] == 100
 
 
-async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_pyformat_no_conversion_needed(aiomysql_parameter_session: Any) -> None:
     """Test that %s placeholders are used directly without conversion (native format)."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     result = await driver.execute(
         "SELECT * FROM test_parameter_conversion WHERE name = %s AND value > %s", ("test2", 150)
@@ -97,9 +97,9 @@ async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: 
     assert result.get_data()[0]["value"] == 200
 
 
-async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_named_to_pyformat_conversion(aiomysql_parameter_session: Any) -> None:
     """Test that %(name)s placeholders get converted to %s placeholders."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     result = await driver.execute(
         "SELECT * FROM test_parameter_conversion WHERE name = %(test_name)s AND value < %(max_value)s",
@@ -114,9 +114,9 @@ async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: A
     assert result.get_data()[0]["value"] == 300
 
 
-async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_sql_object_conversion_validation(aiomysql_parameter_session: Any) -> None:
     """Test parameter conversion with SQL object containing different parameter styles."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     sql_pyformat = SQL("SELECT * FROM test_parameter_conversion WHERE value BETWEEN %s AND %s", 150, 250)
     result = await driver.execute(sql_pyformat)
@@ -137,9 +137,9 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
     assert "test3" in names
 
 
-async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_mixed_parameter_types_conversion(aiomysql_parameter_session: Any) -> None:
     """Test conversion with different parameter value types."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute(
         "INSERT INTO test_parameter_conversion (name, value, description) VALUES (%s, %s, %s)",
@@ -157,9 +157,9 @@ async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_sessio
     assert result.get_data()[0]["description"] == "Mixed type test"
 
 
-async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_execute_many_parameter_conversion(aiomysql_parameter_session: Any) -> None:
     """Test parameter conversion in execute_many operations."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     batch_data = [("batch1", 1000, "Batch test 1"), ("batch2", 2000, "Batch test 2"), ("batch3", 3000, "Batch test 3")]
 
@@ -178,9 +178,9 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
     assert verify_result.get_data()[0]["count"] == 3
 
 
-async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_parameter_conversion_edge_cases(aiomysql_parameter_session: Any) -> None:
     """Test edge cases in parameter conversion."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     result = await driver.execute("SELECT COUNT(*) as total FROM test_parameter_conversion")
     assert result.data is not None
@@ -198,9 +198,9 @@ async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session
     assert result3.get_data()[0]["count"] >= 3
 
 
-async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_parameter_style_consistency_validation(aiomysql_parameter_session: Any) -> None:
     """Test that the parameter conversion maintains consistency."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     result_qmark = await driver.execute(
         "SELECT name, value FROM test_parameter_conversion WHERE value >= ? ORDER BY value", (200,)
@@ -220,9 +220,9 @@ async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_
         assert result_qmark.get_data()[i]["value"] == result_pyformat.get_data()[i]["value"]
 
 
-async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_complex_query_parameter_conversion(aiomysql_parameter_session: Any) -> None:
     """Test parameter conversion in complex queries with multiple operations."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_many(
         "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
@@ -251,9 +251,9 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
     assert result.get_data()[0]["value"] == 250
 
 
-async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_mysql_parameter_style_specifics(aiomysql_parameter_session: Any) -> None:
     """Test MySQL-specific parameter handling requirements."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     result = await driver.execute("SELECT name, value FROM test_parameter_conversion ORDER BY value LIMIT ?", (2,))
     assert result.rows_affected == 2
@@ -281,9 +281,9 @@ async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session
     assert verify_result.get_data()[0]["value"] == 888
 
 
-async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: AsyncmyDriver) -> None:
-    """Test the 2-phase parameter processing system specific to AsyncMy/MySQL."""
-    driver = asyncmy_parameter_session
+async def test_aiomysql_2phase_parameter_processing(aiomysql_parameter_session: Any) -> None:
+    """Test the 2-phase parameter processing system specific to aiomysql/MySQL."""
+    driver = aiomysql_parameter_session
 
     test_cases = [
         ("SELECT * FROM test_parameter_conversion WHERE name = ? AND value = ?", ("test1", 100), "test1", 100),
@@ -313,9 +313,9 @@ async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: As
     assert all(count == consistent_results[0] for count in consistent_results)
 
 
-async def test_asyncmy_none_parameters_pyformat(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_parameters_pyformat(aiomysql_parameter_session: Any) -> None:
     """Test None values with PYFORMAT (%s) parameter style."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_none_values (
@@ -351,9 +351,9 @@ async def test_asyncmy_none_parameters_pyformat(asyncmy_parameter_session: Async
     assert row["created_at"] is None
 
 
-async def test_asyncmy_none_parameters_qmark(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_parameters_qmark(aiomysql_parameter_session: Any) -> None:
     """Test None values with QMARK (?) parameter style."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_none_qmark (
@@ -383,9 +383,9 @@ async def test_asyncmy_none_parameters_qmark(asyncmy_parameter_session: AsyncmyD
     assert row["optional_field"] is None
 
 
-async def test_asyncmy_none_parameters_named_pyformat(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_parameters_named_pyformat(aiomysql_parameter_session: Any) -> None:
     """Test None values with named PYFORMAT %(name)s parameter style."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_none_named (
@@ -426,9 +426,9 @@ async def test_asyncmy_none_parameters_named_pyformat(asyncmy_parameter_session:
     assert row["metadata"] is None
 
 
-async def test_asyncmy_all_none_parameters(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_all_none_parameters(aiomysql_parameter_session: Any) -> None:
     """Test when all parameter values are None."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_all_none (
@@ -463,9 +463,9 @@ async def test_asyncmy_all_none_parameters(asyncmy_parameter_session: AsyncmyDri
     assert row["col4"] is None
 
 
-async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_with_execute_many(aiomysql_parameter_session: Any) -> None:
     """Test None values work correctly with execute_many."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_none_many (
@@ -507,12 +507,12 @@ async def test_asyncmy_none_with_execute_many(asyncmy_parameter_session: Asyncmy
     assert rows[4]["name"] == "item5" and rows[4]["value"] is None and rows[4]["category"] is None
 
 
-async def test_asyncmy_none_parameter_count_validation(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_parameter_count_validation(aiomysql_parameter_session: Any) -> None:
     """Test that parameter count mismatches are properly detected with None values.
 
     This test verifies that None values don't cause parameter count validation to fail.
     """
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_param_validation (
@@ -538,7 +538,7 @@ async def test_asyncmy_none_parameter_count_validation(asyncmy_parameter_session
         assert False, "Expected parameter count error"
     except Exception as e:
         error_msg = str(e).lower()
-        # MySQL/AsyncMy typically reports parameter count errors
+        # MySQL/aiomysql typically reports parameter count errors
         assert any(keyword in error_msg for keyword in ["parameter", "argument", "mismatch", "count"])
 
     # Test: Too few parameters should raise an error
@@ -553,9 +553,9 @@ async def test_asyncmy_none_parameter_count_validation(asyncmy_parameter_session
         assert any(keyword in error_msg for keyword in ["parameter", "argument", "mismatch", "count"])
 
 
-async def test_asyncmy_none_in_where_clauses(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_in_where_clauses(aiomysql_parameter_session: Any) -> None:
     """Test None values in WHERE clauses work correctly."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_none_where (
@@ -596,9 +596,9 @@ async def test_asyncmy_none_in_where_clauses(asyncmy_parameter_session: AsyncmyD
     assert len(result2.data) == 4  # All rows because second condition is always true
 
 
-async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_complex_scenarios(aiomysql_parameter_session: Any) -> None:
     """Test complex scenarios with None parameters."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_complex_none (
@@ -653,9 +653,9 @@ async def test_asyncmy_none_complex_scenarios(asyncmy_parameter_session: Asyncmy
     assert row["metadata"] is None
 
 
-async def test_asyncmy_none_edge_cases(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_aiomysql_none_edge_cases(aiomysql_parameter_session: Any) -> None:
     """Test edge cases that might reveal None parameter handling bugs."""
-    driver = asyncmy_parameter_session
+    driver = aiomysql_parameter_session
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS test_edge_cases (

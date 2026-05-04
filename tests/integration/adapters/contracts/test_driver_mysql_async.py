@@ -1,4 +1,4 @@
-"""Integration tests for aiomysql driver implementation.
+"""MySQL async-family driver contract tests.
 
 This serves as a comprehensive test template for database drivers,
 covering all core functionality including CRUD operations, parameter styles,
@@ -6,39 +6,71 @@ transaction management, and error handling.
 """
 
 import math
-from typing import Literal
+from collections.abc import AsyncGenerator
+from typing import Any, Literal
 
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
-from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
 from sqlspec.utils.serializers import from_json, to_json
+from tests.integration.adapters.contracts._mysql_async import (
+    MYSQL_ASYNC_ADAPTERS,
+    close_mysql_async_config,
+    mysql_async_config,
+)
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
 
-@pytest.fixture
-async def aiomysql_driver(aiomysql_clean_driver: AiomysqlDriver) -> AiomysqlDriver:
-    """Create and manage test table lifecycle."""
+@pytest.fixture(params=MYSQL_ASYNC_ADAPTERS)
+async def aiomysql_driver(request: pytest.FixtureRequest, mysql_service: MySQLService) -> AsyncGenerator[Any, None]:
+    """Create and manage the shared MySQL async-family test table lifecycle."""
+    config = mysql_async_config(str(request.param), mysql_service, minsize=1, maxsize=5)
 
-    create_sql = """
-        CREATE TABLE IF NOT EXISTS test_table_aiomysql (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            value INT DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """
-    await aiomysql_clean_driver.execute_script(create_sql)
-    await aiomysql_clean_driver.execute_script("DELETE FROM test_table_aiomysql")
+    cleanup_tables = [
+        "test_table_aiomysql",
+        "data_types_test_aiomysql",
+        "user_profiles_aiomysql",
+        "driver_feature_test_aiomysql",
+    ]
+    cleanup_procedures = ["test_procedure", "simple_procedure"]
 
-    return aiomysql_clean_driver
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute("SET sql_notes = 0")
+            for table in cleanup_tables:
+                await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+            for procedure in cleanup_procedures:
+                await driver.execute_script(f"DROP PROCEDURE IF EXISTS {procedure}")
+            await driver.execute("SET sql_notes = 1")
+            await driver.execute_script(
+                """
+                CREATE TABLE IF NOT EXISTS test_table_aiomysql (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    value INT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await driver.execute_script("DELETE FROM test_table_aiomysql")
+
+            yield driver
+
+            await driver.execute("SET sql_notes = 0")
+            for table in cleanup_tables:
+                await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+            for procedure in cleanup_procedures:
+                await driver.execute_script(f"DROP PROCEDURE IF EXISTS {procedure}")
+            await driver.execute("SET sql_notes = 1")
+    finally:
+        await close_mysql_async_config(config)
 
 
-async def test_aiomysql_basic_crud(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_basic_crud(aiomysql_driver: Any) -> None:
     """Test basic CRUD operations."""
     driver = aiomysql_driver
 
@@ -69,7 +101,7 @@ async def test_aiomysql_basic_crud(aiomysql_driver: AiomysqlDriver) -> None:
     assert verify_result.get_data()[0]["count"] == 0
 
 
-async def test_aiomysql_parameter_styles(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_parameter_styles(aiomysql_driver: Any) -> None:
     """Test different parameter binding styles."""
     driver = aiomysql_driver
 
@@ -87,7 +119,7 @@ async def test_aiomysql_parameter_styles(aiomysql_driver: AiomysqlDriver) -> Non
     assert select_result.get_data()[1]["value"] == 20
 
 
-async def test_aiomysql_execute_many(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_execute_many(aiomysql_driver: Any) -> None:
     """Test execute_many functionality."""
     driver = aiomysql_driver
 
@@ -104,7 +136,7 @@ async def test_aiomysql_execute_many(aiomysql_driver: AiomysqlDriver) -> None:
     assert select_result.get_data()[0]["value"] == 100
 
 
-async def test_aiomysql_execute_script(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_execute_script(aiomysql_driver: Any) -> None:
     """Test script execution with multiple statements."""
     driver = aiomysql_driver
 
@@ -125,7 +157,7 @@ async def test_aiomysql_execute_script(aiomysql_driver: AiomysqlDriver) -> None:
     assert select_result.get_data()[1]["value"] == 4000
 
 
-async def test_aiomysql_data_types(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_data_types(aiomysql_driver: Any) -> None:
     """Test handling of various MySQL data types."""
     driver = aiomysql_driver
 
@@ -167,7 +199,7 @@ async def test_aiomysql_data_types(aiomysql_driver: AiomysqlDriver) -> None:
     assert row["json_col"]["key"] == "value"
 
 
-async def test_aiomysql_statement_stack_sequential(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_statement_stack_sequential(aiomysql_driver: Any) -> None:
     """StatementStack should execute sequentially for aiomysql (no native batching)."""
 
     await aiomysql_driver.execute_script("DELETE FROM test_table_aiomysql")
@@ -191,7 +223,7 @@ async def test_aiomysql_statement_stack_sequential(aiomysql_driver: AiomysqlDriv
     assert data[0]["total"] == 2
 
 
-async def test_aiomysql_statement_stack_continue_on_error(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_statement_stack_continue_on_error(aiomysql_driver: Any) -> None:
     """Continue-on-error should still work with sequential fallback."""
 
     await aiomysql_driver.execute_script("DELETE FROM test_table_aiomysql")
@@ -216,7 +248,8 @@ async def test_aiomysql_statement_stack_continue_on_error(aiomysql_driver: Aiomy
     assert verify.get_data()[0]["total"] == 2
 
 
-async def test_aiomysql_driver_features_custom_serializers(mysql_service: MySQLService) -> None:
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_driver_features_custom_serializers(adapter: str, mysql_service: MySQLService) -> None:
     """Ensure custom serializer and deserializer driver features are applied."""
 
     serializer_calls: list[object] = []
@@ -231,44 +264,41 @@ async def test_aiomysql_driver_features_custom_serializers(mysql_service: MySQLS
             decoded["extra_marker"] = True
         return decoded
 
-    config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": True,
-        },
+    config = mysql_async_config(
+        adapter,
+        mysql_service,
         driver_features={"json_serializer": tracking_serializer, "json_deserializer": tracking_deserializer},
     )
 
-    async with config.provide_session() as session:
-        await session.execute_script(
-            """
-            CREATE TABLE IF NOT EXISTS driver_feature_test_aiomysql (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                payload JSON
-            );
-            DELETE FROM driver_feature_test_aiomysql;
-            """
-        )
+    try:
+        async with config.provide_session() as session:
+            await session.execute_script(
+                """
+                CREATE TABLE IF NOT EXISTS driver_feature_test_aiomysql (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    payload JSON
+                );
+                DELETE FROM driver_feature_test_aiomysql;
+                """
+            )
 
-        payload = {"foo": "bar"}
-        await session.execute("INSERT INTO driver_feature_test_aiomysql (payload) VALUES (?)", (payload,))
+            payload = {"foo": "bar"}
+            await session.execute("INSERT INTO driver_feature_test_aiomysql (payload) VALUES (?)", (payload,))
 
-        assert serializer_calls
-        assert serializer_calls[0] == payload
+            assert serializer_calls
+            assert serializer_calls[0] == payload
 
-        select_result = await session.execute(
-            "SELECT payload FROM driver_feature_test_aiomysql ORDER BY id DESC LIMIT 1"
-        )
-        stored_row = select_result.get_data()[0]
-        assert stored_row["payload"]["foo"] == "bar"
-        assert stored_row["payload"]["extra_marker"] is True
+            select_result = await session.execute(
+                "SELECT payload FROM driver_feature_test_aiomysql ORDER BY id DESC LIMIT 1"
+            )
+            stored_row = select_result.get_data()[0]
+            assert stored_row["payload"]["foo"] == "bar"
+            assert stored_row["payload"]["extra_marker"] is True
+    finally:
+        await close_mysql_async_config(config)
 
 
-async def test_aiomysql_transaction_management(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_transaction_management(aiomysql_driver: Any) -> None:
     """Test transaction management (begin, commit, rollback)."""
     driver = aiomysql_driver
 
@@ -287,7 +317,7 @@ async def test_aiomysql_transaction_management(aiomysql_driver: AiomysqlDriver) 
     assert result.get_data()[0]["count"] == 0
 
 
-async def test_aiomysql_null_parameters(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_null_parameters(aiomysql_driver: Any) -> None:
     """Test handling of NULL parameters."""
     driver = aiomysql_driver
 
@@ -300,7 +330,7 @@ async def test_aiomysql_null_parameters(aiomysql_driver: AiomysqlDriver) -> None
     assert select_result.get_data()[0]["value"] is None
 
 
-async def test_aiomysql_error_handling(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_error_handling(aiomysql_driver: Any) -> None:
     """Test error handling and exception wrapping."""
     driver = aiomysql_driver
 
@@ -313,7 +343,7 @@ async def test_aiomysql_error_handling(aiomysql_driver: AiomysqlDriver) -> None:
         await driver.execute("INSERT INTO test_table_aiomysql (id, name, value) VALUES (?, ?, ?)", (1, "user2", 200))
 
 
-async def test_aiomysql_large_result_set(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_large_result_set(aiomysql_driver: Any) -> None:
     """Test handling of large result sets."""
     driver = aiomysql_driver
 
@@ -327,7 +357,7 @@ async def test_aiomysql_large_result_set(aiomysql_driver: AiomysqlDriver) -> Non
     assert result.get_data()[99]["name"] == "user_99"
 
 
-async def test_aiomysql_mysql_specific_features(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_mysql_specific_features(aiomysql_driver: Any) -> None:
     """Test MySQL-specific features and SQL constructs."""
     driver = aiomysql_driver
 
@@ -345,7 +375,7 @@ async def test_aiomysql_mysql_specific_features(aiomysql_driver: AiomysqlDriver)
     assert select_result.get_data()[0]["value"] == 250
 
 
-async def test_aiomysql_complex_queries(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_complex_queries(aiomysql_driver: Any) -> None:
     """Test complex SQL queries with JOINs, subqueries, etc."""
     driver = aiomysql_driver
 
@@ -379,7 +409,7 @@ async def test_aiomysql_complex_queries(aiomysql_driver: AiomysqlDriver) -> None
     assert row["age"] == 30
 
 
-async def test_aiomysql_edge_cases(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_edge_cases(aiomysql_driver: Any) -> None:
     """Test edge cases and boundary conditions."""
     driver = aiomysql_driver
 
@@ -402,7 +432,7 @@ async def test_aiomysql_edge_cases(aiomysql_driver: AiomysqlDriver) -> None:
     assert select_result.get_data()[1]["value"] is None
 
 
-async def test_aiomysql_result_metadata(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_result_metadata(aiomysql_driver: Any) -> None:
     """Test SQL result metadata and properties."""
     driver = aiomysql_driver
 
@@ -427,7 +457,7 @@ async def test_aiomysql_result_metadata(aiomysql_driver: AiomysqlDriver) -> None
     assert len(empty_result.get_data()) == 0
 
 
-async def test_aiomysql_sql_object_execution(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_sql_object_execution(aiomysql_driver: Any) -> None:
     """Test execution of SQL objects."""
     driver = aiomysql_driver
 
@@ -450,7 +480,7 @@ async def test_aiomysql_sql_object_execution(aiomysql_driver: AiomysqlDriver) ->
     assert select_result.operation_type == "SELECT"
 
 
-async def test_aiomysql_for_update_locking(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_for_update_locking(aiomysql_driver: Any) -> None:
     """Test FOR UPDATE row locking with MySQL."""
 
     driver = aiomysql_driver
@@ -475,7 +505,7 @@ async def test_aiomysql_for_update_locking(aiomysql_driver: AiomysqlDriver) -> N
         raise
 
 
-async def test_aiomysql_for_update_skip_locked(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_for_update_skip_locked(aiomysql_driver: Any) -> None:
     """Test FOR UPDATE SKIP LOCKED with MySQL (MySQL 8.0+ feature)."""
 
     driver = aiomysql_driver
@@ -499,7 +529,7 @@ async def test_aiomysql_for_update_skip_locked(aiomysql_driver: AiomysqlDriver) 
         raise
 
 
-async def test_aiomysql_for_share_locking(aiomysql_driver: AiomysqlDriver) -> None:
+async def test_aiomysql_for_share_locking(aiomysql_driver: Any) -> None:
     """Test FOR SHARE row locking with MySQL."""
 
     driver = aiomysql_driver
@@ -524,9 +554,9 @@ async def test_aiomysql_for_share_locking(aiomysql_driver: AiomysqlDriver) -> No
         raise
 
 
-async def test_aiomysql_on_connection_create_hook(mysql_service: "MySQLService") -> None:
+@pytest.mark.parametrize("adapter", MYSQL_ASYNC_ADAPTERS)
+async def test_aiomysql_on_connection_create_hook(adapter: str, mysql_service: MySQLService) -> None:
     """Test on_connection_create callback is invoked for each connection."""
-    from typing import Any
 
     hook_call_count = 0
 
@@ -534,17 +564,8 @@ async def test_aiomysql_on_connection_create_hook(mysql_service: "MySQLService")
         nonlocal hook_call_count
         hook_call_count += 1
 
-    config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "minsize": 1,
-            "maxsize": 2,
-        },
-        driver_features={"on_connection_create": connection_hook},
+    config = mysql_async_config(
+        adapter, mysql_service, minsize=1, maxsize=2, driver_features={"on_connection_create": connection_hook}
     )
 
     try:
@@ -552,7 +573,4 @@ async def test_aiomysql_on_connection_create_hook(mysql_service: "MySQLService")
             await session.execute("SELECT 1")
         assert hook_call_count >= 1, "Hook should be called at least once"
     finally:
-        pool = config.connection_instance
-        if pool is not None:
-            pool.close()
-            await pool.wait_closed()
+        await close_mysql_async_config(config)

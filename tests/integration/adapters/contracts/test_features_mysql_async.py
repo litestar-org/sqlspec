@@ -1,6 +1,6 @@
-"""aiomysql-specific feature tests.
+"""MySQL async-family feature contract tests.
 
-This test suite focuses on aiomysql adapter specific functionality including:
+This test suite focuses on shared MySQL async adapter functionality including:
 - Connection pooling behavior
 - MySQL-specific SQL features
 - Async transaction handling
@@ -9,49 +9,71 @@ This test suite focuses on aiomysql adapter specific functionality including:
 """
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, default_statement_config
 from sqlspec.core import SQL, SQLResult
+from tests.integration.adapters.contracts._mysql_async import (
+    MYSQL_ASYNC_ADAPTERS,
+    close_mysql_async_config,
+    mysql_async_config,
+)
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
 
-@pytest.fixture
-async def aiomysql_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[AiomysqlDriver, None]:
-    """Create aiomysql session with connection pooling."""
-    config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": True,
-            "minsize": 2,
-            "maxsize": 10,
-            "echo": False,
-        },
-        statement_config=default_statement_config,
-    )
+async def _cleanup_feature_objects(driver: Any) -> None:
+    """Remove per-case MySQL objects that use shared names across adapters."""
+    cleanup_tables = [
+        "advanced_test_aiomysql",
+        "bulk_test_aiomysql",
+        "concurrent_test_aiomysql",
+        "error_test_aiomysql",
+        "isolation_test_aiomysql",
+        "json_test_aiomysql",
+        "mysql_features_aiomysql",
+    ]
+    cleanup_procedures = ["test_procedure", "simple_procedure"]
 
-    async with config.provide_session() as session:
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS concurrent_test_aiomysql (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                thread_id VARCHAR(50),
-                value INT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await session.execute_script("DELETE FROM concurrent_test_aiomysql")
-
-        yield session
+    await driver.execute("SET sql_notes = 0")
+    for table in cleanup_tables:
+        await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+    for procedure in cleanup_procedures:
+        await driver.execute_script(f"DROP PROCEDURE IF EXISTS {procedure}")
+    await driver.execute("SET sql_notes = 1")
 
 
-async def test_aiomysql_mysql_json_operations(aiomysql_pooled_session: AiomysqlDriver) -> None:
+@pytest.fixture(params=MYSQL_ASYNC_ADAPTERS)
+async def aiomysql_pooled_session(
+    request: pytest.FixtureRequest, mysql_service: MySQLService
+) -> AsyncGenerator[Any, None]:
+    """Create a MySQL async-family session with connection pooling."""
+    config = mysql_async_config(str(request.param), mysql_service, minsize=2, maxsize=10, echo=False)
+
+    try:
+        async with config.provide_session() as session:
+            await _cleanup_feature_objects(session)
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS concurrent_test_aiomysql (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    thread_id VARCHAR(50),
+                    value INT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await session.execute_script("DELETE FROM concurrent_test_aiomysql")
+
+            try:
+                yield session
+            finally:
+                await _cleanup_feature_objects(session)
+    finally:
+        await close_mysql_async_config(config)
+
+
+async def test_aiomysql_mysql_json_operations(aiomysql_pooled_session: Any) -> None:
     """Test MySQL JSON column operations."""
     driver = aiomysql_pooled_session
 
@@ -87,7 +109,7 @@ async def test_aiomysql_mysql_json_operations(aiomysql_pooled_session: AiomysqlD
     assert contains_result.get_data()[0]["count"] == 1
 
 
-async def test_aiomysql_mysql_specific_sql_features(aiomysql_pooled_session: AiomysqlDriver) -> None:
+async def test_aiomysql_mysql_specific_sql_features(aiomysql_pooled_session: Any) -> None:
     """Test MySQL-specific SQL features and syntax."""
     driver = aiomysql_pooled_session
 
@@ -132,7 +154,7 @@ async def test_aiomysql_mysql_specific_sql_features(aiomysql_pooled_session: Aio
     assert "important" in enum_row["tags"]
 
 
-async def test_aiomysql_transaction_isolation_levels(aiomysql_pooled_session: AiomysqlDriver) -> None:
+async def test_aiomysql_transaction_isolation_levels(aiomysql_pooled_session: Any) -> None:
     """Test MySQL transaction isolation level handling."""
     driver = aiomysql_pooled_session
 
@@ -158,7 +180,7 @@ async def test_aiomysql_transaction_isolation_levels(aiomysql_pooled_session: Ai
     assert committed_result.get_data()[0]["value"] == "transaction_data"
 
 
-async def test_aiomysql_stored_procedures(aiomysql_pooled_session: AiomysqlDriver) -> None:
+async def test_aiomysql_stored_procedures(aiomysql_pooled_session: Any) -> None:
     """Test stored procedure execution."""
     driver = aiomysql_pooled_session
 
@@ -184,7 +206,7 @@ async def test_aiomysql_stored_procedures(aiomysql_pooled_session: AiomysqlDrive
     await driver.execute("CALL simple_procedure(?)", (5,))
 
 
-async def test_aiomysql_bulk_operations_performance(aiomysql_pooled_session: AiomysqlDriver) -> None:
+async def test_aiomysql_bulk_operations_performance(aiomysql_pooled_session: Any) -> None:
     """Test bulk operations for performance characteristics."""
     driver = aiomysql_pooled_session
 
@@ -220,7 +242,7 @@ async def test_aiomysql_bulk_operations_performance(aiomysql_pooled_session: Aio
     assert select_result.get_data()[99]["sequence_num"] == 99
 
 
-async def test_aiomysql_error_recovery(aiomysql_pooled_session: AiomysqlDriver) -> None:
+async def test_aiomysql_error_recovery(aiomysql_pooled_session: Any) -> None:
     """Test error handling and connection recovery."""
     driver = aiomysql_pooled_session
 
@@ -246,7 +268,7 @@ async def test_aiomysql_error_recovery(aiomysql_pooled_session: AiomysqlDriver) 
     assert final_result.get_data()[0]["value"] == "test_value"
 
 
-async def test_aiomysql_sql_object_advanced_features(aiomysql_pooled_session: AiomysqlDriver) -> None:
+async def test_aiomysql_sql_object_advanced_features(aiomysql_pooled_session: Any) -> None:
     """Test SQL object integration with advanced aiomysql features."""
     driver = aiomysql_pooled_session
 
