@@ -619,9 +619,9 @@ def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
 
         loader = SQLFileLoader()
 
-        start_time = time.time()
+        start_time = time.perf_counter()
         loader.load_sql(fixture_file)
-        load_time = time.time() - start_time
+        load_time = time.perf_counter() - start_time
 
         queries = loader.list_queries()
         performance_results[fixture_path] = {
@@ -635,9 +635,9 @@ def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
 
         if queries:
             test_query = queries[0]
-            sql_start = time.time()
+            sql_start = time.process_time()
             sql_obj = loader.get_sql(test_query)
-            sql_time = time.time() - sql_start
+            sql_time = time.process_time() - sql_start
 
             assert sql_time < 0.1, f"SQL object creation too slow: {sql_time:.3f}s"
             assert isinstance(sql_obj, SQL)

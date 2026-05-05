@@ -11,7 +11,10 @@ from sqlspec.adapters.aiomysql import default_statement_config as aiomysql_state
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.adapters.asyncmy import default_statement_config as asyncmy_statement_config
 
-MYSQL_ASYNC_ADAPTERS = [pytest.param("aiomysql", id="aiomysql"), pytest.param("asyncmy", id="asyncmy")]
+MYSQL_ASYNC_ADAPTERS = [
+    pytest.param("aiomysql", marks=pytest.mark.aiomysql, id="aiomysql"),
+    pytest.param("asyncmy", marks=pytest.mark.asyncmy, id="asyncmy"),
+]
 
 
 def mysql_async_config_type(adapter: str) -> type[Any]:
@@ -62,6 +65,7 @@ def mysql_async_config(
     echo: bool | None = None,
     migration_config: dict[str, Any] | None = None,
     driver_features: dict[str, Any] | None = None,
+    extension_config: dict[str, Any] | None = None,
 ) -> Any:
     """Build an async MySQL-family config for the requested adapter."""
     connection_config: dict[str, Any] = {
@@ -86,6 +90,7 @@ def mysql_async_config(
             statement_config=aiomysql_statement_config,
             migration_config=migration_config,
             driver_features=driver_features,
+            extension_config=extension_config,
         )
 
     return AsyncmyConfig(
@@ -93,6 +98,7 @@ def mysql_async_config(
         statement_config=asyncmy_statement_config,
         migration_config=migration_config,
         driver_features=driver_features,
+        extension_config=extension_config,
     )
 
 
