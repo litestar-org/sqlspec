@@ -105,10 +105,12 @@ build-performance:                                 ## Build package with mypyc c
 .PHONY: test-mypyc
 test-mypyc:                                        ## Test mypyc compilation on individual modules
 	@echo "${INFO} Testing mypyc compilation... 🔧"
-	@uv run mypyc --check-untyped-defs sqlspec/utils/statement_hashing.py
 	@uv run mypyc --check-untyped-defs sqlspec/utils/text.py
 	@uv run mypyc --check-untyped-defs sqlspec/utils/sync_tools.py
-	@uv run mypyc --check-untyped-defs sqlspec/statement/cache.py
+	@uv run mypyc --check-untyped-defs sqlspec/core/cache.py
+	@uv run mypyc --check-untyped-defs sqlspec/core/hashing.py
+	@uv run mypyc --check-untyped-defs sqlspec/driver/_query_cache.py
+	@uv run mypyc --check-untyped-defs sqlspec/adapters/sqlite/core.py
 	@echo "${OK} Mypyc compilation tests passed ✨"
 
 

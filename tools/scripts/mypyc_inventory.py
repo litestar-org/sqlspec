@@ -1,5 +1,9 @@
 """Inventory the current mypyc compiled vs interpreted module surface."""
 
+import argparse
+import json
+import sys
+from collections.abc import Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -13,10 +17,15 @@ __all__ = (
     "HOT_SURFACE_CLASSIFICATIONS",
     "build_inventory",
     "classify_module",
+    "classify_surface",
+    "format_markdown",
     "list_sqlspec_modules",
     "load_mypyc_patterns",
+    "main",
 )
 
+CANDIDATE_CLASSIFICATIONS = {"compile_now", "helper_split_first", "prove_separately"}
+SURFACE_ORDER = ("compiled", "candidate", "keep_interpreted", "interpreted")
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/config.py": {
@@ -51,9 +60,13 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "keep_interpreted",
         "reason": "Heavy dynamic import and optional dependency probing surface.",
     },
-    "sqlspec/utils/serializers.py": {
+    "sqlspec/utils/serializers/_json.py": {
         "classification": "compile_now",
-        "reason": "Already part of the compiled utility path and performance sensitive.",
+        "reason": "Runtime JSON serializer selection and encode/decode dispatch are hot compiled utility paths.",
+    },
+    "sqlspec/utils/serializers/_schema.py": {
+        "classification": "compile_now",
+        "reason": "Schema dump and struct-aware conversion are already compiled and actively optimized.",
     },
     "sqlspec/utils/sync_tools.py": {
         "classification": "compile_now",
@@ -99,9 +112,27 @@ def list_sqlspec_modules(root: Path) -> list[str]:
 def classify_module(module_path: str, include_patterns: list[str], exclude_patterns: list[str]) -> str:
     """Return whether a module is currently compiled or interpreted."""
 
-    included = any(fnmatch(module_path, pattern) for pattern in include_patterns)
-    excluded = any(fnmatch(module_path, pattern) for pattern in exclude_patterns)
+    included = any(_matches_hatch_glob(module_path, pattern) for pattern in include_patterns)
+    excluded = any(_matches_hatch_glob(module_path, pattern) for pattern in exclude_patterns)
     return "compiled" if included and not excluded else "interpreted"
+
+
+def _matches_hatch_glob(module_path: str, pattern: str) -> bool:
+    """Return whether a module matches hatch-style recursive glob semantics."""
+    if fnmatch(module_path, pattern):
+        return True
+    return "**/" in pattern and fnmatch(module_path, pattern.replace("**/", ""))
+
+
+def classify_surface(status: str, classification: str | None = None) -> str:
+    """Return the planning surface for an inventory entry."""
+    if status == "compiled":
+        return "compiled"
+    if classification == "keep_interpreted":
+        return "keep_interpreted"
+    if classification in CANDIDATE_CLASSIFICATIONS:
+        return "candidate"
+    return "interpreted"
 
 
 def build_inventory(root: Path | None = None) -> dict[str, Any]:
@@ -110,19 +141,29 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
     project_root = root or Path(__file__).resolve().parents[2]
     include_patterns, exclude_patterns = load_mypyc_patterns(project_root)
     modules = list_sqlspec_modules(project_root)
+    module_set = set(modules)
 
     compiled: list[str] = []
     interpreted: list[str] = []
+    surfaces: dict[str, list[str]] = {surface: [] for surface in SURFACE_ORDER}
     for module in modules:
-        if classify_module(module, include_patterns, exclude_patterns) == "compiled":
+        status = classify_module(module, include_patterns, exclude_patterns)
+        hot_details = HOT_SURFACE_CLASSIFICATIONS.get(module)
+        surface = classify_surface(status, hot_details["classification"] if hot_details else None)
+        surfaces[surface].append(module)
+        if status == "compiled":
             compiled.append(module)
         else:
             interpreted.append(module)
 
     hot_surfaces: dict[str, dict[str, str]] = {}
     for module_path, details in HOT_SURFACE_CLASSIFICATIONS.items():
+        if module_path not in module_set:
+            continue
+        status = classify_module(module_path, include_patterns, exclude_patterns)
         hot_surfaces[module_path] = {
-            "status": classify_module(module_path, include_patterns, exclude_patterns),
+            "surface": classify_surface(status, details["classification"]),
+            "status": status,
             "classification": details["classification"],
             "reason": details["reason"],
         }
@@ -140,6 +181,8 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             "interpreted_count": len(interpreted),
             "total_modules": len(modules),
         },
+        "surface_counts": {surface: len(surfaces[surface]) for surface in sorted(surfaces)},
+        "surfaces": {surface: surfaces[surface] for surface in sorted(surfaces)},
         "compiled_modules": compiled,
         "interpreted_modules": interpreted,
         "adapter_config_shells": {
@@ -175,5 +218,66 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def format_markdown(inventory: dict[str, Any]) -> str:
+    """Format inventory output as markdown."""
+    summary = inventory["summary"]
+    surface_counts = inventory["surface_counts"]
+    lines = [
+        "# mypyc Inventory",
+        "",
+        f"Compiled modules: {summary['compiled_count']}",
+        f"Interpreted modules: {summary['interpreted_count']}",
+        f"Total Python modules: {summary['total_modules']}",
+        "",
+        "## Surface Counts",
+        "",
+        "| Surface | Count |",
+        "|---|---:|",
+    ]
+    lines.extend(f"| {surface} | {surface_counts[surface]} |" for surface in sorted(surface_counts))
+
+    lines.extend([
+        "",
+        "## Hot Surfaces",
+        "",
+        "| Module | Surface | Status | Classification | Reason |",
+        "|---|---|---|---|---|",
+    ])
+    for module_path, details in sorted(inventory["hot_surfaces"].items()):
+        lines.append(
+            f"| `{module_path}` | {details['surface']} | {details['status']} | "
+            f"{details['classification']} | {details['reason']} |"
+        )
+
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the mypyc inventory CLI."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--format",
+        choices=("json", "markdown"),
+        default="json",
+        help="Output format. JSON is stable for downstream tooling.",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+        help="Project root containing pyproject.toml and sqlspec/.",
+    )
+    args = parser.parse_args(argv)
+
+    inventory = build_inventory(args.root)
+    if args.format == "markdown":
+        sys.stdout.write(format_markdown(inventory))
+        sys.stdout.write("\n")
+    else:
+        json.dump(inventory, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    return 0
+
+
 if __name__ == "__main__":  # pragma: no cover
-    pass
+    raise SystemExit(main())

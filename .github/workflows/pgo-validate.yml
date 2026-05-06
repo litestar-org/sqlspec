@@ -49,7 +49,7 @@ jobs:
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
           CIBW_TEST_COMMAND: >-
-            python -c "import sqlspec; from sqlspec.driver._query_cache import QueryCache; print('PGO wheel OK')"
+            python /project/tools/scripts/mypyc_smoke.py --require-compiled
 
       - name: List built wheels
         run: ls -la wheelhouse/

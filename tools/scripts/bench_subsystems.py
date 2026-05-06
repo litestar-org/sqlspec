@@ -8,8 +8,10 @@ Run with::
     uv run python tools/scripts/bench_subsystems.py
 """
 
+import json
 import sqlite3
 import tempfile
+import time
 import timeit
 from contextlib import suppress
 from pathlib import Path
@@ -580,6 +582,23 @@ def print_results_table(results: list[dict[str, Any]]) -> None:
         console.print(f"  [bold]sqlspec execute:[/bold] {full_execute['time_per_op_us']:.2f} us/op")
 
 
+def _write_json_results(
+    results: list[dict[str, Any]], output_path: str | Path, *, iterations: int, warmup: int, profile: bool
+) -> None:
+    """Write subsystem benchmark results to JSON."""
+    output = {
+        "metadata": {
+            "iterations": iterations,
+            "warmup": warmup,
+            "profile": profile,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        },
+        "included_cases": [result["name"] for result in results],
+        "results": results,
+    }
+    Path(output_path).write_text(json.dumps(output, indent=2, sort_keys=True))
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -589,7 +608,8 @@ def print_results_table(results: list[dict[str, Any]]) -> None:
 @click.option("--iterations", default=10_000, show_default=True, help="Number of iterations per subsystem benchmark")
 @click.option("--warmup", default=100, show_default=True, help="Number of warmup iterations (not timed)")
 @click.option("--profile", is_flag=True, default=False, help="Profile the benchmarks using HotPathProfiler")
-def main(iterations: int, warmup: int, profile: bool) -> None:
+@click.option("--json-output", default=None, type=click.Path(), help="Write subsystem results to a JSON file")
+def main(iterations: int, warmup: int, profile: bool, json_output: str | None) -> None:
     """Run subsystem micro-benchmarks for sqlspec hot path profiling.
 
     Isolates each execution subsystem and measures it independently to
@@ -607,6 +627,9 @@ def main(iterations: int, warmup: int, profile: bool) -> None:
         results = run_benchmarks(db_path, iterations, warmup, profile=profile)
         click.echo()
         print_results_table(results)
+        if json_output is not None:
+            _write_json_results(results, json_output, iterations=iterations, warmup=warmup, profile=profile)
+            click.secho(f"Subsystem report written to {json_output}", fg="green")
     finally:
         with suppress(OSError):
             db_path.unlink()

@@ -18,7 +18,9 @@ Run with::
 """
 
 import importlib.util
+import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -238,10 +240,37 @@ def print_gate_table(results: list[dict[str, Any]]) -> None:
     console.print(table)
 
 
+def _write_json_results(
+    results: list[dict[str, Any]],
+    output_path: str | Path,
+    *,
+    rows: int,
+    iterations: int,
+    warmup: int,
+    thresholds: dict[str, float],
+    all_passed: bool,
+) -> None:
+    """Write a performance gate report to JSON."""
+    output = {
+        "metadata": {
+            "rows": rows,
+            "iterations": iterations,
+            "warmup": warmup,
+            "mypyc_compiled": bench_mod._is_compiled(),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        },
+        "thresholds": thresholds,
+        "all_passed": all_passed,
+        "results": results,
+    }
+    Path(output_path).write_text(json.dumps(output, indent=2, sort_keys=True))
+
+
 @click.command()
 @click.option("--rows", default=10_000, show_default=True, help="Number of rows per scenario")
 @click.option("--iterations", default=3, show_default=True, help="Number of timed iterations per scenario")
 @click.option("--warmup", default=1, show_default=True, help="Number of warmup iterations (not timed)")
+@click.option("--json-output", default=None, type=click.Path(), help="Write gate results to a JSON file")
 @click.option(
     "--threshold-iterative",
     "threshold_iterative",
@@ -278,6 +307,7 @@ def main(
     threshold_repeated: float,
     threshold_write: float,
     threshold_read: float,
+    json_output: str | None,
 ) -> None:
     """Run performance regression gate.
 
@@ -301,6 +331,17 @@ def main(
     results, all_passed = run_gate(rows=rows, iterations=iterations, warmup=warmup, thresholds=thresholds)
 
     print_gate_table(results)
+    if json_output is not None:
+        _write_json_results(
+            results,
+            json_output,
+            rows=rows,
+            iterations=iterations,
+            warmup=warmup,
+            thresholds=thresholds,
+            all_passed=all_passed,
+        )
+        click.secho(f"\nGate report written to {json_output}", fg="green")
 
     if all_passed:
         click.secho("\nAll scenarios within threshold. Gate PASSED.", fg="green")
