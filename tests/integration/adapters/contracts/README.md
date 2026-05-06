@@ -20,6 +20,27 @@ The C5 broad adapter manifest was reviewed against the live tree after the MySQL
 | `test_features.py` | Partially consolidated | `aiomysql` and `asyncmy` moved to `test_features_mysql_async.py`. Remaining files represent real capability differences rather than a common feature contract. |
 | `test_owner_id_column.py` | Kept local | Standalone owner-id files are ADK store lifecycle tests with adapter-specific setup and foreign-key behavior. The MySQL async owner-id cases that were embedded in store files moved with `test_adk_store_mysql_async.py`. |
 
+## Storage and Event Holdouts
+
+The C3 storage/event pass now has explicit holdouts for the files that remain local:
+
+| Family | Status | Rationale |
+|---|---|---|
+| `test_storage_bridge.py` | Partially consolidated | SQLite-family coverage lives in `test_storage_bridge_sqlite.py`; `aiomysql` and `asyncmy` moved to `test_storage_bridge_mysql_async.py`. The remaining ADBC, Postgres-family, and DuckDB files keep local MinIO/storage-registry setup, sync/async transaction cleanup, FSSPEC/PyArrow skips, and adapter-specific telemetry assertions visible. |
+| `extensions/events/test_queue_backend.py` | Partially consolidated | SQLite-family coverage lives in `test_event_queue_sqlite.py`; MySQL-family queue fallback coverage lives in `test_event_queue_mysql.py`. Native LISTEN/NOTIFY, Oracle AQ, Spanner DDL, DuckDB queue DDL, and Postgres-family table-queue variants stay local because backend name, migration setup, and lifecycle assertions diverge. |
+| `extensions/events/test_listen_notify.py` | Kept local | Native notification behavior has timing and grouping concerns that need adapter-local isolation. |
+| `extensions/events/test_oracle_aq.py` | Kept local | Oracle AQ is a dialect-specific backend, not a generic table-queue contract. |
+
+## Framework Scenario Holdouts
+
+The C4 framework pass moved shared `disable_di` behavior into `tests/integration/extensions/contracts/test_disable_di.py`. The broader framework session scenarios remain local:
+
+| Family | Status | Rationale |
+|---|---|---|
+| `tests/integration/extensions/{fastapi,flask,sanic,starlette}/test_integration.py` | Kept local | These files still cover common nouns such as manual commit, autocommit, rollback, request/session caching, default session keys, and multi-database access, but the app builders, request/client APIs, sync-vs-async paths, response/error handling, and middleware lifecycles are framework-specific enough that a shared matrix would hide important behavior. |
+| `tests/integration/extensions/sanic/test_integration.py::test_sanic_disable_di_preserves_pool_lifecycle` | Kept local | The cross-framework `disable_di` contract covers injection behavior. This Sanic case is app.ctx pool lifecycle coverage and should stay beside the Sanic integration tests. |
+| Serializer parity scenarios | Deferred to active Flow | Non-Litestar serializer parity is still owned by `aa-serializer-parity` C3, so this consolidation branch does not absorb those tests. |
+
 ## Moved MySQL Async Families
 
 These old paths were replaced by adapter-parameterized contract files. Collection count is preserved: the touched MySQL async slice collected 244 items before and 244 items after the move.
@@ -33,9 +54,12 @@ These old paths were replaced by adapter-parameterized contract files. Collectio
 | `tests/integration/adapters/aiomysql/test_driver.py`, `tests/integration/adapters/asyncmy/test_driver.py` | `tests/integration/adapters/contracts/test_driver_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/test_migrations.py`, `tests/integration/adapters/asyncmy/test_migrations.py` | `tests/integration/adapters/contracts/test_migrations_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/test_config.py`, `tests/integration/adapters/asyncmy/test_config.py` | `tests/integration/adapters/contracts/test_config_mysql_async.py` |
+| `tests/integration/adapters/aiomysql/test_storage_bridge.py`, `tests/integration/adapters/asyncmy/test_storage_bridge.py` | `tests/integration/adapters/contracts/test_storage_bridge_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/extensions/adk/test_store.py`, `tests/integration/adapters/asyncmy/extensions/adk/test_store.py` | `tests/integration/adapters/contracts/test_adk_store_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/extensions/litestar/test_store.py`, `tests/integration/adapters/asyncmy/extensions/litestar/test_store.py` | `tests/integration/adapters/contracts/test_litestar_store_mysql_async.py` |
 
 Adapter integration collection stayed stable for the broad MySQL async pass: 200 files / 2099 items before the pass, 193 files / 2099 items after it.
 
 The follow-up MySQL async extension-store pass preserved the 64 touched store cases while reducing four adapter-local files to two contract files. Adapter integration collection stayed stable at 193 files / 2099 items before the store pass and 191 files / 2099 items after it.
+
+The final C3 cleanup moved the remaining MySQL async storage bridge twins. Adapter integration collection stayed stable at 2099 items while collected adapter files dropped from 191 to 190 for this pass.
