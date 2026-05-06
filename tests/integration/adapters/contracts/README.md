@@ -12,7 +12,7 @@ The C5 broad adapter manifest was reviewed against the live tree after the MySQL
 | `test_store.py` | Partially consolidated | `aiomysql` and `asyncmy` ADK store coverage moved to `test_adk_store_mysql_async.py`; their Litestar store coverage moved to `test_litestar_store_mysql_async.py`. Remaining store files stay local because they differ by extension family, table lifecycle, owner-id behavior, and framework storage contracts. |
 | `test_exceptions.py` | Consolidated in C6 | SQLite, MySQL, Postgres-family, DuckDB, ADBC, Oracle, Spanner, and skipped BigQuery emulator-gated exception mapping now live in `test_exceptions.py`. The contract keeps Spanner read/write semantics, ADBC Arrow error mapping, DuckDB catalog errors, and the deliberate BigQuery skip state as named cases. |
 | `test_driver.py` | Partially consolidated | `aiomysql` and `asyncmy` moved to `test_driver_mysql_async.py`. Remaining drivers have distinct sync/async lifecycles, native SQL features, cloud behavior, or dialect-specific lock semantics. |
-| `test_explain.py` | Partially consolidated | `aiomysql` and `asyncmy` moved to `test_explain_mysql_async.py`. Remaining files model different explain syntax and plan shapes. |
+| `test_explain.py` | Consolidated in C6 | SQLite, aiosqlite, MySQL async, Postgres-family, DuckDB, Oracle, and the existing skipped ADBC/BigQuery/Spanner cases now share `test_explain.py`. Dialect-specific statement shapes, plan options, and skip reasons are case data. |
 | `test_arrow.py` | Partially consolidated | `aiomysql` and `asyncmy` moved to `test_arrow_mysql_async.py`. Remaining files cover different Arrow backends, optional dependencies, and native export/import capability surfaces. |
 | `test_migrations.py` | Partially consolidated | `aiomysql` and `asyncmy` moved to `test_migrations_mysql_async.py`. Remaining migration files contain dialect DDL quirks, transactional behavior differences, or adapter-specific migration runner coverage. |
 | `test_execute_many.py` | Kept local | The remaining execute-many files are dialect- and driver-family specific and are not a readable matrix without also moving their driver fixtures. |
@@ -49,7 +49,7 @@ These old paths were replaced by adapter-parameterized contract files. Collectio
 |---|---|
 | `tests/integration/adapters/aiomysql/test_parameter_styles.py`, `tests/integration/adapters/asyncmy/test_parameter_styles.py` | `tests/integration/adapters/contracts/test_parameter_styles_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/test_arrow.py`, `tests/integration/adapters/asyncmy/test_arrow.py` | `tests/integration/adapters/contracts/test_arrow_mysql_async.py` |
-| `tests/integration/adapters/aiomysql/test_explain.py`, `tests/integration/adapters/asyncmy/test_explain.py` | `tests/integration/adapters/contracts/test_explain_mysql_async.py` |
+| `tests/integration/adapters/aiomysql/test_explain.py`, `tests/integration/adapters/asyncmy/test_explain.py` | `tests/integration/adapters/contracts/test_explain.py` |
 | `tests/integration/adapters/aiomysql/test_features.py`, `tests/integration/adapters/asyncmy/test_features.py` | `tests/integration/adapters/contracts/test_features_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/test_driver.py`, `tests/integration/adapters/asyncmy/test_driver.py` | `tests/integration/adapters/contracts/test_driver_mysql_async.py` |
 | `tests/integration/adapters/aiomysql/test_migrations.py`, `tests/integration/adapters/asyncmy/test_migrations.py` | `tests/integration/adapters/contracts/test_migrations_mysql_async.py` |
@@ -63,3 +63,5 @@ Adapter integration collection stayed stable for the broad MySQL async pass: 200
 The follow-up MySQL async extension-store pass preserved the 64 touched store cases while reducing four adapter-local files to two contract files. Adapter integration collection stayed stable at 193 files / 2099 items before the store pass and 191 files / 2099 items after it.
 
 The C6 scope revision replaced the storage bridge holdout model with an every-adapter capability contract. Adapter integration collection stayed stable at 2,099 items while collected adapter files dropped from 190 to 184 for this pass.
+
+The C6 EXPLAIN pass replaced ten adapter-local EXPLAIN files plus the MySQL async EXPLAIN contract with `tests/integration/adapters/contracts/test_explain.py`. Adapter integration collection stayed stable at 2,104 items while collected adapter files dropped from 175 to 165 for this pass.
