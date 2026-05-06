@@ -26,7 +26,7 @@ The C3 storage/event pass now has explicit holdouts for the files that remain lo
 
 | Family | Status | Rationale |
 |---|---|---|
-| `test_storage_bridge.py` | Consolidated in C6 | Storage-capable adapters now share `test_storage_bridge.py`. The contract covers SQLite, ADBC/Postgres, asyncpg, DuckDB, psqlpy, psycopg sync/async, and MySQL async while preserving per-adapter marks, MinIO/local storage setup, sync/async cleanup, and optional FSSPEC/PyArrow skips as case data. |
+| `test_storage_bridge.py` | Consolidated in C6 | Storage-capable adapters now share `test_storage_bridge.py`. The contract covers SQLite, ADBC/Postgres, asyncpg, DuckDB, psqlpy, psycopg sync/async, and MySQL async while preserving per-adapter marks, local storage alias setup, sync/async cleanup, and optional FSSPEC/PyArrow skips as case data. MinIO/S3 backend behavior stays in the storage integration suite rather than the adapter matrix. |
 | `extensions/events/test_queue_backend.py` | Partially consolidated | SQLite-family coverage lives in `test_event_queue_sqlite.py`; MySQL-family queue fallback coverage lives in `test_event_queue_mysql.py`. Native LISTEN/NOTIFY, Oracle AQ, Spanner DDL, DuckDB queue DDL, and Postgres-family table-queue variants stay local because backend name, migration setup, and lifecycle assertions diverge. |
 | `extensions/events/test_listen_notify.py` | Kept local | Native notification behavior has timing and grouping concerns that need adapter-local isolation. |
 | `extensions/events/test_oracle_aq.py` | Kept local | Oracle AQ is a dialect-specific backend, not a generic table-queue contract. |

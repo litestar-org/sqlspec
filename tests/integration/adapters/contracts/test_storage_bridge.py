@@ -19,7 +19,6 @@ from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
-from tests.integration.adapters._storage_bridge_helpers import register_minio_alias
 from tests.integration.adapters.contracts._mysql_async import (
     MYSQL_ASYNC_ADAPTERS,
     close_mysql_async_config,
@@ -253,12 +252,7 @@ async def test_storage_bridge_load_from_storage(tmp_path: Path, adapter: str, re
 
 @pytest.mark.parametrize("adapter", ROUND_TRIP_ADAPTERS)
 async def test_storage_bridge_select_to_storage_round_trip(
-    tmp_path: Path,
-    adapter: str,
-    request: pytest.FixtureRequest,
-    minio_service: Any,
-    minio_client: Any,
-    minio_default_bucket_name: str,
+    tmp_path: Path, adapter: str, request: pytest.FixtureRequest
 ) -> None:
     """Adapters with export support round-trip SQL rows through registered storage backends."""
     labels = ("north", "south", "east")
@@ -266,21 +260,14 @@ async def test_storage_bridge_select_to_storage_round_trip(
     target_table = f"storage_bridge_{adapter.replace('-', '_')}_target"
     alias = f"storage_bridge_{adapter.replace('-', '_')}"
     export_name = f"{adapter.replace('-', '_')}.parquet"
+    destination = f"alias://{alias}/{export_name}"
+    expected_local_path = tmp_path / export_name
     cascade = adapter in {"asyncpg", "psycopg-sync", "psycopg-async"}
     config = _make_round_trip_config(adapter, request)
 
     storage_registry.clear()
     try:
-        if adapter == "adbc-postgres":
-            storage_registry.register_alias(alias, f"file://{tmp_path}", backend="local")
-            destination = f"alias://{alias}/{export_name}"
-            expected_local_path = tmp_path / export_name
-            object_name = None
-        else:
-            prefix = register_minio_alias(alias, minio_service, minio_default_bucket_name)
-            destination = f"alias://{alias}/{adapter}/export.parquet"
-            expected_local_path = None
-            object_name = f"{prefix}/{adapter}/export.parquet"
+        storage_registry.register_alias(alias, f"file://{tmp_path}", backend="local")
 
         async with _provide_driver(adapter, config) as driver:
             await _drop_table(driver, target_table, cascade=cascade)
@@ -310,11 +297,7 @@ async def test_storage_bridge_select_to_storage_round_trip(
             await _drop_table(driver, target_table, cascade=cascade)
             await _drop_table(driver, source_table, cascade=cascade)
 
-        if expected_local_path is not None:
-            assert expected_local_path.exists()
-        else:
-            stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
-            object_size = stat.size if stat.size is not None else 0
-            assert object_size > 0
+        assert expected_local_path.exists()
+        assert expected_local_path.stat().st_size > 0
     finally:
         storage_registry.clear()
