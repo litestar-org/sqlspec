@@ -55,6 +55,54 @@ Data Dictionary
    :undoc-members:
    :show-inheritance:
 
+Adapter Data Dictionary Classes
+===============================
+
+Adapter data dictionaries remain public at their adapter-local import paths, and
+drivers continue to expose them through ``driver.data_dictionary``. Shared helper
+modules under ``sqlspec.data_dictionary.dialects`` are internal implementation
+details used to keep repeated dialect rules consistent.
+
+When changing data-dictionary behavior, review these shared-dialect groups
+together:
+
+- PostgreSQL: ``sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary`` when
+  the driver dialect is Postgres, plus
+  ``sqlspec.adapters.asyncpg.data_dictionary.AsyncpgDataDictionary``,
+  ``sqlspec.adapters.psqlpy.data_dictionary.PsqlpyDataDictionary``,
+  ``sqlspec.adapters.psycopg.data_dictionary.PsycopgSyncDataDictionary``, and
+  ``sqlspec.adapters.psycopg.data_dictionary.PsycopgAsyncDataDictionary``.
+- SQLite: ``sqlspec.adapters.sqlite.data_dictionary.SqliteDataDictionary``,
+  ``sqlspec.adapters.aiosqlite.data_dictionary.AiosqliteDataDictionary``, and
+  ``sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary`` when the driver
+  dialect is SQLite.
+- MySQL and MariaDB:
+  ``sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorSyncDataDictionary``,
+  ``sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorAsyncDataDictionary``,
+  ``sqlspec.adapters.pymysql.data_dictionary.PyMysqlDataDictionary``,
+  ``sqlspec.adapters.aiomysql.data_dictionary.AiomysqlDataDictionary``,
+  ``sqlspec.adapters.asyncmy.data_dictionary.AsyncmyDataDictionary``, and
+  ``sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary`` when the driver
+  dialect is MySQL or MariaDB.
+- CockroachDB:
+  ``sqlspec.adapters.cockroach_asyncpg.data_dictionary.CockroachAsyncpgDataDictionary``,
+  ``sqlspec.adapters.cockroach_psycopg.data_dictionary.CockroachPsycopgSyncDataDictionary``,
+  ``sqlspec.adapters.cockroach_psycopg.data_dictionary.CockroachPsycopgAsyncDataDictionary``,
+  and ``sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary`` when the
+  driver dialect is CockroachDB.
+- Oracle:
+  ``sqlspec.adapters.oracledb.data_dictionary.OracledbSyncDataDictionary`` and
+  ``sqlspec.adapters.oracledb.data_dictionary.OracledbAsyncDataDictionary``.
+  Oracle ADK and event stores that construct these dictionaries directly should
+  be reviewed with the same changes.
+- BigQuery:
+  ``sqlspec.adapters.bigquery.data_dictionary.BigQueryDataDictionary`` and
+  ``sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary`` when the driver
+  dialect is BigQuery.
+- DuckDB and Spanner currently have native-only adapter dictionaries:
+  ``sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary`` and
+  ``sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary``.
+
 Feature Flag Types
 ==================
 

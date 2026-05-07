@@ -68,6 +68,38 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Uses importlib.resources instead of direct __file__ path discovery.",
     },
+    "sqlspec/data_dictionary/dialects/postgres.py": {
+        "classification": "compile_now",
+        "reason": "Shared Postgres JSON type helper for ADBC-as-Postgres, asyncpg, psqlpy, and psycopg dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/sqlite.py": {
+        "classification": "compile_now",
+        "reason": "Shared SQLite JSON and feature-list helpers for sqlite, aiosqlite, and ADBC-as-SQLite dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/mysql.py": {
+        "classification": "compile_now",
+        "reason": "Shared MySQL JSON type helper for mysqlconnector, pymysql, aiomysql, asyncmy, and ADBC-as-MySQL dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/cockroachdb.py": {
+        "classification": "compile_now",
+        "reason": "Shared CockroachDB JSON type helper for cockroach_asyncpg, cockroach_psycopg, and ADBC-as-Cockroach dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/duckdb.py": {
+        "classification": "compile_now",
+        "reason": "DuckDB data-dictionary dialect configuration is in the compiled dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/oracle.py": {
+        "classification": "compile_now",
+        "reason": "Shared Oracle version, JSON, feature, and table-list helpers for oracledb sync and async dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/spanner.py": {
+        "classification": "compile_now",
+        "reason": "Spanner data-dictionary dialect configuration is in the compiled dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/bigquery.py": {
+        "classification": "compile_now",
+        "reason": "Shared BigQuery INFORMATION_SCHEMA formatting helpers for native BigQuery and ADBC-as-BigQuery dictionaries.",
+    },
     "sqlspec/migrations/commands.py": {
         "classification": "keep_interpreted",
         "reason": "CLI command surface keeps dynamic imports and rich-click behavior interpreted.",

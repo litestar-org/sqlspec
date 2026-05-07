@@ -1,8 +1,28 @@
 """Unit tests for data dictionary functionality."""
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
+from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
+from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
+from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
+from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
+from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
+from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
+    CockroachPsycopgAsyncDataDictionary,
+    CockroachPsycopgSyncDataDictionary,
+)
+from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
+from sqlspec.adapters.mysqlconnector.data_dictionary import (
+    MysqlConnectorAsyncDataDictionary,
+    MysqlConnectorSyncDataDictionary,
+)
+from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
+from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
+from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
+from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.typing import VersionInfo
@@ -51,6 +71,35 @@ def test_version_tuple() -> None:
     """Test version_tuple property."""
     version = VersionInfo(1, 2, 3)
     assert version.version_tuple == (1, 2, 3)
+
+
+def test_public_data_dictionary_classes_remain_constructible() -> None:
+    """All adapter data-dictionary public classes should remain directly constructible."""
+    data_dictionary_types: tuple[type[object], ...] = (
+        AdbcDataDictionary,
+        AiomysqlDataDictionary,
+        AiosqliteDataDictionary,
+        AsyncmyDataDictionary,
+        AsyncpgDataDictionary,
+        BigQueryDataDictionary,
+        CockroachAsyncpgDataDictionary,
+        CockroachPsycopgAsyncDataDictionary,
+        CockroachPsycopgSyncDataDictionary,
+        DuckDBDataDictionary,
+        MysqlConnectorAsyncDataDictionary,
+        MysqlConnectorSyncDataDictionary,
+        OracledbAsyncDataDictionary,
+        OracledbSyncDataDictionary,
+        PsqlpyDataDictionary,
+        PsycopgAsyncDataDictionary,
+        PsycopgSyncDataDictionary,
+        PyMysqlDataDictionary,
+        SpannerDataDictionary,
+        SqliteDataDictionary,
+    )
+
+    for dictionary_type in data_dictionary_types:
+        assert dictionary_type().__class__ is dictionary_type
 
 
 def test_sqlite_get_version_success() -> None:
@@ -155,6 +204,32 @@ def test_sqlite_get_optimal_type_without_json_support() -> None:
     assert data_dict.get_optimal_type(mock_driver, "json") == "TEXT"
 
 
+def test_sqlite_dialect_resolves_json_type_by_version() -> None:
+    """SQLite dialect helper should resolve JSON type boundaries."""
+    from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
+
+    assert resolve_sqlite_json_type(VersionInfo(3, 42, 0)) == "JSON"
+    assert resolve_sqlite_json_type(VersionInfo(3, 20, 0)) == "TEXT"
+    assert resolve_sqlite_json_type(None) == "TEXT"
+
+
+async def test_sqlite_family_json_type_selection_matches_adbc() -> None:
+    """SQLite, aiosqlite, and ADBC-as-SQLite should agree on JSON type selection."""
+    sqlite_driver = Mock(spec=SyncDriverAdapterBase)
+    sqlite_driver.select_value_or_none.return_value = "3.42.0"
+
+    aiosqlite_driver = Mock()
+    aiosqlite_driver.select_value_or_none = AsyncMock(return_value="3.42.0")
+
+    adbc_driver = Mock()
+    adbc_driver.dialect = "sqlite"
+    adbc_driver.select_value_or_none.return_value = "3.42.0"
+
+    assert SqliteDataDictionary().get_optimal_type(sqlite_driver, "json") == "JSON"
+    assert await AiosqliteDataDictionary().get_optimal_type(aiosqlite_driver, "json") == "JSON"
+    assert AdbcDataDictionary().get_optimal_type(adbc_driver, "json") == "JSON"
+
+
 def test_sqlite_list_available_features() -> None:
     """Test listing available features."""
     data_dict = SqliteDataDictionary()
@@ -174,6 +249,35 @@ def test_sqlite_list_available_features() -> None:
     ]
 
     assert all(feature in features for feature in expected_features)
+
+
+def test_mysql_dialect_resolves_json_type_by_version() -> None:
+    """MySQL dialect helper should resolve JSON type boundaries."""
+    from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
+
+    assert resolve_mysql_json_type(VersionInfo(8, 0, 0)) == "JSON"
+    assert resolve_mysql_json_type(VersionInfo(5, 7, 7)) == "TEXT"
+    assert resolve_mysql_json_type(None) == "TEXT"
+
+
+async def test_mysql_family_json_type_selection_matches_adbc() -> None:
+    """MySQL-family adapters and ADBC-as-MySQL should agree on JSON type selection."""
+    sync_driver = Mock(spec=SyncDriverAdapterBase)
+    sync_driver.select_value_or_none.return_value = "5.7.8"
+
+    async_driver = Mock()
+    async_driver.select_value_or_none = AsyncMock(return_value="5.7.8")
+
+    adbc_driver = Mock()
+    adbc_driver.dialect = "mariadb"
+    adbc_driver.select_value_or_none.return_value = "10.6.2-MariaDB"
+
+    assert MysqlConnectorSyncDataDictionary().get_optimal_type(sync_driver, "json") == "JSON"
+    assert PyMysqlDataDictionary().get_optimal_type(sync_driver, "json") == "JSON"
+    assert await MysqlConnectorAsyncDataDictionary().get_optimal_type(async_driver, "json") == "JSON"
+    assert await AiomysqlDataDictionary().get_optimal_type(async_driver, "json") == "JSON"
+    assert await AsyncmyDataDictionary().get_optimal_type(async_driver, "json") == "JSON"
+    assert AdbcDataDictionary().get_optimal_type(adbc_driver, "json") == "JSON"
 
 
 def test_adbc_get_dialect() -> None:
@@ -316,6 +420,72 @@ def test_adbc_postgres_optimal_types() -> None:
     assert data_dict.get_optimal_type(mock_driver, "blob") == "BYTEA"
 
 
+def test_postgres_dialect_resolves_json_type_by_version() -> None:
+    """Postgres dialect helper should resolve JSON type boundaries."""
+    from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
+
+    assert resolve_postgres_json_type(VersionInfo(15, 3, 0)) == "JSONB"
+    assert resolve_postgres_json_type(VersionInfo(9, 3, 0)) == "JSON"
+    assert resolve_postgres_json_type(VersionInfo(9, 1, 0)) == "TEXT"
+    assert resolve_postgres_json_type(None) == "TEXT"
+
+
+def test_postgres_sync_json_type_selection_matches_adbc_before_jsonb() -> None:
+    """ADBC-as-Postgres and psycopg should agree before JSONB is available."""
+    adbc_driver = Mock()
+    adbc_driver.dialect = "postgres"
+    adbc_driver.select_value_or_none.return_value = "PostgreSQL 9.3 on x86_64-pc-linux-gnu"
+
+    psycopg_driver = Mock(spec=SyncDriverAdapterBase)
+    psycopg_driver.select_value_or_none.return_value = "PostgreSQL 9.3 on x86_64-pc-linux-gnu"
+
+    assert AdbcDataDictionary().get_optimal_type(adbc_driver, "json") == "JSON"
+    assert PsycopgSyncDataDictionary().get_optimal_type(psycopg_driver, "json") == "JSON"
+
+
+async def test_postgres_async_json_type_selection_matches_before_jsonb() -> None:
+    """Async Postgres adapters should agree before JSONB is available."""
+    asyncpg_driver = Mock()
+    asyncpg_driver.select_value_or_none = AsyncMock(return_value="PostgreSQL 9.3 on x86_64-pc-linux-gnu")
+
+    psycopg_driver = Mock()
+    psycopg_driver.select_value_or_none = AsyncMock(return_value="PostgreSQL 9.3 on x86_64-pc-linux-gnu")
+
+    psqlpy_driver = Mock()
+    psqlpy_driver.select_value = AsyncMock(return_value="PostgreSQL 9.3 on x86_64-pc-linux-gnu")
+
+    assert await AsyncpgDataDictionary().get_optimal_type(asyncpg_driver, "json") == "JSON"
+    assert await PsycopgAsyncDataDictionary().get_optimal_type(psycopg_driver, "json") == "JSON"
+    assert await PsqlpyDataDictionary().get_optimal_type(psqlpy_driver, "json") == "JSON"
+
+
+def test_cockroach_dialect_resolves_json_type_by_version() -> None:
+    """CockroachDB dialect helper should resolve JSON type boundaries."""
+    from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
+
+    assert resolve_cockroachdb_json_type(VersionInfo(23, 1, 0)) == "JSONB"
+    assert resolve_cockroachdb_json_type(VersionInfo(19, 2, 0)) == "TEXT"
+    assert resolve_cockroachdb_json_type(None) == "TEXT"
+
+
+async def test_cockroach_family_json_type_selection_matches_adbc() -> None:
+    """CockroachDB adapters and ADBC-as-Cockroach should agree on JSON type selection."""
+    sync_driver = Mock(spec=SyncDriverAdapterBase)
+    sync_driver.select_value_or_none.return_value = "CockroachDB CCL v19.2.0"
+
+    async_driver = Mock()
+    async_driver.select_value_or_none = AsyncMock(return_value="CockroachDB CCL v19.2.0")
+
+    adbc_driver = Mock()
+    adbc_driver.dialect = "cockroach"
+    adbc_driver.select_value_or_none.return_value = "CockroachDB CCL v19.2.0"
+
+    assert CockroachPsycopgSyncDataDictionary().get_optimal_type(sync_driver, "json") == "TEXT"
+    assert await CockroachPsycopgAsyncDataDictionary().get_optimal_type(async_driver, "json") == "TEXT"
+    assert await CockroachAsyncpgDataDictionary().get_optimal_type(async_driver, "json") == "TEXT"
+    assert AdbcDataDictionary().get_optimal_type(adbc_driver, "json") == "TEXT"
+
+
 def test_adbc_bigquery_feature_flags() -> None:
     """Test BigQuery feature flags via ADBC."""
     mock_driver = Mock()
@@ -328,6 +498,80 @@ def test_adbc_bigquery_feature_flags() -> None:
     assert data_dict.get_feature_flag(mock_driver, "supports_structs") is True
     assert data_dict.get_feature_flag(mock_driver, "supports_returning") is False
     assert data_dict.get_feature_flag(mock_driver, "supports_transactions") is True
+
+
+def test_bigquery_dialect_formats_information_schema_identifiers() -> None:
+    """BigQuery dialect helper should format shared INFORMATION_SCHEMA identifiers."""
+    from sqlspec.data_dictionary.dialects.bigquery import (
+        format_bigquery_information_schema_tables,
+        format_bigquery_schema_prefix,
+    )
+
+    tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables("project.dataset")
+
+    assert tables_table == "`project.dataset.INFORMATION_SCHEMA.TABLES`"
+    assert kcu_table == "`project.dataset.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
+    assert rc_table == "`project.dataset.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
+    assert format_bigquery_schema_prefix("project.dataset") == "`project.dataset`."
+
+
+def test_bigquery_dialect_formats_unqualified_information_schema_identifiers() -> None:
+    """BigQuery dialect helper should leave INFORMATION_SCHEMA unqualified without schema."""
+    from sqlspec.data_dictionary.dialects.bigquery import (
+        format_bigquery_information_schema_tables,
+        format_bigquery_schema_prefix,
+    )
+
+    tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(None)
+
+    assert tables_table == "INFORMATION_SCHEMA.TABLES"
+    assert kcu_table == "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+    assert rc_table == "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+    assert format_bigquery_schema_prefix(None) == ""
+
+
+def test_bigquery_family_uses_dialect_information_schema_helpers(monkeypatch) -> None:
+    """BigQuery and ADBC-as-BigQuery should delegate shared INFORMATION_SCHEMA formatting."""
+    from sqlspec.adapters.adbc import data_dictionary as adbc_data_dictionary_module
+    from sqlspec.adapters.bigquery import data_dictionary as bigquery_data_dictionary_module
+
+    def fake_tables(schema_name: "str | None") -> "tuple[str, str, str]":
+        assert schema_name == "project.dataset"
+        return ("BIGQUERY_TABLES_SENTINEL", "BIGQUERY_KCU_SENTINEL", "BIGQUERY_RC_SENTINEL")
+
+    def fake_prefix(schema_name: "str | None") -> str:
+        assert schema_name == "project.dataset"
+        return "BIGQUERY_PREFIX_SENTINEL."
+
+    monkeypatch.setattr(bigquery_data_dictionary_module, "format_bigquery_information_schema_tables", fake_tables)
+    monkeypatch.setattr(adbc_data_dictionary_module, "format_bigquery_information_schema_tables", fake_tables)
+    monkeypatch.setattr(bigquery_data_dictionary_module, "format_bigquery_schema_prefix", fake_prefix)
+    monkeypatch.setattr(adbc_data_dictionary_module, "format_bigquery_schema_prefix", fake_prefix)
+
+    native_driver = Mock()
+    native_driver.select.return_value = []
+    adbc_driver = Mock()
+    adbc_driver.dialect = "bigquery"
+    adbc_driver.select.return_value = []
+
+    BigQueryDataDictionary().get_tables(native_driver, schema="project.dataset")
+    AdbcDataDictionary().get_tables(adbc_driver, schema="project.dataset")
+    BigQueryDataDictionary().get_columns(native_driver, schema="project.dataset")
+    AdbcDataDictionary().get_columns(adbc_driver, schema="project.dataset")
+
+    native_tables_query = native_driver.select.call_args_list[0].args[0]
+    adbc_tables_query = adbc_driver.select.call_args_list[0].args[0]
+    native_columns_query = native_driver.select.call_args_list[1].args[0]
+    adbc_columns_query = adbc_driver.select.call_args_list[1].args[0]
+
+    assert "BIGQUERY_TABLES_SENTINEL" in native_tables_query
+    assert "BIGQUERY_KCU_SENTINEL" in native_tables_query
+    assert "BIGQUERY_RC_SENTINEL" in native_tables_query
+    assert "BIGQUERY_TABLES_SENTINEL" in adbc_tables_query
+    assert "BIGQUERY_KCU_SENTINEL" in adbc_tables_query
+    assert "BIGQUERY_RC_SENTINEL" in adbc_tables_query
+    assert "BIGQUERY_PREFIX_SENTINEL.INFORMATION_SCHEMA.COLUMNS" in native_columns_query
+    assert "BIGQUERY_PREFIX_SENTINEL.INFORMATION_SCHEMA.COLUMNS" in adbc_columns_query
 
 
 def test_adbc_unknown_feature_flag() -> None:

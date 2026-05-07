@@ -34,3 +34,10 @@ Connection Pool
 .. autoclass:: sqlspec.adapters.duckdb.DuckDBConnectionPool
    :members:
    :show-inheritance:
+
+Data Dictionary
+===============
+
+.. autoclass:: sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary
+   :members:
+   :show-inheritance:

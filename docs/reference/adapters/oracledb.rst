@@ -33,3 +33,18 @@ Async Driver
 .. autoclass:: sqlspec.adapters.oracledb.OracleAsyncDriver
    :members:
    :show-inheritance:
+
+Data Dictionary
+===============
+
+.. autoclass:: sqlspec.adapters.oracledb.data_dictionary.OracleVersionInfo
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.data_dictionary.OracledbSyncDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.data_dictionary.OracledbAsyncDataDictionary
+   :members:
+   :show-inheritance:

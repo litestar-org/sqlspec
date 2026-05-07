@@ -105,18 +105,26 @@ build-performance:                                 ## Build package with mypyc c
 .PHONY: test-mypyc
 test-mypyc:                                        ## Test mypyc compilation on individual modules
 	@echo "${INFO} Testing mypyc compilation... 🔧"
-	@uv run mypyc --check-untyped-defs sqlspec/utils/text.py
-	@uv run mypyc --check-untyped-defs sqlspec/utils/sync_tools.py
-	@uv run mypyc --check-untyped-defs sqlspec/core/cache.py
-	@uv run mypyc --check-untyped-defs sqlspec/core/hashing.py
-	@uv run mypyc --check-untyped-defs sqlspec/core/parameters/_processor.py
-	@uv run mypyc --check-untyped-defs sqlspec/core/result/_base.py
-	@uv run mypyc --check-untyped-defs sqlspec/driver/_query_cache.py
-	@uv run mypyc --check-untyped-defs sqlspec/adapters/sqlite/core.py
-	@uv run mypyc --check-untyped-defs sqlspec/adapters/sqlite/pool.py
-	@uv run mypyc --check-untyped-defs sqlspec/storage/_paths.py
-	@uv run mypyc --check-untyped-defs sqlspec/data_dictionary/_loader.py
-	@uv run mypyc --check-untyped-defs sqlspec/migrations/version.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/text.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/sync_tools.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/cache.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/hashing.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/parameters/_processor.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/result/_base.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/driver/_query_cache.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/core.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/pool.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_paths.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/_loader.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/bigquery.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/cockroachdb.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/duckdb.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/mysql.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/oracle.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/postgres.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/spanner.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/sqlite.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/migrations/version.py
 	@echo "${OK} Mypyc compilation tests passed ✨"
 
 

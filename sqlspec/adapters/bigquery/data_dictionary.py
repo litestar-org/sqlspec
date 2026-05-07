@@ -4,6 +4,10 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.bigquery import (
+    format_bigquery_information_schema_tables,
+    format_bigquery_schema_prefix,
+)
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
@@ -66,14 +70,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
     def get_tables(self, driver: "BigQueryDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using BigQuery catalog."""
         self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="tables")
-        if schema:
-            tables_table = f"`{schema}.INFORMATION_SCHEMA.TABLES`"
-            kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
-            rc_table = f"`{schema}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
-        else:
-            tables_table = "INFORMATION_SCHEMA.TABLES"
-            kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
-            rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+        tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(schema)
 
         query_text = self.get_query_text("tables_by_schema").format(
             tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
@@ -84,7 +81,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
-        schema_prefix = f"`{schema}`." if schema else ""
+        schema_prefix = format_bigquery_schema_prefix(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="columns")
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
@@ -113,12 +110,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema, table_name=None, operation="foreign_keys")
         else:
             self._log_table_describe(driver, schema_name=schema, table_name=table, operation="foreign_keys")
-        if schema:
-            kcu_table = f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
-            rc_table = f"`{schema}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
-        else:
-            kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
-            rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+        _, kcu_table, rc_table = format_bigquery_information_schema_tables(schema)
 
         if table is None:
             query_text = self.get_query_text("foreign_keys_by_schema").format(kcu_table=kcu_table, rc_table=rc_table)

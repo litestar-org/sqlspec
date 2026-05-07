@@ -25,3 +25,10 @@ Connection Pool
 .. autoclass:: sqlspec.adapters.sqlite.pool.SqliteConnectionPool
    :members:
    :show-inheritance:
+
+Data Dictionary
+===============
+
+.. autoclass:: sqlspec.adapters.sqlite.data_dictionary.SqliteDataDictionary
+   :members:
+   :show-inheritance:

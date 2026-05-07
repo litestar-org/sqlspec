@@ -3,6 +3,9 @@ import re
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 from sqlspec.typing import VersionInfo
 
+__all__ = ("list_sqlite_available_features", "resolve_sqlite_json_type")
+
+
 SQLITE_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 SQLITE_FEATURE_VERSIONS: "FeatureVersions" = {
@@ -40,3 +43,17 @@ SQLITE_CONFIG = DialectConfig(
 )
 
 register_dialect(SQLITE_CONFIG)
+
+
+def resolve_sqlite_json_type(version_info: "VersionInfo | None") -> str:
+    """Resolve the best SQLite JSON storage type for a database version."""
+    json_version = SQLITE_CONFIG.get_feature_version("supports_json")
+    if version_info and json_version and version_info >= json_version:
+        return "JSON"
+    return "TEXT"
+
+
+def list_sqlite_available_features() -> "list[str]":
+    """List SQLite data-dictionary feature flags."""
+    features = set(SQLITE_CONFIG.feature_flags.keys()) | set(SQLITE_CONFIG.feature_versions.keys())
+    return sorted(features)

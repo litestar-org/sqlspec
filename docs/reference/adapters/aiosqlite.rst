@@ -25,3 +25,10 @@ Connection Pool
 .. autoclass:: sqlspec.adapters.aiosqlite.pool.AiosqliteConnectionPool
    :members:
    :show-inheritance:
+
+Data Dictionary
+===============
+
+.. autoclass:: sqlspec.adapters.aiosqlite.data_dictionary.AiosqliteDataDictionary
+   :members:
+   :show-inheritance:

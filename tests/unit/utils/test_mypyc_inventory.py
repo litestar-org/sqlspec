@@ -52,9 +52,11 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
     target_match = re.search(r"^test-mypyc:.*?(?=^\S)", makefile, flags=re.MULTILINE | re.DOTALL)
     assert target_match is not None
 
-    smoke_paths = re.findall(r"uv run mypyc --check-untyped-defs (\S+)", target_match.group(0))
+    smoke_invocations = re.findall(
+        r"uv run mypyc --check-untyped-defs --no-warn-unused-configs (\S+)", target_match.group(0)
+    )
 
-    assert smoke_paths == [
+    assert smoke_invocations == [
         "sqlspec/utils/text.py",
         "sqlspec/utils/sync_tools.py",
         "sqlspec/core/cache.py",
@@ -66,9 +68,17 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/adapters/sqlite/pool.py",
         "sqlspec/storage/_paths.py",
         "sqlspec/data_dictionary/_loader.py",
+        "sqlspec/data_dictionary/dialects/bigquery.py",
+        "sqlspec/data_dictionary/dialects/cockroachdb.py",
+        "sqlspec/data_dictionary/dialects/duckdb.py",
+        "sqlspec/data_dictionary/dialects/mysql.py",
+        "sqlspec/data_dictionary/dialects/oracle.py",
+        "sqlspec/data_dictionary/dialects/postgres.py",
+        "sqlspec/data_dictionary/dialects/spanner.py",
+        "sqlspec/data_dictionary/dialects/sqlite.py",
         "sqlspec/migrations/version.py",
     ]
-    assert all((PROJECT_ROOT / path).is_file() for path in smoke_paths)
+    assert all((PROJECT_ROOT / path).is_file() for path in smoke_invocations)
 
 
 def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
@@ -83,6 +93,14 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/storage/pipeline.py" in payload["compiled_modules"]
     assert "sqlspec/storage/_paths.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/_loader.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/bigquery.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/cockroachdb.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/duckdb.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/mysql.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/oracle.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/postgres.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/spanner.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/sqlite.py" in payload["compiled_modules"]
     assert "sqlspec/migrations/runner.py" in payload["compiled_modules"]
     assert "sqlspec/adapters/sqlite/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/aiosqlite/driver.py" in payload["interpreted_modules"]

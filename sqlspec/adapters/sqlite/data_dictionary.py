@@ -6,6 +6,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.sqlite.core import format_identifier
 from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_features, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
@@ -92,18 +93,13 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         version_info = self.get_version(driver)
 
         if type_category == "json":
-            json_version = config.get_feature_version("supports_json")
-            if version_info and json_version and version_info >= json_version:
-                return "JSON"
-            return "TEXT"
+            return resolve_sqlite_json_type(version_info)
 
         return config.get_optimal_type(type_category)
 
     def list_available_features(self) -> "list[str]":
         """List available feature flags for this dialect."""
-        config = get_dialect_config(type(self).dialect)
-        features = set(config.feature_flags.keys()) | set(config.feature_versions.keys())
-        return sorted(features)
+        return list_sqlite_available_features()
 
     def get_tables(self, driver: "SqliteDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using SQLite catalog."""

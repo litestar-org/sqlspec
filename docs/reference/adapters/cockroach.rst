@@ -70,3 +70,18 @@ Retry Configuration
 .. autoclass:: sqlspec.adapters.cockroach_psycopg.core.CockroachPsycopgRetryConfig
    :members:
    :show-inheritance:
+
+Data Dictionaries
+=================
+
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.data_dictionary.CockroachAsyncpgDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.data_dictionary.CockroachPsycopgSyncDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.data_dictionary.CockroachPsycopgAsyncDataDictionary
+   :members:
+   :show-inheritance:

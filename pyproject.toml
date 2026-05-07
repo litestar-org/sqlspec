@@ -184,6 +184,11 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["sqlspec"]
 
+[tool.setuptools]
+# Standalone `uv run mypyc ...` generates a setuptools setup.py in the repo root.
+# Keep that smoke build from auto-discovering ignored scratch directories.
+packages = []
+
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=1.19.1"]
@@ -223,7 +228,7 @@ include = [
   "sqlspec/storage/_paths.py",              # Pure storage path handling
   "sqlspec/storage/pipeline.py",            # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes
-  "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
+  "sqlspec/data_dictionary/**/*.py",       # Data dictionary registry, loader, and dialect helpers
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers

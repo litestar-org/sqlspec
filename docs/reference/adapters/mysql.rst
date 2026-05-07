@@ -114,3 +114,26 @@ Driver Features
 .. autoclass:: sqlspec.adapters.aiomysql.AiomysqlDriverFeatures
    :members:
    :show-inheritance:
+
+Data Dictionaries
+=================
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorSyncDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorAsyncDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.pymysql.data_dictionary.PyMysqlDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.asyncmy.data_dictionary.AsyncmyDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiomysql.data_dictionary.AiomysqlDataDictionary
+   :members:
+   :show-inheritance:

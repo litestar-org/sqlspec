@@ -24,3 +24,10 @@ Driver
 .. autoclass:: sqlspec.adapters.spanner.SpannerSyncDriver
    :members:
    :show-inheritance:
+
+Data Dictionary
+===============
+
+.. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary
+   :members:
+   :show-inheritance:

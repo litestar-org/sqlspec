@@ -29,3 +29,10 @@ Driver
 .. autoclass:: sqlspec.adapters.psqlpy.PsqlpyDriver
    :members:
    :show-inheritance:
+
+Data Dictionary
+===============
+
+.. autoclass:: sqlspec.adapters.psqlpy.data_dictionary.PsqlpyDataDictionary
+   :members:
+   :show-inheritance:

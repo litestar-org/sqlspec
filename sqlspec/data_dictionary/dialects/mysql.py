@@ -3,6 +3,9 @@ import re
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 from sqlspec.typing import VersionInfo
 
+__all__ = ("resolve_mysql_json_type",)
+
+
 MYSQL_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 MYSQL_FEATURE_VERSIONS: "FeatureVersions" = {
@@ -40,3 +43,11 @@ MYSQL_CONFIG = DialectConfig(
 )
 
 register_dialect(MYSQL_CONFIG)
+
+
+def resolve_mysql_json_type(version_info: "VersionInfo | None") -> str:
+    """Resolve the best MySQL JSON storage type for a database version."""
+    json_version = MYSQL_CONFIG.get_feature_version("supports_json")
+    if version_info and json_version and version_info >= json_version:
+        return "JSON"
+    return "TEXT"
