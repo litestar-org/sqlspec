@@ -201,7 +201,7 @@ exclude = [
   "sqlspec/**/__init__.py",                   # Init files (usually just imports)
   "sqlspec/protocols.py",                     # Protocol definitions
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
-  "sqlspec/data_dictionary/_loader.py",       # Loader relies on __file__ which fails in compiled modules
+  "sqlspec/storage/_arrow_payload.py",        # PyArrow conversion boundary stays interpreted
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
@@ -216,8 +216,12 @@ include = [
   "sqlspec/loader.py",                     # Loader module
   "sqlspec/observability/**/*.py",         # Observability utilities
   "sqlspec/driver/**/*.py",                # Driver module
+  "sqlspec/adapters/**/pool.py",            # Adapter pool runtimes proven without driver subclasses
+  "sqlspec/migrations/**/*.py",             # Migration runtime, excluding command CLI
   "sqlspec/storage/registry.py",           # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",             # Safe storage error normalization
+  "sqlspec/storage/_paths.py",              # Pure storage path handling
+  "sqlspec/storage/pipeline.py",            # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary mixin (required for adapter inheritance)
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers

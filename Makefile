@@ -109,8 +109,14 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs sqlspec/utils/sync_tools.py
 	@uv run mypyc --check-untyped-defs sqlspec/core/cache.py
 	@uv run mypyc --check-untyped-defs sqlspec/core/hashing.py
+	@uv run mypyc --check-untyped-defs sqlspec/core/parameters/_processor.py
+	@uv run mypyc --check-untyped-defs sqlspec/core/result/_base.py
 	@uv run mypyc --check-untyped-defs sqlspec/driver/_query_cache.py
 	@uv run mypyc --check-untyped-defs sqlspec/adapters/sqlite/core.py
+	@uv run mypyc --check-untyped-defs sqlspec/adapters/sqlite/pool.py
+	@uv run mypyc --check-untyped-defs sqlspec/storage/_paths.py
+	@uv run mypyc --check-untyped-defs sqlspec/data_dictionary/_loader.py
+	@uv run mypyc --check-untyped-defs sqlspec/migrations/version.py
 	@echo "${OK} Mypyc compilation tests passed ✨"
 
 

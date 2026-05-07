@@ -38,9 +38,13 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "async_driver",
         "builder_select",
         "core_statement",
+        "data_dictionary_loader",
         "data_dictionary_registry",
+        "migration_runner",
+        "sqlite_pool",
         "sqlite_type_converter",
         "storage_registry",
+        "storage_pipeline",
         "sync_driver",
     }
 
@@ -53,3 +57,5 @@ def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
     assert all(result["imported"] for result in results)
     assert any(result["module"] == "sqlspec.driver._sync" for result in results)
     assert any(result["module"] == "sqlspec.adapters.sqlite.type_converter" for result in results)
+    assert any(result["module"] == "sqlspec.storage.pipeline" for result in results)
+    assert any(result["module"] == "sqlspec.migrations.runner" for result in results)

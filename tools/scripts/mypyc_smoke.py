@@ -28,7 +28,11 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("sync_driver", "sqlspec.driver._sync", "SyncDriverAdapterBase", True),
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
+    SmokeImport("storage_pipeline", "sqlspec.storage.pipeline", "SyncStoragePipeline", True),
+    SmokeImport("sqlite_pool", "sqlspec.adapters.sqlite.pool", "SqliteConnectionPool", True),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
+    SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
+    SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
 )
 

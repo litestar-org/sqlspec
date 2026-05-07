@@ -59,7 +59,35 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/utils/sync_tools.py",
         "sqlspec/core/cache.py",
         "sqlspec/core/hashing.py",
+        "sqlspec/core/parameters/_processor.py",
+        "sqlspec/core/result/_base.py",
         "sqlspec/driver/_query_cache.py",
         "sqlspec/adapters/sqlite/core.py",
+        "sqlspec/adapters/sqlite/pool.py",
+        "sqlspec/storage/_paths.py",
+        "sqlspec/data_dictionary/_loader.py",
+        "sqlspec/migrations/version.py",
     ]
     assert all((PROJECT_ROOT / path).is_file() for path in smoke_paths)
+
+
+def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
+    """Inventory output should show admitted modules and retained dynamic boundaries."""
+    script_path = PROJECT_ROOT / "tools" / "scripts" / "mypyc_inventory.py"
+
+    completed = subprocess.run(
+        [sys.executable, str(script_path)], check=True, cwd=PROJECT_ROOT, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+
+    assert "sqlspec/storage/pipeline.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/_paths.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/_loader.py" in payload["compiled_modules"]
+    assert "sqlspec/migrations/runner.py" in payload["compiled_modules"]
+    assert "sqlspec/adapters/sqlite/driver.py" in payload["interpreted_modules"]
+    assert "sqlspec/adapters/aiosqlite/driver.py" in payload["interpreted_modules"]
+    assert "sqlspec/storage/_arrow_payload.py" in payload["interpreted_modules"]
+    assert "sqlspec/observability/_formatting.py" in payload["interpreted_modules"]
+    assert payload["adapter_pool_runtimes"]["status"] == "compiled"
+    assert payload["adapter_driver_shells"]["classification"] == "prove_separately"
+    assert payload["adapter_driver_shells"]["status"] == "blocked"

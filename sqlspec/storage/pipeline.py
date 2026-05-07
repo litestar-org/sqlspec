@@ -11,10 +11,10 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_parquet
+from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
-from sqlspec.utils.serializers import from_json, get_serializer_metrics, serialize_collection, to_json
+from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
 
@@ -215,24 +215,7 @@ def _encode_arrow_payload(
     compression: str | None,
     write_options: "dict[str, Any] | None" = None,
 ) -> bytes:
-    pa = import_pyarrow()
-    sink = pa.BufferOutputStream()
-    if format_choice == "arrow-ipc":
-        writer = pa.ipc.new_file(sink, table.schema)
-        writer.write_table(table)
-        writer.close()
-    elif format_choice == "csv":
-        pa_csv = import_pyarrow_csv()
-        csv_opts: Any = None
-        if write_options:
-            csv_opts = pa_csv.WriteOptions(**write_options)
-        pa_csv.write_csv(table, sink, write_options=csv_opts)
-    else:
-        pq = import_pyarrow_parquet()
-        pq.write_table(table, sink, compression=compression)
-    buffer = sink.getvalue()
-    result_bytes: bytes = buffer.to_pybytes()
-    return result_bytes
+    return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
 
 
 def _delete_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> None:
@@ -254,26 +237,7 @@ def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_nam
 
 
 def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "ArrowTable":
-    pa = import_pyarrow()
-    if format_choice == "parquet":
-        pq = import_pyarrow_parquet()
-        return cast("ArrowTable", pq.read_table(pa.BufferReader(payload)))
-    if format_choice == "arrow-ipc":
-        reader = pa.ipc.open_file(pa.BufferReader(payload))
-        return cast("ArrowTable", reader.read_all())
-    if format_choice == "csv":
-        pa_csv = import_pyarrow_csv()
-        return cast("ArrowTable", pa_csv.read_csv(pa.BufferReader(payload)))
-    text_payload = payload.decode()
-    if format_choice == "json":
-        data = from_json(text_payload)
-        rows = data if isinstance(data, list) else [data]
-        return cast("ArrowTable", pa.Table.from_pylist(rows))
-    if format_choice == "jsonl":
-        rows = [from_json(line) for line in text_payload.splitlines() if line.strip()]
-        return cast("ArrowTable", pa.Table.from_pylist(rows))
-    msg = f"Unsupported storage format for Arrow decoding: {format_choice}"
-    raise ValueError(msg)
+    return decode_arrow_payload(payload, format_choice)
 
 
 def _resolve_alias_destination(

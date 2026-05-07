@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
+from mypy_extensions import mypyc_attr
 from rich.console import Console
 
 from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
@@ -34,6 +35,7 @@ ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 logger = get_logger("sqlspec.migrations.base")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BaseMigrationTracker(ABC, Generic[DriverT]):
     """Base class for migration version tracking."""
 
@@ -345,6 +347,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         ...
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BaseMigrationRunner(ABC, Generic[DriverT]):
     """Base class for migration execution."""
 
@@ -607,6 +610,7 @@ def _migration_sort_key(item: "tuple[str, Path]") -> "MigrationVersion":
     return parse_version(item[0])
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
     """Base class for migration commands."""
 

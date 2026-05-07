@@ -41,8 +41,16 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Serializer selection remains dynamic and historically broke same-unit coercion paths.",
     },
     "sqlspec/storage/pipeline.py": {
-        "classification": "helper_split_first",
-        "reason": "Most orchestration is safe, but Arrow encode/decode helpers still cross interpreted boundaries.",
+        "classification": "compile_now",
+        "reason": "Storage orchestration compiles after PyArrow payload encode/decode moved to _arrow_payload.py.",
+    },
+    "sqlspec/storage/_paths.py": {
+        "classification": "compile_now",
+        "reason": "Pure path resolution split away from optional PyArrow import helpers.",
+    },
+    "sqlspec/storage/_arrow_payload.py": {
+        "classification": "keep_interpreted",
+        "reason": "Direct PyArrow encode/decode boundary remains interpreted.",
     },
     "sqlspec/storage/registry.py": {
         "classification": "compile_now",
@@ -53,8 +61,48 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Storage error normalization is typed runtime logic with no Arrow dependence.",
     },
     "sqlspec/storage/_utils.py": {
-        "classification": "helper_split_first",
-        "reason": "Path resolution is safe, but the same module owns dynamic PyArrow import shims.",
+        "classification": "keep_interpreted",
+        "reason": "Retains optional PyArrow import shims after pure path helpers moved to _paths.py.",
+    },
+    "sqlspec/data_dictionary/_loader.py": {
+        "classification": "compile_now",
+        "reason": "Uses importlib.resources instead of direct __file__ path discovery.",
+    },
+    "sqlspec/migrations/commands.py": {
+        "classification": "keep_interpreted",
+        "reason": "CLI command surface keeps dynamic imports and rich-click behavior interpreted.",
+    },
+    "sqlspec/migrations/runner.py": {
+        "classification": "compile_now",
+        "reason": "Migration runtime is compiled while command dispatch remains excluded.",
+    },
+    "sqlspec/observability/_formatting.py": {
+        "classification": "keep_interpreted",
+        "reason": "Public logging.Formatter subclass stays interpreted; cloud formatter helpers remain compiled.",
+    },
+    "sqlspec/core/_pagination.py": {
+        "classification": "keep_interpreted",
+        "reason": "Litestar OpenAPI requires class annotations that mypyc strips from dataclass pagination models.",
+    },
+    "sqlspec/adapters/sqlite/pool.py": {
+        "classification": "compile_now",
+        "reason": "Pool runtime compiles without adapter driver exception-handler subclasses.",
+    },
+    "sqlspec/adapters/aiosqlite/pool.py": {
+        "classification": "compile_now",
+        "reason": "Async pool runtime compiles without adapter driver exception-handler subclasses.",
+    },
+    "sqlspec/adapters/sqlite/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Native compiled driver construction segfaulted in installed-wheel SqliteConfig session smoke; keep interpreted pending driver layout work.",
+    },
+    "sqlspec/adapters/aiosqlite/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Async SQLite driver shares the same native adapter-driver layout risk as the sync driver and stays out of the compiled baseline.",
+    },
+    "sqlspec/adapters/asyncpg/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
     },
     "sqlspec/utils/module_loader.py": {
         "classification": "keep_interpreted",
@@ -174,6 +222,12 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
     adapter_cores = sorted(
         module for module in modules if module.startswith("sqlspec/adapters/") and module.endswith("/core.py")
     )
+    adapter_drivers = sorted(
+        module for module in modules if module.startswith("sqlspec/adapters/") and module.endswith("/driver.py")
+    )
+    adapter_pools = sorted(
+        module for module in modules if module.startswith("sqlspec/adapters/") and module.endswith("/pool.py")
+    )
 
     return {
         "summary": {
@@ -197,6 +251,19 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             "status": "compiled",
             "classification": "compile_now",
         },
+        "adapter_driver_shells": {
+            "count": len(adapter_drivers),
+            "modules": adapter_drivers,
+            "status": "blocked",
+            "classification": "prove_separately",
+            "reason": "SQLite sync/async driver admission compiled but failed installed-wheel session construction; driver.py files stay interpreted pending layout work.",
+        },
+        "adapter_pool_runtimes": {
+            "count": len(adapter_pools),
+            "modules": adapter_pools,
+            "status": "compiled",
+            "classification": "compile_now",
+        },
         "preserved_exclusions": sorted(
             pattern
             for pattern in exclude_patterns
@@ -207,7 +274,7 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
                 "sqlspec/dialects/spanner/_spangres.py",
                 "sqlspec/dialects/spanner/_spanner.py",
                 "sqlspec/utils/arrow_helpers.py",
-                "sqlspec/data_dictionary/_loader.py",
+                "sqlspec/storage/_arrow_payload.py",
                 "sqlspec/adapters/**/data_dictionary.py",
                 "sqlspec/observability/_formatting.py",
                 "sqlspec/migrations/commands.py",
