@@ -151,8 +151,8 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert payload["adapter_driver_shells"]["status"] == "blocked"
 
 
-def test_mypy_2_toolchain_policy_is_explicit_and_parallel_canary_is_non_blocking() -> None:
-    """The mypy 2.0 cutover should be explicit while parallel checking stays opt-in."""
+def test_mypy_2_toolchain_policy_is_explicit_and_parallel_gate_is_default() -> None:
+    """The mypy 2.0 cutover should keep parallel checking in the default type gate."""
     pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
 
     build_dependencies = pyproject["dependency-groups"]["build"]
@@ -168,5 +168,7 @@ def test_mypy_2_toolchain_policy_is_explicit_and_parallel_canary_is_non_blocking
     assert mypy_config["allow_redefinition"] is False
 
     makefile = (PROJECT_ROOT / "Makefile").read_text()
+    assert re.search(r"^mypy:.*?uv run mypy -n \$\(MYPY_WORKERS\)", makefile, flags=re.MULTILINE | re.DOTALL)
+    assert re.search(r"^dmypy:.*?## Run mypy daemon", makefile, flags=re.MULTILINE) is not None
     assert re.search(r"^mypy-parallel:.*?##", makefile, flags=re.MULTILINE) is not None
     assert re.search(r"^type-check:\s+mypy pyright\s+##", makefile, flags=re.MULTILINE) is not None

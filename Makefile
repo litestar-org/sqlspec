@@ -6,8 +6,10 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 .ONESHELL:
+.SHELLFLAGS := -eu -o pipefail -c
 .EXPORT_ALL_VARIABLES:
 MAKEFLAGS += --no-print-directory
+MYPY_WORKERS ?= 2
 
 # -----------------------------------------------------------------------------
 # Display Formatting and Colors
@@ -223,15 +225,18 @@ coverage:                                           ## Run tests with coverage r
 
 .PHONY: mypy
 mypy:                                               ## Run mypy
-	@echo "${INFO} Running mypy... 🔍"
-	@uv run dmypy run
+	@echo "${INFO} Running mypy with $(MYPY_WORKERS) workers... 🔍"
+	@uv run mypy -n $(MYPY_WORKERS) --no-incremental --no-warn-unused-configs --show-traceback --no-error-summary -p sqlspec
 	@echo "${OK} Mypy checks passed ✨"
 
+.PHONY: dmypy
+dmypy:                                              ## Run mypy daemon
+	@echo "${INFO} Running mypy daemon... 🔍"
+	@uv run dmypy run
+	@echo "${OK} Mypy daemon checks passed ✨"
+
 .PHONY: mypy-parallel
-mypy-parallel:                                      ## Run experimental mypy 2 parallel checking canary
-	@echo "${INFO} Running mypy parallel canary... 🔍"
-	@uv run mypy -n 2 --no-incremental --no-warn-unused-configs --show-traceback --no-error-summary -p sqlspec || exit $$?
-	@echo "${OK} Mypy parallel canary passed ✨"
+mypy-parallel: mypy                                 ## Run mypy parallel checking
 
 .PHONY: pyright
 pyright:                                            ## Run pyright
