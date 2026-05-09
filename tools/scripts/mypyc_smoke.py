@@ -19,6 +19,7 @@ class SmokeImport(NamedTuple):
     module: str
     attribute: str | None = None
     require_compiled: bool = False
+    optional_dependency: str | None = None
 
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
@@ -37,7 +38,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("extension_filter_aliases", "sqlspec.extensions._filter_aliases", "resolve_sort_field_aliases", True),
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue"),
-    SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True),
+    SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
 )
@@ -61,6 +62,8 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
             "compiled": False,
             "compiled_required": require_compiled and entry.require_compiled,
             "error": None,
+            "skipped": False,
+            "skip_reason": None,
         }
         try:
             module = importlib.import_module(entry.module)
@@ -70,6 +73,16 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
             result["compiled"] = is_compiled_module(module)
             if require_compiled and entry.require_compiled and not result["compiled"]:
                 result["error"] = "module was imported from Python source, not a compiled extension"
+        except ModuleNotFoundError as exc:
+            missing_name = exc.name or ""
+            optional_dependency = entry.optional_dependency
+            if optional_dependency is not None and (
+                missing_name == optional_dependency or missing_name.startswith(f"{optional_dependency}.")
+            ):
+                result["skipped"] = True
+                result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
+            else:
+                result["error"] = f"{type(exc).__name__}: {exc}"
         except Exception as exc:
             result["error"] = f"{type(exc).__name__}: {exc}"
         results.append(result)
@@ -77,12 +90,19 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [result for result in results if result["error"] is not None or not result["imported"]]
+    return [
+        result
+        for result in results
+        if not result["skipped"] and (result["error"] is not None or not result["imported"])
+    ]
 
 
 def _format_text(results: list[dict[str, Any]]) -> str:
     lines = ["mypyc wheel smoke results:"]
     for result in results:
+        if result["skipped"]:
+            lines.append(f"- SKIP {result['module']} ({result['skip_reason']})")
+            continue
         status = "OK" if result["error"] is None and result["imported"] else "FAIL"
         compiled = "compiled" if result["compiled"] else "interpreted"
         required = " required" if result["compiled_required"] else ""

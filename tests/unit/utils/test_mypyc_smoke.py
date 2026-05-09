@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from pytest import MonkeyPatch
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -57,8 +59,39 @@ def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
 
     results = module.run_smoke(require_compiled=False)
 
-    assert all(result["imported"] for result in results)
+    assert all(result["imported"] or result["skipped"] for result in results)
     assert any(result["module"] == "sqlspec.driver._sync" for result in results)
     assert any(result["module"] == "sqlspec.adapters.sqlite.type_converter" for result in results)
     assert any(result["module"] == "sqlspec.storage.pipeline" for result in results)
     assert any(result["module"] == "sqlspec.migrations.runner" for result in results)
+
+
+def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) -> None:
+    module = _load_mypyc_smoke_module()
+    monkeypatch.setattr(
+        module,
+        "SMOKE_IMPORTS",
+        (module.SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),),
+    )
+
+    def import_missing_optional_dependency(name: str) -> ModuleType:
+        raise ModuleNotFoundError("No module named 'google.adk'", name="google.adk")
+
+    monkeypatch.setattr(module.importlib, "import_module", import_missing_optional_dependency)
+
+    results = module.run_smoke(require_compiled=True)
+
+    assert results == [
+        {
+            "name": "adk_record_types",
+            "module": "sqlspec.extensions.adk._types",
+            "attribute": "SessionRecord",
+            "imported": False,
+            "compiled": False,
+            "compiled_required": True,
+            "error": None,
+            "skipped": True,
+            "skip_reason": "optional dependency missing: google.adk",
+        }
+    ]
+    assert module._failed_results(results) == []
