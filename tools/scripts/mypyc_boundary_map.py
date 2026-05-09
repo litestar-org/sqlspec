@@ -171,8 +171,40 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
         "reason": "Path discovery is the risky piece; cache/query wrapper logic is otherwise straightforward.",
     },
     "sqlspec/dialects/**": {
-        "bucket": "low_roi",
-        "reason": "Dialect metaclass/plugin surfaces remain mostly registration code, not hot loops.",
+        "bucket": "helper_split",
+        "reason": "Custom SQLGlot generator/operator helpers compile, but subclass/registration modules remain interpreted after native class import failures.",
+    },
+    "sqlspec/dialects/postgres/_pgvector.py": {
+        "bucket": "hard_block",
+        "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc.",
+    },
+    "sqlspec/dialects/postgres/_paradedb.py": {
+        "bucket": "hard_block",
+        "reason": "SQLGlot dialect subclass module fails native class import under mypyc.",
+    },
+    "sqlspec/dialects/spanner/_spanner.py": {
+        "bucket": "hard_block",
+        "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc.",
+    },
+    "sqlspec/dialects/spanner/_spangres.py": {
+        "bucket": "hard_block",
+        "reason": "SQLGlot dialect subclass module fails native class import under mypyc.",
+    },
+    "sqlspec/extensions/events/_channel.py": {
+        "bucket": "hard_block",
+        "reason": "Dynamic native backend import and listener task/thread lifecycle stay interpreted while table queue helpers compile.",
+    },
+    "sqlspec/extensions/events/_models.py": {
+        "bucket": "hard_block",
+        "reason": "Slot dataclass must expose __slots__; native mypyc class changes that observable runtime behavior.",
+    },
+    "sqlspec/extensions/events/_queue.py": {
+        "bucket": "hard_block",
+        "reason": "Table-backed event queue class flags and listener ack paths regress under native mypyc classes.",
+    },
+    "sqlspec/extensions/adk/converters.py": {
+        "bucket": "hard_block",
+        "reason": "Imports Google ADK models at module import time and reconstructs Pydantic payloads; compile only record type modules.",
     },
     "sqlspec/observability/_formatting.py": {
         "bucket": "low_roi",
@@ -240,7 +272,7 @@ HELPER_SPLIT_DESIGNS: tuple[dict[str, Any], ...] = (
 ROLLOUT_FEEDBACK: tuple[dict[str, str], ...] = (
     {
         "task_id": "sqlspec-k1a.4",
-        "recommendation": "Do not reopen adapter runtime compilation for dialect/vector registration; only revisit if a pure renderer helper module is extracted first.",
+        "recommendation": "Compile SQLGlot custom dialect helper modules as their own boundary; keep subclass/registration modules interpreted and do not reopen adapter driver compilation for dialect/vector registration.",
     },
     {
         "task_id": "sqlspec-k1a.5",

@@ -100,6 +100,90 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Shared BigQuery INFORMATION_SCHEMA formatting helpers for native BigQuery and ADBC-as-BigQuery dictionaries.",
     },
+    "sqlspec/dialects/_compat.py": {
+        "classification": "compile_now",
+        "reason": "Small sqlglot[c] compatibility helpers compile with the custom dialect surface.",
+    },
+    "sqlspec/dialects/postgres/_generators.py": {
+        "classification": "compile_now",
+        "reason": "Postgres extension generator hooks compile with sqlglot[c] and patch the compiled base generator directly.",
+    },
+    "sqlspec/dialects/postgres/_operators.py": {
+        "classification": "compile_now",
+        "reason": "Postgres extension operator registry is pure token/expression dispatch used by compiled custom dialects.",
+    },
+    "sqlspec/dialects/postgres/_paradedb.py": {
+        "classification": "keep_interpreted",
+        "reason": "SQLGlot subclass/registration module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
+    },
+    "sqlspec/dialects/postgres/_pgvector.py": {
+        "classification": "keep_interpreted",
+        "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
+    },
+    "sqlspec/dialects/spanner/_generators.py": {
+        "classification": "compile_now",
+        "reason": "Spanner SQL rendering helpers compile with the custom Spanner dialect surface.",
+    },
+    "sqlspec/dialects/spanner/_spangres.py": {
+        "classification": "keep_interpreted",
+        "reason": "SQLGlot subclass/registration module fails native class import under mypyc; compiled helpers stay in _generators.",
+    },
+    "sqlspec/dialects/spanner/_spanner.py": {
+        "classification": "keep_interpreted",
+        "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled render helpers stay in _generators.",
+    },
+    "sqlspec/extensions/_filter_aliases.py": {
+        "classification": "compile_now",
+        "reason": "Shared framework filter alias resolution is pure validation and mapping logic.",
+    },
+    "sqlspec/extensions/events/_models.py": {
+        "classification": "keep_interpreted",
+        "reason": "Slot dataclass must expose __slots__ for tests/public behavior; mypyc native class removes that runtime attribute.",
+    },
+    "sqlspec/extensions/events/_hints.py": {
+        "classification": "compile_now",
+        "reason": "Event runtime hint resolution is pure adapter-name/default selection logic.",
+    },
+    "sqlspec/extensions/events/_payload.py": {
+        "classification": "compile_now",
+        "reason": "Event JSON payload encode/decode helpers are typed and independent of optional native backends.",
+    },
+    "sqlspec/extensions/events/_queue.py": {
+        "classification": "keep_interpreted",
+        "reason": "Table-backed queue owns class-level capability flags and listener ack paths that regress under native mypyc classes.",
+    },
+    "sqlspec/extensions/events/_channel.py": {
+        "classification": "keep_interpreted",
+        "reason": "Owns dynamic native backend imports, listener thread/task lifecycle, and protocol dispatch.",
+    },
+    "sqlspec/extensions/events/_store.py": {
+        "classification": "keep_interpreted",
+        "reason": "Base event queue store remains interpreted because adapter-specific event stores subclass it.",
+    },
+    "sqlspec/extensions/adk/_types.py": {
+        "classification": "compile_now",
+        "reason": "ADK session/event record TypedDict definitions have no optional ADK runtime import.",
+    },
+    "sqlspec/extensions/adk/memory/_types.py": {
+        "classification": "compile_now",
+        "reason": "ADK memory record TypedDict definition has no optional ADK runtime import.",
+    },
+    "sqlspec/extensions/adk/artifact/_types.py": {
+        "classification": "compile_now",
+        "reason": "ADK artifact record TypedDict definition has no optional ADK runtime import.",
+    },
+    "sqlspec/extensions/adk/converters.py": {
+        "classification": "keep_interpreted",
+        "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
+    },
+    "sqlspec/extensions/fastapi/providers.py": {
+        "classification": "keep_interpreted",
+        "reason": "Framework provider surface builds dynamic FastAPI dependency signatures and stays interpreted.",
+    },
+    "sqlspec/extensions/litestar/providers.py": {
+        "classification": "keep_interpreted",
+        "reason": "Framework provider surface builds dynamic Litestar dependency signatures and stays interpreted.",
+    },
     "sqlspec/migrations/commands.py": {
         "classification": "keep_interpreted",
         "reason": "CLI command surface keeps dynamic imports and rich-click behavior interpreted.",
@@ -310,6 +394,13 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
                 "sqlspec/adapters/**/data_dictionary.py",
                 "sqlspec/observability/_formatting.py",
                 "sqlspec/migrations/commands.py",
+                "sqlspec/extensions/events/_channel.py",
+                "sqlspec/extensions/events/_models.py",
+                "sqlspec/extensions/events/_queue.py",
+                "sqlspec/extensions/events/_store.py",
+                "sqlspec/extensions/adk/converters.py",
+                "sqlspec/extensions/fastapi/providers.py",
+                "sqlspec/extensions/litestar/providers.py",
                 "sqlspec/config.py",
             }
         ),

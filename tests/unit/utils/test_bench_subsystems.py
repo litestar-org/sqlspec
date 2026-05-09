@@ -34,6 +34,33 @@ def test_storage_subsystem_benchmarks_are_registered() -> None:
         db_path.unlink(missing_ok=True)
 
 
+def test_librt_string_candidate_benchmarks_are_registered() -> None:
+    module = _load_bench_subsystems_module()
+    db_path = module._make_temp_db()
+    module._setup_test_table(db_path)
+    benchmarks = []
+
+    try:
+        benchmarks = module._build_benchmarks(db_path, iterations=1)
+        names = {benchmark.name for benchmark in benchmarks}
+        assert {
+            "librt ParameterConverter baseline",
+            "librt ParameterConverter StringWriter",
+            "librt splitter join baseline",
+            "librt splitter StringWriter",
+            "librt psqlpy copy baseline",
+            "librt psqlpy copy StringWriter",
+        }.issubset(names)
+        for benchmark in benchmarks:
+            if benchmark.name.startswith("librt "):
+                benchmark.bench_fn()
+    finally:
+        for benchmark in benchmarks:
+            if benchmark.name == "_cleanup_" and benchmark.setup_fn is not None:
+                benchmark.setup_fn()
+        db_path.unlink(missing_ok=True)
+
+
 def test_subsystem_json_report_records_included_cases(tmp_path: Path) -> None:
     module = _load_bench_subsystems_module()
     output_path = tmp_path / "subsystems.json"

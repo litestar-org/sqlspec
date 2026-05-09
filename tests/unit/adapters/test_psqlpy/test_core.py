@@ -11,6 +11,7 @@ from sqlspec.adapters.psqlpy.core import (
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
     collect_rows,
+    encode_records_for_binary_copy,
     format_execute_many_parameters,
     prepare_parameters_with_casts,
 )
@@ -90,6 +91,15 @@ def test_coerce_records_for_execute_many_delegates_to_formatter() -> None:
 
     assert formatted[0][0] == Decimal("1.25")
     assert formatted[1] == [3, "y"]
+
+
+def test_encode_records_for_binary_copy_preserves_copy_format() -> None:
+    """The public copy encoder should keep the same escaped wire payload."""
+    records = [("plain", "needs\tescape", "line\nbreak", None, True, b"bytes")]
+
+    payload = encode_records_for_binary_copy(records)
+
+    assert payload == b"plain\tneeds\\tescape\tline\\nbreak\t\\\\N\tt\tbytes\n"
 
 
 def test_collect_rows_names_from_first_row() -> None:

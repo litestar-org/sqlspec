@@ -36,10 +36,13 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
     compiled_required = {entry.name for entry in module.SMOKE_IMPORTS if entry.require_compiled}
     assert compiled_required == {
         "async_driver",
+        "adk_record_types",
         "builder_select",
         "core_statement",
         "data_dictionary_loader",
         "data_dictionary_registry",
+        "event_payload",
+        "extension_filter_aliases",
         "migration_runner",
         "sqlite_pool",
         "sqlite_type_converter",

@@ -6,6 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -63,8 +68,10 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/core/hashing.py",
         "sqlspec/core/parameters/_processor.py",
         "sqlspec/core/result/_base.py",
+        "sqlspec/core/splitter.py",
         "sqlspec/driver/_query_cache.py",
         "sqlspec/adapters/sqlite/core.py",
+        "sqlspec/adapters/psqlpy/core.py",
         "sqlspec/adapters/sqlite/pool.py",
         "sqlspec/storage/_paths.py",
         "sqlspec/data_dictionary/_loader.py",
@@ -76,6 +83,16 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/data_dictionary/dialects/postgres.py",
         "sqlspec/data_dictionary/dialects/spanner.py",
         "sqlspec/data_dictionary/dialects/sqlite.py",
+        "sqlspec/dialects/_compat.py",
+        "sqlspec/dialects/postgres/_generators.py",
+        "sqlspec/dialects/postgres/_operators.py",
+        "sqlspec/dialects/spanner/_generators.py",
+        "sqlspec/extensions/_filter_aliases.py",
+        "sqlspec/extensions/events/_hints.py",
+        "sqlspec/extensions/events/_payload.py",
+        "sqlspec/extensions/adk/_types.py",
+        "sqlspec/extensions/adk/memory/_types.py",
+        "sqlspec/extensions/adk/artifact/_types.py",
         "sqlspec/migrations/version.py",
     ]
     assert all((PROJECT_ROOT / path).is_file() for path in smoke_invocations)
@@ -101,11 +118,55 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/data_dictionary/dialects/postgres.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/spanner.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/sqlite.py" in payload["compiled_modules"]
+    assert "sqlspec/dialects/_compat.py" in payload["compiled_modules"]
+    assert "sqlspec/dialects/postgres/_generators.py" in payload["compiled_modules"]
+    assert "sqlspec/dialects/postgres/_operators.py" in payload["compiled_modules"]
+    assert "sqlspec/dialects/spanner/_generators.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/_filter_aliases.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/events/_hints.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/events/_payload.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/adk/_types.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/adk/memory/_types.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/adk/artifact/_types.py" in payload["compiled_modules"]
     assert "sqlspec/migrations/runner.py" in payload["compiled_modules"]
     assert "sqlspec/adapters/sqlite/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/aiosqlite/driver.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/events/_channel.py" in payload["interpreted_modules"]
+    assert "sqlspec/dialects/postgres/_paradedb.py" in payload["interpreted_modules"]
+    assert "sqlspec/dialects/postgres/_pgvector.py" in payload["interpreted_modules"]
+    assert "sqlspec/dialects/spanner/_spangres.py" in payload["interpreted_modules"]
+    assert "sqlspec/dialects/spanner/_spanner.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/events/_models.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/events/_queue.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/adk/converters.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/fastapi/providers.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/litestar/providers.py" in payload["interpreted_modules"]
     assert "sqlspec/storage/_arrow_payload.py" in payload["interpreted_modules"]
     assert "sqlspec/observability/_formatting.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/events/_models.py" in payload["preserved_exclusions"]
+    assert "sqlspec/extensions/events/_queue.py" in payload["preserved_exclusions"]
+    assert "sqlspec/extensions/adk/converters.py" in payload["preserved_exclusions"]
     assert payload["adapter_pool_runtimes"]["status"] == "compiled"
     assert payload["adapter_driver_shells"]["classification"] == "prove_separately"
     assert payload["adapter_driver_shells"]["status"] == "blocked"
+
+
+def test_mypy_2_toolchain_policy_is_explicit_and_parallel_canary_is_non_blocking() -> None:
+    """The mypy 2.0 cutover should be explicit while parallel checking stays opt-in."""
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+
+    build_dependencies = pyproject["dependency-groups"]["build"]
+    lint_dependencies = pyproject["dependency-groups"]["lint"]
+    mypyc_dependencies = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["hooks"]["mypyc"]["dependencies"]
+    mypy_config = pyproject["tool"]["mypy"]
+
+    assert "mypy>=2.0.0" in build_dependencies
+    assert "mypy>=2.0.0" in lint_dependencies
+    assert "mypy>=2.0.0" in mypyc_dependencies
+    assert mypy_config["local_partial_types"] is True
+    assert mypy_config["strict_bytes"] is True
+    assert mypy_config["allow_redefinition"] is False
+
+    makefile = (PROJECT_ROOT / "Makefile").read_text()
+    assert re.search(r"^mypy-parallel:.*?##", makefile, flags=re.MULTILINE) is not None
+    assert re.search(r"^type-check:\s+mypy pyright\s+##", makefile, flags=re.MULTILINE) is not None

@@ -36,8 +36,9 @@ Install bundles
 Performance bundle
 ~~~~~~~~~~~~~~~~~~
 
-For production deployments, install the ``performance`` extra for Rust-based SQL
-parsing and high-speed serialization, or the ``mypyc`` extra for C-compiled internals:
+For production deployments, install the ``performance`` extra for Rust-backed
+hot-path helpers and high-speed serialization, or the ``mypyc`` extra for
+C-compiled internals:
 
 .. tab-set::
 
@@ -129,6 +130,9 @@ Package groups
    * - ``msgspec``
      - ``msgspec``
      - High-performance result mapping.
+   * - ``performance``
+     - ``librt``, ``msgspec``
+     - Runtime helpers for compiled hot paths and high-speed serialization.
    * - ``mypyc``
      - ``sqlglot[c]``
      - C-compiled sqlglot internals for faster SQL parsing.

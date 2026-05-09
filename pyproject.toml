@@ -61,7 +61,7 @@ opentelemetry = ["opentelemetry-instrumentation"]
 oracledb = ["oracledb"]
 orjson = ["orjson"]
 pandas = ["pandas", "pyarrow"]
-performance = ["msgspec"]
+performance = ["librt>=0.10.0", "msgspec"]
 polars = ["polars", "pyarrow"]
 prometheus = ["prometheus-client"]
 psqlpy = ["psqlpy"]
@@ -76,7 +76,7 @@ uuid = ["uuid-utils"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]
-build = ["bump-my-version", "hatch-mypyc", "mypy>=1.19.1", "pydantic-settings"]
+build = ["bump-my-version", "hatch-mypyc", "mypy>=2.0.0", "pydantic-settings"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -120,7 +120,7 @@ extras = [
   "dishka",
 ]
 lint = [
-  "mypy>=1.19.1",
+  "mypy>=2.0.0",
   "pre-commit>=3.5.0",
   "pyright>=1.1.386",
   "ruff>=0.7.1",
@@ -191,7 +191,7 @@ packages = []
 
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
-dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=1.19.1"]
+dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
 enable-by-default = false
 exclude = [
   "tests/**",                                 # Test files
@@ -201,12 +201,19 @@ exclude = [
   "sqlspec/_typing.py",                       # Type aliases
   "sqlspec/**/_typing.py",                    # Type aliases (mypyc-incompatible)
   "sqlspec/config.py",                        # Main config
-  "sqlspec/extensions/**",                    # All extensions
-  "sqlspec/dialects/**/*.py",                 # Keep SQLGlot dialect subclasses interpreted
   "sqlspec/**/__init__.py",                   # Init files (usually just imports)
   "sqlspec/protocols.py",                     # Protocol definitions
   "sqlspec/migrations/commands.py",           # Migration command CLI (dynamic imports)
+  "sqlspec/dialects/postgres/_pgvector.py",   # SQLGlot subclass/registration module stays interpreted
+  "sqlspec/dialects/postgres/_paradedb.py",   # SQLGlot subclass/registration module stays interpreted
+  "sqlspec/dialects/spanner/_spanner.py",     # SQLGlot subclass/registration module stays interpreted
+  "sqlspec/dialects/spanner/_spangres.py",    # SQLGlot subclass/registration module stays interpreted
   "sqlspec/storage/_arrow_payload.py",        # PyArrow conversion boundary stays interpreted
+  "sqlspec/extensions/events/_channel.py",    # Dynamic native backend import/lifecycle stays interpreted
+  "sqlspec/extensions/events/_models.py",     # Runtime __slots__ behavior must stay visible
+  "sqlspec/extensions/events/_queue.py",      # Table queue class flags/listener ack paths stay interpreted
+  "sqlspec/extensions/events/_store.py",      # Adapter-local event stores subclass this base
+  "sqlspec/extensions/adk/converters.py",     # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/extensions/fastapi/providers.py",  # Uses SingletonMeta metaclass
   "sqlspec/extensions/litestar/providers.py", # Uses SingletonMeta metaclass
   "sqlspec/adapters/**/data_dictionary.py",   # Cross-module inheritance causes mypyc segfaults
@@ -223,12 +230,22 @@ include = [
   "sqlspec/driver/**/*.py",                # Driver module
   "sqlspec/adapters/**/pool.py",            # Adapter pool runtimes proven without driver subclasses
   "sqlspec/migrations/**/*.py",             # Migration runtime, excluding command CLI
+  "sqlspec/dialects/_compat.py",             # SQLGlot compiled-class compatibility helpers
+  "sqlspec/dialects/postgres/_generators.py", # Postgres custom dialect render hooks
+  "sqlspec/dialects/postgres/_operators.py",  # Postgres extension operator registry
+  "sqlspec/dialects/spanner/_generators.py",  # Spanner custom dialect render hooks
   "sqlspec/storage/registry.py",           # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",             # Safe storage error normalization
   "sqlspec/storage/_paths.py",              # Pure storage path handling
   "sqlspec/storage/pipeline.py",            # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",      # Storage backend runtime base classes
   "sqlspec/data_dictionary/**/*.py",       # Data dictionary registry, loader, and dialect helpers
+  "sqlspec/extensions/_filter_aliases.py",  # Shared filter alias resolver for framework providers
+  "sqlspec/extensions/events/_hints.py",    # Adapter event runtime defaults
+  "sqlspec/extensions/events/_payload.py",  # Event JSON payload codec helpers
+  "sqlspec/extensions/adk/_types.py",       # ADK session/event record types
+  "sqlspec/extensions/adk/memory/_types.py",   # ADK memory record types
+  "sqlspec/extensions/adk/artifact/_types.py", # ADK artifact record types
   "sqlspec/adapters/**/core.py",           # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py", # All adapters type converters
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers
@@ -409,9 +426,12 @@ timeout = 300
 timeout_method = "thread"
 
 [tool.mypy]
+allow_redefinition = false
 exclude = ["tmp/", ".tmp/", ".bugs/"]
+local_partial_types = true
 packages = ["sqlspec", "tests"]
 python_version = "3.10"
+strict_bytes = true
 
 disallow_any_generics = false
 disallow_untyped_decorators = true

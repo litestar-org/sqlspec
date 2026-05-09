@@ -8,6 +8,7 @@ Run with::
     uv run python tools/scripts/bench_subsystems.py
 """
 
+import io
 import json
 import sqlite3
 import tempfile
@@ -51,6 +52,15 @@ def _setup_test_table(db_path: Path) -> None:
     conn.close()
 
 
+def _get_librt_string_writer() -> "type[Any] | None":
+    """Return librt's StringWriter when the mypy 2 runtime helper is installed."""
+    try:
+        from librt.strings import StringWriter
+    except ImportError:
+        return None
+    return StringWriter
+
+
 # ---------------------------------------------------------------------------
 # Benchmark definitions
 # ---------------------------------------------------------------------------
@@ -69,6 +79,161 @@ class SubsystemBenchmark:
         self.iterations = iterations
         self.setup_fn = setup_fn
         self.description = description
+
+
+def _build_librt_candidate_benchmarks(iterations: int) -> list[SubsystemBenchmark]:
+    """Build optional benchmarks for candidate librt.strings replacements."""
+    string_writer_type = _get_librt_string_writer()
+    if string_writer_type is None:
+        return []
+
+    benchmarks: list[SubsystemBenchmark] = []
+
+    placeholder_sql = (
+        "SELECT * FROM accounts WHERE tenant_id = :tenant_id AND status = :status "
+        "AND created_at >= :created_after AND created_at < :created_before "
+        "AND region = :region ORDER BY created_at DESC LIMIT :limit_value"
+    )
+    placeholders = (":tenant_id", ":status", ":created_after", ":created_before", ":region", ":limit_value")
+    replacements: list[tuple[int, str, str]] = []
+    search_start = 0
+    for index, placeholder in enumerate(placeholders, start=1):
+        position = placeholder_sql.index(placeholder, search_start)
+        replacements.append((position, placeholder, f"${index}"))
+        search_start = position + len(placeholder)
+
+    def bench_parameter_converter_baseline() -> None:
+        segments: list[str] = []
+        last_end = 0
+        for position, placeholder, replacement in replacements:
+            segments.extend((placeholder_sql[last_end:position], replacement))
+            last_end = position + len(placeholder)
+        segments.append(placeholder_sql[last_end:])
+        "".join(segments)
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="librt ParameterConverter baseline",
+            bench_fn=bench_parameter_converter_baseline,
+            iterations=iterations,
+            description="Current list-join placeholder assembly shape from ParameterConverter",
+        )
+    )
+
+    def bench_parameter_converter_string_writer() -> None:
+        writer = string_writer_type()
+        last_end = 0
+        for position, placeholder, replacement in replacements:
+            writer.write(placeholder_sql[last_end:position])
+            writer.write(replacement)
+            last_end = position + len(placeholder)
+        writer.write(placeholder_sql[last_end:])
+        writer.getvalue()
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="librt ParameterConverter StringWriter",
+            bench_fn=bench_parameter_converter_string_writer,
+            iterations=iterations,
+            description="librt.strings.StringWriter candidate for ParameterConverter assembly",
+        )
+    )
+
+    token_values = tuple(
+        token
+        for _ in range(12)
+        for token in (
+            "SELECT",
+            " ",
+            "id",
+            ", ",
+            "name",
+            " FROM ",
+            "accounts",
+            " WHERE ",
+            "status",
+            " = ",
+            "'active'",
+            ";",
+        )
+    )
+
+    def bench_splitter_join_baseline() -> None:
+        statement_chars: list[str] = []
+        for token_value in token_values:
+            statement_chars.append(token_value)  # noqa: PERF402 - Keep the splitter's token append shape.
+        "".join(statement_chars).strip()
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="librt splitter join baseline",
+            bench_fn=bench_splitter_join_baseline,
+            iterations=iterations,
+            description="Current list-join statement assembly shape from StatementSplitter",
+        )
+    )
+
+    def bench_splitter_string_writer() -> None:
+        writer = string_writer_type()
+        for token_value in token_values:
+            writer.write(token_value)
+        writer.getvalue().strip()
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="librt splitter StringWriter",
+            bench_fn=bench_splitter_string_writer,
+            iterations=iterations,
+            description="librt.strings.StringWriter candidate for StatementSplitter assembly",
+        )
+    )
+
+    copy_records: tuple[tuple[str, ...], ...] = tuple(
+        (f"value_{row}_0", f"value_{row}_1", "contains\\tab\tand newline\n") for row in range(16)
+    )
+
+    def _escape_copy_text(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+    def bench_psqlpy_copy_baseline() -> None:
+        buffer = io.StringIO()
+        for record in copy_records:
+            buffer.write("\t".join(_escape_copy_text(value) for value in record))
+            buffer.write("\n")
+        buffer.getvalue().encode("utf-8")
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="librt psqlpy copy baseline",
+            bench_fn=bench_psqlpy_copy_baseline,
+            iterations=iterations,
+            description="Current StringIO row assembly shape from psqlpy binary copy encoding",
+        )
+    )
+
+    def bench_psqlpy_copy_string_writer() -> None:
+        writer = string_writer_type()
+        for record in copy_records:
+            first = True
+            for value in record:
+                if first:
+                    first = False
+                else:
+                    writer.write("\t")
+                writer.write(_escape_copy_text(value))
+            writer.write("\n")
+        writer.getvalue().encode("utf-8")
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="librt psqlpy copy StringWriter",
+            bench_fn=bench_psqlpy_copy_string_writer,
+            iterations=iterations,
+            description="librt.strings.StringWriter candidate for psqlpy binary copy encoding",
+        )
+    )
+
+    return benchmarks
 
 
 def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark]:
@@ -438,6 +603,8 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
             description="Raw sqlite3 execute for comparison baseline",
         )
     )
+
+    benchmarks.extend(_build_librt_candidate_benchmarks(iterations))
 
     def cleanup_benchmarks() -> None:
         _session_ctx.__exit__(None, None, None)

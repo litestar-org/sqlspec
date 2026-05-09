@@ -32,6 +32,12 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("sqlite_pool", "sqlspec.adapters.sqlite.pool", "SqliteConnectionPool", True),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
+    SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
+    SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
+    SmokeImport("extension_filter_aliases", "sqlspec.extensions._filter_aliases", "resolve_sort_field_aliases", True),
+    SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
+    SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue"),
+    SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
 )

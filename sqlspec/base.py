@@ -542,7 +542,7 @@ class SQLSpec:
     @overload
     def get_pool(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]"
-    ) -> "None": ...
+    ) -> None: ...
     @overload
     def get_pool(self, config: "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]") -> "type[PoolT]": ...
     @overload
@@ -570,7 +570,7 @@ class SQLSpec:
     @overload
     def close_pool(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
-    ) -> "None": ...
+    ) -> None: ...
 
     @overload
     def close_pool(

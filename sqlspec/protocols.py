@@ -717,6 +717,10 @@ class HasParameterBuilderProtocol(Protocol):
         """Add a parameter to the builder."""
         ...
 
+    def generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate a unique public parameter name."""
+        ...
+
     def get_expression(self) -> "exp.Expr | None":
         """Return the underlying SQLGlot expression."""
         ...

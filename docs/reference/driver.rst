@@ -61,7 +61,9 @@ Adapter Data Dictionary Classes
 Adapter data dictionaries remain public at their adapter-local import paths, and
 drivers continue to expose them through ``driver.data_dictionary``. Shared helper
 modules under ``sqlspec.data_dictionary.dialects`` are internal implementation
-details used to keep repeated dialect rules consistent.
+details used to keep repeated dialect rules consistent. Performance builds
+compile the shared helper modules, while adapter-local data-dictionary classes
+stay in their driver packages because they still own real adapter overrides.
 
 When changing data-dictionary behavior, review these shared-dialect groups
 together:
