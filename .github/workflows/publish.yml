@@ -199,13 +199,13 @@ jobs:
         run: |
           uv venv test-standard --python ${{ matrix.python-version }}
           uv pip install --python test-standard --find-links dist-standard/ sqlspec
-          uv run --python test-standard python -c "import sqlspec; print('Standard wheel OK')"
+          uv run --python test-standard python -I -c "import sqlspec; print('Standard wheel OK')"
 
       - name: Test mypyc wheel installation
         run: |
           uv venv test-mypyc --python ${{ matrix.python-version }}
           uv pip install --python test-mypyc --find-links dist-mypyc/ sqlspec
-          uv run --python test-mypyc python tools/scripts/mypyc_smoke.py --require-compiled
+          uv run --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
 
   publish-release:
     name: Publish to PyPI
