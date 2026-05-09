@@ -50,6 +50,16 @@ def is_compiled_module(module: Any) -> bool:
     return module_file.endswith(COMPILED_SUFFIXES)
 
 
+def _is_missing_optional_dependency(missing_name: str, optional_dependency: str | None) -> bool:
+    if optional_dependency is None or not missing_name:
+        return False
+    return (
+        missing_name == optional_dependency
+        or missing_name.startswith(f"{optional_dependency}.")
+        or optional_dependency.startswith(f"{missing_name}.")
+    )
+
+
 def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Import the compiled-wheel smoke matrix and return per-entry results."""
     results: list[dict[str, Any]] = []
@@ -76,9 +86,7 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
         except ModuleNotFoundError as exc:
             missing_name = exc.name or ""
             optional_dependency = entry.optional_dependency
-            if optional_dependency is not None and (
-                missing_name == optional_dependency or missing_name.startswith(f"{optional_dependency}.")
-            ):
+            if _is_missing_optional_dependency(missing_name, optional_dependency):
                 result["skipped"] = True
                 result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
             else:

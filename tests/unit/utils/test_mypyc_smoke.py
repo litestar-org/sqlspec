@@ -95,3 +95,24 @@ def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) ->
         }
     ]
     assert module._failed_results(results) == []
+
+
+def test_smoke_runner_skips_missing_optional_parent_package(monkeypatch: MonkeyPatch) -> None:
+    module = _load_mypyc_smoke_module()
+    monkeypatch.setattr(
+        module,
+        "SMOKE_IMPORTS",
+        (module.SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),),
+    )
+
+    def import_missing_optional_parent(name: str) -> ModuleType:
+        raise ModuleNotFoundError("No module named 'google'", name="google")
+
+    monkeypatch.setattr(module.importlib, "import_module", import_missing_optional_parent)
+
+    results = module.run_smoke(require_compiled=True)
+
+    assert results[0]["skipped"] is True
+    assert results[0]["error"] is None
+    assert results[0]["skip_reason"] == "optional dependency missing: google.adk"
+    assert module._failed_results(results) == []
