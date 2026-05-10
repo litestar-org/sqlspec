@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.adapters.sqlite.adk.store import SqliteADKStore
+from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.extensions.adk import EventRecord
 
 pytestmark = pytest.mark.xdist_group("sqlite")

@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from sqlspec.adapters.mysqlconnector.adk.store import MysqlConnectorAsyncADKStore
+from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore
 from sqlspec.extensions.adk import EventRecord
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.integration]

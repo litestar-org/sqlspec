@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.adapters.duckdb.adk.store import DuckdbADKStore
+from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import EventRecord
 

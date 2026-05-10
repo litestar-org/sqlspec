@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
-from sqlspec.adapters.aiomysql.adk.store import AiomysqlADKStore
+from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.extensions.adk import EventRecord
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.aiomysql, pytest.mark.integration]

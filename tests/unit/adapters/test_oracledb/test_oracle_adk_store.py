@@ -5,14 +5,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-from sqlspec.adapters.oracledb.adk.store import (
+from sqlspec.adapters.oracledb.adk import (
     JSONStorageType,
     OracleAsyncADKMemoryStore,
     OracleAsyncADKStore,
     OracleSyncADKMemoryStore,
     OracleSyncADKStore,
-    _event_json_column_ddl,
 )
+from sqlspec.adapters.oracledb.adk.store import _event_json_column_ddl
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:

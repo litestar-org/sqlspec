@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from sqlspec.adapters.psycopg.adk.store import PsycopgAsyncADKStore, PsycopgSyncADKStore
+from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore, PsycopgSyncADKStore
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
 if TYPE_CHECKING:

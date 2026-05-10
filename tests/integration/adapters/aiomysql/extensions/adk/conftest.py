@@ -7,7 +7,7 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.aiomysql import AiomysqlConfig
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
-from sqlspec.adapters.aiomysql.adk.store import AiomysqlADKStore
+from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 
 
 @pytest.fixture

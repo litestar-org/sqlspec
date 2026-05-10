@@ -13,62 +13,51 @@ import importlib
 
 import pytest
 
-# Session stores (async)
-ASYNC_SESSION_STORES = [
-    "sqlspec.adapters.asyncpg.adk.store.AsyncpgADKStore",
-    "sqlspec.adapters.aiomysql.adk.store.AiomysqlADKStore",
-    "sqlspec.adapters.aiosqlite.adk.store.AiosqliteADKStore",
-    "sqlspec.adapters.asyncmy.adk.store.AsyncmyADKStore",
-    "sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKStore",
-    "sqlspec.adapters.cockroach_psycopg.adk.store.CockroachPsycopgAsyncADKStore",
-    "sqlspec.adapters.mysqlconnector.adk.store.MysqlConnectorAsyncADKStore",
-    "sqlspec.adapters.oracledb.adk.store.OracleAsyncADKStore",
-    "sqlspec.adapters.psqlpy.adk.store.PsqlpyADKStore",
-    "sqlspec.adapters.psycopg.adk.store.PsycopgAsyncADKStore",
-    # sqlite uses BaseAsyncADKStore despite being backed by a sync driver
-    "sqlspec.adapters.sqlite.adk.store.SqliteADKStore",
+SESSION_STORE_CLASSES = [
+    "sqlspec.adapters.asyncpg.adk.AsyncpgADKStore",
+    "sqlspec.adapters.aiomysql.adk.AiomysqlADKStore",
+    "sqlspec.adapters.aiosqlite.adk.AiosqliteADKStore",
+    "sqlspec.adapters.asyncmy.adk.AsyncmyADKStore",
+    "sqlspec.adapters.adbc.adk.AdbcADKStore",
+    "sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKStore",
+    "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKStore",
+    "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore",
+    "sqlspec.adapters.duckdb.adk.DuckdbADKStore",
+    "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKStore",
+    "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKStore",
+    "sqlspec.adapters.oracledb.adk.OracleAsyncADKStore",
+    "sqlspec.adapters.oracledb.adk.OracleSyncADKStore",
+    "sqlspec.adapters.psqlpy.adk.PsqlpyADKStore",
+    "sqlspec.adapters.psycopg.adk.PsycopgAsyncADKStore",
+    "sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore",
+    "sqlspec.adapters.pymysql.adk.PyMysqlADKStore",
+    "sqlspec.adapters.spanner.adk.SpannerSyncADKStore",
+    "sqlspec.adapters.sqlite.adk.SqliteADKStore",
 ]
 
-# Session stores (sync)
-SYNC_SESSION_STORES = [
-    "sqlspec.adapters.adbc.adk.store.AdbcADKStore",
-    "sqlspec.adapters.cockroach_psycopg.adk.store.CockroachPsycopgSyncADKStore",
-    "sqlspec.adapters.duckdb.adk.store.DuckdbADKStore",
-    "sqlspec.adapters.mysqlconnector.adk.store.MysqlConnectorSyncADKStore",
-    "sqlspec.adapters.oracledb.adk.store.OracleSyncADKStore",
-    "sqlspec.adapters.psycopg.adk.store.PsycopgSyncADKStore",
-    "sqlspec.adapters.pymysql.adk.store.PyMysqlADKStore",
-    "sqlspec.adapters.spanner.adk.store.SpannerSyncADKStore",
+MEMORY_STORE_CLASSES = [
+    "sqlspec.adapters.asyncpg.adk.AsyncpgADKMemoryStore",
+    "sqlspec.adapters.aiomysql.adk.AiomysqlADKMemoryStore",
+    "sqlspec.adapters.aiosqlite.adk.AiosqliteADKMemoryStore",
+    "sqlspec.adapters.asyncmy.adk.AsyncmyADKMemoryStore",
+    "sqlspec.adapters.adbc.adk.AdbcADKMemoryStore",
+    "sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKMemoryStore",
+    "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKMemoryStore",
+    "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore",
+    "sqlspec.adapters.duckdb.adk.DuckdbADKMemoryStore",
+    "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKMemoryStore",
+    "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKMemoryStore",
+    "sqlspec.adapters.oracledb.adk.OracleAsyncADKMemoryStore",
+    "sqlspec.adapters.oracledb.adk.OracleSyncADKMemoryStore",
+    "sqlspec.adapters.psqlpy.adk.PsqlpyADKMemoryStore",
+    "sqlspec.adapters.psycopg.adk.PsycopgAsyncADKMemoryStore",
+    "sqlspec.adapters.psycopg.adk.PsycopgSyncADKMemoryStore",
+    "sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore",
+    "sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore",
+    "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
 ]
 
-# Memory stores (async)
-ASYNC_MEMORY_STORES = [
-    "sqlspec.adapters.asyncpg.adk.store.AsyncpgADKMemoryStore",
-    "sqlspec.adapters.aiomysql.adk.store.AiomysqlADKMemoryStore",
-    "sqlspec.adapters.aiosqlite.adk.store.AiosqliteADKMemoryStore",
-    "sqlspec.adapters.asyncmy.adk.store.AsyncmyADKMemoryStore",
-    "sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKMemoryStore",
-    "sqlspec.adapters.cockroach_psycopg.adk.store.CockroachPsycopgAsyncADKMemoryStore",
-    "sqlspec.adapters.mysqlconnector.adk.store.MysqlConnectorAsyncADKMemoryStore",
-    "sqlspec.adapters.oracledb.adk.store.OracleAsyncADKMemoryStore",
-    "sqlspec.adapters.psqlpy.adk.store.PsqlpyADKMemoryStore",
-    "sqlspec.adapters.psycopg.adk.store.PsycopgAsyncADKMemoryStore",
-]
-
-# Memory stores (sync)
-SYNC_MEMORY_STORES = [
-    "sqlspec.adapters.adbc.adk.store.AdbcADKMemoryStore",
-    "sqlspec.adapters.cockroach_psycopg.adk.store.CockroachPsycopgSyncADKMemoryStore",
-    "sqlspec.adapters.duckdb.adk.store.DuckdbADKMemoryStore",
-    "sqlspec.adapters.mysqlconnector.adk.store.MysqlConnectorSyncADKMemoryStore",
-    "sqlspec.adapters.oracledb.adk.store.OracleSyncADKMemoryStore",
-    "sqlspec.adapters.psycopg.adk.store.PsycopgSyncADKMemoryStore",
-    "sqlspec.adapters.pymysql.adk.store.PyMysqlADKMemoryStore",
-    "sqlspec.adapters.spanner.adk.store.SpannerSyncADKMemoryStore",
-    "sqlspec.adapters.sqlite.adk.store.SqliteADKMemoryStore",
-]
-
-ALL_STORE_CLASSES = ASYNC_SESSION_STORES + SYNC_SESSION_STORES + ASYNC_MEMORY_STORES + SYNC_MEMORY_STORES
+ALL_STORE_CLASSES = SESSION_STORE_CLASSES + MEMORY_STORE_CLASSES
 
 
 @pytest.mark.parametrize("class_path", ALL_STORE_CLASSES)

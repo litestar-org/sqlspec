@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
-from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage._paths import resolve_storage_path
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable

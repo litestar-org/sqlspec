@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKStore
+from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.extensions.adk import EventRecord
 
 pytestmark = pytest.mark.xdist_group("sqlite")

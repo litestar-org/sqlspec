@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
+from sqlspec.adapters.aiosqlite.adk import AiosqliteADKMemoryStore
 from sqlspec.extensions.adk import MemoryRecord
 
 pytestmark = pytest.mark.xdist_group("sqlite")

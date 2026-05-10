@@ -583,7 +583,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
     Example:
         from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore
+        from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
 
         config = SqliteConfig(
             database="app.db",

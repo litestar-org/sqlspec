@@ -530,7 +530,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
+        from sqlspec.adapters.aiosqlite.adk import AiosqliteADKMemoryStore
 
         config = AiosqliteConfig(
             connection_config={"database": ":memory:"},

@@ -30,7 +30,7 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKSt
     Notes:
         Dynamically imports the store class from the config's module path.
         For example, AsyncpgConfig at 'sqlspec.adapters.asyncpg.config'
-        maps to AsyncpgADKStore at 'sqlspec.adapters.asyncpg.adk.store.AsyncpgADKStore'.
+        maps to AsyncpgADKStore at 'sqlspec.adapters.asyncpg.adk.AsyncpgADKStore'.
     """
     if not context or not context.config:
         _raise_missing_config()
@@ -45,7 +45,7 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKSt
     adapter_name = config_module.split(".")[2]
     store_class_name = config_name.replace("Config", "ADKStore")
 
-    store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
+    store_path = f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
 
     try:
         store_class: type[BaseAsyncADKStore] = import_string(store_path)
@@ -69,7 +69,7 @@ def _get_memory_store_class(
     Notes:
         Dynamically imports the memory store class from the config's module path.
         For example, AsyncpgConfig at 'sqlspec.adapters.asyncpg.config'
-        maps to AsyncpgADKMemoryStore at 'sqlspec.adapters.asyncpg.adk.store.AsyncpgADKMemoryStore'.
+        maps to AsyncpgADKMemoryStore at 'sqlspec.adapters.asyncpg.adk.AsyncpgADKMemoryStore'.
     """
     if not context or not context.config:
         return None
@@ -84,7 +84,7 @@ def _get_memory_store_class(
     adapter_name = config_module.split(".")[2]
     store_class_name = config_name.replace("Config", "ADKMemoryStore")
 
-    store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
+    store_path = f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
 
     try:
         store_class: type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore] = import_string(store_path)

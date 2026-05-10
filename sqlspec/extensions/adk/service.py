@@ -37,7 +37,7 @@ class SQLSpecSessionService(BaseSessionService):
 
     Example:
         from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKStore
+        from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
         from sqlspec.extensions.adk.service import SQLSpecSessionService
 
         config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})

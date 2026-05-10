@@ -6,7 +6,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
-from sqlspec.adapters.mysqlconnector.adk.store import MysqlConnectorAsyncADKStore
+from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore
 
 
 @pytest.fixture

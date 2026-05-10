@@ -565,7 +565,7 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
 
     Example:
         from sqlspec.adapters.duckdb import DuckDBConfig
-        from sqlspec.adapters.duckdb.adk.store import DuckdbADKMemoryStore
+        from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
 
         config = DuckDBConfig(
             database="app.ddb",

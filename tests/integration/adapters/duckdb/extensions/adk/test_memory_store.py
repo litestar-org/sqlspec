@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec.adapters.duckdb.adk.store import DuckdbADKMemoryStore
+from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import MemoryRecord
 

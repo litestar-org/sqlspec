@@ -6,7 +6,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 from typing_extensions import Self
 
-from sqlspec.adapters.psycopg.adk.store import PsycopgSyncADKStore
+from sqlspec.adapters.psycopg.adk import PsycopgSyncADKStore
 
 
 class _DummyCursor:

@@ -4,7 +4,7 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from sqlspec.adapters.spanner.adk.store import SpannerSyncADKMemoryStore, SpannerSyncADKStore
+from sqlspec.adapters.spanner.adk import SpannerSyncADKMemoryStore, SpannerSyncADKStore
 from sqlspec.extensions.adk import EventRecord, MemoryRecord
 
 
