@@ -1,3 +1,13 @@
+"""Database configuration surfaces for SQLSpec adapters.
+
+This module is intentionally interpreted even though compiled modules consume
+its config classes. The public configuration API is stability-critical for
+compiled callers: keep constructor fields, protocol attributes, migration
+refresh behavior, storage capability hooks, and provider context managers
+runtime-visible and backwards coherent. Move small pure helpers into compiled
+modules only after proving the boundary with installed-wheel smoke coverage.
+"""
+
 import asyncio
 import threading
 from abc import ABC, abstractmethod
@@ -1071,7 +1081,14 @@ ExtensionConfigs: TypeAlias = dict[
 
 
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
-    """Protocol defining the interface for database configurations."""
+    """Protocol defining the stability-critical config contract.
+
+    Compiled callers rely on these attributes and methods remaining
+    runtime-visible while ``sqlspec.config`` stays interpreted. Changes to
+    migration setup, pool/session provider behavior, storage capabilities, or
+    observability bootstrap must preserve this contract or move behind a
+    separately verified compiled helper boundary.
+    """
 
     __slots__ = (
         "_migration_commands",
