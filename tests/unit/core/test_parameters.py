@@ -1343,6 +1343,33 @@ def test_parameter_caching() -> None:
     assert params1 is params2
 
 
+def test_processor_cache_key_uses_shared_tuple_helper() -> None:
+    """ParameterProcessor cache keys should use the shared cache tuple layout."""
+    processor = ParameterProcessor()
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+    )
+    sql = "SELECT * FROM users WHERE id = ?"
+    parameters = {"id": 1}
+    fingerprint = _processor_module.structural_fingerprint(parameters, is_many=False)
+
+    cache_key = processor._make_processor_cache_key(
+        sql, parameters, config, False, None, True, False, param_fingerprint=fingerprint
+    )
+
+    assert cache_key == _processor_module._make_cache_key_tuple(
+        sql,
+        fingerprint,
+        ParameterStyle.QMARK.value,
+        ParameterStyle.POSITIONAL_PYFORMAT.value,
+        "default",
+        False,
+        True,
+        False,
+    )
+
+
 def test_singledispatch_type_wrapping_performance() -> None:
     """Test that singledispatch provides efficient type-based dispatch."""
 

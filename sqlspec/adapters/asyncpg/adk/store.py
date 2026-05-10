@@ -91,14 +91,14 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
     async def create_tables(self) -> None:
-        async with self.config.provide_session() as driver:
+        async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        async with self.config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn:
             if self._owner_id_column_name:
                 sql = f"""
                 INSERT INTO {self._session_table}
@@ -123,7 +123,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         try:
-            async with self.config.provide_connection() as conn:
+            async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, session_id)
 
                 if row is None:
@@ -147,13 +147,13 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         WHERE id = $2
         """
 
-        async with self.config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, state, session_id)
 
     async def delete_session(self, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE id = $1"
 
-        async with self.config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, session_id)
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -175,7 +175,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             params = [app_name, user_id]
 
         try:
-            async with self.config.provide_connection() as conn:
+            async with self._config.provide_connection() as conn:
                 rows = await conn.fetch(sql, *params)
 
                 return [
@@ -199,7 +199,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         ) VALUES ($1, $2, $3, $4, $5)
         """
 
-        async with self.config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn:
             await conn.execute(
                 sql,
                 event_record["session_id"],
@@ -223,7 +223,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         WHERE id = $2
         """
 
-        async with self.config.provide_connection() as conn, conn.transaction():
+        async with self._config.provide_connection() as conn, conn.transaction():
             await conn.execute(
                 insert_sql,
                 event_record["session_id"],
@@ -257,7 +257,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         try:
-            async with self.config.provide_connection() as conn:
+            async with self._config.provide_connection() as conn:
                 rows = await conn.fetch(sql, *params)
 
                 return [

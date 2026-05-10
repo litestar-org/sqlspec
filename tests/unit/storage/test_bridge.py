@@ -513,6 +513,26 @@ def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> No
     assert "|" in text.split("\n")[0]
 
 
+def test_write_arrow_csv_uses_pipeline_storage_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Write an Arrow table using storage options bound at pipeline construction."""
+    backend = _CsvTestBackend()
+    pipeline = SyncStoragePipeline(storage_options={"write_options": {"delimiter": "|"}})
+
+    def _fake_resolve(
+        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
+
+    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+
+    table = pa.table({"x": [10], "y": [20]})
+    pipeline.write_arrow(table, "data/output.csv", format_hint="csv")
+
+    payload = backend.payloads["data/output.csv"]
+    text = payload.decode()
+    assert "|" in text.split("\n")[0]
+
+
 def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
     """Write an Arrow table as CSV without header row."""
     backend = _CsvTestBackend()

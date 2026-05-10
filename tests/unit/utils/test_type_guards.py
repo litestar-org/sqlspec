@@ -832,8 +832,10 @@ def test_serializer_pipeline_reuses_entry() -> None:
 
 
 def test_serializer_metrics_track_hits_and_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.utils.serializers import _schema as schema_module
+
     reset_serializer_cache()
-    monkeypatch.setenv("SQLSPEC_DEBUG_PIPELINE_CACHE", "1")
+    monkeypatch.setattr(schema_module, "_METRICS_ENABLED", True)
 
     sample = _SerializerRecord(identifier=1, name="instrumented")
     get_collection_serializer(sample)

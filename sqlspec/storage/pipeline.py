@@ -147,6 +147,29 @@ _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 _EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
 
 
+def _resolve_pipeline_storage_options(
+    default_options: "dict[str, Any]", storage_options: "dict[str, Any] | None"
+) -> "dict[str, Any]":
+    return default_options if storage_options is None else storage_options
+
+
+def _extract_csv_write_options(storage_options: "dict[str, Any]") -> "dict[str, Any] | None":
+    return cast("dict[str, Any] | None", storage_options.get("write_options"))
+
+
+def _get_csv_write_options(
+    format_choice: StorageFormat,
+    resolved_options: "dict[str, Any]",
+    default_options: "dict[str, Any]",
+    default_write_options: "dict[str, Any] | None",
+) -> "dict[str, Any] | None":
+    if format_choice != "csv":
+        return None
+    if resolved_options is default_options:
+        return default_write_options
+    return _extract_csv_write_options(resolved_options)
+
+
 def get_storage_bridge_metrics() -> "dict[str, int]":
     """Return aggregated storage bridge metrics."""
 
@@ -293,11 +316,15 @@ def _make_resolved_backend_cache_key(
 class SyncStoragePipeline:
     """Pipeline coordinating storage registry operations and telemetry."""
 
-    __slots__ = ("_resolved_backend_cache", "registry")
+    __slots__ = ("_csv_write_options", "_resolved_backend_cache", "_storage_options", "registry")
 
-    def __init__(self, *, registry: StorageRegistry | None = None) -> None:
+    def __init__(
+        self, *, registry: StorageRegistry | None = None, storage_options: "dict[str, Any] | None" = None
+    ) -> None:
         self.registry = registry or storage_registry
         self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
+        self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        self._csv_write_options = _extract_csv_write_options(self._storage_options)
 
     def clear_cache(self) -> None:
         """Clear cached storage backend resolutions for this pipeline instance."""
@@ -330,7 +357,7 @@ class SyncStoragePipeline:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
         payload = _encode_row_payload(serialized, format_choice)
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
         return self._write_bytes(
             payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
@@ -347,8 +374,10 @@ class SyncStoragePipeline:
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
-        format_write_options = resolved_options.get("write_options") if format_choice == "csv" else None
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
+        format_write_options = _get_csv_write_options(
+            format_choice, resolved_options, self._storage_options, self._csv_write_options
+        )
         payload = _encode_arrow_payload(
             table, format_choice, compression=compression, write_options=format_write_options
         )
@@ -447,11 +476,15 @@ class SyncStoragePipeline:
 class AsyncStoragePipeline:
     """Async variant of the storage pipeline leveraging async-capable backends when available."""
 
-    __slots__ = ("_resolved_backend_cache", "registry")
+    __slots__ = ("_csv_write_options", "_resolved_backend_cache", "_storage_options", "registry")
 
-    def __init__(self, *, registry: StorageRegistry | None = None) -> None:
+    def __init__(
+        self, *, registry: StorageRegistry | None = None, storage_options: "dict[str, Any] | None" = None
+    ) -> None:
         self.registry = registry or storage_registry
         self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
+        self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        self._csv_write_options = _extract_csv_write_options(self._storage_options)
 
     def clear_cache(self) -> None:
         """Clear cached storage backend resolutions for this pipeline instance."""
@@ -482,7 +515,7 @@ class AsyncStoragePipeline:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
         payload = await async_(_encode_row_payload)(serialized, format_choice)
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
         return await self._write_bytes_async(
             payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
@@ -497,8 +530,10 @@ class AsyncStoragePipeline:
         compression: str | None = None,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
-        format_write_options = resolved_options.get("write_options") if format_choice == "csv" else None
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
+        format_write_options = _get_csv_write_options(
+            format_choice, resolved_options, self._storage_options, self._csv_write_options
+        )
         payload = await async_(_encode_arrow_payload)(
             table, format_choice, compression=compression, write_options=format_write_options
         )

@@ -40,6 +40,7 @@ from sqlspec.core import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core.parameters._processor import _make_cache_key_tuple
 from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
@@ -340,6 +341,9 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
 
     # Cache keys are now tuples for better performance
     assert isinstance(key1, tuple)
+    assert key1 == _make_cache_key_tuple(
+        "SELECT * FROM users", fp1, processor._input_style, processor._exec_style, processor._dialect_str, False
+    )
 
 
 def test_cache_eviction(basic_statement_config: "StatementConfig") -> None:
@@ -378,6 +382,33 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
     assert key1 in processor._cache
     assert key2 not in processor._cache
     assert key3 in processor._cache
+
+
+def test_micro_cache_hit_does_not_touch_lru_order(basic_statement_config: "StatementConfig") -> None:
+    """The 1-entry cache should return before the full LRU cache is updated."""
+    processor = SQLProcessor(basic_statement_config, max_cache_size=2)
+    processor.compile("SELECT 1", None)
+    processor.compile("SELECT 2", None)
+
+    class TrackingCache(OrderedDict[Any, CompiledSQL]):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.move_to_end_calls = 0
+
+        def move_to_end(self, key: Any, last: bool = True) -> None:
+            self.move_to_end_calls += 1
+            super().move_to_end(key, last=last)
+
+    tracked_cache = TrackingCache(processor._cache)
+    processor._cache = tracked_cache
+
+    processor.compile("SELECT 2", None)
+    assert tracked_cache.move_to_end_calls == 0
+    assert processor._cache_hits == 1
+
+    processor.compile("SELECT 1", None)
+    assert tracked_cache.move_to_end_calls == 1
+    assert processor._cache_hits == 2
 
 
 @pytest.mark.parametrize(

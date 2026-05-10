@@ -1,8 +1,10 @@
 """Schema dumping and cache helpers for ``sqlspec.utils.serializers``."""
 
 import os
+from collections import OrderedDict
 from functools import partial
 from threading import RLock
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.typing import UNSET, ArrowReturnFormat, attrs_asdict
@@ -32,6 +34,8 @@ __all__ = (
 
 DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
 _PRIMITIVE_TYPES: Final[tuple[type[Any], ...]] = (str, bytes, int, float, bool)
+_PRIMITIVE_TYPES_SET: Final[frozenset[type[Any]]] = frozenset(_PRIMITIVE_TYPES)
+_SCHEMA_SERIALIZER_CACHE_MAX_SIZE: Final[int] = 1000
 
 
 def _is_truthy(value: "str | None") -> bool:
@@ -41,8 +45,13 @@ def _is_truthy(value: "str | None") -> bool:
     return normalized in {"1", "true", "yes", "on"}
 
 
-def _metrics_enabled() -> bool:
-    return _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+_METRICS_ENABLED: Final[bool] = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+_msgspec_structs: ModuleType | None
+
+try:
+    from msgspec import structs as _msgspec_structs
+except ImportError:  # pragma: no cover - msgspec is a required dependency in supported environments
+    _msgspec_structs = None
 
 
 class _SerializerCacheMetrics:
@@ -55,14 +64,14 @@ class _SerializerCacheMetrics:
         self.max_size = 0
 
     def record_hit(self, cache_size: int) -> None:
-        if not _metrics_enabled():
+        if not _METRICS_ENABLED:
             return
         self.hits += 1
         self.size = cache_size
         self.max_size = max(self.max_size, cache_size)
 
     def record_miss(self, cache_size: int) -> None:
-        if not _metrics_enabled():
+        if not _METRICS_ENABLED:
             return
         self.misses += 1
         self.size = cache_size
@@ -76,10 +85,10 @@ class _SerializerCacheMetrics:
 
     def snapshot(self) -> "dict[str, int]":
         return {
-            "hits": self.hits if _metrics_enabled() else 0,
-            "misses": self.misses if _metrics_enabled() else 0,
-            "max_size": self.max_size if _metrics_enabled() else 0,
-            "size": self.size if _metrics_enabled() else 0,
+            "hits": self.hits if _METRICS_ENABLED else 0,
+            "misses": self.misses if _METRICS_ENABLED else 0,
+            "max_size": self.max_size if _METRICS_ENABLED else 0,
+            "size": self.size if _METRICS_ENABLED else 0,
         }
 
 
@@ -110,7 +119,7 @@ class SchemaSerializer:
 
 
 _SERIALIZER_LOCK: RLock = RLock()
-_SCHEMA_SERIALIZERS: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
+_SCHEMA_SERIALIZERS: "OrderedDict[tuple[type[Any] | None, bool, bool], SchemaSerializer]" = OrderedDict()
 _SERIALIZER_METRICS = _SerializerCacheMetrics()
 
 
@@ -125,11 +134,13 @@ def _dump_identity_dict(value: Any) -> "dict[str, Any]":
 
 
 def _get_msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
-    from msgspec import structs
+    if _msgspec_structs is None:
+        msg = "msgspec is required to serialize msgspec.Struct values"
+        raise RuntimeError(msg)
 
     if wire_format:
-        return tuple((field.encode_name, field.name) for field in structs.fields(schema_type))
-    return tuple((field.name, field.name) for field in structs.fields(schema_type))
+        return tuple((field.encode_name, field.name) for field in _msgspec_structs.fields(schema_type))
+    return tuple((field.name, field.name) for field in _msgspec_structs.fields(schema_type))
 
 
 def _dump_msgspec_struct(
@@ -195,15 +206,28 @@ def get_collection_serializer(
 ) -> "SchemaSerializer":
     """Return cached serializer pipeline for the provided sample object."""
     key = _make_serializer_key(sample, exclude_unset, wire_format)
+    pipeline = _SCHEMA_SERIALIZERS.get(key)
+    if pipeline is not None:
+        try:
+            _SCHEMA_SERIALIZERS.move_to_end(key)
+        except KeyError:
+            pipeline = None
+        else:
+            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
+            return pipeline
+
     with _SERIALIZER_LOCK:
         pipeline = _SCHEMA_SERIALIZERS.get(key)
         if pipeline is not None:
+            _SCHEMA_SERIALIZERS.move_to_end(key)
             _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
             return pipeline
 
         dump = _build_dump_function(sample, exclude_unset, wire_format)
         pipeline = SchemaSerializer(key, dump)
         _SCHEMA_SERIALIZERS[key] = pipeline
+        if len(_SCHEMA_SERIALIZERS) > _SCHEMA_SERIALIZER_CACHE_MAX_SIZE:
+            _SCHEMA_SERIALIZERS.popitem(last=False)
         _SERIALIZER_METRICS.record_miss(len(_SCHEMA_SERIALIZERS))
         return pipeline
 
@@ -216,7 +240,7 @@ def serialize_collection(
     cache: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
 
     for item in items:
-        if isinstance(item, _PRIMITIVE_TYPES) or item is None or isinstance(item, dict):
+        if type(item) in _PRIMITIVE_TYPES_SET or item is None or isinstance(item, dict):
             serialized.append(item)
             continue
 
@@ -261,7 +285,7 @@ def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = Fa
     """
     if is_dict(data):
         return data
-    if isinstance(data, _PRIMITIVE_TYPES) or data is None:
+    if type(data) in _PRIMITIVE_TYPES_SET or data is None:
         return data
 
     serializer = get_collection_serializer(data, exclude_unset=exclude_unset, wire_format=wire_format)

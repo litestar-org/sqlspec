@@ -24,6 +24,7 @@ from sqlspec.core.parameters import (
     validate_parameter_alignment,
     value_fingerprint,
 )
+from sqlspec.core.parameters._processor import _make_cache_key_tuple
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -405,83 +406,17 @@ class SQLProcessor:
         # MICRO-CACHE: Fast path for repeating statements
         if cache_key == self._last_cache_key and self._last_result is not None:
             self._cache_hits += 1
-            cached_result = self._last_result
-            if self._config.parameter_config.needs_static_script_compilation:
-                return cached_result
+            return self._materialize_cached_result(self._last_result, parameters, is_many)
 
-            processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
-                parameters,
-                cached_result.parameter_profile,
-                self._config.parameter_config,
-                input_named_parameters=cached_result.input_named_parameters,
-                is_many=is_many,
-                apply_wrap_types=cached_result.applied_wrap_types,
-            )
-
-            final_sql = cached_result.compiled_sql
-            output_transformer = self._config.output_transformer
-            if output_transformer:
-                final_sql, processed_params = output_transformer(final_sql, processed_params)
-
-            return CompiledSQL(
-                compiled_sql=final_sql,
-                execution_parameters=processed_params,
-                operation_type=cached_result.operation_type,
-                expression=cached_result.expression,
-                parameter_style=cached_result.parameter_style,
-                supports_many=cached_result.supports_many,
-                parameter_casts=cached_result.parameter_casts,
-                parameter_profile=cached_result.parameter_profile,
-                operation_profile=cached_result.operation_profile,
-                input_named_parameters=cached_result.input_named_parameters,
-                applied_wrap_types=cached_result.applied_wrap_types,
-            )
-
-        if cache_key in self._cache:
-            cached_result = self._cache[cache_key]
-            del self._cache[cache_key]
-            self._cache[cache_key] = cached_result
+        cached_result = self._cache.get(cache_key)
+        if cached_result is not None:
+            self._cache.move_to_end(cache_key)
             self._cache_hits += 1
 
             # Update micro-cache
             self._last_cache_key = cache_key
             self._last_result = cached_result
-            if self._config.parameter_config.needs_static_script_compilation:
-                return cached_result
-
-            # Structural fingerprinting means same SQL structure = same cache entry,
-            # but we must still process the caller's actual parameter values.
-            # FAST PATH: Call _transform_cached_parameters directly to bypass redundant
-            # ParameterProcessor cache lookup and key generation.
-            processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
-                parameters,
-                cached_result.parameter_profile,
-                self._config.parameter_config,
-                input_named_parameters=cached_result.input_named_parameters,
-                is_many=is_many,
-                apply_wrap_types=cached_result.applied_wrap_types,
-            )
-
-            # Apply output transformer if present (cached SQL already transformed)
-            final_sql = cached_result.compiled_sql
-            output_transformer = self._config.output_transformer
-            if output_transformer:
-                final_sql, processed_params = output_transformer(final_sql, processed_params)
-
-            # Return cached compilation metadata with NEW parameters
-            return CompiledSQL(
-                compiled_sql=final_sql,
-                execution_parameters=processed_params,
-                operation_type=cached_result.operation_type,
-                expression=cached_result.expression,
-                parameter_style=cached_result.parameter_style,
-                supports_many=cached_result.supports_many,
-                parameter_casts=cached_result.parameter_casts,
-                parameter_profile=cached_result.parameter_profile,
-                operation_profile=cached_result.operation_profile,
-                input_named_parameters=cached_result.input_named_parameters,
-                applied_wrap_types=cached_result.applied_wrap_types,
-            )
+            return self._materialize_cached_result(cached_result, parameters, is_many)
 
         self._cache_misses += 1
         result = self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=param_fingerprint)
@@ -493,6 +428,41 @@ class SQLProcessor:
         self._last_cache_key = cache_key
         self._last_result = result
         return result
+
+    def _materialize_cached_result(self, cached_result: CompiledSQL, parameters: Any, is_many: bool) -> CompiledSQL:
+        """Return cached compilation metadata with parameters for the current call."""
+        if self._config.parameter_config.needs_static_script_compilation:
+            return cached_result
+
+        # Structural fingerprinting means same SQL structure = same cache entry,
+        # but we must still process the caller's actual parameter values.
+        processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+            parameters,
+            cached_result.parameter_profile,
+            self._config.parameter_config,
+            input_named_parameters=cached_result.input_named_parameters,
+            is_many=is_many,
+            apply_wrap_types=cached_result.applied_wrap_types,
+        )
+
+        final_sql = cached_result.compiled_sql
+        output_transformer = self._config.output_transformer
+        if output_transformer:
+            final_sql, processed_params = output_transformer(final_sql, processed_params)
+
+        return CompiledSQL(
+            compiled_sql=final_sql,
+            execution_parameters=processed_params,
+            operation_type=cached_result.operation_type,
+            expression=cached_result.expression,
+            parameter_style=cached_result.parameter_style,
+            supports_many=cached_result.supports_many,
+            parameter_casts=cached_result.parameter_casts,
+            parameter_profile=cached_result.parameter_profile,
+            operation_profile=cached_result.operation_profile,
+            input_named_parameters=cached_result.input_named_parameters,
+            applied_wrap_types=cached_result.applied_wrap_types,
+        )
 
     def _prepare_parameters(
         self, sql: str, parameters: Any, is_many: bool, dialect_str: "str | None", *, param_fingerprint: Any | None
@@ -936,8 +906,9 @@ class SQLProcessor:
         Returns:
             Cache key tuple
         """
-        # Use pre-calculated static components for speed
-        return (sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many)
+        return _make_cache_key_tuple(
+            sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many
+        )
 
     def _detect_operation_type(self, expression: "exp.Expr") -> "OperationType":
         """Detect operation type from AST.

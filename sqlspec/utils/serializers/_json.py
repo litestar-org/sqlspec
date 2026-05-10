@@ -41,6 +41,7 @@ __all__ = (
 
 
 TypeEncodersMap = Mapping[type, Callable[[Any], Any]]
+StructuralEncoder = Callable[[Any], Any]
 
 
 def _get_uuid_utils_type() -> "type[Any] | None":
@@ -132,6 +133,11 @@ def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
 
 
 DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _build_default_type_encoders()
+_STRUCTURAL_ENCODER_CACHE: Final["dict[type[Any], StructuralEncoder | None]"] = {}
+
+
+def _dump_attrs_instance(value: Any) -> Any:
+    return attrs_asdict(value, recurse=True)
 
 
 def _resolve_structural_encoder(value: Any) -> Any:
@@ -141,12 +147,23 @@ def _resolve_structural_encoder(value: Any) -> Any:
     rather than ``isinstance`` against a single base type, so they can't live
     in the type-keyed registry.
     """
+    value_type = type(value)
+    encoder = _STRUCTURAL_ENCODER_CACHE.get(value_type)
+    if encoder is not None:
+        return encoder(value)
+    if value_type in _STRUCTURAL_ENCODER_CACHE:
+        return None
+
     if is_dataclass_instance(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = dataclass_to_dict
         return dataclass_to_dict(value)
     if is_attrs_instance(value):
-        return attrs_asdict(value, recurse=True)
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_attrs_instance
+        return _dump_attrs_instance(value)
     if is_msgspec_struct(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_msgspec_struct
         return _dump_msgspec_struct(value)
+    _STRUCTURAL_ENCODER_CACHE[value_type] = None
     return None
 
 

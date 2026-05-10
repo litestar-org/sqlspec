@@ -22,7 +22,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 from rich.console import Console
@@ -139,7 +139,7 @@ def run_gate(
         Tuple of (results list, all_passed boolean).
     """
     # Set bench.py global rows
-    bench_mod.ROWS_TO_INSERT = rows
+    cast("Any", bench_mod).ROWS_TO_INSERT = rows
 
     # Run benchmarks using the same infrastructure as bench.py
     errors: list[str] = []
@@ -268,8 +268,18 @@ def _write_json_results(
 
 @click.command()
 @click.option("--rows", default=10_000, show_default=True, help="Number of rows per scenario")
-@click.option("--iterations", default=3, show_default=True, help="Number of timed iterations per scenario")
-@click.option("--warmup", default=1, show_default=True, help="Number of warmup iterations (not timed)")
+@click.option(
+    "--iterations",
+    default=bench_mod.DEFAULT_BENCH_ITERATIONS,
+    show_default=True,
+    help="Number of timed iterations per scenario",
+)
+@click.option(
+    "--warmup",
+    default=bench_mod.DEFAULT_BENCH_WARMUP,
+    show_default=True,
+    help="Number of warmup iterations (not timed)",
+)
 @click.option("--json-output", default=None, type=click.Path(), help="Write gate results to a JSON file")
 @click.option(
     "--threshold-iterative",

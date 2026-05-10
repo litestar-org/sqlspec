@@ -3,15 +3,14 @@
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
-from typing_extensions import NotRequired, TypedDict
-
+from sqlspec.extensions.adk._config_utils import _ADKMemoryStoreConfig, _get_adk_memory_store_config
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from sqlspec.config import ADKConfig, DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.memory._types import MemoryRecord
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
@@ -23,16 +22,6 @@ __all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 MAX_TABLE_NAME_LENGTH: Final = 63
-
-
-class _ADKMemoryStoreConfig(TypedDict):
-    """Normalized ADK memory store configuration."""
-
-    enable_memory: bool
-    memory_table: str
-    use_fts: bool
-    max_results: int
-    owner_id_column: NotRequired[str]
 
 
 def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
@@ -150,25 +139,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
-        extension_config = self._config.extension_config
-        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
-        enable_memory = adk_config.get("enable_memory")
-        memory_table = adk_config.get("memory_table")
-        use_fts = adk_config.get("memory_use_fts")
-        max_results = adk_config.get("memory_max_results")
-
-        result: _ADKMemoryStoreConfig = {
-            "enable_memory": bool(enable_memory) if enable_memory is not None else True,
-            "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
-            "use_fts": bool(use_fts) if use_fts is not None else False,
-            "max_results": int(max_results) if isinstance(max_results, int) else 20,
-        }
-
-        owner_id = adk_config.get("owner_id_column")
-        if owner_id is not None:
-            result["owner_id_column"] = owner_id
-
-        return result
+        return _get_adk_memory_store_config(self._config)
 
     @property
     def config(self) -> ConfigT:
@@ -396,25 +367,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
-        extension_config = self._config.extension_config
-        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
-        enable_memory = adk_config.get("enable_memory")
-        memory_table = adk_config.get("memory_table")
-        use_fts = adk_config.get("memory_use_fts")
-        max_results = adk_config.get("memory_max_results")
-
-        result: _ADKMemoryStoreConfig = {
-            "enable_memory": bool(enable_memory) if enable_memory is not None else True,
-            "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
-            "use_fts": bool(use_fts) if use_fts is not None else False,
-            "max_results": int(max_results) if isinstance(max_results, int) else 20,
-        }
-
-        owner_id = adk_config.get("owner_id_column")
-        if owner_id is not None:
-            result["owner_id_column"] = owner_id
-
-        return result
+        return _get_adk_memory_store_config(self._config)
 
     @property
     def config(self) -> ConfigT:
@@ -487,19 +440,22 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     def _log_memory_table_created(self) -> None:
-        logger.debug(
-            "ADK memory table ready",
-            extra={"db.system": resolve_db_system(type(self).__name__), "memory_table": self._memory_table},
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.memory.table.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            memory_table=self._memory_table,
         )
 
     def _log_memory_table_skipped(self) -> None:
-        logger.debug(
-            "ADK memory table creation skipped",
-            extra={
-                "db.system": resolve_db_system(type(self).__name__),
-                "memory_table": self._memory_table,
-                "reason": "disabled",
-            },
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.memory.table.skipped",
+            db_system=resolve_db_system(type(self).__name__),
+            memory_table=self._memory_table,
+            reason="disabled",
         )
 
     @abstractmethod

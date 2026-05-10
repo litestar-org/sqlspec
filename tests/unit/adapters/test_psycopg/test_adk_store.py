@@ -59,7 +59,8 @@ def _build_store(
     cursor = _DummyCursor(rows)
     connection = _DummyConnection(cursor)
     store = PsycopgSyncADKStore.__new__(PsycopgSyncADKStore)  # type: ignore[call-arg]
-    store._config = _DummyConfig(connection)  # type: ignore[attr-defined]
+    config = _DummyConfig(connection)
+    store._config = config  # type: ignore[attr-defined]
     store._events_table = "test_events"  # type: ignore[attr-defined]
     store._session_table = "test_sessions"  # type: ignore[attr-defined]
     store._owner_id_column_ddl = None  # type: ignore[attr-defined]

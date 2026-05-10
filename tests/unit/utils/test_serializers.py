@@ -5,6 +5,7 @@ Tests for the canonical JSON serialization surface and contract-level regression
 
 import json
 import math
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -707,6 +708,86 @@ def test_numpy_serialization_with_to_json() -> None:
 
     decoded_list = from_json(json_str)
     assert decoded_list == [1.0, 2.0, 3.0]
+
+
+def test_structural_encoder_resolution_is_cached_by_exact_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Structural probes should run once per concrete type."""
+    from sqlspec.utils.serializers import _json as json_module
+
+    json_module._STRUCTURAL_ENCODER_CACHE.clear()
+
+    @dataclass
+    class _Payload:
+        id: int
+
+    original_probe = json_module.is_dataclass_instance
+    call_count = 0
+
+    def count_probe(value: Any) -> bool:
+        nonlocal call_count
+        call_count += 1
+        return original_probe(value)
+
+    monkeypatch.setattr(json_module, "is_dataclass_instance", count_probe)
+
+    assert json_module._resolve_structural_encoder(_Payload(id=1)) == {"id": 1}
+    assert json_module._resolve_structural_encoder(_Payload(id=2)) == {"id": 2}
+    assert call_count == 1
+
+    json_module._STRUCTURAL_ENCODER_CACHE.clear()
+
+
+def test_schema_serializer_cache_is_lru_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema serializer cache should evict least-recently-used entries."""
+    from sqlspec.utils.serializers import _schema as schema_module
+
+    reset_serializer_cache()
+    monkeypatch.setattr(schema_module, "_SCHEMA_SERIALIZER_CACHE_MAX_SIZE", 2)
+
+    @dataclass
+    class _First:
+        id: int
+
+    @dataclass
+    class _Second:
+        id: int
+
+    @dataclass
+    class _Third:
+        id: int
+
+    first = get_collection_serializer(_First(id=1))
+    second = get_collection_serializer(_Second(id=1))
+    assert len(schema_module._SCHEMA_SERIALIZERS) == 2
+
+    assert get_collection_serializer(_First(id=2)) is first
+    third = get_collection_serializer(_Third(id=1))
+
+    assert len(schema_module._SCHEMA_SERIALIZERS) == 2
+    assert schema_module._make_serializer_key(_First(id=3), True, False) in schema_module._SCHEMA_SERIALIZERS
+    assert schema_module._make_serializer_key(_Third(id=2), True, False) in schema_module._SCHEMA_SERIALIZERS
+    assert schema_module._make_serializer_key(_Second(id=2), True, False) not in schema_module._SCHEMA_SERIALIZERS
+    assert get_collection_serializer(_Second(id=3)) is not second
+    assert third.dump_one(_Third(id=4)) == {"id": 4}
+
+
+def test_schema_serializer_cache_handles_concurrent_registration() -> None:
+    """Concurrent cold-cache registrations should publish one serializer per key."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    reset_serializer_cache()
+
+    @dataclass
+    class _Payload:
+        id: int
+
+    def get_serializer(index: int) -> int:
+        return id(get_collection_serializer(_Payload(id=index)))
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        serializer_ids = set(executor.map(get_serializer, range(32)))
+
+    assert len(serializer_ids) == 1
 
 
 class TestSchemaDumpWireFormatOptOut:

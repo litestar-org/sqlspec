@@ -33,6 +33,22 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
+def _make_cache_key_tuple(
+    sql: str,
+    param_fingerprint: Any,
+    input_style: str,
+    exec_style: str,
+    dialect: str | None,
+    is_many: bool,
+    wrap_types: bool | None = None,
+    normalize_for_parsing: bool | None = None,
+) -> tuple[Any, ...]:
+    """Build the shared SQL and parameter processor cache key tuple."""
+    if wrap_types is None and normalize_for_parsing is None:
+        return (sql, param_fingerprint, input_style, exec_style, dialect, is_many)
+    return (sql, param_fingerprint, input_style, exec_style, dialect, is_many, wrap_types, normalize_for_parsing)
+
+
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
     """Return a structural fingerprint for caching parameter payloads.
 
@@ -803,18 +819,8 @@ class ParameterProcessor:
             config.default_execution_parameter_style.value if config.default_execution_parameter_style else input_style
         )
 
-        # Optimize: Use tuple as cache key instead of hashing the string representation.
-        # This avoids expensive repr() and blake2b hashing of the SQL string on every call.
-        # Python's dict/OrderedDict handles tuple keys efficiently using hash().
-        return (
-            sql,
-            param_fingerprint,
-            input_style,
-            exec_style,
-            is_many,
-            dialect_marker,
-            wrap_types,
-            normalize_for_parsing,
+        return _make_cache_key_tuple(
+            sql, param_fingerprint, input_style, exec_style, dialect_marker, is_many, wrap_types, normalize_for_parsing
         )
 
     def process(
