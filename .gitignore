@@ -76,3 +76,4 @@ tools/scripts/profiles/*.prof
 .dolt/
 .beads-credential-key
 .codex
+.mypy_worker*
