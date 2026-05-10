@@ -22,7 +22,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import abc
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -334,10 +334,76 @@ class OnBeforeAfterFilter(StatementFilter):
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
     """Base class for collection-based filters that support ANY operations."""
 
-    __slots__ = ()
+    __slots__ = ("_field_name", "_values")
+
+    _cache_key_name: ClassVar[str] = "InAnyFilter"
+    _condition_type: ClassVar[Literal["in", "not_in", "any", "not_any"]] = "in"
+    _empty_values_return_false: ClassVar[bool] = False
+    _parameter_suffix: ClassVar[str] = "value"
+
+    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
+        self._field_name = field_name
+        self._values = values
+
+    @property
+    def field_name(self) -> "str | exp.Expression":
+        return self._field_name
+
+    @property
+    def values(self) -> abc.Collection[T] | None:
+        return self._values
+
+    def get_param_names(self) -> "list[str]":
+        """Get parameter names without storing them."""
+        if not self.values:
+            return []
+        sanitized_field = self._sanitize_param_name(self.field_name)
+        suffix = self._parameter_suffix
+        return [f"{sanitized_field}_{suffix}_{i}" for i, _ in enumerate(self.values)]
+
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.values:
+            param_names = self.get_param_names()
+            for i, value in enumerate(self.values):
+                named_parameters[param_names[i]] = value
+        return [], named_parameters
+
+    def _build_collection_condition(self, col_expr: exp.Expression, placeholders: "list[exp.Expr]") -> exp.Expression:
+        condition_type = self._condition_type
+        if condition_type == "in":
+            return exp.In(this=col_expr, expressions=placeholders)
+        if condition_type == "not_in":
+            return exp.Not(this=exp.In(this=col_expr, expressions=placeholders))
+
+        array_expr = exp.Array(expressions=placeholders)
+        condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
+        if condition_type == "not_any":
+            return exp.Not(this=condition)
+        return condition
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        raise NotImplementedError
+        values = self.values
+        if values is None:
+            return statement
+
+        if not values:
+            return statement.where(exp.false()) if self._empty_values_return_false else statement
+
+        col_expr = self._get_column_expression(self.field_name)
+        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
+        placeholders: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
+        result = statement.where(self._build_collection_condition(col_expr, placeholders))
+
+        for resolved_name, value in zip(resolved_names, values, strict=False):
+            result = result.add_named_parameter(resolved_name, value)
+        return result
+
+    def get_cache_key(self) -> "tuple[Any, ...]":
+        """Return cache key for this filter configuration."""
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return (self._cache_key_name, self.field_name, values_tuple)
 
 
 class InCollectionFilter(InAnyFilter[T]):
@@ -346,60 +412,11 @@ class InCollectionFilter(InAnyFilter[T]):
     Constructs WHERE ... IN (...) clauses.
     """
 
-    __slots__ = ("_field_name", "_values")
-
-    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
-        self._field_name = field_name
-        self._values = values
-
-    @property
-    def field_name(self) -> "str | exp.Expression":
-        return self._field_name
-
-    @property
-    def values(self) -> abc.Collection[T] | None:
-        return self._values
-
-    def get_param_names(self) -> "list[str]":
-        """Get parameter names without storing them."""
-        if not self.values:
-            return []
-        sanitized_field = self._sanitize_param_name(self.field_name)
-        return [f"{sanitized_field}_in_{i}" for i, _ in enumerate(self.values)]
-
-    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
-        """Extract filter parameters."""
-        named_parameters = {}
-        if self.values:
-            param_names = self.get_param_names()
-            for i, value in enumerate(self.values):
-                named_parameters[param_names[i]] = value
-        return [], named_parameters
-
-    def append_to_statement(self, statement: "SQL") -> "SQL":
-        if self.values is None:
-            return statement
-
-        if not self.values:
-            return statement.where(exp.false())
-
-        col_expr = self._get_column_expression(self.field_name)
-        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
-
-        placeholder_expressions: list[exp.Placeholder] = [
-            exp.Placeholder(this=param_name) for param_name in resolved_names
-        ]
-
-        result = statement.where(exp.In(this=col_expr, expressions=placeholder_expressions))
-
-        for resolved_name, value in zip(resolved_names, self.values, strict=False):
-            result = result.add_named_parameter(resolved_name, value)
-        return result
-
-    def get_cache_key(self) -> "tuple[Any, ...]":
-        """Return cache key for this filter configuration."""
-        values_tuple = tuple(self.values) if self.values is not None else None
-        return ("InCollectionFilter", self.field_name, values_tuple)
+    __slots__ = ()
+    _cache_key_name: ClassVar[str] = "InCollectionFilter"
+    _condition_type: ClassVar[Literal["in", "not_in", "any", "not_any"]] = "in"
+    _empty_values_return_false: ClassVar[bool] = True
+    _parameter_suffix: ClassVar[str] = "in"
 
 
 class NotInCollectionFilter(InAnyFilter[T]):
@@ -408,57 +425,10 @@ class NotInCollectionFilter(InAnyFilter[T]):
     Constructs WHERE ... NOT IN (...) clauses.
     """
 
-    __slots__ = ("_field_name", "_values")
-
-    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
-        self._field_name = field_name
-        self._values = values
-
-    @property
-    def field_name(self) -> "str | exp.Expression":
-        return self._field_name
-
-    @property
-    def values(self) -> abc.Collection[T] | None:
-        return self._values
-
-    def get_param_names(self) -> "list[str]":
-        """Get parameter names without storing them."""
-        if not self.values:
-            return []
-        sanitized_field = self._sanitize_param_name(self.field_name)
-        return [f"{sanitized_field}_notin_{i}" for i, _ in enumerate(self.values)]
-
-    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
-        """Extract filter parameters."""
-        named_parameters = {}
-        if self.values:
-            param_names = self.get_param_names()
-            for i, value in enumerate(self.values):
-                named_parameters[param_names[i]] = value
-        return [], named_parameters
-
-    def append_to_statement(self, statement: "SQL") -> "SQL":
-        if self.values is None or not self.values:
-            return statement
-
-        col_expr = self._get_column_expression(self.field_name)
-        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
-
-        placeholder_expressions: list[exp.Placeholder] = [
-            exp.Placeholder(this=param_name) for param_name in resolved_names
-        ]
-
-        result = statement.where(exp.Not(this=exp.In(this=col_expr, expressions=placeholder_expressions)))
-
-        for resolved_name, value in zip(resolved_names, self.values, strict=False):
-            result = result.add_named_parameter(resolved_name, value)
-        return result
-
-    def get_cache_key(self) -> "tuple[Any, ...]":
-        """Return cache key for this filter configuration."""
-        values_tuple = tuple(self.values) if self.values is not None else None
-        return ("NotInCollectionFilter", self.field_name, values_tuple)
+    __slots__ = ()
+    _cache_key_name: ClassVar[str] = "NotInCollectionFilter"
+    _condition_type: ClassVar[Literal["in", "not_in", "any", "not_any"]] = "not_in"
+    _parameter_suffix: ClassVar[str] = "not-in".replace("-", "")
 
 
 class AnyCollectionFilter(InAnyFilter[T]):
@@ -467,59 +437,11 @@ class AnyCollectionFilter(InAnyFilter[T]):
     Constructs WHERE column_name = ANY (array_expression) clauses.
     """
 
-    __slots__ = ("_field_name", "_values")
-
-    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
-        self._field_name = field_name
-        self._values = values
-
-    @property
-    def field_name(self) -> "str | exp.Expression":
-        return self._field_name
-
-    @property
-    def values(self) -> abc.Collection[T] | None:
-        return self._values
-
-    def get_param_names(self) -> "list[str]":
-        """Get parameter names without storing them."""
-        if not self.values:
-            return []
-        sanitized_field = self._sanitize_param_name(self.field_name)
-        return [f"{sanitized_field}_any_{i}" for i, _ in enumerate(self.values)]
-
-    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
-        """Extract filter parameters."""
-        named_parameters = {}
-        if self.values:
-            param_names = self.get_param_names()
-            for i, value in enumerate(self.values):
-                named_parameters[param_names[i]] = value
-        return [], named_parameters
-
-    def append_to_statement(self, statement: "SQL") -> "SQL":
-        if self.values is None:
-            return statement
-
-        if not self.values:
-            return statement.where(exp.false())
-
-        col_expr = self._get_column_expression(self.field_name)
-        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
-
-        placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
-
-        array_expr = exp.Array(expressions=placeholder_expressions)
-        result = statement.where(exp.EQ(this=col_expr, expression=exp.Any(this=array_expr)))
-
-        for resolved_name, value in zip(resolved_names, self.values, strict=False):
-            result = result.add_named_parameter(resolved_name, value)
-        return result
-
-    def get_cache_key(self) -> "tuple[Any, ...]":
-        """Return cache key for this filter configuration."""
-        values_tuple = tuple(self.values) if self.values is not None else None
-        return ("AnyCollectionFilter", self.field_name, values_tuple)
+    __slots__ = ()
+    _cache_key_name: ClassVar[str] = "AnyCollectionFilter"
+    _condition_type: ClassVar[Literal["in", "not_in", "any", "not_any"]] = "any"
+    _empty_values_return_false: ClassVar[bool] = True
+    _parameter_suffix: ClassVar[str] = "any"
 
 
 class NotAnyCollectionFilter(InAnyFilter[T]):
@@ -528,57 +450,10 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     Constructs WHERE NOT (column_name = ANY (array_expression)) clauses.
     """
 
-    __slots__ = ("_field_name", "_values")
-
-    def __init__(self, field_name: "str | exp.Expression", values: abc.Collection[T] | None = None) -> None:
-        self._field_name = field_name
-        self._values = values
-
-    @property
-    def field_name(self) -> "str | exp.Expression":
-        return self._field_name
-
-    @property
-    def values(self) -> abc.Collection[T] | None:
-        return self._values
-
-    def get_param_names(self) -> "list[str]":
-        """Get parameter names without storing them."""
-        if not self.values:
-            return []
-        sanitized_field = self._sanitize_param_name(self.field_name)
-        return [f"{sanitized_field}_not_any_{i}" for i, _ in enumerate(self.values)]
-
-    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
-        """Extract filter parameters."""
-        named_parameters = {}
-        if self.values:
-            param_names = self.get_param_names()
-            for i, value in enumerate(self.values):
-                named_parameters[param_names[i]] = value
-        return [], named_parameters
-
-    def append_to_statement(self, statement: "SQL") -> "SQL":
-        if self.values is None or not self.values:
-            return statement
-
-        col_expr = self._get_column_expression(self.field_name)
-        resolved_names = self._resolve_parameter_conflicts(statement, self.get_param_names())
-
-        placeholder_expressions: list[exp.Expr] = [exp.Placeholder(this=param_name) for param_name in resolved_names]
-
-        array_expr = exp.Array(expressions=placeholder_expressions)
-        condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
-        result = statement.where(exp.Not(this=condition))
-
-        for resolved_name, value in zip(resolved_names, self.values, strict=False):
-            result = result.add_named_parameter(resolved_name, value)
-        return result
-
-    def get_cache_key(self) -> "tuple[Any, ...]":
-        """Return cache key for this filter configuration."""
-        values_tuple = tuple(self.values) if self.values is not None else None
-        return ("NotAnyCollectionFilter", self.field_name, values_tuple)
+    __slots__ = ()
+    _cache_key_name: ClassVar[str] = "NotAnyCollectionFilter"
+    _condition_type: ClassVar[Literal["in", "not_in", "any", "not_any"]] = "not_any"
+    _parameter_suffix: ClassVar[str] = "not_any"
 
 
 class PaginationFilter(StatementFilter, ABC):
