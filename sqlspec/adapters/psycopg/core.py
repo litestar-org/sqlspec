@@ -2,7 +2,7 @@
 
 import datetime
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 from typing_extensions import LiteralString
 
@@ -436,6 +436,52 @@ def _create_postgres_error(
     return exc
 
 
+_EXCEPTION_MAPPING: Final[dict[type[Any], tuple[str, type[SQLSpecError], str]]] = {}
+_EXCEPTION_MAPPING_CACHE: Final[dict[type[Any], tuple[str, type[SQLSpecError], str]]] = {}
+
+
+def _register_exception_mappings() -> None:
+    if pg_errors is None:
+        return
+
+    _EXCEPTION_MAPPING.update({
+        pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
+        pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
+        pg_errors.NotNullViolation: ("23502", NotNullViolationError, "not-null constraint violation"),
+        pg_errors.CheckViolation: ("23514", CheckViolationError, "check constraint violation"),
+        pg_errors.IntegrityError: ("23000", IntegrityError, "integrity constraint violation"),
+        pg_errors.DeadlockDetected: ("40P01", DeadlockError, "deadlock detected"),
+        pg_errors.SerializationFailure: ("40001", SerializationConflictError, "serialization failure"),
+        pg_errors.QueryCanceled: ("57014", QueryTimeoutError, "query canceled"),
+        pg_errors.InsufficientPrivilege: ("42501", PermissionDeniedError, "insufficient privilege"),
+        pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
+    })
+
+    admin_shutdown = getattr(pg_errors, "AdminShutdown", None)
+    if isinstance(admin_shutdown, type):
+        _EXCEPTION_MAPPING[admin_shutdown] = ("57P01", ConnectionTimeoutError, "admin shutdown")
+
+    cannot_connect_now = getattr(pg_errors, "CannotConnectNow", None)
+    if isinstance(cannot_connect_now, type):
+        _EXCEPTION_MAPPING[cannot_connect_now] = ("57P03", ConnectionTimeoutError, "cannot connect now")
+
+
+def _resolve_exception_mapping(error_type: type[Any]) -> "tuple[str, type[SQLSpecError], str] | None":
+    mapped_error = _EXCEPTION_MAPPING_CACHE.get(error_type)
+    if mapped_error is not None:
+        return mapped_error
+
+    for base_type in error_type.__mro__[1:]:
+        mapped_error = _EXCEPTION_MAPPING.get(base_type)
+        if mapped_error is not None:
+            _EXCEPTION_MAPPING_CACHE[error_type] = mapped_error
+            return mapped_error
+    return None
+
+
+_register_exception_mappings()
+
+
 def create_mapped_exception(error: Any) -> SQLSpecError:
     """Map psycopg exceptions to SQLSpec exceptions.
 
@@ -444,7 +490,7 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. Native psycopg exception types (isinstance checks - most reliable)
+    1. Native psycopg exception types via adapter-local dispatch table
     2. SQLSTATE code via centralized utility
     3. Generic SQLSpecError fallback
 
@@ -454,43 +500,13 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    # Priority 1: Check native psycopg exception types first (most reliable)
-    if pg_errors is not None:
-        # Integrity constraint violations
-        if isinstance(error, pg_errors.UniqueViolation):
-            return _create_postgres_error(error, "23505", UniqueViolationError, "unique constraint violation")
-        if isinstance(error, pg_errors.ForeignKeyViolation):
-            return _create_postgres_error(error, "23503", ForeignKeyViolationError, "foreign key constraint violation")
-        if isinstance(error, pg_errors.NotNullViolation):
-            return _create_postgres_error(error, "23502", NotNullViolationError, "not-null constraint violation")
-        if isinstance(error, pg_errors.CheckViolation):
-            return _create_postgres_error(error, "23514", CheckViolationError, "check constraint violation")
-        if isinstance(error, pg_errors.IntegrityError):
-            return _create_postgres_error(error, "23000", IntegrityError, "integrity constraint violation")
-
-        # Transaction and serialization errors
-        if isinstance(error, pg_errors.DeadlockDetected):
-            return _create_postgres_error(error, "40P01", DeadlockError, "deadlock detected")
-        if isinstance(error, pg_errors.SerializationFailure):
-            return _create_postgres_error(error, "40001", SerializationConflictError, "serialization failure")
-
-        # Query timeout/cancellation
-        if isinstance(error, pg_errors.QueryCanceled):
-            return _create_postgres_error(error, "57014", QueryTimeoutError, "query canceled")
-
-        # Permission/authentication errors
-        if isinstance(error, pg_errors.InsufficientPrivilege):
-            return _create_postgres_error(error, "42501", PermissionDeniedError, "insufficient privilege")
-
-        # Connection errors
-        if hasattr(pg_errors, "AdminShutdown") and isinstance(error, pg_errors.AdminShutdown):
-            return _create_postgres_error(error, "57P01", ConnectionTimeoutError, "admin shutdown")
-        if hasattr(pg_errors, "CannotConnectNow") and isinstance(error, pg_errors.CannotConnectNow):
-            return _create_postgres_error(error, "57P03", ConnectionTimeoutError, "cannot connect now")
-
-        # SQL syntax errors
-        if isinstance(error, pg_errors.SyntaxError):
-            return _create_postgres_error(error, "42601", SQLParsingError, "SQL syntax error")
+    error_type = type(error)
+    mapped_error = _EXCEPTION_MAPPING.get(error_type)
+    if mapped_error is None:
+        mapped_error = _resolve_exception_mapping(error_type)
+    if mapped_error is not None:
+        mapped_error_code, error_class, description = mapped_error
+        return _create_postgres_error(error, mapped_error_code, error_class, description)
 
     # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None

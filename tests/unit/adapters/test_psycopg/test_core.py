@@ -5,11 +5,15 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from sqlspec.adapters.psycopg.core import (
     build_async_pipeline_execution_result,
     build_pipeline_execution_result,
+    create_mapped_exception,
     resolve_many_rowcount,
 )
+from sqlspec.exceptions import SQLParsingError, UniqueViolationError
 
 
 def test_resolve_many_rowcount_prefers_positive_driver_rowcount() -> None:
@@ -52,6 +56,37 @@ def test_resolve_many_rowcount_prefers_precomputed_fallback_for_unsized_paramete
     affected_rows = resolve_many_rowcount(cursor, _parameter_stream(), fallback_count=4)
 
     assert affected_rows == 4
+
+
+def test_create_mapped_exception_dispatches_native_psycopg_error() -> None:
+    """Native psycopg error types should resolve through the adapter-local dispatch table."""
+    pytest.importorskip("psycopg")
+    from psycopg import errors as pg_errors
+
+    error = pg_errors.SyntaxError("syntax error at or near SELECT")
+
+    mapped = create_mapped_exception(error)
+
+    assert isinstance(mapped, SQLParsingError)
+    assert mapped.__cause__ is error
+    assert "[42601]" in str(mapped)
+
+
+def test_create_mapped_exception_dispatches_native_psycopg_subclass() -> None:
+    """Native psycopg subclasses should use cached MRO dispatch without changing mappings."""
+    pytest.importorskip("psycopg")
+    from psycopg import errors as pg_errors
+
+    class CustomUniqueViolation(pg_errors.UniqueViolation):
+        pass
+
+    error = CustomUniqueViolation("duplicate key value violates unique constraint")
+
+    mapped = create_mapped_exception(error)
+
+    assert isinstance(mapped, UniqueViolationError)
+    assert mapped.__cause__ is error
+    assert "[23505]" in str(mapped)
 
 
 def test_build_pipeline_execution_result_uses_column_resolver_fast_path() -> None:
