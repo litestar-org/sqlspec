@@ -1046,20 +1046,49 @@ def create_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, 
     return tuple(filters)
 
 
-def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str]":
-    """Sort key for canonicalizing filters by type and field_name."""
+def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str, str]":
+    """Sort key for canonicalizing filters by type, field name, and value."""
     class_name = type(f).__name__
-    field_name = str(f.field_name) if has_field_name(f) else ""
-    return (class_name, field_name)
+    canonical_key = _canonical_filter_key(f)
+    field_name = _stable_filter_key_part(f.field_name) if has_field_name(f) else ""
+    return (class_name, repr(field_name), repr(canonical_key))
 
 
-def canonicalize_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, ...]":
-    """Sort filters by type and field_name for consistent hashing.
+def _stable_filter_key_part(value: Any) -> Any:
+    if isinstance(value, exp.Expression):
+        return value.sql()
+    if isinstance(value, set):
+        return tuple(sorted((_stable_filter_key_part(item) for item in value), key=repr))
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                ((_stable_filter_key_part(key), _stable_filter_key_part(item)) for key, item in value.items()), key=repr
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_stable_filter_key_part(item) for item in value)
+
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _canonical_filter_key(f: "StatementFilter") -> "tuple[Any, ...]":
+    return tuple(_stable_filter_key_part(item) for item in f.get_cache_key())
+
+
+def canonicalize_filters(filters: "abc.Sequence[StatementFilter]") -> "tuple[StatementFilter, ...]":
+    """Deduplicate and sort filters by type and field name for consistent hashing.
 
     Args:
-        filters: List of StatementFilter objects
+        filters: Sequence of StatementFilter objects
 
     Returns:
-        Canonically sorted tuple of filters
+        Canonically sorted tuple of unique filters
     """
-    return tuple(sorted(filters, key=_filter_sort_key))
+    unique_filters: dict[tuple[Any, ...], StatementFilter] = {}
+    for filter_ in filters:
+        unique_filters.setdefault(_canonical_filter_key(filter_), filter_)
+    return tuple(sorted(unique_filters.values(), key=_filter_sort_key))

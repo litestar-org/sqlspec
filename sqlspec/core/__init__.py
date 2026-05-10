@@ -97,7 +97,6 @@ from sqlspec.core.cache import (
     FiltersView,
     LRUCache,
     NamespacedCache,
-    canonicalize_filters,
     clear_all_caches,
     create_cache_key,
     get_cache,
@@ -135,6 +134,7 @@ from sqlspec.core.filters import (
     SearchFilter,
     StatementFilter,
     apply_filter,
+    canonicalize_filters,
 )
 from sqlspec.core.hashing import (
     hash_expression,
