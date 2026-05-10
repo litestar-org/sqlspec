@@ -2223,9 +2223,6 @@ class CommonDriverAttributesMixin:
             return ([{k: v for k, v in dict(row).items() if k != "_total_count"} for row in rows], total)
         if has_asdict_method(first_row):
             total = cast("int", getattr(first_row, "_total_count", 0))
-            return (
-                [{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows],  # type: ignore[attr-defined]
-                total,
-            )
+            return ([{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows], total)
 
         return ([{} for _ in rows], 0)

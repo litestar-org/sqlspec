@@ -712,7 +712,7 @@ class SQL:
         if state.filter_hash != hash_filters(self._filters):
             return False
         params = self._named_parameters or self._positional_parameters
-        return structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint
+        return bool(structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint)
 
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
