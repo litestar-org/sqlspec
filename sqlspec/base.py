@@ -50,7 +50,7 @@ def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager
     return isinstance(obj, AbstractAsyncContextManager)
 
 
-class _RuntimeContext(AbstractContextManager[ContextValueT], Generic[ContextValueT]):
+class _RuntimeContext(Generic[ContextValueT]):
     __slots__ = ("_config", "_context", "_runtime", "_value")
 
     def __init__(
@@ -98,7 +98,7 @@ class _RuntimeContext(AbstractContextManager[ContextValueT], Generic[ContextValu
                 self._value = None
 
 
-class _RuntimeAsyncContext(AbstractAsyncContextManager[ContextValueT], Generic[ContextValueT]):
+class _RuntimeAsyncContext(Generic[ContextValueT]):
     __slots__ = ("_config", "_context", "_runtime", "_value")
 
     def __init__(
