@@ -5,6 +5,13 @@ CockroachDB
 CockroachDB adapters with automatic transaction retry logic. Available in
 asyncpg and psycopg variants.
 
+Retry Configuration
+===================
+
+.. autoclass:: sqlspec.adapters.cockroach._shared_core.CockroachRetryConfig
+   :members:
+   :show-inheritance:
+
 CockroachDB + AsyncPG
 =====================
 
@@ -23,13 +30,6 @@ Driver
 ------
 
 .. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgDriver
-   :members:
-   :show-inheritance:
-
-Retry Configuration
--------------------
-
-.. autoclass:: sqlspec.adapters.cockroach_asyncpg.core.CockroachAsyncpgRetryConfig
    :members:
    :show-inheritance:
 
@@ -61,13 +61,6 @@ Async Driver
 ------------
 
 .. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgAsyncDriver
-   :members:
-   :show-inheritance:
-
-Retry Configuration
--------------------
-
-.. autoclass:: sqlspec.adapters.cockroach_psycopg.core.CockroachPsycopgRetryConfig
    :members:
    :show-inheritance:
 

@@ -6,12 +6,12 @@ from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.cockroach._shared_core import CockroachRetryConfig
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
     CockroachAsyncpgPool,
     CockroachAsyncpgSessionContext,
 )
-from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
@@ -153,7 +153,7 @@ class CockroachAsyncpgConfig(
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
-        _ = CockroachAsyncpgRetryConfig.from_features(driver_features)
+        _ = CockroachRetryConfig.from_features(driver_features)
 
         # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}

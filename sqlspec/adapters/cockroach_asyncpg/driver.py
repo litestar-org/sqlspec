@@ -8,12 +8,8 @@ import asyncpg
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
+from sqlspec.adapters.cockroach._shared_core import CockroachRetryConfig, calculate_backoff_seconds, is_retryable_error
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgSessionContext
-from sqlspec.adapters.cockroach_asyncpg.core import (
-    CockroachAsyncpgRetryConfig,
-    calculate_backoff_seconds,
-    is_retryable_error,
-)
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
 from sqlspec.driver import BaseAsyncExceptionHandler
@@ -62,7 +58,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._retry_config = CockroachAsyncpgRetryConfig.from_features(self.driver_features)
+        self._retry_config = CockroachRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
         # Data dictionary is lazily initialized in property; use parent slot

@@ -1,0 +1,1 @@
+"""Shared CockroachDB adapter tests."""
