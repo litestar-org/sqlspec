@@ -470,6 +470,38 @@ def test_parameter_processing_integration(basic_statement_config: "StatementConf
         assert result.execution_parameters is not None
 
 
+@pytest.mark.parametrize(
+    "validation_enabled,final_params,raw_parameters,is_many,expected",
+    [
+        (False, None, None, False, False),
+        (False, [1], None, False, False),
+        (False, None, None, True, False),
+        (False, [1], None, True, False),
+        (True, None, None, False, False),
+        (True, [], {}, False, False),
+        (True, [1], None, False, True),
+        (True, None, {"id": 1}, False, True),
+        (True, None, None, True, True),
+        (True, [1], None, True, True),
+    ],
+)
+def test_should_validate_parameters_truth_table(
+    basic_statement_config: "StatementConfig",
+    validation_enabled: bool,
+    final_params: Any,
+    raw_parameters: Any,
+    is_many: bool,
+    expected: bool,
+) -> None:
+    """Parameter validation depends only on validation config, parameters, and execute_many."""
+    config = basic_statement_config.replace(enable_validation=validation_enabled)
+    processor = SQLProcessor(config)
+
+    should_validate = processor._should_validate_parameters(final_params, raw_parameters, is_many)
+
+    assert should_validate is expected
+
+
 def test_compilation_with_transformations(basic_statement_config: "StatementConfig") -> None:
     """Test compilation with output transformations."""
 
@@ -855,7 +887,6 @@ def test_processor_memory_efficiency_with_slots() -> None:
         assert set(slots) == expected_slots
 
 
-@pytest.mark.performance
 def test_compilation_speed_benchmark(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:

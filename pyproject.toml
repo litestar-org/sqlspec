@@ -210,7 +210,7 @@ exclude = [
   "sqlspec/dialects/spanner/_spangres.py",  # SQLGlot subclass/registration module stays interpreted
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted
   "sqlspec/extensions/events/_channel.py",  # Dynamic native backend import/lifecycle stays interpreted
-  "sqlspec/extensions/events/_models.py",   # Runtime __slots__ behavior must stay visible
+  "sqlspec/extensions/events/_models.py",   # Runtime dataclass annotations/slots stay interpreted
   "sqlspec/extensions/events/_queue.py",    # Table queue class flags/listener ack paths stay interpreted
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted

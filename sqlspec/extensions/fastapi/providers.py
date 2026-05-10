@@ -6,8 +6,10 @@ automatic parsing of query parameters into SQLSpec filter objects.
 
 import datetime
 import inspect
+from collections.abc import Callable
+from functools import partial
 from types import GenericAlias
-from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple, cast
 from uuid import UUID
 
 from fastapi import Depends, Query
@@ -27,9 +29,6 @@ from sqlspec.core import (
 )
 from sqlspec.extensions._filter_aliases import resolve_sort_field_aliases
 from sqlspec.utils.text import camelize
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 __all__ = (
     "DEPENDENCY_DEFAULTS",
@@ -312,7 +311,7 @@ def _create_filter_aggregate_function(
             param_name = f"{field_name}_not_null_filter"
             _add_dependency(params, annotations, param_name, _NullFilterProvider(field_name, negated=True))
 
-    return _AggregateFilterProvider(params, annotations)
+    return _make_aggregate_filter_provider(params, annotations)
 
 
 def _empty_filter_list() -> "list[FilterTypes]":
@@ -359,28 +358,40 @@ def _query_parameter_annotation(value_annotation: Any, query: Any) -> Any:
     return Annotated[value_annotation, query]
 
 
-class _AggregateFilterProvider:
-    def __init__(self, parameters: list[inspect.Parameter], annotations: dict[str, Any]) -> None:
-        self.__signature__ = inspect.Signature(
-            parameters=parameters, return_annotation=Annotated["list[FilterTypes]", self]
-        )
-        self.__annotations__ = annotations
-        self.__annotations__["return"] = list[FilterTypes]
+def _set_provider_metadata(
+    provider: Any, signature: inspect.Signature, annotations: dict[str, Any]
+) -> Callable[..., Any]:
+    provider.__signature__ = signature
+    provider.__annotations__ = annotations
+    return cast("Callable[..., Any]", provider)
 
-    def __call__(self, **kwargs: Any) -> list[FilterTypes]:
-        filters: list[FilterTypes] = []
-        for filter_value in kwargs.values():
-            if filter_value is None:
-                continue
-            if isinstance(filter_value, list):
-                filters.extend(filter_value)
-            elif (isinstance(filter_value, SearchFilter) and filter_value.value is None) or (
-                isinstance(filter_value, OrderByFilter) and filter_value.field_name is None
-            ):
-                continue
-            else:
-                filters.append(filter_value)
-        return filters
+
+def _aggregate_filter_provider(**kwargs: Any) -> list[FilterTypes]:
+    filters: list[FilterTypes] = []
+    for filter_value in kwargs.values():
+        if filter_value is None:
+            continue
+        if isinstance(filter_value, list):
+            filters.extend(filter_value)
+        elif (isinstance(filter_value, SearchFilter) and filter_value.value is None) or (
+            isinstance(filter_value, OrderByFilter) and filter_value.field_name is None
+        ):
+            continue
+        else:
+            filters.append(filter_value)
+    return filters
+
+
+def _make_aggregate_filter_provider(
+    parameters: list[inspect.Parameter], annotations: dict[str, Any]
+) -> Callable[..., list[FilterTypes]]:
+    aggregate_annotations = dict(annotations)
+    aggregate_annotations["return"] = list[FilterTypes]
+    return _set_provider_metadata(
+        partial(_aggregate_filter_provider),
+        inspect.Signature(parameters=parameters, return_annotation=list[FilterTypes]),
+        aggregate_annotations,
+    )
 
 
 class _IdFilterProvider:

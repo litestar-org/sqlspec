@@ -784,13 +784,11 @@ class SQLProcessor:
         Returns:
             True when validation should run.
         """
-        if not self._config.enable_validation:
-            return False
-        return not (
-            _is_effectively_empty_parameters(final_params)
-            and _is_effectively_empty_parameters(raw_parameters)
-            and not is_many
-        )
+        validation_enabled = self._config.enable_validation
+        has_final_params = not _is_effectively_empty_parameters(final_params)
+        has_raw_params = not _is_effectively_empty_parameters(raw_parameters)
+        has_params = has_final_params or has_raw_params
+        return (has_params or is_many) and validation_enabled
 
     def _validate_parameters(self, parameter_profile: "ParameterProfile", final_params: Any, is_many: bool) -> None:
         """Validate parameter alignment and log failures.

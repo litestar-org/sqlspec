@@ -7,14 +7,20 @@ from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 
-from sqlspec.adapters.cockroach._shared_core import CockroachRetryConfig, calculate_backoff_seconds, is_retryable_error
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
     CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
-from sqlspec.adapters.cockroach_psycopg.core import apply_driver_features, build_statement_config, driver_profile
+from sqlspec.adapters.cockroach_psycopg.core import (
+    CockroachPsycopgRetryConfig,
+    apply_driver_features,
+    build_statement_config,
+    calculate_backoff_seconds,
+    driver_profile,
+    is_retryable_error,
+)
 from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
     CockroachPsycopgAsyncDataDictionary,
     CockroachPsycopgSyncDataDictionary,
@@ -98,7 +104,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
 
-        self._retry_config = CockroachRetryConfig.from_features(self.driver_features)
+        self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
         # Data dictionary is lazily initialized in property; use parent slot
@@ -191,7 +197,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
 
-        self._retry_config = CockroachRetryConfig.from_features(self.driver_features)
+        self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
         # Data dictionary is lazily initialized in property; use parent slot

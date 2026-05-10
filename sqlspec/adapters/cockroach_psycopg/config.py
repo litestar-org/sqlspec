@@ -6,7 +6,6 @@ from psycopg import crdb as psycopg_crdb
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.cockroach._shared_core import CockroachRetryConfig
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
     CockroachPsycopgAsyncSessionContext,
@@ -194,7 +193,6 @@ class CockroachPsycopgSyncConfig(
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
-        _ = CockroachRetryConfig.from_features(driver_features)
 
         # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
@@ -395,7 +393,6 @@ class CockroachPsycopgAsyncConfig(
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
-        _ = CockroachRetryConfig.from_features(driver_features)
 
         # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
