@@ -16,6 +16,7 @@ from sqlspec.driver._common import (
     ExecutionResult,
     StackExecutionObserver,
     SyncExceptionHandler,
+    _raise_database_exception,
     describe_stack_statement,
     handle_single_row_error,
 )
@@ -160,17 +161,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         if exc_handler.pending_exception is not None:
             raise exc_handler.pending_exception from None
 
-    @staticmethod
-    def _raise_sync_database_exception(exc_handler: SyncExceptionHandler, exc: Exception | None) -> None:
-        """Raise any mapped database exception captured by the sync handler."""
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            if exc is None:
-                raise pending_exception from None
-            raise pending_exception from exc
-        if exc is not None:
-            raise exc
-
     @final
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -246,17 +236,17 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                     mapped_exc = pending_exception
                     runtime.span_manager.end_span(span, error=mapped_exc)
                     runtime.emit_error(mapped_exc, **query_context)
-                    self._raise_sync_database_exception(exc_handler, exc)
+                    _raise_database_exception(exc_handler, exc)
                 runtime.span_manager.end_span(span, error=exc)
                 runtime.emit_error(exc, **query_context)
-                self._raise_sync_database_exception(exc_handler, exc)
+                _raise_database_exception(exc_handler, exc)
 
             pending_exception = exc_handler.pending_exception
             if pending_exception is not None:
                 mapped_exc = pending_exception
                 runtime.span_manager.end_span(span, error=mapped_exc)
                 runtime.emit_error(mapped_exc, **query_context)
-                self._raise_sync_database_exception(exc_handler, None)
+                _raise_database_exception(exc_handler, None)
 
             assert result is not None  # Guaranteed: no exception means result was assigned
 

@@ -227,6 +227,19 @@ class AsyncExceptionHandler(Protocol):
     ) -> bool: ...
 
 
+def _raise_database_exception(
+    exc_handler: "AsyncExceptionHandler | SyncExceptionHandler", exc: Exception | None
+) -> None:
+    """Raise any mapped database exception captured by a deferred exception handler."""
+    pending_exception = exc_handler.pending_exception
+    if pending_exception is not None:
+        if exc is None:
+            raise pending_exception from None
+        raise pending_exception from exc
+    if exc is not None:
+        raise exc
+
+
 logger = get_logger("sqlspec.driver")
 
 VERSION_GROUPS_MIN_FOR_MINOR = 1
