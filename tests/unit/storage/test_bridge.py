@@ -23,7 +23,7 @@ from sqlspec.adapters.psqlpy import default_statement_config as psqlpy_statement
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
-from sqlspec.storage.pipeline import StorageDestination
+from sqlspec.storage.pipeline import AsyncStoragePipeline, StagedArtifact, StorageDestination
 from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
@@ -91,6 +91,90 @@ class DummyAsyncmyConnection:
 
     def cursor(self) -> DummyAsyncmyCursorImpl:
         return DummyAsyncmyCursorImpl(self.operations)
+
+
+class _CountingStorageBackend:
+    backend_type = "counting"
+
+    def __init__(self) -> None:
+        self.deleted_paths: list[str] = []
+
+    def delete_sync(self, path: str) -> None:
+        self.deleted_paths.append(path)
+
+    async def delete_async(self, path: str) -> None:
+        self.deleted_paths.append(path)
+
+
+class _CountingStorageRegistry:
+    def __init__(self) -> None:
+        self.backend = _CountingStorageBackend()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get(self, destination: str, **options: Any) -> _CountingStorageBackend:
+        self.calls.append((destination, dict(options)))
+        return self.backend
+
+
+def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:
+    registry = _CountingStorageRegistry()
+    pipeline = SyncStoragePipeline(registry=cast(Any, registry))
+
+    first_backend, first_path = pipeline._resolve_backend("file://tmp/payload.jsonl", None)
+    second_backend, second_path = pipeline._resolve_backend("file://tmp/payload.jsonl", {})
+
+    assert first_backend is second_backend is registry.backend
+    assert first_path == second_path == "tmp/payload.jsonl"
+    assert registry.calls == [("file://tmp/payload.jsonl", {})]
+
+    pipeline.clear_cache()
+    pipeline._resolve_backend("file://tmp/payload.jsonl", None)
+    assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
+
+
+def test_sync_pipeline_bypasses_resolution_cache_for_storage_options() -> None:
+    registry = _CountingStorageRegistry()
+    pipeline = SyncStoragePipeline(registry=cast(Any, registry))
+
+    pipeline._resolve_backend("file://tmp/payload.jsonl", {"backend": "local"})
+    pipeline._resolve_backend("file://tmp/payload.jsonl", {"backend": "local"})
+
+    assert registry.calls == [
+        ("file://tmp/payload.jsonl", {"backend": "local"}),
+        ("file://tmp/payload.jsonl", {"backend": "local"}),
+    ]
+
+
+async def test_async_pipeline_cleanup_reuses_cached_backend_resolution() -> None:
+    registry = _CountingStorageRegistry()
+    pipeline = AsyncStoragePipeline(registry=cast(Any, registry))
+    artifacts: list[StagedArtifact] = [
+        {
+            "partition_id": "0",
+            "uri": "file://tmp/payload.jsonl",
+            "cleanup_token": "cleanup::0",
+            "ttl_seconds": 0,
+            "expires_at": 0.0,
+            "correlation_id": "cleanup",
+        },
+        {
+            "partition_id": "1",
+            "uri": "file://tmp/payload.jsonl",
+            "cleanup_token": "cleanup::1",
+            "ttl_seconds": 0,
+            "expires_at": 0.0,
+            "correlation_id": "cleanup",
+        },
+    ]
+
+    await pipeline.cleanup_staging_artifacts(artifacts)
+
+    assert registry.calls == [("file://tmp/payload.jsonl", {})]
+    assert registry.backend.deleted_paths == ["tmp/payload.jsonl", "tmp/payload.jsonl"]
+
+    pipeline.clear_cache()
+    await pipeline.cleanup_staging_artifacts(artifacts[:1])
+    assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
 
 
 async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:

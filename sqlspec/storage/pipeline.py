@@ -281,20 +281,41 @@ def _resolve_storage_backend(
     return backend, normalized_path
 
 
+def _make_resolved_backend_cache_key(
+    destination: StorageDestination, backend_options: "dict[str, Any] | None"
+) -> "str | None":
+    if backend_options:
+        return None
+    return destination.as_posix() if isinstance(destination, Path) else str(destination)
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncStoragePipeline:
     """Pipeline coordinating storage registry operations and telemetry."""
 
-    __slots__ = ("registry",)
+    __slots__ = ("_resolved_backend_cache", "registry")
 
     def __init__(self, *, registry: StorageRegistry | None = None) -> None:
         self.registry = registry or storage_registry
+        self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str]] = {}
+
+    def clear_cache(self) -> None:
+        """Clear cached storage backend resolutions for this pipeline instance."""
+        self._resolved_backend_cache.clear()
 
     def _resolve_backend(
         self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
     ) -> "tuple[ObjectStoreProtocol, str]":
         """Resolve storage backend and normalized path for a destination."""
-        return _resolve_storage_backend(self.registry, destination, backend_options)
+        cache_key = _make_resolved_backend_cache_key(destination, backend_options)
+        if cache_key is None:
+            return _resolve_storage_backend(self.registry, destination, backend_options)
+        cached = self._resolved_backend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        resolved = _resolve_storage_backend(self.registry, destination, backend_options)
+        self._resolved_backend_cache[cache_key] = resolved
+        return resolved
 
     def write_rows(
         self,
@@ -428,10 +449,29 @@ class SyncStoragePipeline:
 class AsyncStoragePipeline:
     """Async variant of the storage pipeline leveraging async-capable backends when available."""
 
-    __slots__ = ("registry",)
+    __slots__ = ("_resolved_backend_cache", "registry")
 
     def __init__(self, *, registry: StorageRegistry | None = None) -> None:
         self.registry = registry or storage_registry
+        self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str]] = {}
+
+    def clear_cache(self) -> None:
+        """Clear cached storage backend resolutions for this pipeline instance."""
+        self._resolved_backend_cache.clear()
+
+    def _resolve_backend(
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+    ) -> "tuple[ObjectStoreProtocol, str]":
+        """Resolve storage backend and normalized path for a destination."""
+        cache_key = _make_resolved_backend_cache_key(destination, backend_options)
+        if cache_key is None:
+            return _resolve_storage_backend(self.registry, destination, backend_options)
+        cached = self._resolved_backend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        resolved = _resolve_storage_backend(self.registry, destination, backend_options)
+        self._resolved_backend_cache[cache_key] = resolved
+        return resolved
 
     async def write_rows(
         self,
@@ -470,7 +510,7 @@ class AsyncStoragePipeline:
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
-            backend, path = _resolve_storage_backend(self.registry, artifact["uri"], None)
+            backend, path = self._resolve_backend(artifact["uri"], None)
             backend_name = backend.backend_type
             if supports_async_delete(backend):
                 try:
@@ -497,7 +537,7 @@ class AsyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = _resolve_storage_backend(self.registry, destination, storage_options)
+        backend, path = self._resolve_backend(destination, storage_options)
         backend_name = backend.backend_type
         start = perf_counter()
         if supports_async_write_bytes(backend):
@@ -526,7 +566,7 @@ class AsyncStoragePipeline:
     async def read_arrow_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
+        backend, path = self._resolve_backend(source, storage_options)
         backend_name = backend.backend_type
         if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
@@ -554,5 +594,5 @@ class AsyncStoragePipeline:
         storage_options: "dict[str, Any] | None" = None,
     ) -> "AsyncIterator[bytes]":
         """Stream bytes from an artifact asynchronously."""
-        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
+        backend, path = self._resolve_backend(source, storage_options)
         return await backend.stream_read_async(path, chunk_size=chunk_size)
