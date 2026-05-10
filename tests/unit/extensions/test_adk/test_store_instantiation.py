@@ -5,8 +5,8 @@ This catches bugs where stores have method signature mismatches with the base
 class, such as cockroach, mysqlconnector sync, pymysql, and spanner stores
 that are missing abstract method implementations added to the base contract.
 
-NOTE: Some stores WILL fail this test currently — that is expected and
-documents one of the bugs the ADK Clean-Break Overhaul (Ch1) is fixing.
+The class list mirrors the shipped adapter ``adk`` exports and catches drift
+when a concrete store no longer satisfies the base contract.
 """
 
 import importlib
@@ -16,6 +16,7 @@ import pytest
 # Session stores (async)
 ASYNC_SESSION_STORES = [
     "sqlspec.adapters.asyncpg.adk.store.AsyncpgADKStore",
+    "sqlspec.adapters.aiomysql.adk.store.AiomysqlADKStore",
     "sqlspec.adapters.aiosqlite.adk.store.AiosqliteADKStore",
     "sqlspec.adapters.asyncmy.adk.store.AsyncmyADKStore",
     "sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKStore",
@@ -43,6 +44,7 @@ SYNC_SESSION_STORES = [
 # Memory stores (async)
 ASYNC_MEMORY_STORES = [
     "sqlspec.adapters.asyncpg.adk.store.AsyncpgADKMemoryStore",
+    "sqlspec.adapters.aiomysql.adk.store.AiomysqlADKMemoryStore",
     "sqlspec.adapters.aiosqlite.adk.store.AiosqliteADKMemoryStore",
     "sqlspec.adapters.asyncmy.adk.store.AsyncmyADKMemoryStore",
     "sqlspec.adapters.cockroach_asyncpg.adk.store.CockroachAsyncpgADKMemoryStore",

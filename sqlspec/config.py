@@ -519,7 +519,7 @@ class ADKPartitionConfig(TypedDict):
     - list: Partition by discrete value lists
     - hash: Partition by hash of the partition key
 
-    Supported by: PostgreSQL, MySQL 8+, Oracle, BigQuery, Spanner.
+    Supported by: PostgreSQL, MySQL 8+, Oracle, Spanner.
     Ignored by: SQLite, DuckDB.
     """
 
@@ -530,12 +530,27 @@ class ADKPartitionConfig(TypedDict):
     like 'created_at'. For hash partitioning, this is typically the primary key.
     """
 
+    session_partition_key: NotRequired[str]
+    """Session-table partition key override for adapters that create separate ADK tables."""
+
+    events_partition_key: NotRequired[str]
+    """Event-table partition key override for adapters that create separate ADK tables."""
+
+    memory_partition_key: NotRequired[str]
+    """Memory-table partition key override for adapters that create separate ADK tables."""
+
     interval: NotRequired[str]
     """Partition interval for range partitioning.
 
     Examples: 'day', 'week', 'month', 'year'.
     Only meaningful when strategy is 'range'.
     """
+
+    partition_count: NotRequired[int]
+    """Number of hash partitions for adapters that support hash-partitioned ADK tables."""
+
+    initial_less_than: NotRequired[str]
+    """Initial range-partition upper bound for adapters that require a seed partition."""
 
 
 class ADKRetentionConfig(TypedDict):
@@ -781,7 +796,6 @@ class ADKConfig(TypedDict):
     - SQLite: FTS5 virtual table
     - DuckDB: FTS extension with match_bm25
     - Oracle: CONTAINS() with CTXSYS.CONTEXT index
-    - BigQuery: SEARCH() function (requires search index)
     - Spanner: TOKENIZE_FULLTEXT with search index
     - MySQL: MATCH...AGAINST with FULLTEXT index
 
@@ -945,7 +959,7 @@ class ADKConfig(TypedDict):
     Controls how ADK tables are partitioned for improved query performance
     and data management at scale. See ``ADKPartitionConfig`` for options.
 
-    Supported by: PostgreSQL, MySQL 8+, Oracle, BigQuery, Spanner.
+    Supported by: PostgreSQL, MySQL 8+, Oracle, Spanner.
     Ignored by: SQLite, DuckDB.
     """
 

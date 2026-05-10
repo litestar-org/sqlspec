@@ -5,8 +5,7 @@ artifact version metadata.  Content storage is handled separately by
 ``sqlspec/storage/`` backends; these stores only manage the relational
 metadata rows.
 
-Adapter-specific subclasses (e.g., ``AsyncpgADKArtifactStore``) implement
-the abstract methods with dialect-specific SQL.
+Concrete subclasses implement the abstract methods with dialect-specific SQL.
 """
 
 import logging

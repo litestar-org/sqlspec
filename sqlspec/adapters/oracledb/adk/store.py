@@ -41,6 +41,23 @@ ORACLE_TABLE_NOT_FOUND_ERROR: Final = 942
 ORACLE_MIN_JSON_NATIVE_VERSION: Final = 21
 ORACLE_MIN_JSON_NATIVE_COMPATIBLE: Final = 20
 ORACLE_MIN_JSON_BLOB_VERSION: Final = 12
+ORACLE_DEFAULT_HASH_PARTITIONS: Final = 16
+ORACLE_MIN_HASH_PARTITIONS: Final = 2
+ORACLE_RANGE_INTERVALS: Final[dict[str, str]] = {
+    "day": "NUMTODSINTERVAL(1, 'DAY')",
+    "week": "NUMTODSINTERVAL(7, 'DAY')",
+    "month": "NUMTOYMINTERVAL(1, 'MONTH')",
+    "year": "NUMTOYMINTERVAL(1, 'YEAR')",
+}
+ORACLE_COMPRESSION_CLAUSES: Final[dict[str, str]] = {
+    "basic": "ROW STORE COMPRESS BASIC",
+    "oltp": "ROW STORE COMPRESS ADVANCED",
+    "advanced": "ROW STORE COMPRESS ADVANCED",
+    "query_low": "COLUMN STORE COMPRESS FOR QUERY LOW",
+    "query_high": "COLUMN STORE COMPRESS FOR QUERY HIGH",
+    "archive_low": "COLUMN STORE COMPRESS FOR ARCHIVE LOW",
+    "archive_high": "COLUMN STORE COMPRESS FOR ARCHIVE HIGH",
+}
 
 
 class JSONStorageType(str, Enum):
@@ -92,20 +109,6 @@ def coerce_decimal_values(value: Any) -> Any:
 
 def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
     return _storage_type_from_version(version_info)
-
-
-def _event_json_column_ddl(storage_type: JSONStorageType) -> str:
-    """Return the DDL fragment for the event_json column.
-
-    For JSON_NATIVE (Oracle 21c+) we use the native JSON type.
-    For older versions we use BLOB since Oracle recommends BLOB over CLOB for
-    JSON storage. BLOB_JSON gets a CHECK constraint; BLOB_PLAIN does not.
-    """
-    if storage_type == JSONStorageType.JSON_NATIVE:
-        return "event_json JSON NOT NULL"
-    if storage_type == JSONStorageType.BLOB_JSON:
-        return "event_json BLOB CHECK (event_json IS JSON) NOT NULL"
-    return "event_json BLOB NOT NULL"
 
 
 def _oracle_text_value(value: Any) -> str:
@@ -316,7 +319,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "session",
+            in_memory=self._in_memory,
+            hash_partition_key="id",
+            range_partition_key="create_time",
+        )
 
         return f"""
         BEGIN
@@ -327,7 +336,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 {state_column},
                 create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            ){inmemory_clause}';
+            ){table_clauses}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -370,7 +379,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             SQL statement to create adk_events table.
         """
         event_json_col = _event_json_column_ddl(storage_type)
-        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "events",
+            in_memory=self._in_memory,
+            hash_partition_key="session_id",
+            range_partition_key="timestamp",
+        )
 
         return f"""
         BEGIN
@@ -382,7 +397,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 {event_json_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            ){inmemory_clause}';
+            ){table_clauses}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -999,7 +1014,13 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "session",
+            in_memory=self._in_memory,
+            hash_partition_key="id",
+            range_partition_key="create_time",
+        )
 
         return f"""
         BEGIN
@@ -1010,7 +1031,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 {state_column},
                 create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            ){inmemory_clause}';
+            ){table_clauses}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -1053,7 +1074,13 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             SQL statement to create adk_events table.
         """
         event_json_col = _event_json_column_ddl(storage_type)
-        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "events",
+            in_memory=self._in_memory,
+            hash_partition_key="session_id",
+            range_partition_key="timestamp",
+        )
 
         return f"""
         BEGIN
@@ -1065,7 +1092,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 {event_json_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            ){inmemory_clause}';
+            ){table_clauses}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -1540,6 +1567,120 @@ def _extract_json_value(data: Any) -> "dict[str, Any]":
     return from_json(str(data))  # type: ignore[no-any-return]
 
 
+def _event_json_column_ddl(storage_type: JSONStorageType) -> str:
+    """Return the DDL fragment for the event_json column."""
+    if storage_type == JSONStorageType.JSON_NATIVE:
+        return "event_json JSON NOT NULL"
+    if storage_type == JSONStorageType.BLOB_JSON:
+        return "event_json BLOB CHECK (event_json IS JSON) NOT NULL"
+    return "event_json BLOB NOT NULL"
+
+
+def _get_oracle_adk_config(config: Any) -> dict[str, Any]:
+    adk_config = config.extension_config.get("adk", {})
+    if isinstance(adk_config, dict):
+        return adk_config
+    return {}
+
+
+def _validate_oracle_identifier(value: str, label: str) -> str:
+    if not value or not (value[0].isalpha() or value[0] == "_"):
+        msg = f"Invalid Oracle {label}: {value!r}"
+        raise ValueError(msg)
+    if any(not (char.isalnum() or char == "_") for char in value):
+        msg = f"Invalid Oracle {label}: {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+def _oracle_compression_clause(adk_config: dict[str, Any]) -> str:
+    compression = adk_config.get("compression")
+    if not isinstance(compression, dict) or not compression.get("enabled"):
+        return ""
+
+    algorithm = str(compression.get("algorithm") or "advanced").lower()
+    try:
+        return ORACLE_COMPRESSION_CLAUSES[algorithm]
+    except KeyError as exc:
+        supported = ", ".join(sorted(ORACLE_COMPRESSION_CLAUSES))
+        msg = f"Unsupported Oracle ADK compression algorithm {algorithm!r}. Supported values: {supported}"
+        raise ValueError(msg) from exc
+
+
+def _oracle_hash_partition_clause(partitioning: dict[str, Any], partition_key: str) -> str:
+    partition_count = partitioning.get(
+        "partition_count", partitioning.get("partitions", ORACLE_DEFAULT_HASH_PARTITIONS)
+    )
+    if not isinstance(partition_count, int) or partition_count < ORACLE_MIN_HASH_PARTITIONS:
+        msg = "Oracle ADK hash partitioning requires partition_count >= 2"
+        raise ValueError(msg)
+    return f"PARTITION BY HASH ({partition_key}) PARTITIONS {partition_count}"
+
+
+def _oracle_range_partition_clause(partitioning: dict[str, Any], partition_key: str) -> str:
+    interval = str(partitioning.get("interval") or "month").lower()
+    interval_sql = ORACLE_RANGE_INTERVALS.get(interval)
+    if interval_sql is None:
+        supported = ", ".join(sorted(ORACLE_RANGE_INTERVALS))
+        msg = f"Unsupported Oracle ADK range partition interval {interval!r}. Supported values: {supported}"
+        raise ValueError(msg)
+
+    initial_less_than = str(partitioning.get("initial_less_than") or "TIMESTAMP '2000-01-01 00:00:00'")
+    return (
+        f"PARTITION BY RANGE ({partition_key}) INTERVAL ({interval_sql}) "
+        f"(PARTITION p_initial VALUES LESS THAN ({initial_less_than}))"
+    )
+
+
+def _oracle_partition_clause(
+    adk_config: dict[str, Any], table_kind: str, hash_partition_key: str, range_partition_key: str
+) -> str:
+    partitioning = adk_config.get("partitioning")
+    if not isinstance(partitioning, dict):
+        return ""
+
+    strategy = str(partitioning.get("strategy") or "").lower()
+    if not strategy:
+        return ""
+
+    table_key = partitioning.get(f"{table_kind}_partition_key")
+    configured_key = table_key if table_key is not None else partitioning.get("partition_key")
+    if strategy == "hash":
+        partition_key = _validate_oracle_identifier(str(configured_key or hash_partition_key), "partition key")
+        return _oracle_hash_partition_clause(partitioning, partition_key)
+    if strategy == "range":
+        partition_key = _validate_oracle_identifier(str(configured_key or range_partition_key), "partition key")
+        return _oracle_range_partition_clause(partitioning, partition_key)
+
+    msg = f"Unsupported Oracle ADK partitioning strategy {strategy!r}. Supported values: hash, range"
+    raise ValueError(msg)
+
+
+def _oracle_table_options_clause(adk_config: dict[str, Any], table_kind: str) -> str:
+    option_key = "events_table_options" if table_kind == "events" else f"{table_kind}_table_options"
+    options = adk_config.get(option_key)
+    return str(options).strip() if options else ""
+
+
+def _oracle_table_feature_clauses(
+    config: Any, table_kind: str, *, in_memory: bool, hash_partition_key: str, range_partition_key: str
+) -> str:
+    adk_config = _get_oracle_adk_config(config)
+    clauses = [
+        clause
+        for clause in (
+            _oracle_compression_clause(adk_config),
+            "INMEMORY PRIORITY HIGH" if in_memory else "",
+            _oracle_table_options_clause(adk_config, table_kind),
+            _oracle_partition_clause(adk_config, table_kind, hash_partition_key, range_partition_key),
+        )
+        if clause
+    ]
+    if not clauses:
+        return ""
+    return " " + " ".join(clauses).replace("'", "''")
+
+
 async def _read_lob_async(data: Any) -> Any:
     if is_async_readable(data):
         return await data.read()
@@ -1627,7 +1768,13 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             """
 
         owner_id_line = f",\n                {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "memory",
+            in_memory=self._in_memory,
+            hash_partition_key="id",
+            range_partition_key="inserted_at",
+        )
 
         fts_index = ""
         if self._use_fts:
@@ -1656,7 +1803,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 {json_columns},
                 content_text CLOB NOT NULL,
                 inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ){inmemory_clause}';
+            ){table_clauses}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -1966,7 +2113,13 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
             """
 
         owner_id_line = f",\n                {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        inmemory_clause = " INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "memory",
+            in_memory=self._in_memory,
+            hash_partition_key="id",
+            range_partition_key="inserted_at",
+        )
 
         fts_index = ""
         if self._use_fts:
@@ -1995,7 +2148,7 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
                 {json_columns},
                 content_text CLOB NOT NULL,
                 inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ){inmemory_clause}';
+            ){table_clauses}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN

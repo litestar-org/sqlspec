@@ -2,14 +2,14 @@
 Quickstart
 ==========
 
-Wire SQLSpec stores into your ADK agent to persist sessions, events, memory,
-and artifacts across restarts.
+Wire SQLSpec stores into your ADK agent to persist sessions, events, and memory
+across restarts.
 
 How It Works
 ============
 
 1. Create a SQLSpec database config with ADK extension settings.
-2. Initialize the appropriate stores (session, memory, artifact).
+2. Initialize the appropriate stores (session and memory).
 3. Pass the service wrappers to your ADK agent.
 
 Session Service
@@ -90,48 +90,21 @@ efficient memory retrieval.
 Artifact Service
 ================
 
-The artifact service stores binary artifacts (files, images, reports) with
-automatic versioning. Metadata lives in SQL; content lives in object storage.
-
-.. code-block:: python
-
-   from sqlspec.adapters.asyncpg.adk import AsyncpgADKArtifactStore
-   from sqlspec.extensions.adk import SQLSpecArtifactService
-
-   artifact_store = AsyncpgADKArtifactStore(config)
-   await artifact_store.ensure_table()
-
-   artifact_service = SQLSpecArtifactService(
-       store=artifact_store,
-       artifact_storage_uri="s3://my-bucket/adk-artifacts/",
-   )
-
-   # Save an artifact (returns version number starting from 0)
-   version = await artifact_service.save_artifact(
-       app_name="my_agent",
-       user_id="user_123",
-       filename="report.pdf",
-       artifact=part,
-   )
-
-   # Load the latest version
-   loaded = await artifact_service.load_artifact(
-       app_name="my_agent",
-       user_id="user_123",
-       filename="report.pdf",
-   )
+The artifact service contracts live in ``sqlspec.extensions.adk.artifact`` and
+separate SQL metadata from object-storage content. Use them when your
+deployment provides a concrete artifact metadata store; adapter ``adk``
+packages currently export session/event and memory stores only.
 
 Schema Setup
 ============
 
 You can programmatically create ADK tables ahead of first use with
-``ensure_tables()`` / ``ensure_table()``:
+``ensure_tables()``:
 
 .. code-block:: python
 
    await session_store.ensure_tables()
    await memory_store.ensure_tables()
-   await artifact_store.ensure_table()
 
 Alternatively, configure SQLSpec migrations for your database and run the
 migration CLI as part of deployment:

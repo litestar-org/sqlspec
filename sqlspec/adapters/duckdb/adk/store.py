@@ -632,6 +632,7 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
                 f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
                 f"stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
             )
+            conn.commit()
         except Exception as exc:
             logger.debug("Failed to create DuckDB FTS index: %s", exc)
 
@@ -644,14 +645,12 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
         if not self._ensure_fts_extension(conn):
             return
 
-        with contextlib.suppress(Exception):
-            conn.execute(f"PRAGMA drop_fts_index('{self._memory_table}')")
-
         try:
             conn.execute(
                 f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
                 f"overwrite=1, stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
             )
+            conn.commit()
         except Exception as exc:
             logger.debug("Failed to refresh DuckDB FTS index: %s", exc)
 
@@ -823,9 +822,15 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
             return []
 
         limit_value = limit or self._max_results
-        if self._use_fts:
-            # Use match_bm25() -- the correct DuckDB FTS syntax
-            sql = f"""
+        use_fts = self._use_fts
+
+        with self._config.provide_connection() as conn:
+            if use_fts and not self._ensure_fts_extension(conn):
+                use_fts = False
+
+            if use_fts:
+                # Use match_bm25() -- the correct DuckDB FTS syntax
+                sql = f"""
             SELECT m.*
             FROM {self._memory_table} m
             JOIN (
@@ -836,17 +841,16 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
             ORDER BY fts.score DESC
             LIMIT ?
             """
-            params = (query, app_name, user_id, limit_value)
-        else:
-            sql = f"""
+                params = (query, app_name, user_id, limit_value)
+            else:
+                sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE app_name = ? AND user_id = ? AND content_text ILIKE ?
             ORDER BY timestamp DESC
             LIMIT ?
             """
-            params = (app_name, user_id, f"%{query}%", limit_value)
+                params = (app_name, user_id, f"%{query}%", limit_value)
 
-        with self._config.provide_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
             columns = [col[0] for col in conn.description or []]
         records: list[MemoryRecord] = []

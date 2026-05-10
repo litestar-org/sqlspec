@@ -54,6 +54,10 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         self._session_table_options: str | None = adk_config.get("session_table_options")
         self._events_table_options: str | None = adk_config.get("events_table_options")
         self._expires_index_options: str | None = adk_config.get("expires_index_options")
+        self._session_row_deletion_policy = _spanner_row_deletion_policy(
+            adk_config, "session_ttl_seconds", "create_time"
+        )
+        self._events_row_deletion_policy = _spanner_row_deletion_policy(adk_config, "event_ttl_seconds", "timestamp")
 
     def _database(self) -> "Database":
         return self._config.get_database()
@@ -254,7 +258,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
-            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
+            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_json)
         """
 
         json_type = _json_param_type()
@@ -288,7 +292,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
-            VALUES (@session_id, @invocation_id, @author, PENDING_COMMIT_TIMESTAMP(), @event_json)
+            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_json)
         """
         self._run_write([(insert_sql, event_params, self._event_param_types())])
 
@@ -376,7 +380,7 @@ CREATE TABLE {self._session_table} (
   state JSON NOT NULL,
   create_time TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
   update_time TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true){shard_column}
-) {pk}{options}
+) {pk}{options}{self._session_row_deletion_policy}
 """
 
     async def _get_create_events_table_sql(self) -> str:
@@ -395,11 +399,27 @@ CREATE TABLE {self._events_table} (
   author STRING(128) NOT NULL,
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
   event_json JSON NOT NULL{shard_column}
-) {pk}{options}
+) {pk}{options}{self._events_row_deletion_policy}
 """
 
     def _get_drop_tables_sql(self) -> "list[str]":
         return [f"DROP TABLE {self._events_table}", f"DROP TABLE {self._session_table}"]
+
+
+def _spanner_ttl_days(ttl_seconds: Any) -> int:
+    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+        return 0
+    return max(1, (ttl_seconds + 86_399) // 86_400)
+
+
+def _spanner_row_deletion_policy(adk_config: dict[str, Any], ttl_key: str, column: str) -> str:
+    retention = adk_config.get("retention")
+    if not isinstance(retention, dict):
+        return ""
+    ttl_days = _spanner_ttl_days(retention.get(ttl_key))
+    if ttl_days == 0:
+        return ""
+    return f"\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
 
 
 class _SpannerMemoryWriteJob:
@@ -441,6 +461,10 @@ class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
         adk_config = cast("ADKConfig", config.extension_config.get("adk", {}))
         shard_count = adk_config.get("shard_count")
         self._shard_count = int(shard_count) if isinstance(shard_count, int) else 0
+        self._memory_table_options: str | None = adk_config.get("memory_table_options")
+        self._memory_row_deletion_policy = _spanner_row_deletion_policy(
+            cast("dict[str, Any]", adk_config), "memory_ttl_seconds", "inserted_at"
+        )
 
     def _database(self) -> "Database":
         return self._config.get_database()
@@ -518,6 +542,9 @@ class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
         if self._shard_count > 1:
             shard_column = f",\n  shard_id INT64 AS (MOD(FARM_FINGERPRINT(id), {self._shard_count})) STORED"
             pk = "PRIMARY KEY (shard_id, id)"
+        options = ""
+        if self._memory_table_options:
+            options = f"\nOPTIONS ({self._memory_table_options})"
 
         table_sql = f"""
 CREATE TABLE {self._memory_table} (
@@ -532,7 +559,7 @@ CREATE TABLE {self._memory_table} (
   content_text STRING(MAX) NOT NULL,
   metadata_json JSON,
   inserted_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true){fts_column_line}{shard_column}
-) {pk}
+) {pk}{options}{self._memory_row_deletion_policy}
 """
 
         app_user_idx = (

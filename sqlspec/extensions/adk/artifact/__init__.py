@@ -23,9 +23,9 @@ Example:
         }
     )
 
-    # Create an adapter-specific artifact store (e.g., AsyncpgADKArtifactStore)
+    # Provide a concrete BaseAsyncADKArtifactStore implementation for metadata
     # and ensure tables exist:
-    artifact_store = AsyncpgADKArtifactStore(config)
+    artifact_store = MyArtifactMetadataStore(config)
     await artifact_store.ensure_table()
 
     # Create the service with a storage backend URI:
