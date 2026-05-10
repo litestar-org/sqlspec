@@ -120,11 +120,12 @@ def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:
     registry = _CountingStorageRegistry()
     pipeline = SyncStoragePipeline(registry=cast(Any, registry))
 
-    first_backend, first_path = pipeline._resolve_backend("file://tmp/payload.jsonl", None)
-    second_backend, second_path = pipeline._resolve_backend("file://tmp/payload.jsonl", {})
+    first_backend, first_path, first_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", None)
+    second_backend, second_path, second_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", {})
 
     assert first_backend is second_backend is registry.backend
     assert first_path == second_path == "tmp/payload.jsonl"
+    assert first_backend_name == second_backend_name == "counting"
     assert registry.calls == [("file://tmp/payload.jsonl", {})]
 
     pipeline.clear_cache()
@@ -422,8 +423,8 @@ def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPat
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> tuple[_Backend, str]:
-        return backend, "objects/data.jsonl"
+    ) -> tuple[_Backend, str, str]:
+        return backend, "objects/data.jsonl", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -473,8 +474,8 @@ def test_write_arrow_csv_default_options(monkeypatch: pytest.MonkeyPatch) -> Non
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/output.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -497,8 +498,8 @@ def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> No
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/output.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -519,8 +520,8 @@ def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/output.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -561,8 +562,8 @@ def test_read_arrow_csv(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/input.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/input.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
