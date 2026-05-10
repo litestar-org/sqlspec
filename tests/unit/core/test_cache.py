@@ -33,7 +33,6 @@ from sqlspec.core import (
     get_cache,
     get_cache_config,
     get_cache_statistics,
-    get_cache_stats,
     get_default_cache,
     log_cache_stats,
     reset_cache_stats,
@@ -561,11 +560,11 @@ def test_namespaced_cache_namespace_isolation() -> None:
     assert cache.get_builder("key1") == "value3"
 
 
-def test_get_cache_stats_aggregation() -> None:
+def test_get_cache_statistics_aggregation() -> None:
     """Test cache statistics aggregation."""
     reset_cache_stats()
 
-    stats = get_cache_stats()
+    stats = get_cache_statistics()
     assert isinstance(stats, dict)
     assert "default" in stats
     assert "namespaced" in stats

@@ -555,15 +555,6 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
-def get_cache_stats() -> "dict[str, CacheStats]":
-    """Get cache statistics from all caches.
-
-    Returns:
-        Dictionary of cache statistics
-    """
-    return get_cache_statistics()
-
-
 def reset_cache_stats() -> None:
     """Reset all cache statistics."""
     clear_all_caches()
@@ -572,7 +563,7 @@ def reset_cache_stats() -> None:
 def log_cache_stats() -> None:
     """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
-    stats = get_cache_stats()
+    stats = get_cache_statistics()
     stats_summary = {
         name: {
             "hits": stat.hits,
