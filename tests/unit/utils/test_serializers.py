@@ -784,6 +784,30 @@ class TestSchemaDumpWireFormatOptOut:
         assert dumped == [{expected_key: "first"}, {expected_key: "second"}]
         assert call_count == 1
 
+    def test_msgspec_dump_modes_use_one_parameterized_function(self) -> None:
+        """All msgspec serializer modes should share one dump implementation."""
+        import msgspec
+
+        from sqlspec.utils.serializers import _schema as schema_module
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+
+        dump_function = getattr(schema_module, "_dump_msgspec_struct")
+        removed_function_names = (
+            "_dump_msgspec_fields",
+            "_dump_msgspec_excluding_unset",
+            "_dump_msgspec_fields_python",
+            "_dump_msgspec_excluding_unset_python",
+        )
+        assert not any(hasattr(schema_module, name) for name in removed_function_names)
+
+        for exclude_unset, wire_format in ((False, False), (False, True), (True, False), (True, True)):
+            pipeline = get_collection_serializer(
+                _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format
+            )
+            assert getattr(getattr(pipeline, "_dump"), "func") is dump_function
+
     def test_pydantic_unaffected_by_wire_format(self) -> None:
         pytest.importorskip("pydantic")
         import pydantic
