@@ -186,9 +186,31 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         try:
-            runtime = self.observability
+            runtime = self._observability
             compiled_sql, execution_parameters = statement.compile()
             _ = cast("ProcessedState", statement.get_processed_state())
+            result: SQLResult | None = None
+
+            # FAST PATH: Skip all instrumentation if runtime is absent or idle.
+            if runtime is None or runtime.is_idle:
+                exc_handler = self.handle_database_exceptions()
+                async with exc_handler, self.with_cursor(connection) as cursor:
+                    special_result = await self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        result = special_result
+                    elif statement.is_script:
+                        execution_result = await self.dispatch_execute_script(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    elif statement.is_many:
+                        execution_result = await self.dispatch_execute_many(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    else:
+                        execution_result = await self.dispatch_execute(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                self._check_pending_exception(exc_handler)
+                assert result is not None
+                return result
+
             operation = statement.operation_type
             query_context = {
                 "sql": compiled_sql,
@@ -202,7 +224,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
             started = perf_counter()
 
-            result: SQLResult | None = None
             exc_handler = self.handle_database_exceptions()
             try:
                 async with exc_handler, self.with_cursor(connection) as cursor:

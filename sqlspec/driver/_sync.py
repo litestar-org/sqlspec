@@ -167,7 +167,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         try:
-            runtime = self.observability
+            runtime = self._observability
             # Pre-compile the statement so dispatch methods can reuse the processed state
             # via the fast path in _get_compiled_statement(). This ensures compile()
             # is called exactly once per statement execution.
@@ -175,7 +175,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             result: SQLResult | None = None
 
             # FAST PATH: Skip all instrumentation if runtime is idle
-            if runtime.is_idle:
+            if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
                 with exc_handler, self.with_cursor(connection) as cursor:
                     # Logic mirrors the instrumentation path below but without telemetry
