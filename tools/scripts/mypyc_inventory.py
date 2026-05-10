@@ -177,12 +177,12 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
     },
     "sqlspec/extensions/fastapi/providers.py": {
-        "classification": "keep_interpreted",
-        "reason": "Framework provider surface builds dynamic FastAPI dependency signatures and stays interpreted.",
+        "classification": "compile_now",
+        "reason": "Framework provider surface now uses module-level callable providers with precomputed dynamic signatures.",
     },
     "sqlspec/extensions/litestar/providers.py": {
-        "classification": "keep_interpreted",
-        "reason": "Framework provider surface builds dynamic Litestar dependency signatures and stays interpreted.",
+        "classification": "compile_now",
+        "reason": "Framework provider surface now uses module-level callable providers with precomputed dynamic signatures.",
     },
     "sqlspec/migrations/commands.py": {
         "classification": "keep_interpreted",
@@ -399,8 +399,6 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
                 "sqlspec/extensions/events/_queue.py",
                 "sqlspec/extensions/events/_store.py",
                 "sqlspec/extensions/adk/converters.py",
-                "sqlspec/extensions/fastapi/providers.py",
-                "sqlspec/extensions/litestar/providers.py",
                 "sqlspec/config.py",
             }
         ),
