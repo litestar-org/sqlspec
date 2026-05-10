@@ -1,5 +1,7 @@
 """Tests for count query helpers and edge cases."""
 
+import ast
+import inspect
 import sqlite3
 from collections.abc import Iterator
 from typing import Any
@@ -10,6 +12,7 @@ from sqlspec import SQL
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.core import StatementConfig, get_default_config
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import _common as driver_common
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
 
@@ -93,6 +96,16 @@ def test_create_count_query_compiles_missing_expression(sqlite_driver: "SqliteDr
 
     assert count_sql.expression is not None
     assert "count" in compiled_sql.lower()
+
+
+def test_extract_pagination_placeholders_uses_module_sqlglot_import() -> None:
+    """Pagination placeholder extraction should avoid per-call import lookups."""
+    source = inspect.getsource(driver_common._extract_pagination_placeholders)
+    tree = ast.parse(source)
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
+
+    assert hasattr(driver_common, "sqlglot")
+    assert imports == []
 
 
 def test_create_count_query_with_cte_keeps_with_clause(sqlite_driver: "SqliteDriver") -> None:

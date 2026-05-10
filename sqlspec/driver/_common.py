@@ -8,6 +8,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
+import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from typing_extensions import Self
@@ -160,8 +161,6 @@ def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
         Set of placeholder names found in LIMIT/OFFSET clauses.
 
     """
-    import sqlglot
-
     # First try: use statement_expression if available and has named placeholders
     stmt_expr = original_sql.statement_expression
     if stmt_expr is not None:
