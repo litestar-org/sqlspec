@@ -20,7 +20,7 @@ import sqlspec.exceptions
 from sqlspec.core.parameters import (
     ParameterProcessor,
     ParameterProfile,
-    _structural_fingerprint,  # pyright: ignore[reportPrivateUsage]
+    structural_fingerprint,
     validate_parameter_alignment,
     value_fingerprint,
 )
@@ -922,7 +922,7 @@ class SQLProcessor:
     def _get_param_fingerprint(self, parameters: Any, is_many: bool) -> Any:
         if self._config.parameter_config.needs_static_script_compilation:
             return value_fingerprint(parameters)
-        return _structural_fingerprint(parameters, is_many)
+        return structural_fingerprint(parameters, is_many)
 
     def _make_cache_key(self, sql: str, param_fingerprint: Any, is_many: bool = False) -> tuple[Any, ...]:
         """Generate cache key.

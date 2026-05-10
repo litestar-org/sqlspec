@@ -308,13 +308,13 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     are based on parameter STRUCTURE (types, keys) not VALUES. Same SQL with same
     parameter structure produces the same cache key regardless of actual values.
     """
-    from sqlspec.core.parameters import _structural_fingerprint
+    from sqlspec.core.parameters import structural_fingerprint
 
     processor = SQLProcessor(basic_statement_config)
 
     # _make_cache_key expects a precomputed fingerprint, not raw params
     # Same SQL and parameter structure = same key
-    fp1 = _structural_fingerprint([123])
+    fp1 = structural_fingerprint([123])
     key1 = processor._make_cache_key("SELECT * FROM users", fp1)
     key2 = processor._make_cache_key("SELECT * FROM users", fp1)
     assert key1 == key2
@@ -324,16 +324,16 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     assert key1 != key3
 
     # Same SQL with same parameter STRUCTURE (list of one int) = SAME key (structural fingerprinting)
-    fp4 = _structural_fingerprint([456])
+    fp4 = structural_fingerprint([456])
     key4 = processor._make_cache_key("SELECT * FROM users", fp4)
     assert key1 == key4  # Structural fingerprinting: same structure = same key
 
     # Different parameter STRUCTURE = different key
-    fp5 = _structural_fingerprint({"id": 123})  # dict vs list
+    fp5 = structural_fingerprint({"id": 123})  # dict vs list
     key5 = processor._make_cache_key("SELECT * FROM users", fp5)
     assert key1 != key5
 
-    fp6 = _structural_fingerprint([123, "extra"])  # different type signature
+    fp6 = structural_fingerprint([123, "extra"])  # different type signature
     key6 = processor._make_cache_key("SELECT * FROM users", fp6)
     assert key1 != key6
 

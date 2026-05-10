@@ -22,13 +22,7 @@ from sqlspec.core.parameters._types import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.dispatch import TypeDispatcher
 
-__all__ = (
-    "ParameterProcessor",
-    "_structural_fingerprint",
-    "_value_fingerprint",
-    "structural_fingerprint",
-    "value_fingerprint",
-)
+__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
 
 # Threshold for sampling execute_many parameters instead of full iteration
 _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
@@ -39,7 +33,7 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
-def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
+def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
     """Return a structural fingerprint for caching parameter payloads.
 
     Returns a hashable tuple representing the structure (keys, types, count).
@@ -152,40 +146,11 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
     return ("many_scalar", type_sig, param_count)
 
 
-def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
-    """Return a structural fingerprint for parameter payloads.
-
-    This fingerprint is based on parameter STRUCTURE (keys, types, count) only,
-    NOT on actual values. This improves cache hit rates for repeated queries
-    with different parameter values.
-
-    Args:
-        parameters: Original parameter payload supplied by the caller.
-        is_many: Whether this is for execute_many operation.
-
-    Returns:
-        Deterministic fingerprint string derived from parameter structure.
-    """
-    return str(_structural_fingerprint(parameters, is_many))
-
-
-def value_fingerprint(parameters: "ParameterPayload") -> str:
+def value_fingerprint(parameters: "ParameterPayload") -> Any:
     """Return a value-based fingerprint for parameter payloads.
 
     Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
     Used for static script compilation where SQL has values embedded directly.
-
-    Args:
-        parameters: Original parameter payload supplied by the caller.
-
-    Returns:
-        Deterministic fingerprint string including parameter values.
-    """
-    return str(_value_fingerprint(parameters))
-
-
-def _value_fingerprint(parameters: "ParameterPayload") -> Any:
-    """Return a value-based fingerprint for parameter payloads.
 
     Args:
         parameters: Original parameter payload supplied by the caller.
@@ -826,10 +791,10 @@ class ParameterProcessor:
             # For static script compilation, we must include actual values in the fingerprint
             # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
             if config.needs_static_script_compilation:
-                param_fingerprint = _value_fingerprint(parameters)
+                param_fingerprint = value_fingerprint(parameters)
             else:
                 # Use structural fingerprint (keys + types, not values) for better cache hit rates
-                param_fingerprint = _structural_fingerprint(parameters, is_many)
+                param_fingerprint = structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
         # Include both input and execution parameter styles to avoid cache collisions
         # (e.g., MySQL asyncmy uses ? for input but %s for execution)
