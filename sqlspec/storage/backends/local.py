@@ -8,7 +8,7 @@ import shutil
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
@@ -68,7 +68,9 @@ class LocalStore:
     All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
-    __slots__ = ("backend_type", "base_path", "protocol")
+    __slots__ = ("base_path", "protocol")
+
+    backend_type: ClassVar[str] = "local"
 
     def __init__(self, uri: str = "", **kwargs: Any) -> None:
         """Initialize local storage backend.
@@ -106,7 +108,6 @@ class LocalStore:
             self.base_path = self.base_path.parent
 
         self.protocol = "file"
-        self.backend_type = "local"
 
     def _resolve_path(self, path: "str | Path") -> Path:
         """Resolve path relative to base_path.

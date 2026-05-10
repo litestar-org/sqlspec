@@ -14,6 +14,7 @@ Test Coverage:
 8. Performance characteristics - Compilation speed and efficiency testing
 """
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -774,6 +775,27 @@ def test_compilation_exception_recovery(basic_statement_config: "StatementConfig
 
     assert isinstance(result, CompiledSQL)
     assert result.operation_type == "COMMAND"
+
+
+@pytest.mark.parametrize("exception_cls", (RuntimeError, ValueError, TypeError))
+def test_unexpected_compile_exception_is_not_swallowed(
+    basic_statement_config: "StatementConfig", exception_cls: type[Exception]
+) -> None:
+    """Unexpected compiler failures should surface instead of returning COMMAND fallback."""
+
+    def _raise_unexpected(_expression: "exp.Expr", _parameters: Any) -> "tuple[exp.Expr, Any]":
+        raise exception_cls("boom")
+
+    config = basic_statement_config.replace(statement_transformers=(_raise_unexpected,))
+    processor = SQLProcessor(config)
+
+    with patch("sqlspec.core.compiler.log_with_context") as mock_log, pytest.raises(exception_cls, match="boom"):
+        processor.compile("SELECT * FROM users", None)
+
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] is logging.ERROR
+    assert mock_log.call_args.args[2] == "sql.compile"
+    assert mock_log.call_args.kwargs["status"] == "error"
 
 
 def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:

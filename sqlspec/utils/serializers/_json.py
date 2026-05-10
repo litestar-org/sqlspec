@@ -20,6 +20,7 @@ from sqlspec.typing import (
     BaseModel,
     attrs_asdict,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
 from sqlspec.utils.uuids import UUID_UTILS_INSTALLED, _load_uuid_utils
 
@@ -52,6 +53,7 @@ def _get_uuid_utils_type() -> "type[Any] | None":
 
 
 _UUID_UTILS_TYPE: "type[Any] | None" = _get_uuid_utils_type()
+logger = get_logger(__name__)
 
 
 def convert_datetime_to_gmt_iso(value: datetime.datetime) -> str:
@@ -188,6 +190,17 @@ def _is_explicit_unsupported_error(exc: Exception) -> bool:
     return "unsupported json value" in str(exc).lower()
 
 
+def _log_msgspec_encode_fallback(exc: Exception) -> None:
+    fallback_name = "orjson" if ORJSON_INSTALLED else "standard library json"
+    logger.debug(
+        "Msgspec JSON encode failed with %s: %s; falling back to %s",
+        exc.__class__.__name__,
+        exc,
+        fallback_name,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+
 class JSONSerializer(Protocol):
     """Protocol for JSON serializer implementations."""
 
@@ -261,10 +274,12 @@ class MsgspecSerializer(BaseJSONSerializer):
         except TypeError as exc:
             if _is_explicit_unsupported_error(exc):
                 raise
+            _log_msgspec_encode_fallback(exc)
             if ORJSON_INSTALLED:
                 return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
             return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)
-        except ValueError:
+        except ValueError as exc:
+            _log_msgspec_encode_fallback(exc)
             if ORJSON_INSTALLED:
                 return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
             return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)

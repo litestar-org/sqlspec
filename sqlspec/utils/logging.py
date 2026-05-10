@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.correlation import correlation_id_var as _correlation_id_var
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from contextvars import ContextVar
@@ -153,6 +152,8 @@ class StructuredFormatter(logging.Formatter):
 
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
+
+        from sqlspec.utils.serializers import to_json
 
         return to_json(log_entry)
 

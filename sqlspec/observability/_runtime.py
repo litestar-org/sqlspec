@@ -11,12 +11,15 @@ from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.type_guards import has_span_attribute
 
-_LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
-
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from sqlspec.storage import StorageTelemetry
+
+__all__ = ("ObservabilityRuntime",)
+
+
+_LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
 
 
 class ObservabilityRuntime:
@@ -434,6 +437,3 @@ def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(value) <= max_chars:
         return value, False
     return value[:max_chars], True
-
-
-__all__ = ("ObservabilityRuntime",)

@@ -72,7 +72,7 @@ The table below classifies every backend by its ADK support level.
      - Supported
      - Full
      - Full
-     - Preferred async local backend; single-writer limits still apply.
+     - Async local backend; single-writer limits still apply.
    * - sqlite
      - Supported
      - Full
@@ -112,6 +112,13 @@ Status Definitions
 **Reduced-scope**
    Implemented with known limitations. Specific features may be absent or
    behave differently. See backend-specific notes.
+
+Current scoped-state boundary
+   The shared session service strips ``temp:`` keys before persistence.
+   ``app:`` and ``user:`` keys are preserved in each session's state JSON, but
+   current SQLSpec ADK stores do not yet persist them in shared app/user state
+   buckets across sessions. This is a shared store-contract boundary, not a
+   SQLite-specific limitation.
 
 **Removed**
    Previously available but no longer supported. See the removal notice for
@@ -180,6 +187,15 @@ and single-process deployments:
 - JSON1 extension for state and event storage.
 - FTS5 virtual tables for memory full-text search.
 - File-based or in-memory operation.
+- Empty session state is persisted as JSON ``{}``, not ``NULL``.
+- ``append_event_and_update_state()`` stores the event and durable state
+  snapshot in one transaction.
+
+Current scoped-state boundary:
+
+- Use SQLite backends for local development, tests, and single-process
+  deployments. They follow the same current scoped-state boundary as the other
+  ADK session stores.
 
 .. note::
 

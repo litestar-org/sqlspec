@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import Any, Final, cast, overload
+from typing import Any, ClassVar, Final, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
@@ -84,13 +84,14 @@ class ObStoreBackend:
         "_is_local_store",
         "_local_store_root",
         "_path_cache",
-        "backend_type",
         "base_path",
         "protocol",
         "store",
         "store_options",
         "store_uri",
     )
+
+    backend_type: ClassVar[str] = "obstore"
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         """Initialize obstore backend.
@@ -122,7 +123,6 @@ class ObStoreBackend:
         self._is_local_store = False
         self._local_store_root = ""
         self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
-        self.backend_type = "obstore"
         try:
             if uri.startswith("memory://"):
                 from obstore.store import MemoryStore
@@ -144,7 +144,7 @@ class ObStoreBackend:
                 # If base_path is absolute, Path division will use it directly (backward compat)
                 local_store_root_obj = Path(path_str)
                 if self.base_path:
-                    local_store_root_obj = local_store_root_obj / self.base_path
+                    local_store_root_obj /= self.base_path
 
                 self._is_local_store = True
                 self._local_store_root = str(local_store_root_obj.resolve())

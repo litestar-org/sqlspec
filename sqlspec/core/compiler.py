@@ -906,7 +906,7 @@ class SQLProcessor:
 
         except sqlspec.exceptions.SQLSpecError:
             raise
-        except Exception as exc:
+        except ParseError as exc:
             log_with_context(logger, logging.DEBUG, "sql.compile", error_type=type(exc).__name__, status="fallback")
             return CompiledSQL(
                 compiled_sql=sql,
@@ -916,6 +916,9 @@ class SQLProcessor:
                 parameter_profile=parameter_profile,
                 operation_profile=operation_profile,
             )
+        except Exception as exc:
+            log_with_context(logger, logging.ERROR, "sql.compile", error_type=type(exc).__name__, status="error")
+            raise
 
     def _get_param_fingerprint(self, parameters: Any, is_many: bool) -> Any:
         if self._config.parameter_config.needs_static_script_compilation:
@@ -957,11 +960,6 @@ class SQLProcessor:
             if copy_kind is False:
                 return "COPY_TO"
             return "COPY"
-
-        # Handle Alias expressions used by sqlglot for unrecognized commands
-        # like UNLISTEN, LISTEN, NOTIFY, DISCARD (PostgreSQL-specific)
-        if isinstance(expression, exp.Alias) and expression.this:
-            return "COMMAND"
 
         # COMMAND is the generic fallback for any database command
         # that doesn't fit specific categories

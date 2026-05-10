@@ -9,6 +9,15 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from sqlspec.observability._observer import StatementEvent
     from sqlspec.observability._sampling import SamplingConfig
 
+__all__ = (
+    "LifecycleHook",
+    "LoggingConfig",
+    "ObservabilityConfig",
+    "RedactionConfig",
+    "StatementObserver",
+    "TelemetryConfig",
+)
+
 
 StatementObserver = Callable[["StatementEvent"], None]
 LifecycleHook = Callable[[dict[str, Any]], None]
@@ -347,13 +356,3 @@ def _merge_lifecycle(base: "LifecycleConfig | None", override: "LifecycleConfig 
         merged_dict.setdefault(event, [])
         merged_dict[event].extend(cast("Iterable[LifecycleHook]", hooks))
     return cast("LifecycleConfig", merged_dict)
-
-
-__all__ = (
-    "LifecycleHook",
-    "LoggingConfig",
-    "ObservabilityConfig",
-    "RedactionConfig",
-    "StatementObserver",
-    "TelemetryConfig",
-)
