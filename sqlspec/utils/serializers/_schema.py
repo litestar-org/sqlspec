@@ -124,37 +124,37 @@ def _dump_identity_dict(value: Any) -> "dict[str, Any]":
     return cast("dict[str, Any]", value)
 
 
-def _dump_msgspec_fields(value: Any) -> "dict[str, Any]":
+def _get_msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
     from msgspec import structs
 
-    return {field.encode_name: value.__getattribute__(field.name) for field in structs.fields(type(value))}
+    if wire_format:
+        return tuple((field.encode_name, field.name) for field in structs.fields(schema_type))
+    return tuple((field.name, field.name) for field in structs.fields(schema_type))
 
 
-def _dump_msgspec_excluding_unset(value: Any) -> "dict[str, Any]":
-    from msgspec import structs
+def _dump_msgspec_fields(value: Any, *, field_pairs: "tuple[tuple[str, str], ...]") -> "dict[str, Any]":
+    return {output_name: value.__getattribute__(field_name) for output_name, field_name in field_pairs}
 
+
+def _dump_msgspec_excluding_unset(value: Any, *, field_pairs: "tuple[tuple[str, str], ...]") -> "dict[str, Any]":
     return {
-        field.encode_name: field_value
-        for field in structs.fields(type(value))
-        if (field_value := value.__getattribute__(field.name)) != UNSET
+        output_name: field_value
+        for output_name, field_name in field_pairs
+        if (field_value := value.__getattribute__(field_name)) != UNSET
     }
 
 
-def _dump_msgspec_fields_python(value: Any) -> "dict[str, Any]":
+def _dump_msgspec_fields_python(value: Any, *, field_pairs: "tuple[tuple[str, str], ...]") -> "dict[str, Any]":
     """Dump msgspec Struct keyed by Python attribute names (ignores rename=)."""
-    from msgspec import structs
-
-    return {field.name: value.__getattribute__(field.name) for field in structs.fields(type(value))}
+    return {output_name: value.__getattribute__(field_name) for output_name, field_name in field_pairs}
 
 
-def _dump_msgspec_excluding_unset_python(value: Any) -> "dict[str, Any]":
+def _dump_msgspec_excluding_unset_python(value: Any, *, field_pairs: "tuple[tuple[str, str], ...]") -> "dict[str, Any]":
     """Dump msgspec Struct (Python names, exclude UNSET fields)."""
-    from msgspec import structs
-
     return {
-        field.name: field_value
-        for field in structs.fields(type(value))
-        if (field_value := value.__getattribute__(field.name)) != UNSET
+        output_name: field_value
+        for output_name, field_name in field_pairs
+        if (field_value := value.__getattribute__(field_name)) != UNSET
     }
 
 
@@ -178,6 +178,23 @@ def _dump_mapping(value: Any) -> "dict[str, Any]":
     return dict(value)
 
 
+def _build_msgspec_dump_function(
+    sample: Any, *, exclude_unset: bool, wire_format: bool
+) -> "Callable[[Any], dict[str, Any]]":
+    field_pairs = _get_msgspec_field_pairs(type(sample), wire_format=wire_format)
+    if wire_format:
+        if exclude_unset:
+            return cast(
+                "Callable[[Any], dict[str, Any]]", partial(_dump_msgspec_excluding_unset, field_pairs=field_pairs)
+            )
+        return cast("Callable[[Any], dict[str, Any]]", partial(_dump_msgspec_fields, field_pairs=field_pairs))
+    if exclude_unset:
+        return cast(
+            "Callable[[Any], dict[str, Any]]", partial(_dump_msgspec_excluding_unset_python, field_pairs=field_pairs)
+        )
+    return cast("Callable[[Any], dict[str, Any]]", partial(_dump_msgspec_fields_python, field_pairs=field_pairs))
+
+
 def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
     if sample is None or isinstance(sample, dict):
         return _dump_identity_dict
@@ -186,13 +203,7 @@ def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) ->
     if is_pydantic_model(sample):
         return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
-        if wire_format:
-            if exclude_unset:
-                return _dump_msgspec_excluding_unset
-            return _dump_msgspec_fields
-        if exclude_unset:
-            return _dump_msgspec_excluding_unset_python
-        return _dump_msgspec_fields_python
+        return _build_msgspec_dump_function(sample, exclude_unset=exclude_unset, wire_format=wire_format)
     if is_attrs_instance(sample):
         return _dump_attrs
     if has_dict_attribute(sample):

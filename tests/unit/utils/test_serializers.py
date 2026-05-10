@@ -13,6 +13,7 @@ from sqlspec.core.filters import OffsetPagination
 from sqlspec.utils.serializers import (
     __all__,
     from_json,
+    get_collection_serializer,
     numpy_array_dec_hook,
     numpy_array_enc_hook,
     numpy_array_predicate,
@@ -748,6 +749,40 @@ class TestSchemaDumpWireFormatOptOut:
         assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
         assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
         assert schema_dump(obj) == {"user_id": "abc"}  # default is wire_format=False
+
+    @pytest.mark.parametrize(
+        ("exclude_unset", "wire_format", "expected_key"),
+        [(False, False, "user_id"), (False, True, "userId"), (True, False, "user_id"), (True, True, "userId")],
+    )
+    def test_msgspec_fields_are_precomputed_per_serializer(
+        self, monkeypatch: pytest.MonkeyPatch, exclude_unset: bool, wire_format: bool, expected_key: str
+    ) -> None:
+        """Serializer registration should precompute immutable msgspec field metadata once."""
+        import msgspec
+        from msgspec import structs
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+
+        original_fields = structs.fields
+        call_count = 0
+
+        def count_fields(schema_type: type[Any]) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return original_fields(schema_type)
+
+        monkeypatch.setattr(structs, "fields", count_fields)
+
+        pipeline = get_collection_serializer(
+            _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format
+        )
+        assert call_count == 1
+
+        dumped = pipeline.dump_many([_User(user_id="first"), _User(user_id="second")])
+
+        assert dumped == [{expected_key: "first"}, {expected_key: "second"}]
+        assert call_count == 1
 
     def test_pydantic_unaffected_by_wire_format(self) -> None:
         pytest.importorskip("pydantic")
