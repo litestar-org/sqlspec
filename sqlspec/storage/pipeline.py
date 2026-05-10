@@ -142,12 +142,6 @@ class _StorageBridgeMetrics:
         self.partitions_created = 0
 
 
-class _BackendCapabilityFlags(NamedTuple):
-    supports_async_delete: bool
-    supports_async_read_bytes: bool
-    supports_async_write_bytes: bool
-
-
 _METRICS = _StorageBridgeMetrics()
 _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 _EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
@@ -453,17 +447,15 @@ class SyncStoragePipeline:
 class AsyncStoragePipeline:
     """Async variant of the storage pipeline leveraging async-capable backends when available."""
 
-    __slots__ = ("_backend_capability_cache", "_resolved_backend_cache", "registry")
+    __slots__ = ("_resolved_backend_cache", "registry")
 
     def __init__(self, *, registry: StorageRegistry | None = None) -> None:
         self.registry = registry or storage_registry
         self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
-        self._backend_capability_cache: dict[int, tuple[ObjectStoreProtocol, _BackendCapabilityFlags]] = {}
 
     def clear_cache(self) -> None:
         """Clear cached storage backend resolutions for this pipeline instance."""
         self._resolved_backend_cache.clear()
-        self._backend_capability_cache.clear()
 
     def _resolve_backend(
         self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
@@ -478,21 +470,6 @@ class AsyncStoragePipeline:
         resolved = _resolve_storage_backend(self.registry, destination, backend_options)
         self._resolved_backend_cache[cache_key] = resolved
         return resolved
-
-    def _get_backend_capabilities(self, backend: "ObjectStoreProtocol") -> _BackendCapabilityFlags:
-        cache_key = id(backend)
-        cached = self._backend_capability_cache.get(cache_key)
-        if cached is not None:
-            cached_backend, flags = cached
-            if cached_backend is backend:
-                return flags
-        flags = _BackendCapabilityFlags(
-            supports_async_delete=supports_async_delete(backend),
-            supports_async_read_bytes=supports_async_read_bytes(backend),
-            supports_async_write_bytes=supports_async_write_bytes(backend),
-        )
-        self._backend_capability_cache[cache_key] = (backend, flags)
-        return flags
 
     async def write_rows(
         self,
@@ -532,8 +509,7 @@ class AsyncStoragePipeline:
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
             backend, path, backend_name = self._resolve_backend(artifact["uri"], None)
-            capabilities = self._get_backend_capabilities(backend)
-            if capabilities.supports_async_delete:
+            if supports_async_delete(backend):
                 try:
                     await execute_async_storage_operation(
                         partial(backend.delete_async, path), backend=backend_name, operation="delete", path=path
@@ -560,8 +536,7 @@ class AsyncStoragePipeline:
     ) -> StorageTelemetry:
         backend, path, backend_name = self._resolve_backend(destination, storage_options)
         start = perf_counter()
-        capabilities = self._get_backend_capabilities(backend)
-        if capabilities.supports_async_write_bytes:
+        if supports_async_write_bytes(backend):
             await execute_async_storage_operation(
                 partial(backend.write_bytes_async, path, payload),
                 backend=backend_name,
@@ -588,8 +563,7 @@ class AsyncStoragePipeline:
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         backend, path, backend_name = self._resolve_backend(source, storage_options)
-        capabilities = self._get_backend_capabilities(backend)
-        if capabilities.supports_async_read_bytes:
+        if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
                 partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
             )
