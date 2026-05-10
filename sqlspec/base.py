@@ -2,9 +2,9 @@ import asyncio
 import atexit
 from collections.abc import Awaitable, Coroutine
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeGuard, cast, overload
 
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -43,22 +43,42 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpec",)
 
 logger = get_logger()
+ContextValueT = TypeVar("ContextValueT")
 
 
 def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
     return isinstance(obj, AbstractAsyncContextManager)
 
 
-class _RuntimeConnectionContext(AbstractContextManager[ConnectionT]):
-    def __init__(self, context: "AbstractContextManager[ConnectionT]", runtime: "ObservabilityRuntime") -> None:
+class _RuntimeContext(AbstractContextManager[ContextValueT], Generic[ContextValueT]):
+    __slots__ = ("_config", "_context", "_runtime", "_value")
+
+    def __init__(
+        self,
+        context: "AbstractContextManager[Any]",
+        runtime: "ObservabilityRuntime",
+        config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> None:
         self._context = context
         self._runtime = runtime
-        self._connection: ConnectionT | None = None
+        self._config = config
+        self._value: Any | None = None
 
-    def __enter__(self) -> ConnectionT:
-        self._connection = self._context.__enter__()
-        self._runtime.emit_connection_create(self._connection)
-        return self._connection
+    def __enter__(self) -> ContextValueT:
+        value = self._context.__enter__()
+        config = self._config
+        if config is not None:
+            driver = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+            self._value = driver
+            connection = driver.connection
+            if connection is not None:
+                self._runtime.emit_connection_create(connection)
+            self._runtime.emit_session_start(driver)
+            return cast("ContextValueT", driver)
+
+        self._value = value
+        self._runtime.emit_connection_create(value)
+        return cast("ContextValueT", value)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -66,21 +86,47 @@ class _RuntimeConnectionContext(AbstractContextManager[ConnectionT]):
         try:
             return self._context.__exit__(exc_type, exc_val, exc_tb)
         finally:
-            if self._connection is not None:
-                self._runtime.emit_connection_destroy(self._connection)
-                self._connection = None
+            value = self._value
+            if value is not None:
+                if self._config is None:
+                    self._runtime.emit_connection_destroy(value)
+                else:
+                    self._runtime.emit_session_end(value)
+                    connection = value.connection
+                    if connection is not None:
+                        self._runtime.emit_connection_destroy(connection)
+                self._value = None
 
 
-class _RuntimeAsyncConnectionContext(AbstractAsyncContextManager[ConnectionT]):
-    def __init__(self, context: "AbstractAsyncContextManager[ConnectionT]", runtime: "ObservabilityRuntime") -> None:
+class _RuntimeAsyncContext(AbstractAsyncContextManager[ContextValueT], Generic[ContextValueT]):
+    __slots__ = ("_config", "_context", "_runtime", "_value")
+
+    def __init__(
+        self,
+        context: "AbstractAsyncContextManager[Any]",
+        runtime: "ObservabilityRuntime",
+        config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> None:
         self._context = context
         self._runtime = runtime
-        self._connection: ConnectionT | None = None
+        self._config = config
+        self._value: Any | None = None
 
-    async def __aenter__(self) -> ConnectionT:
-        self._connection = await self._context.__aenter__()
-        self._runtime.emit_connection_create(self._connection)
-        return self._connection
+    async def __aenter__(self) -> ContextValueT:
+        value = await self._context.__aenter__()
+        config = self._config
+        if config is not None:
+            driver = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+            self._value = driver
+            connection = driver.connection
+            if connection is not None:
+                self._runtime.emit_connection_create(connection)
+            self._runtime.emit_session_start(driver)
+            return cast("ContextValueT", driver)
+
+        self._value = value
+        self._runtime.emit_connection_create(value)
+        return cast("ContextValueT", value)
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -88,81 +134,16 @@ class _RuntimeAsyncConnectionContext(AbstractAsyncContextManager[ConnectionT]):
         try:
             return await self._context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            if self._connection is not None:
-                self._runtime.emit_connection_destroy(self._connection)
-                self._connection = None
-
-
-class _RuntimeSessionContext(AbstractContextManager[DriverT]):
-    def __init__(
-        self,
-        context: "AbstractContextManager[DriverT]",
-        runtime: "ObservabilityRuntime",
-        config: "DatabaseConfigProtocol[Any, Any, DriverT]",
-    ) -> None:
-        self._context = context
-        self._runtime = runtime
-        self._config = config
-        self._driver: DriverT | None = None
-
-    def __enter__(self) -> DriverT:
-        session = self._context.__enter__()
-        driver = self._config._prepare_driver(session)  # pyright: ignore[reportPrivateUsage]
-        self._driver = driver
-        connection = driver.connection
-        if connection is not None:
-            self._runtime.emit_connection_create(connection)
-        self._runtime.emit_session_start(driver)
-        return driver
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        try:
-            return self._context.__exit__(exc_type, exc_val, exc_tb)
-        finally:
-            if self._driver is not None:
-                self._runtime.emit_session_end(self._driver)
-                connection = self._driver.connection
-                if connection is not None:
-                    self._runtime.emit_connection_destroy(connection)
-                self._driver = None
-
-
-class _RuntimeAsyncSessionContext(AbstractAsyncContextManager[DriverT]):
-    def __init__(
-        self,
-        context: "AbstractAsyncContextManager[DriverT]",
-        runtime: "ObservabilityRuntime",
-        config: "DatabaseConfigProtocol[Any, Any, DriverT]",
-    ) -> None:
-        self._context = context
-        self._runtime = runtime
-        self._config = config
-        self._driver: DriverT | None = None
-
-    async def __aenter__(self) -> DriverT:
-        session = await self._context.__aenter__()
-        driver = self._config._prepare_driver(session)  # pyright: ignore[reportPrivateUsage]
-        self._driver = driver
-        connection = driver.connection
-        if connection is not None:
-            self._runtime.emit_connection_create(connection)
-        self._runtime.emit_session_start(driver)
-        return driver
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        try:
-            return await self._context.__aexit__(exc_type, exc_val, exc_tb)
-        finally:
-            if self._driver is not None:
-                self._runtime.emit_session_end(self._driver)
-                connection = self._driver.connection
-                if connection is not None:
-                    self._runtime.emit_connection_destroy(connection)
-                self._driver = None
+            value = self._value
+            if value is not None:
+                if self._config is None:
+                    self._runtime.emit_connection_destroy(value)
+                else:
+                    self._runtime.emit_session_end(value)
+                    connection = value.connection
+                    if connection is not None:
+                        self._runtime.emit_connection_destroy(connection)
+                self._value = None
 
 
 class SQLSpec:
@@ -489,10 +470,10 @@ class SQLSpec:
 
         if _is_async_context_manager(connection_context):
             async_context = cast("AbstractAsyncContextManager[ConnectionT]", connection_context)
-            return _RuntimeAsyncConnectionContext(async_context, runtime)
+            return _RuntimeAsyncContext[ConnectionT](async_context, runtime)
 
         sync_context = cast("AbstractContextManager[ConnectionT]", connection_context)
-        return _RuntimeConnectionContext(sync_context, runtime)
+        return _RuntimeContext[ConnectionT](sync_context, runtime)
 
     @overload
     def provide_session(
@@ -534,10 +515,10 @@ class SQLSpec:
 
         if _is_async_context_manager(session_context):
             async_session = cast("AbstractAsyncContextManager[DriverT]", session_context)
-            return _RuntimeAsyncSessionContext(async_session, runtime, config)
+            return _RuntimeAsyncContext[DriverT](async_session, runtime, config)
 
         sync_session = cast("AbstractContextManager[DriverT]", session_context)
-        return _RuntimeSessionContext(sync_session, runtime, config)
+        return _RuntimeContext[DriverT](sync_session, runtime, config)
 
     @overload
     def get_pool(
