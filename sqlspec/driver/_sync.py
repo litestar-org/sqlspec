@@ -35,7 +35,6 @@ from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat,
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import ValueT, to_value_type
-from sqlspec.utils.type_guards import has_asdict_method, is_dict_row, is_mapping_like
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1203,27 +1202,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             modified_sql = self._add_count_over_column(sql_statement)
             result = self.dispatch_statement_execution(modified_sql, self.connection)
             rows = result.all()
-
-            # Batch-level type detection: check first row type once, use specialized list comprehension
-            # All rows from a result set share the same type, so checking first_row is sufficient
-            if not rows:
-                total = 0
-                data: list[dict[str, Any]] = []
-            else:
-                first_row = rows[0]
-                # Extract total count from first row
-                if is_dict_row(first_row):
-                    total = first_row.get("_total_count", 0)
-                    data = [{k: v for k, v in row.items() if k != "_total_count"} for row in rows]
-                elif is_mapping_like(first_row):
-                    total = dict(first_row).get("_total_count", 0)
-                    data = [{k: v for k, v in dict(row).items() if k != "_total_count"} for row in rows]
-                elif has_asdict_method(first_row):
-                    total = getattr(first_row, "_total_count", 0)
-                    data = [{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows]  # type: ignore[attr-defined]
-                else:
-                    total = 0
-                    data = [{} for _ in rows]
+            data, total = self._extract_total_from_rows(rows)
 
             if schema_type is not None:
                 return ([schema_type(**r) for r in data], total)

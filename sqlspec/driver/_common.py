@@ -44,11 +44,14 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
     has_array_interface,
+    has_asdict_method,
     has_cursor_metadata,
     has_dtype_str,
     has_statement_type,
     has_typecode,
     has_typecode_and_len,
+    is_dict_row,
+    is_mapping_like,
     is_statement_filter,
 )
 
@@ -2192,3 +2195,24 @@ class CommonDriverAttributesMixin:
             statement_config=original_sql.statement_config,
             **original_sql.named_parameters,
         )
+
+    def _extract_total_from_rows(self, rows: "list[Any]") -> "tuple[list[dict[str, Any]], int]":
+        """Extract window-count totals and remove the synthetic total column from rows."""
+        if not rows:
+            return ([], 0)
+
+        first_row = rows[0]
+        if is_dict_row(first_row):
+            total = cast("int", first_row.get("_total_count", 0))
+            return ([{k: v for k, v in row.items() if k != "_total_count"} for row in rows], total)
+        if is_mapping_like(first_row):
+            total = cast("int", dict(first_row).get("_total_count", 0))
+            return ([{k: v for k, v in dict(row).items() if k != "_total_count"} for row in rows], total)
+        if has_asdict_method(first_row):
+            total = cast("int", getattr(first_row, "_total_count", 0))
+            return (
+                [{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows],  # type: ignore[attr-defined]
+                total,
+            )
+
+        return ([{} for _ in rows], 0)
