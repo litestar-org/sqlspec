@@ -133,14 +133,19 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Notes:
             - TEXT for IDs, names, and JSON state
             - REAL for Julian Day timestamps
+            - Optional owner ID column for multi-tenant scenarios
             - Composite index on (app_name, user_id)
             - Index on update_time DESC for recent session queries
         """
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id TEXT PRIMARY KEY,
             app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
+            user_id TEXT NOT NULL{owner_id_line},
             state TEXT NOT NULL DEFAULT '{{}}',
             create_time REAL NOT NULL,
             update_time REAL NOT NULL
