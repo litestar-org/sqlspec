@@ -24,24 +24,6 @@ SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol
 __all__ = ("SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
 
 
-def _json_param_type() -> Any:
-    try:
-        return SPANNER_PARAM_TYPES.JSON
-    except AttributeError:
-        return SPANNER_PARAM_TYPES.STRING
-
-
-class _SpannerWriteJob:
-    __slots__ = ("_statements",)
-
-    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._statements = statements
-
-    def __call__(self, transaction: "Transaction") -> None:
-        for sql, params, types in self._statements:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-
 class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
     """Spanner ADK store backed by synchronous Spanner client."""
 
@@ -406,51 +388,6 @@ CREATE TABLE {self._events_table} (
         return [f"DROP TABLE {self._events_table}", f"DROP TABLE {self._session_table}"]
 
 
-def _spanner_ttl_days(ttl_seconds: Any) -> int:
-    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
-        return 0
-    return max(1, (ttl_seconds + 86_399) // 86_400)
-
-
-def _spanner_row_deletion_policy(adk_config: dict[str, Any], ttl_key: str, column: str) -> str:
-    retention = adk_config.get("retention")
-    if not isinstance(retention, dict):
-        return ""
-    ttl_days = _spanner_ttl_days(retention.get(ttl_key))
-    if ttl_days == 0:
-        return ""
-    return f"\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
-
-
-class _SpannerMemoryWriteJob:
-    __slots__ = ("_statements",)
-
-    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._statements = statements
-
-    def __call__(self, transaction: "Transaction") -> None:
-        for sql, params, types in self._statements:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-
-class _SpannerMemoryUpdateJob:
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "Transaction") -> int:
-        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
-
-
-class _SpannerReadProtocol(Protocol):
-    def execute_sql(
-        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
-    ) -> Iterable[Any]: ...
-
-
 class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
     """Spanner ADK memory store backed by synchronous Spanner client."""
 
@@ -747,3 +684,66 @@ CREATE TABLE {self._memory_table} (
             }
             for row in rows
         ]
+
+
+def _json_param_type() -> Any:
+    try:
+        return SPANNER_PARAM_TYPES.JSON
+    except AttributeError:
+        return SPANNER_PARAM_TYPES.STRING
+
+
+def _spanner_ttl_days(ttl_seconds: Any) -> int:
+    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+        return 0
+    return max(1, (ttl_seconds + 86_399) // 86_400)
+
+
+def _spanner_row_deletion_policy(adk_config: dict[str, Any], ttl_key: str, column: str) -> str:
+    retention = adk_config.get("retention")
+    if not isinstance(retention, dict):
+        return ""
+    ttl_days = _spanner_ttl_days(retention.get(ttl_key))
+    if ttl_days == 0:
+        return ""
+    return f"\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
+
+
+class _SpannerWriteJob:
+    __slots__ = ("_statements",)
+
+    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
+        self._statements = statements
+
+    def __call__(self, transaction: "Transaction") -> None:
+        for sql, params, types in self._statements:
+            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerMemoryWriteJob:
+    __slots__ = ("_statements",)
+
+    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
+        self._statements = statements
+
+    def __call__(self, transaction: "Transaction") -> None:
+        for sql, params, types in self._statements:
+            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerMemoryUpdateJob:
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> int:
+        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
+
+
+class _SpannerReadProtocol(Protocol):
+    def execute_sql(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> Iterable[Any]: ...
