@@ -23,14 +23,7 @@ from sqlspec.driver._common import (
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._storage_helpers import (
-    arrow_table_to_rows,
-    attach_partition_telemetry,
-    build_ingest_telemetry,
-    coerce_arrow_table,
-    create_storage_job,
-    stringify_storage_target,
-)
+from sqlspec.driver._storage_helpers import stringify_storage_target
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
@@ -1699,76 +1692,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         telemetry = runtime.annotate_storage_telemetry(telemetry)
         runtime.end_storage_span(span, telemetry=telemetry)
         return table, telemetry
-
-    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
-        """Coerce various sources to a PyArrow Table.
-
-        Args:
-            source: ArrowResult, PyArrow Table, RecordBatch, or iterable of dicts.
-
-        Returns:
-            PyArrow Table.
-
-        """
-        return coerce_arrow_table(source)
-
-    @staticmethod
-    def _arrow_table_to_rows(
-        table: "ArrowTable", columns: "list[str] | None" = None
-    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
-        """Convert Arrow table to column names and row tuples.
-
-        Args:
-            table: Arrow table to convert.
-            columns: Optional list of columns to extract.
-
-        Returns:
-            Tuple of (column_names, list of row tuples).
-
-        """
-        return arrow_table_to_rows(table, columns)
-
-    @staticmethod
-    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
-        """Build telemetry dict from Arrow table statistics.
-
-        Args:
-            table: Arrow table to extract statistics from.
-            format_label: Format label for telemetry.
-
-        Returns:
-            StorageTelemetry dict with row/byte counts.
-
-        """
-        return build_ingest_telemetry(table, format_label=format_label)
-
-    def _attach_partition_telemetry(
-        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
-    ) -> None:
-        """Attach partitioner info to telemetry dict.
-
-        Args:
-            telemetry: Telemetry dict to update.
-            partitioner: Partitioner configuration or None.
-
-        """
-        attach_partition_telemetry(telemetry, partitioner)
-
-    def _create_storage_job(
-        self, produced: "StorageTelemetry", provided: "StorageTelemetry | None" = None, *, status: str = "completed"
-    ) -> "StorageBridgeJob":
-        """Create a StorageBridgeJob from telemetry data.
-
-        Args:
-            produced: Telemetry from the production side of the operation.
-            provided: Optional telemetry from the source side.
-            status: Job status string.
-
-        Returns:
-            StorageBridgeJob instance.
-
-        """
-        return create_storage_job(produced, provided, status=status)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

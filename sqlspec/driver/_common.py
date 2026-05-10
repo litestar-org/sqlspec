@@ -34,7 +34,14 @@ from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
-from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
+from sqlspec.driver._storage_helpers import (
+    CAPABILITY_HINTS,
+    arrow_table_to_rows,
+    attach_partition_telemetry,
+    build_ingest_telemetry,
+    coerce_arrow_table,
+    create_storage_job,
+)
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
@@ -60,12 +67,18 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
-    from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
-    from sqlspec.typing import ForeignKeyMetadata, SchemaT, StatementParameters
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageCapabilities,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
+    from sqlspec.typing import ArrowTable, ForeignKeyMetadata, SchemaT, StatementParameters
 
 
 __all__ = (
@@ -2226,3 +2239,31 @@ class CommonDriverAttributesMixin:
             return ([{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows], total)
 
         return ([{} for _ in rows], 0)
+
+    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
+        """Coerce various sources to a PyArrow Table."""
+        return coerce_arrow_table(source)
+
+    @staticmethod
+    def _arrow_table_to_rows(
+        table: "ArrowTable", columns: "list[str] | None" = None
+    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
+        """Convert Arrow table to column names and row tuples."""
+        return arrow_table_to_rows(table, columns)
+
+    @staticmethod
+    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
+        """Build telemetry dict from Arrow table statistics."""
+        return build_ingest_telemetry(table, format_label=format_label)
+
+    def _attach_partition_telemetry(
+        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
+    ) -> None:
+        """Attach partitioner info to telemetry dict."""
+        attach_partition_telemetry(telemetry, partitioner)
+
+    def _create_storage_job(
+        self, produced: "StorageTelemetry", provided: "StorageTelemetry | None" = None, *, status: str = "completed"
+    ) -> "StorageBridgeJob":
+        """Create a StorageBridgeJob from telemetry data."""
+        return create_storage_job(produced, provided, status=status)
