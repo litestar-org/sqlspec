@@ -67,7 +67,7 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
 
     # Handle dict (most common Mapping type) - fast path
     if param_type is dict:
-        dict_params: dict[str, Any] = parameters  # type: ignore[assignment]
+        dict_params = cast("dict[str, Any]", parameters)
         if not dict_params:
             return ("dict",)
         # Use dict insertion order (Python 3.7+ guaranteed) instead of sorted()
@@ -79,7 +79,7 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
 
     # Handle list and tuple (most common Sequence types) - fast path
     if param_type is list or param_type is tuple:
-        seq_params: Sequence[Any] = parameters  # type: ignore[assignment]
+        seq_params = cast("Sequence[Any]", parameters)
         if not seq_params:
             return ("seq",)
 
@@ -243,7 +243,7 @@ def _coerce_parameter_value(
     value_type = type(value)
     # Fast path: check TypedParameter by type identity (2-4x faster than isinstance)
     if value_type is TypedParameter:
-        typed_param: TypedParameter = value  # type: ignore[assignment]
+        typed_param = cast("TypedParameter", value)
         wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
@@ -506,13 +506,13 @@ class ParameterProcessor:
                     wrapped_values = source[:idx]
                 wrapped_values.append(wrapped)
             if wrapped_values is None:
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_values
         if param_type is tuple:
             tuple_source = cast("tuple[Any, ...]", parameters)
             wrapped_values = [wrap_with_type(value) for value in tuple_source]
             if all(wrapped is value for wrapped, value in zip(wrapped_values, tuple_source, strict=False)):
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_values
         if param_type is dict:
             source_mapping = cast("dict[str, Any]", parameters)
@@ -525,13 +525,13 @@ class ParameterProcessor:
                     wrapped_mapping = dict(source_mapping)
                 wrapped_mapping[key] = wrapped
             if wrapped_mapping is None:
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_mapping
         # Fallback to ABC checks for custom types
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             wrapped_values = [wrap_with_type(value) for value in parameters]
             if all(wrapped is value for wrapped, value in zip(wrapped_values, parameters, strict=False)):
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_values
         if isinstance(parameters, Mapping):
             fallback_mapping: dict[str, Any] | None = None
@@ -543,7 +543,7 @@ class ParameterProcessor:
                     fallback_mapping = dict(parameters)
                 fallback_mapping[key] = wrapped
             if fallback_mapping is None:
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return fallback_mapping
         return None
 
@@ -560,11 +560,11 @@ class ParameterProcessor:
             return None
         result_type = type(result)
         if result_type is dict:
-            return result  # type: ignore[return-value]
+            return cast("ConvertedParameters", result)
         if result_type is list:
-            return result  # type: ignore[return-value]
+            return cast("ConvertedParameters", result)
         if result_type is tuple:
-            return result  # type: ignore[return-value]
+            return cast("ConvertedParameters", result)
         return None
 
     def _store_cached_result(
@@ -608,7 +608,7 @@ class ParameterProcessor:
         if parameters is None:
             return None
 
-        processed: ConvertedParameters = parameters  # type: ignore[assignment]
+        processed = cast("ConvertedParameters", parameters)
 
         # Step 1: Type wrapping (must happen before coercion)
         if apply_wrap_types and processed:
@@ -696,14 +696,15 @@ class ParameterProcessor:
             return updated_rows
 
         if param_type is dict:
+            dict_parameters = cast("dict[str, Any]", parameters)
             if strict:
-                missing = [name for name in named_order if name not in parameters]  # type: ignore[operator]
+                missing = [name for name in named_order if name not in dict_parameters]
                 if missing:
                     from sqlspec.exceptions import SQLSpecError
 
                     msg = f"Missing required parameters: {missing}"
                     raise SQLSpecError(msg)
-            return tuple(parameters.get(name) for name in named_order)  # type: ignore[union-attr]
+            return tuple(dict_parameters.get(name) for name in named_order)
 
         # Fallback for custom Mapping types
         if isinstance(parameters, Mapping):

@@ -517,7 +517,7 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
     if isinstance(statement, str):
         return statement
-    if isinstance(statement, StatementProtocol):  # pyright: ignore[reportUnnecessaryIsInstance]
+    if isinstance(statement, StatementProtocol):
         return statement.raw_sql or statement.sql
     return repr(statement)
 
@@ -922,7 +922,7 @@ class CommonDriverAttributesMixin:
         self._update_stmt_cache_flag()
 
     def _update_stmt_cache_flag(self) -> None:
-        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)  # pyright: ignore[reportPrivateUsage]
+        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)
 
     @property
     def observability(self) -> "ObservabilityRuntime":
@@ -1011,7 +1011,7 @@ class CommonDriverAttributesMixin:
             cache_max_size=0,
             validator_cache_max_size=0,
         )
-        return processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+        return processor._transform_cached_parameters(
             params,
             cached.parameter_profile,
             config,
@@ -1058,7 +1058,7 @@ class CommonDriverAttributesMixin:
             is_many=False,
         )
         # Fast-path: directly set internal attributes to avoid constructor overhead.
-        return SQL._create_cached_direct(sql, self.statement_config, direct_state)  # pyright: ignore[reportPrivateUsage]
+        return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
     def _stmt_cache_prepare_direct(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQL | None":
         """Prepare direct execution if cache hit.
@@ -1143,7 +1143,7 @@ class CommonDriverAttributesMixin:
             else:
                 needs_rebind = any(type(p) in coercion_types for p in params)
 
-        if not needs_rebind and not config._has_output_transformer:  # pyright: ignore[reportPrivateUsage]
+        if not needs_rebind and not config._has_output_transformer:
             return self._stmt_cache_execute_direct(statement, params, cached)
 
         # Fallback to standard path (builds SQL object)
@@ -1155,8 +1155,9 @@ class CommonDriverAttributesMixin:
             params_are_simple = True
 
         compiled_sql = cached.compiled_sql
-        if config._has_output_transformer:  # pyright: ignore[reportPrivateUsage]
-            compiled_sql, rebound_params = config.output_transformer(compiled_sql, rebound_params)  # type: ignore[misc]
+        output_transformer = config.output_transformer
+        if output_transformer is not None:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
             params_are_simple = False
 
         prepared = self._stmt_cache_build_direct(
@@ -1586,7 +1587,7 @@ class CommonDriverAttributesMixin:
         parameters: "StatementParameters | list[StatementParameters] | tuple[StatementParameters, ...]",
         statement_config: "StatementConfig",
         is_many: bool = False,
-        prepared_statement: Any | None = None,  # pyright: ignore[reportUnusedParameter]
+        prepared_statement: Any | None = None,
     ) -> "ConvertedParameters":
         """Prepare parameters for database driver consumption.
 
@@ -2070,7 +2071,7 @@ class CommonDriverAttributesMixin:
 
         expr = original_sql.expression
         cte: exp.Expr | None = None
-        if isinstance(expr, exp.Expression):  # pyright: ignore
+        if isinstance(expr, exp.Expression):
             cte = expr.args.get("with_")
             if cte is not None:
                 expr = expr.copy()
