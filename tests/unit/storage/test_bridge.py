@@ -123,7 +123,8 @@ def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:
     first_backend, first_path, first_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", None)
     second_backend, second_path, second_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", {})
 
-    assert first_backend is second_backend is registry.backend
+    assert first_backend is second_backend
+    assert first_backend is cast("Any", registry.backend)
     assert first_path == second_path == "tmp/payload.jsonl"
     assert first_backend_name == second_backend_name == "counting"
     assert registry.calls == [("file://tmp/payload.jsonl", {})]

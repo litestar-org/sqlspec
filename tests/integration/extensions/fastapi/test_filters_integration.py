@@ -1,7 +1,7 @@
 """Integration tests for FastAPI filter dependencies with real HTTP requests."""
 
 from collections.abc import Generator
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -37,7 +37,7 @@ def _find_schema_type(schema: dict[str, Any], schema_type: str) -> dict[str, Any
 
 def _query_param_schema(endpoint: dict[str, Any], name: str) -> dict[str, Any]:
     param = next(param for param in endpoint.get("parameters", []) if param["name"] == name)
-    return param["schema"]
+    return cast("dict[str, Any]", param["schema"])
 
 
 def _assert_array_items_schema(

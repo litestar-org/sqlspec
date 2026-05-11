@@ -11,6 +11,7 @@ when a concrete store no longer satisfies the base contract.
 
 import importlib
 import inspect
+from typing import cast
 
 import pytest
 
@@ -72,7 +73,7 @@ def _load_class(class_path: str) -> type:
     except ImportError as exc:
         pytest.skip(f"Module {module_path} not importable (missing optional dependency)")
         raise RuntimeError("pytest.skip did not raise") from exc
-    return getattr(module, class_name)
+    return cast("type", getattr(module, class_name))
 
 
 @pytest.mark.parametrize("class_path", ALL_STORE_CLASSES)
