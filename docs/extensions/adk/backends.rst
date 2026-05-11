@@ -181,26 +181,56 @@ support:
 SQLite
 ------
 
-SQLite backends (aiosqlite, sqlite) are ideal for local development, testing,
-and single-process deployments:
+SQLite backends (``aiosqlite``, ``sqlite``) are the recommended local-file
+ADK backends for development, tests, and single-process deployments. Both
+adapters share the same DDL and store contract; they differ only in their
+connection model.
+
+Supported behavior (both adapters):
 
 - JSON1 extension for state and event storage.
-- FTS5 virtual tables for memory full-text search.
+- FTS5 virtual tables for memory full-text search, with optional
+  ``tokenize='porter'`` stemming and ``detail='none'`` index reduction
+  controlled by the ADK extension config.
 - File-based or in-memory operation.
-- Empty session state is persisted as JSON ``{}``, not ``NULL``.
-- ``append_event_and_update_state()`` stores the event and durable state
-  snapshot in one transaction.
+- Empty session state is persisted as JSON ``{}``, not ``NULL``. The store
+  never serializes the empty-state value as ``None``.
+- ``append_event_and_update_state()`` writes the event row and the durable
+  state snapshot in a single transaction and returns the updated session
+  record without an extra ``get_session()`` round trip.
+- WAL journaling and ``synchronous=NORMAL`` for file-based databases, with
+  configurable ``busy_timeout``, ``cache_size``, ``mmap_size``, and
+  ``journal_size_limit`` PRAGMAs for local tuning.
 
-Current scoped-state boundary:
+``sqlite`` vs ``aiosqlite`` boundary:
 
-- Use SQLite backends for local development, tests, and single-process
-  deployments. They follow the same current scoped-state boundary as the other
-  ADK session stores.
+- ``sqlite`` (``sqlspec.adapters.sqlite``) is the synchronous adapter. ADK
+  uses a thread-local connection pool and offloads each store call to a
+  worker thread. Best suited for scripts, CLI utilities, test fixtures, and
+  small embedded agents where async overhead is undesirable.
+- ``aiosqlite`` (``sqlspec.adapters.aiosqlite``) is the native async adapter.
+  ADK calls run directly on the event loop without thread offload. Best
+  suited for single-process async ADK runners that already operate inside
+  an async framework (Litestar, FastAPI, Starlette, etc.).
+
+Both adapters use identical table schemas, so a SQLite database created by
+one adapter can be opened and read by the other without migration.
+
+Unsupported lifecycle features:
+
+- No native server-side partitioning, hash sharding, or table compression.
+  The capability profile reports these as unsupported. If you need them,
+  choose a server-backed adapter (PostgreSQL, MySQL, Oracle, Spanner).
+- No concurrent writers. SQLite serializes writes at the file level; use a
+  server-backed database for production multi-process or multi-writer
+  deployments.
 
 .. note::
 
-   SQLite does not support concurrent writers. Use a server-backed database
-   for production multi-process deployments.
+   The shared scoped-state contract for ``app:`` and ``user:`` keys is
+   defined under the :ref:`adk-support-matrix` above. SQLite is not uniquely
+   partial here — it follows the same shared behavior as every other ADK
+   session store.
 
 Oracle
 ------
