@@ -22,13 +22,7 @@ LifecycleHook = Callable[[dict[str, Any]], None]
 
 
 class StatementObserver(Protocol):
-    """Protocol for callbacks that receive SQL execution events.
-
-    Used as a structural type annotation only; no ``@runtime_checkable`` because
-    nothing in the codebase performs ``isinstance`` checks against it, and that
-    decorator is incompatible with mypyc-compiled Protocol classes (breaks PGO
-    training on the build wheel).
-    """
+    """Protocol for callbacks that receive SQL execution events."""
 
     def __call__(self, event: "StatementEvent", /) -> None:
         """Handle a SQL execution event."""
