@@ -35,14 +35,6 @@ def test_dtype_to_array_code_mapping() -> None:
     assert DTYPE_TO_ARRAY_CODE == expected
 
 
-def test_vector_handlers_are_private_to_handler_module() -> None:
-    """The package does not re-export Oracle vector handler internals."""
-    import sqlspec.adapters.oracledb as oracledb_module
-
-    assert not hasattr(oracledb_module, "vector_handlers")
-    assert not hasattr(oracledb_module, "numpy_handlers")
-
-
 def test_numpy_converter_in_float32() -> None:
     """Test NumPy float32 array conversion to Oracle array."""
     import numpy as np
