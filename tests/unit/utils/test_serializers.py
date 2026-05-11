@@ -840,12 +840,13 @@ class TestSchemaDumpWireFormatOptOut:
     ) -> None:
         """Serializer registration should precompute immutable msgspec field metadata once."""
         import msgspec
-        from msgspec import structs
+
+        from sqlspec.utils.serializers import _schema as schema_module
 
         class _User(msgspec.Struct, rename="camel"):
             user_id: str
 
-        original_fields = structs.fields
+        original_fields = schema_module.msgspec_fields
         call_count = 0
 
         def count_fields(schema_type: type[Any]) -> Any:
@@ -853,7 +854,7 @@ class TestSchemaDumpWireFormatOptOut:
             call_count += 1
             return original_fields(schema_type)
 
-        monkeypatch.setattr(structs, "fields", count_fields)
+        monkeypatch.setattr(schema_module, "msgspec_fields", count_fields)
 
         pipeline = get_collection_serializer(
             _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format

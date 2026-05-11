@@ -869,6 +869,13 @@ DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
 
+_CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
+    ParameterStyle.NAMED_COLON.value,
+    ParameterStyle.NAMED_AT.value,
+    ParameterStyle.NAMED_DOLLAR.value,
+    ParameterStyle.NAMED_PYFORMAT.value,
+))
+
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
@@ -1003,7 +1010,13 @@ class CommonDriverAttributesMixin:
     def stmt_cache_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
         """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
-        if not cached.input_named_parameters and not cached.applied_wrap_types and not config.type_coercion_map:
+        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
+        if (
+            not cached.input_named_parameters
+            and not cached.applied_wrap_types
+            and not config.type_coercion_map
+            and not needs_style_remap
+        ):
             return params
         processor = ParameterProcessor(
             converter=self.statement_config.parameter_converter,
@@ -1142,6 +1155,9 @@ class CommonDriverAttributesMixin:
                 needs_rebind = type(params[0]) in coercion_types
             else:
                 needs_rebind = any(type(p) in coercion_types for p in params)
+
+        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
+            needs_rebind = True
 
         if not needs_rebind and not config._has_output_transformer:
             return self._stmt_cache_execute_direct(statement, params, cached)

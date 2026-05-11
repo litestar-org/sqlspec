@@ -618,20 +618,84 @@ class ParameterProcessor:
         if config.type_coercion_map and processed:
             processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
 
-        # Step 3: Named-to-positional mapping only when cached SQL uses positional placeholders.
-        if input_named_parameters and processed:
+        # Step 3: Re-apply the same placeholder-style shape the cached compiled SQL
+        # uses to the new parameter values. This is the symmetric inverse of the
+        # compile-time conversion: if the cached SQL is positional, named input
+        # must be flattened to a sequence; if it is named, positional input must
+        # be remapped into a dict keyed by the cached placeholder names.
+        if processed:
             positional_styles = {
                 ParameterStyle.QMARK.value,
                 ParameterStyle.NUMERIC.value,
                 ParameterStyle.POSITIONAL_COLON.value,
                 ParameterStyle.POSITIONAL_PYFORMAT.value,
             }
-            if any(style in positional_styles for style in cached_profile.styles):
+            named_styles = {
+                ParameterStyle.NAMED_COLON.value,
+                ParameterStyle.NAMED_AT.value,
+                ParameterStyle.NAMED_DOLLAR.value,
+                ParameterStyle.NAMED_PYFORMAT.value,
+            }
+            cached_styles = cached_profile.styles
+            if input_named_parameters and any(style in positional_styles for style in cached_styles):
                 processed = self._map_named_to_positional(
                     processed, input_named_parameters, is_many, strict=config.strict_named_parameters
                 )
+            elif any(style in named_styles for style in cached_styles):
+                processed = self._map_positional_to_named(processed, cached_profile, is_many)
 
         return processed
+
+    def _map_positional_to_named(
+        self, parameters: "ConvertedParameters", cached_profile: "ParameterProfile", is_many: bool
+    ) -> "ConvertedParameters":
+        """Map a positional sequence to a dict keyed by cached placeholder names.
+
+        Used by the fast-path when the cached SQL uses named placeholders but the
+        caller passed positional parameters (e.g. qmark input converted to @param_N).
+        Mappings and already-named inputs are returned unchanged.
+
+        Args:
+            parameters: Current parameters (sequence or already a dict).
+            cached_profile: Cached parameter profile holding placeholder metadata.
+            is_many: Whether this is execute_many.
+
+        Returns:
+            Parameters converted to a dict (or list of dicts for is_many).
+        """
+        cached_param_info = cached_profile.parameters
+        if not cached_param_info:
+            return parameters
+
+        if is_many and isinstance(parameters, (list, tuple)):
+            rows = cast("Sequence[Any]", parameters)
+            mapped_rows: list[Any] = []
+            for row in rows:
+                if isinstance(row, Mapping):
+                    mapped_rows.append(row)
+                    continue
+                if isinstance(row, (list, tuple)) and not isinstance(row, (str, bytes, bytearray)):
+                    mapped_rows.append({
+                        (param.name or f"param_{param.ordinal}"): row[idx]
+                        for idx, param in enumerate(cached_param_info)
+                        if idx < len(row)
+                    })
+                    continue
+                mapped_rows.append(row)
+            return mapped_rows
+
+        if isinstance(parameters, Mapping):
+            return parameters
+
+        if isinstance(parameters, (list, tuple)) and not isinstance(parameters, (str, bytes, bytearray)):
+            seq = cast("Sequence[Any]", parameters)
+            return {
+                (param.name or f"param_{param.ordinal}"): seq[idx]
+                for idx, param in enumerate(cached_param_info)
+                if idx < len(seq)
+            }
+
+        return parameters
 
     def _map_named_to_positional(
         self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool, strict: bool = False
