@@ -62,6 +62,20 @@ async def test_sqlite_append_event_and_update_state_is_atomic_contract(tmp_path:
         config.close_pool()
 
 
+async def test_sqlite_reads_return_empty_when_tables_missing(tmp_path: Path) -> None:
+    """Read paths must match the asyncpg reference: None/[] when tables don't exist."""
+    db_path = tmp_path / "test_adk_no_tables.db"
+    config = SqliteConfig(connection_config={"database": str(db_path)})
+    store = SqliteADKStore(config)
+    try:
+        assert await store.get_session("missing") is None
+        assert await store.list_sessions("app") == []
+        assert await store.list_sessions("app", "user") == []
+        assert await store.get_events("session-x") == []
+    finally:
+        config.close_pool()
+
+
 async def test_sqlite_get_events_filters_by_timestamp_and_limit(tmp_path: Path) -> None:
     """Event reads honor the clean-break after_timestamp and limit contract."""
     config, store = await _build_store(tmp_path)
