@@ -610,19 +610,12 @@ class ParameterProcessor:
 
         processed = cast("ConvertedParameters", parameters)
 
-        # Step 1: Type wrapping (must happen before coercion)
         if apply_wrap_types and processed:
             processed = self._wrap_parameter_types(processed)
 
-        # Step 2: Type coercion
         if config.type_coercion_map and processed:
             processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
 
-        # Step 3: Re-apply the same placeholder-style shape the cached compiled SQL
-        # uses to the new parameter values. This is the symmetric inverse of the
-        # compile-time conversion: if the cached SQL is positional, named input
-        # must be flattened to a sequence; if it is named, positional input must
-        # be remapped into a dict keyed by the cached placeholder names.
         if processed:
             positional_styles = {
                 ParameterStyle.QMARK.value,
@@ -649,20 +642,7 @@ class ParameterProcessor:
     def _map_positional_to_named(
         self, parameters: "ConvertedParameters", cached_profile: "ParameterProfile", is_many: bool
     ) -> "ConvertedParameters":
-        """Map a positional sequence to a dict keyed by cached placeholder names.
-
-        Used by the fast-path when the cached SQL uses named placeholders but the
-        caller passed positional parameters (e.g. qmark input converted to @param_N).
-        Mappings and already-named inputs are returned unchanged.
-
-        Args:
-            parameters: Current parameters (sequence or already a dict).
-            cached_profile: Cached parameter profile holding placeholder metadata.
-            is_many: Whether this is execute_many.
-
-        Returns:
-            Parameters converted to a dict (or list of dicts for is_many).
-        """
+        """Map a positional sequence to a dict keyed by cached placeholder names."""
         cached_param_info = cached_profile.parameters
         if not cached_param_info:
             return parameters

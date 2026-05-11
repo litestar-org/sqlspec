@@ -264,13 +264,7 @@ class ParameterConverter:
     def _align_mapping_for_named_style(
         self, parameters: "Mapping[str, Any]", param_info: "list[ParameterInfo]"
     ) -> "NamedParameterOutput":
-        """Align a user-supplied mapping with the placeholder names of a named-style target.
-
-        If the mapping already contains every expected placeholder name, it is returned as-is.
-        Otherwise (e.g. user passed a dict keyed by column names for a qmark statement that was
-        rewritten to ``@param_N``), values are remapped by insertion order into the placeholder
-        names.
-        """
+        """Align a mapping with the placeholder names of a named-style target."""
         expected_names = {param.name or f"param_{param.ordinal}" for param in param_info}
         if expected_names.issubset(parameters.keys()):
             return dict(parameters)
