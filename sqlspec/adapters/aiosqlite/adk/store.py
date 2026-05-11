@@ -426,11 +426,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
         Inserts the event and updates the session state + update_time in a
-        single transaction. Both operations succeed or fail together.
+        single transaction. Both operations succeed or fail together. Returns
+        the updated SessionRecord via SQLite RETURNING (3.35+).
 
         Args:
             event_record: Event record to store.
@@ -456,6 +457,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE id = ?
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
         async with self._config.provide_connection() as conn:
@@ -471,8 +473,22 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     event_data_json,
                 ),
             )
-            await conn.execute(update_sql, (state_json, now_julian, session_id))
+            cursor = await conn.execute(update_sql, (state_json, now_julian, session_id))
+            row = await cursor.fetchone()
             await conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row[0],
+            app_name=row[1],
+            user_id=row[2],
+            state=from_json(row[3]) if row[3] else {},
+            create_time=_julian_to_datetime(row[4]),
+            update_time=_julian_to_datetime(row[5]),
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None

@@ -243,18 +243,26 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     @abstractmethod
     async def append_event_and_update_state(
         self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> "SessionRecord":
         """Atomically append an event and update the session's durable state.
 
         This is the authoritative durable write boundary for post-creation
         session mutations.  The event insert and state update must succeed
-        together or fail together.
+        together or fail together, and the updated session record is returned
+        in the same round-trip so callers don't need a follow-up read.
 
         Args:
             event_record: Event record to store.
             session_id: Session identifier whose state should be updated.
             state: Post-append durable state snapshot (``temp:`` keys already
                 stripped by the service layer).
+
+        Returns:
+            The updated SessionRecord reflecting the new state and update_time.
+
+        Raises:
+            ValueError: If the session row no longer exists at update time
+                (raced with delete_session).
         """
         raise NotImplementedError
 

@@ -47,9 +47,18 @@ async def test_append_event_and_update_state_preserves_event_record_timestamp() 
         "timestamp": timestamp,
         "event_json": {"id": "event-1"},
     }
+    # Stub the post-write SELECT — the contract requires returning the refreshed record.
+    fake_record = {
+        "id": "session-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"turn": 1},
+        "create_time": timestamp,
+        "update_time": timestamp,
+    }
 
-    with patch.object(store, "_run_write") as run_write:
-        await store.append_event_and_update_state(event, "session-1", {"turn": 1})
+    with patch.object(store, "_run_write") as run_write, patch.object(store, "_get_session", return_value=fake_record):
+        returned = await store.append_event_and_update_state(event, "session-1", {"turn": 1})
 
     event_sql, event_params, _event_types = run_write.call_args.args[0][0]
     update_sql, _state_params, _state_types = run_write.call_args.args[0][1]
@@ -57,6 +66,7 @@ async def test_append_event_and_update_state_preserves_event_record_timestamp() 
     assert "PENDING_COMMIT_TIMESTAMP()" not in event_sql
     assert event_params["timestamp"] is timestamp
     assert "PENDING_COMMIT_TIMESTAMP()" in update_sql
+    assert returned == fake_record
 
 
 async def test_spanner_session_table_generates_row_deletion_policy_from_retention() -> None:

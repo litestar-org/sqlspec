@@ -220,11 +220,14 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
     def _append_event_and_update_state(
         self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically insert an event and update session state in one transaction.
 
         Both the event INSERT and the session state UPDATE execute within a single
-        Spanner transaction so they succeed or fail together.
+        Spanner transaction so they succeed or fail together. A follow-up
+        single-use read returns the SessionRecord; we can't capture update_time
+        inside the write txn because PENDING_COMMIT_TIMESTAMP() only materialises
+        on commit.
 
         Args:
             event_record: Event record to store.
@@ -258,11 +261,17 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
         ])
 
+        record = self._get_session(session_id)
+        if record is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+        return record
+
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state."""
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _insert_event(self, event_record: "EventRecord") -> None:
         event_params: dict[str, Any] = {

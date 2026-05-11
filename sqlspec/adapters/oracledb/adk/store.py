@@ -677,11 +677,14 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
         Both the event insert and session state update are executed within a
-        single transaction so they succeed or fail together.
+        single transaction so they succeed or fail together. The refreshed
+        SessionRecord is read inside the same transaction (Oracle's RETURNING
+        INTO requires output bind variables which complicate async cursor
+        handling, so a SELECT-after-UPDATE is used instead).
 
         Args:
             event_record: Event record with 5 keys: session_id, invocation_id,
@@ -705,6 +708,12 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         WHERE id = :id
         """
 
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE id = :id
+        """
+
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             await cursor.execute(
@@ -718,7 +727,23 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 },
             )
             await cursor.execute(update_sql, {"state": state_data, "id": session_id})
+            await cursor.execute(select_sql, {"id": session_id})
+            row = await cursor.fetchone()
             await conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        session_id_val, app_name, user_id, state_data_row, create_time, update_time = row
+        return SessionRecord(
+            id=session_id_val,
+            app_name=app_name,
+            user_id=user_id,
+            state=await self._deserialize_state(state_data_row),
+            create_time=create_time,
+            update_time=update_time,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -1374,11 +1399,12 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically create an event and update the session's durable state.
 
         Both the event insert and session state update are executed within a
-        single transaction so they succeed or fail together.
+        single transaction so they succeed or fail together; the refreshed
+        SessionRecord is read inside the same transaction.
 
         Args:
             event_record: Event record with 5 keys: session_id, invocation_id,
@@ -1402,6 +1428,12 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         WHERE id = :id
         """
 
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE id = :id
+        """
+
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -1415,13 +1447,29 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 },
             )
             cursor.execute(update_sql, {"state": state_data, "id": session_id})
+            cursor.execute(select_sql, {"id": session_id})
+            row = cursor.fetchone()
             conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        session_id_val, app_name, user_id, state_data_row, create_time, update_time = row
+        return SessionRecord(
+            id=session_id_val,
+            app_name=app_name,
+            user_id=user_id,
+            state=self._deserialize_state(state_data_row),
+            create_time=create_time,
+            update_time=update_time,
+        )
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state."""
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None

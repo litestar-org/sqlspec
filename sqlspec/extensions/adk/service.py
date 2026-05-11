@@ -260,15 +260,13 @@ class SQLSpecSessionService(BaseSessionService):
             raise ValueError(msg)
 
         # --- Persist event and state atomically ---
-        await self._store.append_event_and_update_state(
+        updated_record = await self._store.append_event_and_update_state(
             event_record=event_record, session_id=session.id, state=durable_state
         )
 
-        # Fetch updated session to refresh marker and timestamp
-        updated_record = await self._store.get_session(session.id)
-        if updated_record:
-            session.last_update_time = updated_record["update_time"].timestamp()
-            session._storage_update_marker = compute_update_marker(updated_record["update_time"])  # pyright: ignore[reportPrivateUsage]
+        # Use the returned record directly — saves a round-trip vs a follow-up get_session().
+        session.last_update_time = updated_record["update_time"].timestamp()
+        session._storage_update_marker = compute_update_marker(updated_record["update_time"])  # pyright: ignore[reportPrivateUsage]
 
         # Update in-memory session AFTER successful persistence
         self._update_session_state(session, event)

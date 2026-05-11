@@ -442,7 +442,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Synchronous implementation of append_event_and_update_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
@@ -458,6 +458,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE id = ?
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
         with self._config.provide_connection() as conn:
@@ -471,16 +472,32 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                     event_json_str,
                 ),
             )
-            conn.execute(update_sql, (state_json, now, session_id))
+            cursor = conn.execute(update_sql, (state_json, now, session_id))
+            row = cursor.fetchone()
             conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        session_id_val, app_name, user_id, state_data, create_time, update_time = row
+        return SessionRecord(
+            id=session_id_val,
+            app_name=app_name,
+            user_id=user_id,
+            state=from_json(state_data) if isinstance(state_data, str) else state_data,
+            create_time=create_time,
+            update_time=update_time,
+        )
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
         The event insert and state update succeed together or fail together
-        within a single DuckDB transaction.
+        within a single DuckDB transaction; the updated SessionRecord is
+        returned via UPDATE...RETURNING.
 
         Args:
             event_record: Event record to store (5-key shape).
@@ -488,7 +505,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
             state: Post-append durable state snapshot (``temp:`` keys already
                 stripped by the service layer).
         """
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
