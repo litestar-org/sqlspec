@@ -11,6 +11,10 @@ You can programmatically create the schema with ``create_tables()`` or
 ``ensure_tables()`` on a store. For managed deployments, configure SQLSpec
 migrations for the target database and run ``sqlspec upgrade`` instead.
 
+When ADK migrations are enabled from ``extension_config["adk"]``, SQLSpec
+checks that the selected adapter has the session and memory store classes used
+to generate this schema before the migration starts.
+
 .. contents:: On this page
    :local:
    :depth: 2

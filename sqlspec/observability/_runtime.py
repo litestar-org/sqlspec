@@ -4,9 +4,9 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
-from sqlspec.observability._config import LoggingConfig, ObservabilityConfig
+from sqlspec.observability._config import LoggingConfig, ObservabilityConfig, StatementObserver
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
-from sqlspec.observability._observer import StatementObserver, create_event, create_statement_observer
+from sqlspec.observability._observer import create_event, create_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.type_guards import has_span_attribute

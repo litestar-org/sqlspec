@@ -1,5 +1,10 @@
 # ruff: noqa: RUF100, PLR0913, A002, DOC201, PLR6301, PLR0917, ARG004, ARG002, ARG001
-"""Wrapper around library classes for compatibility when libraries are installed."""
+"""Private implementation for SQLSpec typing and optional dependency shims.
+
+Public consumers should import from :mod:`sqlspec.typing`. This module is kept
+private because it centralizes optional dependency fallbacks, compatibility
+aliases, and mypyc-excluded type boundaries used by the package internals.
+"""
 
 import enum
 from collections.abc import Iterable, Mapping

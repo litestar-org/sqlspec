@@ -146,22 +146,137 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                 self._value = None
 
 
+class _CacheManager:
+    """Private coordinator for global SQLSpec cache helpers."""
+
+    __slots__ = ()
+
+    @staticmethod
+    def get_cache_config() -> CacheConfig:
+        return get_cache_config()
+
+    @staticmethod
+    def update_cache_config(config: CacheConfig) -> None:
+        update_cache_config(config)
+
+    @staticmethod
+    def get_cache_stats() -> "dict[str, Any]":
+        return get_cache_statistics()
+
+    @staticmethod
+    def reset_cache_stats() -> None:
+        reset_cache_stats()
+
+    @staticmethod
+    def log_cache_stats() -> None:
+        log_cache_stats()
+
+    @staticmethod
+    def configure_cache(
+        *,
+        sql_cache_size: int | None = None,
+        fragment_cache_size: int | None = None,
+        optimized_cache_size: int | None = None,
+        sql_cache_enabled: bool | None = None,
+        fragment_cache_enabled: bool | None = None,
+        optimized_cache_enabled: bool | None = None,
+    ) -> None:
+        current_config = get_cache_config()
+        update_cache_config(
+            CacheConfig(
+                sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
+                fragment_cache_size=fragment_cache_size
+                if fragment_cache_size is not None
+                else current_config.fragment_cache_size,
+                optimized_cache_size=optimized_cache_size
+                if optimized_cache_size is not None
+                else current_config.optimized_cache_size,
+                sql_cache_enabled=sql_cache_enabled
+                if sql_cache_enabled is not None
+                else current_config.sql_cache_enabled,
+                fragment_cache_enabled=fragment_cache_enabled
+                if fragment_cache_enabled is not None
+                else current_config.fragment_cache_enabled,
+                optimized_cache_enabled=optimized_cache_enabled
+                if optimized_cache_enabled is not None
+                else current_config.optimized_cache_enabled,
+            )
+        )
+
+
+class _SQLFileManager:
+    """Private coordinator for SQL file loader lifecycle and delegation."""
+
+    __slots__ = ("_loader", "runtime")
+
+    def __init__(self, loader: "SQLFileLoader | None", runtime: "ObservabilityRuntime") -> None:
+        self._loader = loader
+        self.runtime = runtime
+        if self._loader is not None:
+            self._loader.set_observability_runtime(runtime)
+
+    def _ensure_loader(self) -> SQLFileLoader:
+        if self._loader is None:
+            self._loader = SQLFileLoader(runtime=self.runtime)
+        else:
+            self._loader.set_observability_runtime(self.runtime)
+        return self._loader
+
+    def load_sql_files(self, *paths: "str | Path") -> None:
+        loader = self._ensure_loader()
+        loader.load_sql(*paths)
+        logger.debug("Loaded SQL files: %s", paths)
+
+    def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
+        loader = self._ensure_loader()
+        loader.add_named_sql(name, sql, dialect)
+        logger.debug("Added named SQL: %s", name)
+
+    def get_sql(self, name: str) -> "SQL":
+        return self._ensure_loader().get_sql(name)
+
+    def list_sql_queries(self) -> "list[str]":
+        if self._loader is None:
+            return []
+        return self._loader.list_queries()
+
+    def has_sql_query(self, name: str) -> bool:
+        if self._loader is None:
+            return False
+        return self._loader.has_query(name)
+
+    def clear_sql_cache(self) -> None:
+        if self._loader is not None:
+            self._loader.clear_cache()
+            logger.debug("Cleared SQL cache")
+
+    def reload_sql_files(self) -> None:
+        if self._loader is not None:
+            self._loader.clear_cache()
+            logger.debug("Cleared SQL cache for reload")
+
+    def get_sql_files(self) -> "list[str]":
+        if self._loader is None:
+            return []
+        return self._loader.list_files()
+
+
+_CACHE_MANAGER = _CacheManager()
+
+
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config", "_loader_runtime", "_observability_config", "_sql_loader")
+    __slots__ = ("_configs", "_observability_config", "_sql_files")
 
     def __init__(
         self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
     ) -> None:
         self._configs: dict[int, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_sync_pools)
-        self._instance_cache_config: CacheConfig | None = None
-        self._sql_loader: SQLFileLoader | None = loader
         self._observability_config = observability_config
-        self._loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
-        if self._sql_loader is not None:
-            self._sql_loader.set_observability_runtime(self._loader_runtime)
+        loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
+        self._sql_files = _SQLFileManager(loader, loader_runtime)
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -332,7 +447,7 @@ class SQLSpec:
         """Return aggregated diagnostics across all registered configurations."""
 
         diagnostics = TelemetryDiagnostics()
-        loader_metrics = self._loader_runtime.metrics_snapshot()
+        loader_metrics = self._sql_files.runtime.metrics_snapshot()
         if loader_metrics:
             diagnostics.add_metric_snapshot(loader_metrics)
         for config in self._configs.values():
@@ -342,15 +457,6 @@ class SQLSpec:
             if metrics_snapshot:
                 diagnostics.add_metric_snapshot(metrics_snapshot)
         return diagnostics.snapshot()
-
-    def _ensure_sql_loader(self) -> SQLFileLoader:
-        """Return a SQLFileLoader instance configured with observability runtime."""
-
-        if self._sql_loader is None:
-            self._sql_loader = SQLFileLoader(runtime=self._loader_runtime)
-        else:
-            self._sql_loader.set_observability_runtime(self._loader_runtime)
-        return self._sql_loader
 
     @overload
     def get_connection(
@@ -584,7 +690,7 @@ class SQLSpec:
         Returns:
             The current cache configuration.
         """
-        return get_cache_config()
+        return _CACHE_MANAGER.get_cache_config()
 
     @staticmethod
     def update_cache_config(config: CacheConfig) -> None:
@@ -593,7 +699,7 @@ class SQLSpec:
         Args:
             config: The new cache configuration to apply.
         """
-        update_cache_config(config)
+        _CACHE_MANAGER.update_cache_config(config)
 
     @staticmethod
     def get_cache_stats() -> "dict[str, Any]":
@@ -602,17 +708,17 @@ class SQLSpec:
         Returns:
             Cache statistics object with detailed metrics.
         """
-        return get_cache_statistics()
+        return _CACHE_MANAGER.get_cache_stats()
 
     @staticmethod
     def reset_cache_stats() -> None:
         """Reset all cache statistics to zero."""
-        reset_cache_stats()
+        _CACHE_MANAGER.reset_cache_stats()
 
     @staticmethod
     def log_cache_stats() -> None:
         """Log current cache statistics using the configured logger."""
-        log_cache_stats()
+        _CACHE_MANAGER.log_cache_stats()
 
     @staticmethod
     def configure_cache(
@@ -634,26 +740,13 @@ class SQLSpec:
             fragment_cache_enabled: Enable/disable expression/parameter/file cache.
             optimized_cache_enabled: Enable/disable optimized expression cache.
         """
-        current_config = get_cache_config()
-        update_cache_config(
-            CacheConfig(
-                sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
-                fragment_cache_size=fragment_cache_size
-                if fragment_cache_size is not None
-                else current_config.fragment_cache_size,
-                optimized_cache_size=optimized_cache_size
-                if optimized_cache_size is not None
-                else current_config.optimized_cache_size,
-                sql_cache_enabled=sql_cache_enabled
-                if sql_cache_enabled is not None
-                else current_config.sql_cache_enabled,
-                fragment_cache_enabled=fragment_cache_enabled
-                if fragment_cache_enabled is not None
-                else current_config.fragment_cache_enabled,
-                optimized_cache_enabled=optimized_cache_enabled
-                if optimized_cache_enabled is not None
-                else current_config.optimized_cache_enabled,
-            )
+        _CACHE_MANAGER.configure_cache(
+            sql_cache_size=sql_cache_size,
+            fragment_cache_size=fragment_cache_size,
+            optimized_cache_size=optimized_cache_size,
+            sql_cache_enabled=sql_cache_enabled,
+            fragment_cache_enabled=fragment_cache_enabled,
+            optimized_cache_enabled=optimized_cache_enabled,
         )
 
     def load_sql_files(self, *paths: "str | Path") -> None:
@@ -662,9 +755,7 @@ class SQLSpec:
         Args:
             *paths: One or more file paths or directory paths to load.
         """
-        loader = self._ensure_sql_loader()
-        loader.load_sql(*paths)
-        logger.debug("Loaded SQL files: %s", paths)
+        self._sql_files.load_sql_files(*paths)
 
     def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
         """Add a named SQL query directly.
@@ -674,9 +765,7 @@ class SQLSpec:
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
         """
-        loader = self._ensure_sql_loader()
-        loader.add_named_sql(name, sql, dialect)
-        logger.debug("Added named SQL: %s", name)
+        self._sql_files.add_named_sql(name, sql, dialect)
 
     def get_sql(self, name: str) -> "SQL":
         """Get a SQL object by name.
@@ -688,8 +777,7 @@ class SQLSpec:
         Returns:
             SQL object ready for execution.
         """
-        loader = self._ensure_sql_loader()
-        return loader.get_sql(name)
+        return self._sql_files.get_sql(name)
 
     def list_sql_queries(self) -> "list[str]":
         """List all available query names.
@@ -697,9 +785,7 @@ class SQLSpec:
         Returns:
             Sorted list of query names.
         """
-        if self._sql_loader is None:
-            return []
-        return self._sql_loader.list_queries()
+        return self._sql_files.list_sql_queries()
 
     def has_sql_query(self, name: str) -> bool:
         """Check if a SQL query exists.
@@ -710,15 +796,11 @@ class SQLSpec:
         Returns:
             True if the query exists in the loader.
         """
-        if self._sql_loader is None:
-            return False
-        return self._sql_loader.has_query(name)
+        return self._sql_files.has_sql_query(name)
 
     def clear_sql_cache(self) -> None:
         """Clear the SQL file cache."""
-        if self._sql_loader is not None:
-            self._sql_loader.clear_cache()
-            logger.debug("Cleared SQL cache")
+        self._sql_files.clear_sql_cache()
 
     def reload_sql_files(self) -> None:
         """Reload all SQL files.
@@ -726,9 +808,7 @@ class SQLSpec:
         Note:
             This clears the cache and requires calling load_sql_files again.
         """
-        if self._sql_loader is not None:
-            self._sql_loader.clear_cache()
-            logger.debug("Cleared SQL cache for reload")
+        self._sql_files.reload_sql_files()
 
     def get_sql_files(self) -> "list[str]":
         """Get list of loaded SQL files.
@@ -736,6 +816,4 @@ class SQLSpec:
         Returns:
             Sorted list of file paths.
         """
-        if self._sql_loader is None:
-            return []
-        return self._sql_loader.list_files()
+        return self._sql_files.get_sql_files()

@@ -10,8 +10,13 @@ when a concrete store no longer satisfies the base contract.
 """
 
 import importlib
+import inspect
 
 import pytest
+
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
 SESSION_STORE_CLASSES = [
     "sqlspec.adapters.asyncpg.adk.AsyncpgADKStore",
@@ -60,6 +65,16 @@ MEMORY_STORE_CLASSES = [
 ALL_STORE_CLASSES = SESSION_STORE_CLASSES + MEMORY_STORE_CLASSES
 
 
+def _load_class(class_path: str) -> type:
+    module_path, class_name = class_path.rsplit(".", 1)
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as exc:
+        pytest.skip(f"Module {module_path} not importable (missing optional dependency)")
+        raise RuntimeError("pytest.skip did not raise") from exc
+    return getattr(module, class_name)
+
+
 @pytest.mark.parametrize("class_path", ALL_STORE_CLASSES)
 def test_store_has_no_abstract_methods(class_path: str) -> None:
     """Every shipped store class must be concrete (no unsatisfied abstract methods).
@@ -68,11 +83,66 @@ def test_store_has_no_abstract_methods(class_path: str) -> None:
     signals that the concrete store is missing one or more method implementations
     required by its base class contract.
     """
-    module_path, class_name = class_path.rsplit(".", 1)
-    try:
-        module = importlib.import_module(module_path)
-    except ImportError:
-        pytest.skip(f"Module {module_path} not importable (missing optional dependency)")
-    cls = getattr(module, class_name)
+    cls = _load_class(class_path)
     abstract: set[str] = getattr(cls, "__abstractmethods__", set())
     assert not abstract, f"{class_path} has unsatisfied abstract methods: {abstract}"
+
+
+@pytest.mark.parametrize("class_path", ALL_STORE_CLASSES)
+def test_store_method_signatures_match_base_contract(class_path: str) -> None:
+    """Every shipped concrete store keeps the base store method signatures."""
+    cls = _load_class(class_path)
+
+    if issubclass(cls, BaseAsyncADKStore):
+        base: type = BaseAsyncADKStore
+    elif issubclass(cls, BaseSyncADKStore):
+        base = BaseSyncADKStore
+    elif issubclass(cls, BaseAsyncADKMemoryStore):
+        base = BaseAsyncADKMemoryStore
+    else:
+        base = BaseSyncADKMemoryStore
+
+    for method_name in base.__abstractmethods__:
+        base_signature = inspect.signature(getattr(base, method_name))
+        concrete_signature = inspect.signature(getattr(cls, method_name))
+        assert list(base_signature.parameters) == list(concrete_signature.parameters), (
+            f"{class_path}.{method_name} parameters differ from {base.__name__}: "
+            f"{concrete_signature} != {base_signature}"
+        )
+
+
+def test_adk_store_registration_validator_resolves_sqlite_store_classes() -> None:
+    """The migration registration validator resolves both SQLite ADK store classes."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+
+    config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
+
+    _validate_adk_store_registration(config)
+
+
+def test_adk_store_registration_validator_resolves_duckdb_store_classes() -> None:
+    """The migration registration validator handles DuckDB store export casing."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+    from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
+
+    _validate_adk_store_registration(config)
+
+
+def test_adk_store_registration_validator_fails_fast_for_broken_store_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Broken adapter-to-store naming fails during config registration."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.extensions.adk import _config_utils
+
+    def import_missing_store(path: str) -> object:
+        if path.endswith("SqliteADKStore"):
+            raise ImportError("missing test store")
+        return importlib.import_module(path.rsplit(".", 1)[0])
+
+    monkeypatch.setattr(_config_utils, "import_string", import_missing_store)
+    monkeypatch.setattr(_config_utils, "_get_adk_exported_store_class", lambda _config, _suffix: None)
+
+    with pytest.raises(SQLSpecError, match="Failed to import ADK store class"):
+        SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})

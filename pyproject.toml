@@ -238,7 +238,6 @@ include = [
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
-  "sqlspec/extensions/_filter_aliases.py",         # Shared filter alias resolver for framework providers
   "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter providers avoid nested dependency functions
   "sqlspec/extensions/litestar/providers.py",      # Litestar filter providers precompute dynamic signatures
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults

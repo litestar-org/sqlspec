@@ -2,11 +2,15 @@
 
 import inspect
 import logging
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.extensions.adk._config_utils import (
+    _get_adk_adapter_store_class,
+    _get_adk_memory_migration_store_class,
+    _is_adk_memory_migration_enabled,
+)
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
     from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
@@ -35,24 +39,7 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKSt
     if not context or not context.config:
         _raise_missing_config()
 
-    config_class = type(context.config)
-    config_module = config_class.__module__
-    config_name = config_class.__name__
-
-    if not config_module.startswith("sqlspec.adapters."):
-        _raise_unsupported_config(f"{config_module}.{config_name}")
-
-    adapter_name = config_module.split(".")[2]
-    store_class_name = config_name.replace("Config", "ADKStore")
-
-    store_path = f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
-
-    try:
-        store_class: type[BaseAsyncADKStore] = import_string(store_path)
-    except ImportError as e:
-        _raise_store_import_failed(store_path, e)
-
-    return store_class
+    return cast("type[BaseAsyncADKStore]", _get_adk_adapter_store_class(context.config, "ADKStore"))
 
 
 def _get_memory_store_class(
@@ -74,25 +61,11 @@ def _get_memory_store_class(
     if not context or not context.config:
         return None
 
-    config_class = type(context.config)
-    config_module = config_class.__module__
-    config_name = config_class.__name__
-
-    if not config_module.startswith("sqlspec.adapters."):
+    store_class = _get_adk_memory_migration_store_class(context.config)
+    if store_class is None:
+        log_with_context(logger, logging.DEBUG, "adk.migration.memory_store.missing")
         return None
-
-    adapter_name = config_module.split(".")[2]
-    store_class_name = config_name.replace("Config", "ADKMemoryStore")
-
-    store_path = f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
-
-    try:
-        store_class: type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore] = import_string(store_path)
-    except ImportError:
-        log_with_context(logger, logging.DEBUG, "adk.migration.memory_store.missing", store_path=store_path)
-        return None
-    else:
-        return store_class
+    return cast("type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore]", store_class)
 
 
 def _is_memory_enabled(context: "MigrationContext | None") -> bool:
@@ -111,15 +84,7 @@ def _is_memory_enabled(context: "MigrationContext | None") -> bool:
     if not context or not context.config:
         return False
 
-    config = context.config
-    extension_config = cast("dict[str, dict[str, Any]]", config.extension_config)
-    adk_config: dict[str, Any] = extension_config.get("adk", {})
-
-    include_memory = adk_config.get("include_memory_migration")
-    if include_memory is not None:
-        return bool(include_memory)
-
-    return bool(adk_config.get("enable_memory", True))
+    return _is_adk_memory_migration_enabled(context.config)
 
 
 def _raise_missing_config() -> NoReturn:
@@ -130,33 +95,6 @@ def _raise_missing_config() -> NoReturn:
     """
     msg = "Migration context must have a config to determine store class"
     raise SQLSpecError(msg)
-
-
-def _raise_unsupported_config(config_type: str) -> NoReturn:
-    """Raise error for unsupported config type.
-
-    Args:
-        config_type: The unsupported config type name.
-
-    Raises:
-        SQLSpecError: Always raised with config type info.
-    """
-    msg = f"Unsupported config type for ADK migration: {config_type}"
-    raise SQLSpecError(msg)
-
-
-def _raise_store_import_failed(store_path: str, error: ImportError) -> NoReturn:
-    """Raise error when store class import fails.
-
-    Args:
-        store_path: The import path that failed.
-        error: The original import error.
-
-    Raises:
-        SQLSpecError: Always raised with import details.
-    """
-    msg = f"Failed to import ADK store class from {store_path}: {error}"
-    raise SQLSpecError(msg) from error
 
 
 async def up(context: "MigrationContext | None" = None) -> "list[str]":

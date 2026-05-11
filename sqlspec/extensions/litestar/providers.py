@@ -5,7 +5,7 @@ This module contains functions to create dependency providers for services and f
 
 import datetime
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from types import GenericAlias
 from typing import Any, Literal, NamedTuple, TypedDict, cast
@@ -28,7 +28,6 @@ from sqlspec.core import (
     OrderByFilter,
     SearchFilter,
 )
-from sqlspec.extensions._filter_aliases import resolve_sort_field_aliases
 from sqlspec.utils.text import camelize
 
 __all__ = (
@@ -81,6 +80,20 @@ class FieldNameType(NamedTuple):
 
     name: str
     type_hint: type[Any] = str
+
+
+class _SortFieldResolution(NamedTuple):
+    default_field: str
+    default_query_value: str
+    allowed_fields: frozenset[str]
+    inbound_aliases: dict[str, str]
+    field_display_names: dict[str, str]
+    allowed_display_names: tuple[str, ...]
+
+    def normalize(self, value: str | None) -> str | None:
+        if value is None:
+            return self.default_field
+        return self.inbound_aliases.get(value)
 
 
 class FilterConfig(TypedDict):
@@ -612,7 +625,7 @@ class _SearchFilterProvider:
 
 class _OrderByProvider:
     def __init__(self, sort_field: SortField, config: FilterConfig) -> None:
-        self.sort_resolution = resolve_sort_field_aliases(
+        self.sort_resolution = _resolve_sort_field_aliases(
             sort_field,
             sort_field_aliases=config.get("sort_field_aliases"),
             sort_field_camelize=config.get("sort_field_camelize", True),
@@ -654,6 +667,62 @@ class _OrderByProvider:
             msg = f"Invalid orderBy field '{field_name}'. Allowed fields: {self.allowed_field_names}"
             raise ValidationException(detail=msg)
         return OrderByFilter(field_name=resolved_field, sort_order=sort_order or self.sort_order_default)
+
+
+def _resolve_sort_field_aliases(
+    sort_field: SortField, sort_field_aliases: Mapping[str, str] | None = None, sort_field_camelize: bool = True
+) -> _SortFieldResolution:
+    fields = _coerce_sort_fields(sort_field)
+    allowed_fields = frozenset(fields)
+    inbound_aliases: dict[str, str] = {}
+    field_display_names = {field: field for field in fields}
+
+    for field in fields:
+        _add_sort_field_alias(inbound_aliases, alias=field, field=field)
+
+    if sort_field_camelize:
+        for field in fields:
+            alias = camelize(field)
+            _add_sort_field_alias(inbound_aliases, alias=alias, field=field)
+            field_display_names[field] = alias
+
+    if sort_field_aliases:
+        for alias, field in sort_field_aliases.items():
+            if field not in allowed_fields:
+                msg = f"sort field alias '{alias}' targets unknown sort field '{field}'"
+                raise ValueError(msg)
+            _add_sort_field_alias(inbound_aliases, alias=alias, field=field)
+            field_display_names[field] = alias
+
+    allowed_display_names = tuple(field_display_names[field] for field in fields)
+    return _SortFieldResolution(
+        default_field=fields[0],
+        default_query_value=field_display_names[fields[0]],
+        allowed_fields=allowed_fields,
+        inbound_aliases=inbound_aliases,
+        field_display_names=field_display_names,
+        allowed_display_names=allowed_display_names,
+    )
+
+
+def _coerce_sort_fields(sort_field: SortField) -> tuple[str, ...]:
+    if isinstance(sort_field, str):
+        return (sort_field,)
+    fields = tuple(sorted(sort_field)) if isinstance(sort_field, set) else tuple(sort_field)
+    if not fields:
+        msg = "sort_field must include at least one field"
+        raise ValueError(msg)
+    return fields
+
+
+def _add_sort_field_alias(inbound_aliases: dict[str, str], *, alias: str, field: str) -> None:
+    existing_field = inbound_aliases.get(alias)
+    if existing_field is None or existing_field == field:
+        inbound_aliases[alias] = field
+        return
+
+    msg = f"ambiguous sort field alias '{alias}' maps to both '{existing_field}' and '{field}'"
+    raise ValueError(msg)
 
 
 def _provide_collection_filter(context: _CollectionFilterProvider, **kwargs: Any) -> Any:

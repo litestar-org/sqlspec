@@ -34,7 +34,8 @@ def test_enable_metrics_uses_db_system_labels(monkeypatch) -> None:
     config = prometheus.enable_metrics()
     assert config.statement_observers is not None
     observer = config.statement_observers[-1]
-    assert observer._label_names == ("db_system", "operation")  # pyright: ignore[reportPrivateUsage, reportFunctionMemberAccess]
+    assert isinstance(observer, prometheus.PrometheusStatementObserver)
+    assert observer._label_names == ("db_system", "operation")  # pyright: ignore[reportPrivateUsage]
 
 
 def test_db_system_label_extraction_from_event(monkeypatch) -> None:

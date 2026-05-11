@@ -1,4 +1,12 @@
 # pyright: ignore[reportAttributeAccessIssue]
+"""Public typing helpers and optional dependency aliases.
+
+This module is the supported import surface for SQLSpec typing utilities.
+The implementation lives in :mod:`sqlspec._typing`, which remains private so
+adapter and optional dependency shims can evolve without expanding the public
+API.
+"""
+
 from collections.abc import Iterator
 from functools import lru_cache
 from typing import Annotated, Any, Literal, Protocol, TypeAlias, TypedDict, _TypedDict  # pyright: ignore

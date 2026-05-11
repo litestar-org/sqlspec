@@ -13,12 +13,13 @@ from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
-BIGQUERY_ENABLED = os.environ.get("SQLSPEC_ENABLE_BIGQUERY_TESTS") == "1"
+BIGQUERY_ENABLED = os.environ.get("CI") == "true" or os.environ.get("SQLSPEC_ENABLE_BIGQUERY_TESTS") == "1"
 
 pytestmark = [
     pytest.mark.xdist_group("bigquery"),
     pytest.mark.skipif(
-        not BIGQUERY_ENABLED, reason="BigQuery emulator is optional; set SQLSPEC_ENABLE_BIGQUERY_TESTS=1 to enable"
+        not BIGQUERY_ENABLED,
+        reason="BigQuery emulator is optional locally; set SQLSPEC_ENABLE_BIGQUERY_TESTS=1 to enable",
     ),
 ]
 

@@ -1,7 +1,7 @@
 """Configuration objects for the observability suite."""
 
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from sqlspec.config import LifecycleConfig
@@ -18,9 +18,16 @@ __all__ = (
     "TelemetryConfig",
 )
 
-
-StatementObserver = Callable[["StatementEvent"], None]
 LifecycleHook = Callable[[dict[str, Any]], None]
+
+
+@runtime_checkable
+class StatementObserver(Protocol):
+    """Protocol for callbacks that receive SQL execution events."""
+
+    def __call__(self, event: "StatementEvent", /) -> None:
+        """Handle a SQL execution event."""
+        ...
 
 
 class RedactionConfig:

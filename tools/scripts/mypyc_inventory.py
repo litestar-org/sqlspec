@@ -132,10 +132,6 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "keep_interpreted",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled render helpers stay in _generators.",
     },
-    "sqlspec/extensions/_filter_aliases.py": {
-        "classification": "compile_now",
-        "reason": "Shared framework filter alias resolution is pure validation and mapping logic.",
-    },
     "sqlspec/extensions/events/_models.py": {
         "classification": "keep_interpreted",
         "reason": "Slot dataclass must expose __slots__ for tests/public behavior; mypyc native class removes that runtime attribute.",

@@ -87,7 +87,6 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/dialects/postgres/_generators.py",
         "sqlspec/dialects/postgres/_operators.py",
         "sqlspec/dialects/spanner/_generators.py",
-        "sqlspec/extensions/_filter_aliases.py",
         "sqlspec/extensions/events/_hints.py",
         "sqlspec/extensions/events/_payload.py",
         "sqlspec/extensions/adk/_types.py",
@@ -122,7 +121,6 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/dialects/postgres/_generators.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/postgres/_operators.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/spanner/_generators.py" in payload["compiled_modules"]
-    assert "sqlspec/extensions/_filter_aliases.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_hints.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_payload.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/_types.py" in payload["compiled_modules"]
