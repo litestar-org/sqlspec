@@ -4,10 +4,9 @@ import os
 from collections import OrderedDict
 from functools import partial
 from threading import RLock
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.typing import UNSET, ArrowReturnFormat, attrs_asdict
+from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, attrs_asdict, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
@@ -46,12 +45,6 @@ def _is_truthy(value: "str | None") -> bool:
 
 
 _METRICS_ENABLED: Final[bool] = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
-_msgspec_structs: ModuleType | None
-
-try:
-    from msgspec import structs as _msgspec_structs
-except ImportError:  # pragma: no cover - msgspec is a required dependency in supported environments
-    _msgspec_structs = None
 
 
 class _SerializerCacheMetrics:
@@ -134,13 +127,13 @@ def _dump_identity_dict(value: Any) -> "dict[str, Any]":
 
 
 def _get_msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
-    if _msgspec_structs is None:
+    if not MSGSPEC_INSTALLED:
         msg = "msgspec is required to serialize msgspec.Struct values"
         raise RuntimeError(msg)
 
     if wire_format:
-        return tuple((field.encode_name, field.name) for field in _msgspec_structs.fields(schema_type))
-    return tuple((field.name, field.name) for field in _msgspec_structs.fields(schema_type))
+        return tuple((field.encode_name, field.name) for field in msgspec_fields(schema_type))
+    return tuple((field.name, field.name) for field in msgspec_fields(schema_type))
 
 
 def _dump_msgspec_struct(

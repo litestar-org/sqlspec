@@ -155,6 +155,11 @@ def convert_stub(  # noqa: PLR0913
     return {}
 
 
+def msgspec_fields_stub(type_: Any, /) -> "tuple[Any, ...]":  # noqa: ARG001
+    """Placeholder implementation."""
+    return ()
+
+
 class UnsetTypeStub(enum.Enum):
     UNSET = "UNSET"
 
@@ -167,16 +172,19 @@ try:
     from msgspec import Struct as _RealStruct
     from msgspec import UnsetType as _RealUnsetType
     from msgspec import convert as _real_convert
+    from msgspec.structs import fields as _real_msgspec_fields
 
     Struct = _RealStruct
     UnsetType = _RealUnsetType
     UNSET = _REAL_UNSET
     convert = _real_convert
+    msgspec_fields = _real_msgspec_fields
 except ImportError:
     Struct = StructStub  # type: ignore[assignment,misc]
     UnsetType = UnsetTypeStub  # type: ignore[assignment,misc]
     UNSET = UNSET_STUB  # type: ignore[assignment] # pyright: ignore[reportConstantRedefinition]
     convert = convert_stub
+    msgspec_fields = msgspec_fields_stub  # type: ignore[assignment]
 
 
 try:
@@ -700,5 +708,7 @@ __all__ = (
     "convert",
     "convert_stub",
     "module_available",
+    "msgspec_fields",
+    "msgspec_fields_stub",
     "trace",
 )

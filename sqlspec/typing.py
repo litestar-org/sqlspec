@@ -73,6 +73,7 @@ from sqlspec._typing import (
     cattrs_unstructure,
     convert,
     module_available,
+    msgspec_fields,
     trace,
 )
 
@@ -399,5 +400,6 @@ __all__ = (
     "convert",
     "get_type_adapter",
     "module_available",
+    "msgspec_fields",
     "trace",
 )
