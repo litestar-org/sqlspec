@@ -1,7 +1,7 @@
 """Configuration objects for the observability suite."""
 
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from sqlspec.config import LifecycleConfig
@@ -21,9 +21,14 @@ __all__ = (
 LifecycleHook = Callable[[dict[str, Any]], None]
 
 
-@runtime_checkable
 class StatementObserver(Protocol):
-    """Protocol for callbacks that receive SQL execution events."""
+    """Protocol for callbacks that receive SQL execution events.
+
+    Used as a structural type annotation only; no ``@runtime_checkable`` because
+    nothing in the codebase performs ``isinstance`` checks against it, and that
+    decorator is incompatible with mypyc-compiled Protocol classes (breaks PGO
+    training on the build wheel).
+    """
 
     def __call__(self, event: "StatementEvent", /) -> None:
         """Handle a SQL execution event."""
