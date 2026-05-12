@@ -390,6 +390,10 @@ filterwarnings = [
   "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.spanner_admin_database_v1:FutureWarning",
   "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.spanner_admin_instance_v1:FutureWarning",
   "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.bigquery_storage_v1:FutureWarning",
+  "ignore::DeprecationWarning:sanic.logging.deprecation",
+  "ignore:Table '.*' already exists:Warning",
+  "ignore:Unknown table '.*':Warning",
+  "ignore:PROCEDURE .* does not exist:Warning",
 ]
 markers = [
   "integration: marks tests that require an external database",

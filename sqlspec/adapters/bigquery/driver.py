@@ -166,8 +166,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
         if is_select_like:
-            column_names = resolve_column_names(cursor.job.schema, self._column_name_cache)
-            rows_list, _ = collect_rows(job_result, cursor.job.schema, column_names=column_names)
+            job_schema = cursor.job.schema or getattr(job_result, "schema", None)
+            column_names = resolve_column_names(job_schema, self._column_name_cache)
+            rows_list, _ = collect_rows(job_result, job_schema, column_names=column_names)
 
             return self.create_execution_result(
                 cursor,
