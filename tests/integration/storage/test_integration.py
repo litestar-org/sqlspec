@@ -1,6 +1,6 @@
-"""Integration tests for storage backends using minio fixtures.
+"""Integration tests for storage backends using RustFS fixtures.
 
-Tests storage backend operations against S3-compatible storage using pytest-databases minio fixtures.
+Tests storage backend operations against S3-compatible storage using pytest-databases RustFS fixtures.
 Follows Advanced Alchemy patterns for comprehensive storage testing.
 """
 
@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from minio import Minio
-from pytest_databases.docker.minio import MinioService
+from pytest_databases.docker.rustfs import RustfsService
 
 from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED, PYARROW_INSTALLED
+from tests.fixtures.rustfs import rustfs_fsspec_kwargs, rustfs_obstore_kwargs
 
 # Test data
 TEST_TEXT_CONTENT = "Hello, SQLSpec storage integration test!"
@@ -58,40 +58,20 @@ def local_test_setup(tmp_path: "Path") -> "Path":
 
 
 @pytest.fixture
-def fsspec_s3_backend(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> "ObjectStoreProtocol":
+def fsspec_s3_backend(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> "ObjectStoreProtocol":
     """Set up FSSpec S3 backend for testing."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    return FSSpecBackend(
-        uri=f"s3://{minio_default_bucket_name}/",
-        endpoint_url=f"http://{minio_service.endpoint}",
-        key=minio_service.access_key,
-        secret=minio_service.secret_key,
-        use_ssl=False,
-        client_kwargs={"verify": False, "use_ssl": False},
-    )
+    return FSSpecBackend(uri=f"s3://{rustfs_bucket_name}/", **rustfs_fsspec_kwargs(rustfs_service))
 
 
 @pytest.fixture
-def obstore_s3_backend(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> "ObjectStoreProtocol":
+def obstore_s3_backend(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> "ObjectStoreProtocol":
     """Set up ObStore S3 backend for testing."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
-    s3_uri = f"s3://{minio_default_bucket_name}"
-    return ObStoreBackend(
-        s3_uri,
-        aws_endpoint=f"http://{minio_service.endpoint}",
-        aws_access_key_id=minio_service.access_key,
-        aws_secret_access_key=minio_service.secret_key,
-        aws_virtual_hosted_style_request=False,
-        client_options={"allow_http": True},
-    )
+    s3_uri = f"s3://{rustfs_bucket_name}"
+    return ObStoreBackend(s3_uri, **rustfs_obstore_kwargs(rustfs_service))
 
 
 # Local storage tests
@@ -207,15 +187,8 @@ def test_storage_missing_logging_format(caplog) -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
-def test_fsspec_s3_basic_operations(
-    fsspec_s3_backend: "ObjectStoreProtocol", minio_client: "Minio", minio_default_bucket_name: str
-) -> None:
+def test_fsspec_s3_basic_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend basic operations."""
-    # Ensure bucket exists (following Advanced Alchemy pattern)
-    assert minio_client.bucket_exists(bucket_name=minio_default_bucket_name), (
-        f"Bucket {minio_default_bucket_name} does not exist"
-    )
-
     # Test write and read text
     test_path = "integration_test/test.txt"
     fsspec_s3_backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
@@ -303,15 +276,8 @@ def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol"
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
-def test_obstore_s3_basic_operations(
-    obstore_s3_backend: "ObjectStoreProtocol", minio_client: "Minio", minio_default_bucket_name: str
-) -> None:
+def test_obstore_s3_basic_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend basic operations."""
-    # Ensure bucket exists (following Advanced Alchemy pattern)
-    assert minio_client.bucket_exists(bucket_name=minio_default_bucket_name), (
-        f"Bucket {minio_default_bucket_name} does not exist"
-    )
-
     test_path = "integration_test/obstore_test.txt"
 
     # Test write and read
@@ -408,24 +374,13 @@ def test_registry_path_resolution(tmp_path: "Path") -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
-def test_registry_s3_fsspec_resolution(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> None:
+def test_registry_s3_fsspec_resolution(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test storage registry S3 resolution with FSSpec backend."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    s3_uri = f"s3://{minio_default_bucket_name}/registry_test/"
+    s3_uri = f"s3://{rustfs_bucket_name}/registry_test/"
 
-    backend = storage_registry.get(
-        s3_uri,
-        backend="fsspec",
-        endpoint_url=f"http://{minio_service.endpoint}",
-        key=minio_service.access_key,
-        secret=minio_service.secret_key,
-        use_ssl=False,
-        client_kwargs={"verify": False, "use_ssl": False},
-    )
+    backend = storage_registry.get(s3_uri, backend="fsspec", **rustfs_fsspec_kwargs(rustfs_service))
 
     # Should get FSSpec backend for S3
     assert isinstance(backend, FSSpecBackend)
@@ -439,10 +394,9 @@ def test_registry_s3_fsspec_resolution(
 
 @pytest.mark.xdist_group("storage")
 def test_registry_alias_registration(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str, tmp_path: "Path"
+    rustfs_service: "RustfsService", rustfs_bucket_name: str, tmp_path: "Path"
 ) -> None:
     """Test storage registry alias registration and usage."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.local import LocalStore
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -468,14 +422,7 @@ def test_registry_alias_registration(
             from sqlspec.storage.backends.fsspec import FSSpecBackend
 
             storage_registry.register_alias(
-                "test-s3",
-                uri=f"s3://{minio_default_bucket_name}/",
-                backend="fsspec",
-                endpoint_url=f"http://{minio_service.endpoint}",
-                key=minio_service.access_key,
-                secret=minio_service.secret_key,
-                use_ssl=False,
-                client_kwargs={"verify": False, "use_ssl": False},
+                "test-s3", uri=f"s3://{rustfs_bucket_name}/", backend="fsspec", **rustfs_fsspec_kwargs(rustfs_service)
             )
 
             s3_backend = storage_registry.get("test-s3")
@@ -503,11 +450,8 @@ def local_backend(tmp_path: "Path") -> "ObjectStoreProtocol":
 
 
 @pytest.fixture
-def fsspec_s3_backend_optional(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> "ObjectStoreProtocol":
+def fsspec_s3_backend_optional(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> "ObjectStoreProtocol":
     """Create FSSpec S3 backend if available."""
-    _ = minio_client  # Ensures bucket is created
     if not FSSPEC_INSTALLED:
         pytest.skip("fsspec missing")
 
@@ -515,35 +459,21 @@ def fsspec_s3_backend_optional(
 
     return FSSpecBackend.from_config({
         "protocol": "s3",
-        "fs_config": {
-            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-            "key": minio_service.access_key,
-            "secret": minio_service.secret_key,
-        },
-        "base_path": minio_default_bucket_name,
+        "fs_config": rustfs_fsspec_kwargs(rustfs_service),
+        "base_path": rustfs_bucket_name,
     })
 
 
 @pytest.fixture
-def obstore_s3_backend_optional(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> "ObjectStoreProtocol":
+def obstore_s3_backend_optional(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> "ObjectStoreProtocol":
     """Create ObStore S3 backend if available."""
-    _ = minio_client  # Ensures bucket is created
     if not OBSTORE_INSTALLED:
         pytest.skip("obstore missing")
 
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
-    s3_uri = f"s3://{minio_default_bucket_name}"
-    return ObStoreBackend(
-        s3_uri,
-        aws_endpoint=f"http://{minio_service.endpoint}",
-        aws_access_key_id=minio_service.access_key,
-        aws_secret_access_key=minio_service.secret_key,
-        aws_virtual_hosted_style_request=False,
-        client_options={"allow_http": True},
-    )
+    s3_uri = f"s3://{rustfs_bucket_name}"
+    return ObStoreBackend(s3_uri, **rustfs_obstore_kwargs(rustfs_service))
 
 
 @pytest.mark.xdist_group("storage")
@@ -614,21 +544,14 @@ def test_local_backend_error_handling(tmp_path: "Path") -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
-def test_fsspec_s3_error_handling(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> None:
+def test_fsspec_s3_error_handling(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test FSSpec S3 backend error handling."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({
         "protocol": "s3",
-        "fs_config": {
-            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-            "key": minio_service.access_key,
-            "secret": minio_service.secret_key,
-        },
-        "base_path": minio_default_bucket_name,
+        "fs_config": rustfs_fsspec_kwargs(rustfs_service),
+        "base_path": rustfs_bucket_name,
     })
 
     # Test reading nonexistent file
@@ -708,10 +631,9 @@ def test_registry_alias_management(tmp_path: "Path") -> None:
 
 @pytest.mark.xdist_group("storage")
 def test_registry_backend_fallback_order(
-    tmp_path: "Path", minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
+    tmp_path: "Path", rustfs_service: "RustfsService", rustfs_bucket_name: str
 ) -> None:
     """Test that registry follows correct backend fallback order."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.local import LocalStore
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -725,13 +647,11 @@ def test_registry_backend_fallback_order(
         assert isinstance(local_backend, (ObStoreBackend, LocalStore))
 
         # Test S3 resolution (should prefer ObStore > FSSpec if available)
-        s3_uri = f"s3://{minio_default_bucket_name}"
-        s3_backend = storage_registry.get(
-            s3_uri,
-            endpoint_url=f"http://{minio_service.host}:{minio_service.port}",
-            aws_access_key_id=minio_service.access_key,
-            aws_secret_access_key=minio_service.secret_key,
+        s3_uri = f"s3://{rustfs_bucket_name}"
+        storage_kwargs = (
+            rustfs_obstore_kwargs(rustfs_service) if OBSTORE_INSTALLED else rustfs_fsspec_kwargs(rustfs_service)
         )
+        s3_backend = storage_registry.get(s3_uri, **storage_kwargs)
 
         # Should get ObStore if available, else FSSpec, else error
         if OBSTORE_INSTALLED:
@@ -781,21 +701,14 @@ def test_local_arrow_operations(tmp_path: "Path") -> None:
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")
-def test_fsspec_s3_arrow_operations(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> None:
+def test_fsspec_s3_arrow_operations(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test FSSpec S3 backend Arrow operations if pyarrow is available."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({
         "protocol": "s3",
-        "fs_config": {
-            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-            "key": minio_service.access_key,
-            "secret": minio_service.secret_key,
-        },
-        "base_path": minio_default_bucket_name,
+        "fs_config": rustfs_fsspec_kwargs(rustfs_service),
+        "base_path": rustfs_bucket_name,
     })
 
     import pyarrow as pa
@@ -905,21 +818,14 @@ def test_local_metadata_operations(tmp_path: "Path") -> None:
 
 @pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
-def test_fsspec_s3_metadata_operations(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> None:
+def test_fsspec_s3_metadata_operations(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test FSSpec S3 backend metadata operations."""
-    _ = minio_client  # Ensures bucket is created
     from sqlspec.storage.backends.fsspec import FSSpecBackend
 
     backend = FSSpecBackend.from_config({
         "protocol": "s3",
-        "fs_config": {
-            "endpoint_url": f"http://{minio_service.host}:{minio_service.port}",
-            "key": minio_service.access_key,
-            "secret": minio_service.secret_key,
-        },
-        "base_path": minio_default_bucket_name,
+        "fs_config": rustfs_fsspec_kwargs(rustfs_service),
+        "base_path": rustfs_bucket_name,
     })
 
     # Test S3 metadata

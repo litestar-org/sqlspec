@@ -3,26 +3,20 @@
 from typing import TYPE_CHECKING
 
 from sqlspec.storage.registry import storage_registry
+from tests.fixtures.rustfs import rustfs_fsspec_kwargs
 
 if TYPE_CHECKING:  # pragma: no cover
-    from pytest_databases.docker.minio import MinioService
+    from pytest_databases.docker.rustfs import RustfsService
 
-__all__ = ("register_minio_alias",)
+__all__ = ("register_rustfs_alias",)
 
 
-def register_minio_alias(
-    alias: str, minio_service: "MinioService", bucket: str, *, prefix: str = "storage-bridge"
+def register_rustfs_alias(
+    alias: str, rustfs_service: "RustfsService", bucket: str, *, prefix: str = "storage-bridge"
 ) -> str:
-    """Register a storage registry alias backed by the pytest-databases MinIO service."""
+    """Register a storage registry alias backed by the pytest-databases RustFS service."""
 
     storage_registry.register_alias(
-        alias,
-        f"s3://{bucket}/{prefix}",
-        backend="fsspec",
-        endpoint_url=f"http://{minio_service.endpoint}",
-        key=minio_service.access_key,
-        secret=minio_service.secret_key,
-        use_ssl=False,
-        client_kwargs={"endpoint_url": f"http://{minio_service.endpoint}", "verify": False},
+        alias, f"s3://{bucket}/{prefix}", backend="fsspec", **rustfs_fsspec_kwargs(rustfs_service)
     )
     return prefix
