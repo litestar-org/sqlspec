@@ -8,7 +8,7 @@ Provides a storage system with:
 - Capability-based backend selection
 """
 
-from sqlspec.storage._utils import resolve_storage_path
+from sqlspec.storage._paths import resolve_storage_path
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
     PartitionStrategyConfig,

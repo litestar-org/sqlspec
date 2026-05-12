@@ -11,7 +11,9 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.observability import ObservabilityRuntime
 from sqlspec.typing import Empty
 
 pytestmark = pytest.mark.xdist_group("adapter_unit")
@@ -149,6 +151,24 @@ async def test_async_driver_dispatch_statement_execution_select(aiosqlite_async_
     assert len(result.get_data()) == 2
     assert result.get_data()[0]["id"] == 1
     assert result.get_data()[0]["name"] == "test"
+
+
+async def test_async_driver_dispatch_uses_observability_slot(
+    aiosqlite_async_driver: AiosqliteDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dispatch should not route through the lazy observability property."""
+
+    def fail_observability_access(self: CommonDriverAttributesMixin) -> ObservabilityRuntime:
+        msg = "dispatch should read _observability directly"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(CommonDriverAttributesMixin, "observability", property(fail_observability_access))
+    statement = SQL("SELECT * FROM users", statement_config=aiosqlite_async_driver.statement_config)
+
+    result = await aiosqlite_async_driver.dispatch_statement_execution(statement, aiosqlite_async_driver.connection)
+
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SELECT"
 
 
 async def test_async_driver_dispatch_statement_execution_insert(aiosqlite_async_driver: AiosqliteDriver) -> None:

@@ -132,7 +132,6 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_generators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_operators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/spanner/_generators.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/_filter_aliases.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_hints.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_payload.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/_types.py

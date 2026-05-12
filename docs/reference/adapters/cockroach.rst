@@ -15,7 +15,7 @@ Configuration
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgPoolConfig
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgPoolConfig
    :members:
    :show-inheritance:
 
@@ -29,7 +29,7 @@ Driver
 Retry Configuration
 -------------------
 
-.. autoclass:: sqlspec.adapters.cockroach_asyncpg.core.CockroachAsyncpgRetryConfig
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgRetryConfig
    :members:
    :show-inheritance:
 
@@ -67,7 +67,7 @@ Async Driver
 Retry Configuration
 -------------------
 
-.. autoclass:: sqlspec.adapters.cockroach_psycopg.core.CockroachPsycopgRetryConfig
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgRetryConfig
    :members:
    :show-inheritance:
 

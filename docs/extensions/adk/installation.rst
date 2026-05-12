@@ -64,6 +64,10 @@ Install SQLSpec with a database adapter and the Google ADK SDK.
 
    .. tab-item:: MySQL
 
+      ``asyncmy`` is the recommended async MySQL extra. ``aiomysql`` is also
+      supported via ``sqlspec[aiomysql,adk]`` when an application already uses
+      that driver.
+
       .. tab-set::
 
          .. tab-item:: uv
@@ -155,8 +159,8 @@ The ``adk`` extra includes the Google ADK SDK (``google-genai``). SQLSpec provid
   with atomic ``append_event_and_update_state()`` writes.
 - **Memory Service** -- Store agent memory with database-native full-text search
   for context retrieval across conversations.
-- **Artifact Service** -- Version and store binary artifacts with SQL metadata
-  and pluggable object storage backends.
+- **Artifact Service contracts** -- Compose a concrete metadata store with
+  pluggable object storage backends when your deployment needs ADK artifacts.
 - **Event Storage** -- Full-event JSON storage (EventRecord) that captures the
   entire ADK Event without schema drift.
 

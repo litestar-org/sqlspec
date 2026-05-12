@@ -8,9 +8,10 @@ from sqlspec.utils.serializers import from_json
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable
 
-StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
-
 __all__ = ("decode_arrow_payload", "encode_arrow_payload")
+
+
+StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
 
 
 def encode_arrow_payload(

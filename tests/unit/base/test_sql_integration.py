@@ -23,24 +23,24 @@ pytestmark = pytest.mark.xdist_group("base")
 def test_init_without_loader() -> None:
     """Test SQLSpec initialization without a loader."""
     sql_spec = SQLSpec()
-    assert sql_spec._sql_loader is None
+    assert sql_spec._sql_files._loader is None
 
 
 def test_init_with_loader() -> None:
     """Test SQLSpec initialization with a provided loader."""
     loader = SQLFileLoader()
     sql_spec = SQLSpec(loader=loader)
-    assert sql_spec._sql_loader is loader
+    assert sql_spec._sql_files._loader is loader
 
 
 def test_lazy_loader_initialization() -> None:
     """Test that loader is created lazily when first needed."""
     sql_spec = SQLSpec()
-    assert sql_spec._sql_loader is None
+    assert sql_spec._sql_files._loader is None
 
     # Trigger lazy initialization by calling a method that needs the loader
     sql_spec.add_named_sql("test", "SELECT 1")
-    assert isinstance(sql_spec._sql_loader, SQLFileLoader)
+    assert isinstance(sql_spec._sql_files._loader, SQLFileLoader)
 
 
 def test_add_named_sql() -> None:
@@ -221,12 +221,12 @@ def test_sql_loader_cleanup_on_cache_clear() -> None:
     sql_spec.add_named_sql("query1", "SELECT 1")
     sql_spec.add_named_sql("query2", "SELECT 2")
 
-    assert sql_spec._sql_loader is not None
+    assert sql_spec._sql_files._loader is not None
     assert len(sql_spec.list_sql_queries()) == 2
 
     sql_spec.clear_sql_cache()
 
-    assert sql_spec._sql_loader is not None
+    assert sql_spec._sql_files._loader is not None
     assert len(sql_spec.list_sql_queries()) == 0
 
 

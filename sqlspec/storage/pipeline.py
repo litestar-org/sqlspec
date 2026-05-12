@@ -147,6 +147,29 @@ _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 _EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
 
 
+def _resolve_pipeline_storage_options(
+    default_options: "dict[str, Any]", storage_options: "dict[str, Any] | None"
+) -> "dict[str, Any]":
+    return default_options if storage_options is None else storage_options
+
+
+def _extract_csv_write_options(storage_options: "dict[str, Any]") -> "dict[str, Any] | None":
+    return cast("dict[str, Any] | None", storage_options.get("write_options"))
+
+
+def _get_csv_write_options(
+    format_choice: StorageFormat,
+    resolved_options: "dict[str, Any]",
+    default_options: "dict[str, Any]",
+    default_write_options: "dict[str, Any] | None",
+) -> "dict[str, Any] | None":
+    if format_choice != "csv":
+        return None
+    if resolved_options is default_options:
+        return default_write_options
+    return _extract_csv_write_options(resolved_options)
+
+
 def get_storage_bridge_metrics() -> "dict[str, int]":
     """Return aggregated storage bridge metrics."""
 
@@ -242,7 +265,7 @@ def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arro
 
 def _resolve_alias_destination(
     registry: StorageRegistry, destination: str, backend_options: "dict[str, Any]"
-) -> "tuple[ObjectStoreProtocol, str] | None":
+) -> "tuple[ObjectStoreProtocol, str, str] | None":
     if not destination.startswith("alias://"):
         return None
     payload = destination.removeprefix("alias://")
@@ -256,7 +279,7 @@ def _resolve_alias_destination(
         msg = "Alias destinations must include an object path after the alias name"
         raise ImproperConfigurationError(msg)
     backend = registry.get(alias, **backend_options)
-    return backend, path_segment.lstrip("/")
+    return backend, path_segment.lstrip("/"), backend.backend_type
 
 
 def _normalize_path_for_backend(destination: str) -> str:
@@ -270,7 +293,7 @@ def _normalize_path_for_backend(destination: str) -> str:
 
 def _resolve_storage_backend(
     registry: StorageRegistry, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-) -> "tuple[ObjectStoreProtocol, str]":
+) -> "tuple[ObjectStoreProtocol, str, str]":
     destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
     options = _EMPTY_STORAGE_OPTIONS if backend_options is None else backend_options
     alias_resolution = _resolve_alias_destination(registry, destination_str, options)
@@ -278,23 +301,48 @@ def _resolve_storage_backend(
         return alias_resolution
     backend = registry.get(destination_str, **options)
     normalized_path = _normalize_path_for_backend(destination_str)
-    return backend, normalized_path
+    return backend, normalized_path, backend.backend_type
+
+
+def _make_resolved_backend_cache_key(
+    destination: StorageDestination, backend_options: "dict[str, Any] | None"
+) -> "str | None":
+    if backend_options:
+        return None
+    return destination.as_posix() if isinstance(destination, Path) else str(destination)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncStoragePipeline:
     """Pipeline coordinating storage registry operations and telemetry."""
 
-    __slots__ = ("registry",)
+    __slots__ = ("_csv_write_options", "_resolved_backend_cache", "_storage_options", "registry")
 
-    def __init__(self, *, registry: StorageRegistry | None = None) -> None:
+    def __init__(
+        self, *, registry: StorageRegistry | None = None, storage_options: "dict[str, Any] | None" = None
+    ) -> None:
         self.registry = registry or storage_registry
+        self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
+        self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        self._csv_write_options = _extract_csv_write_options(self._storage_options)
+
+    def clear_cache(self) -> None:
+        """Clear cached storage backend resolutions for this pipeline instance."""
+        self._resolved_backend_cache.clear()
 
     def _resolve_backend(
         self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str]":
+    ) -> "tuple[ObjectStoreProtocol, str, str]":
         """Resolve storage backend and normalized path for a destination."""
-        return _resolve_storage_backend(self.registry, destination, backend_options)
+        cache_key = _make_resolved_backend_cache_key(destination, backend_options)
+        if cache_key is None:
+            return _resolve_storage_backend(self.registry, destination, backend_options)
+        cached = self._resolved_backend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        resolved = _resolve_storage_backend(self.registry, destination, backend_options)
+        self._resolved_backend_cache[cache_key] = resolved
+        return resolved
 
     def write_rows(
         self,
@@ -309,7 +357,7 @@ class SyncStoragePipeline:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
         payload = _encode_row_payload(serialized, format_choice)
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
         return self._write_bytes(
             payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
@@ -326,8 +374,10 @@ class SyncStoragePipeline:
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
-        format_write_options = resolved_options.get("write_options") if format_choice == "csv" else None
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
+        format_write_options = _get_csv_write_options(
+            format_choice, resolved_options, self._storage_options, self._csv_write_options
+        )
         payload = _encode_arrow_payload(
             table, format_choice, compression=compression, write_options=format_write_options
         )
@@ -340,8 +390,7 @@ class SyncStoragePipeline:
     ) -> "tuple[ArrowTable, StorageTelemetry]":
         """Read an artifact from storage and decode it into an Arrow table."""
 
-        backend, path = self._resolve_backend(source, storage_options)
-        backend_name = backend.backend_type
+        backend, path, backend_name = self._resolve_backend(source, storage_options)
         payload = _read_backend_sync(backend, path, backend_name=backend_name)
         table = _decode_arrow_payload(payload, file_format)
         rows_processed = int(table.num_rows)
@@ -362,7 +411,7 @@ class SyncStoragePipeline:
         storage_options: "dict[str, Any] | None" = None,
     ) -> "Iterator[bytes]":
         """Stream bytes from an artifact."""
-        backend, path = self._resolve_backend(source, storage_options)
+        backend, path, _backend_name = self._resolve_backend(source, storage_options)
         return backend.stream_read_sync(path, chunk_size=chunk_size)
 
     def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
@@ -390,9 +439,9 @@ class SyncStoragePipeline:
         """Delete staged artifacts best-effort."""
 
         for artifact in artifacts:
-            backend, path = self._resolve_backend(artifact["uri"], None)
+            backend, path, backend_name = self._resolve_backend(artifact["uri"], None)
             try:
-                _delete_backend_sync(backend, path, backend_name=backend.backend_type)
+                _delete_backend_sync(backend, path, backend_name=backend_name)
             except Exception:
                 if not ignore_errors:
                     raise
@@ -406,8 +455,7 @@ class SyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = self._resolve_backend(destination, storage_options)
-        backend_name = backend.backend_type
+        backend, path, backend_name = self._resolve_backend(destination, storage_options)
         start = perf_counter()
         _write_backend_sync(backend, path, payload, backend_name=backend_name)
         elapsed = perf_counter() - start
@@ -428,10 +476,33 @@ class SyncStoragePipeline:
 class AsyncStoragePipeline:
     """Async variant of the storage pipeline leveraging async-capable backends when available."""
 
-    __slots__ = ("registry",)
+    __slots__ = ("_csv_write_options", "_resolved_backend_cache", "_storage_options", "registry")
 
-    def __init__(self, *, registry: StorageRegistry | None = None) -> None:
+    def __init__(
+        self, *, registry: StorageRegistry | None = None, storage_options: "dict[str, Any] | None" = None
+    ) -> None:
         self.registry = registry or storage_registry
+        self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
+        self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        self._csv_write_options = _extract_csv_write_options(self._storage_options)
+
+    def clear_cache(self) -> None:
+        """Clear cached storage backend resolutions for this pipeline instance."""
+        self._resolved_backend_cache.clear()
+
+    def _resolve_backend(
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+    ) -> "tuple[ObjectStoreProtocol, str, str]":
+        """Resolve storage backend and normalized path for a destination."""
+        cache_key = _make_resolved_backend_cache_key(destination, backend_options)
+        if cache_key is None:
+            return _resolve_storage_backend(self.registry, destination, backend_options)
+        cached = self._resolved_backend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        resolved = _resolve_storage_backend(self.registry, destination, backend_options)
+        self._resolved_backend_cache[cache_key] = resolved
+        return resolved
 
     async def write_rows(
         self,
@@ -444,7 +515,7 @@ class AsyncStoragePipeline:
         serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
         payload = await async_(_encode_row_payload)(serialized, format_choice)
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
         return await self._write_bytes_async(
             payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
         )
@@ -459,8 +530,10 @@ class AsyncStoragePipeline:
         compression: str | None = None,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
-        resolved_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
-        format_write_options = resolved_options.get("write_options") if format_choice == "csv" else None
+        resolved_options = _resolve_pipeline_storage_options(self._storage_options, storage_options)
+        format_write_options = _get_csv_write_options(
+            format_choice, resolved_options, self._storage_options, self._csv_write_options
+        )
         payload = await async_(_encode_arrow_payload)(
             table, format_choice, compression=compression, write_options=format_write_options
         )
@@ -470,8 +543,7 @@ class AsyncStoragePipeline:
 
     async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
         for artifact in artifacts:
-            backend, path = _resolve_storage_backend(self.registry, artifact["uri"], None)
-            backend_name = backend.backend_type
+            backend, path, backend_name = self._resolve_backend(artifact["uri"], None)
             if supports_async_delete(backend):
                 try:
                     await execute_async_storage_operation(
@@ -497,8 +569,7 @@ class AsyncStoragePipeline:
         format_label: str,
         storage_options: "dict[str, Any]",
     ) -> StorageTelemetry:
-        backend, path = _resolve_storage_backend(self.registry, destination, storage_options)
-        backend_name = backend.backend_type
+        backend, path, backend_name = self._resolve_backend(destination, storage_options)
         start = perf_counter()
         if supports_async_write_bytes(backend):
             await execute_async_storage_operation(
@@ -526,8 +597,7 @@ class AsyncStoragePipeline:
     async def read_arrow_async(
         self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
     ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
-        backend_name = backend.backend_type
+        backend, path, backend_name = self._resolve_backend(source, storage_options)
         if supports_async_read_bytes(backend):
             payload = await execute_async_storage_operation(
                 partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
@@ -554,5 +624,5 @@ class AsyncStoragePipeline:
         storage_options: "dict[str, Any] | None" = None,
     ) -> "AsyncIterator[bytes]":
         """Stream bytes from an artifact asynchronously."""
-        backend, path = _resolve_storage_backend(self.registry, source, storage_options)
+        backend, path, _backend_name = self._resolve_backend(source, storage_options)
         return await backend.stream_read_async(path, chunk_size=chunk_size)

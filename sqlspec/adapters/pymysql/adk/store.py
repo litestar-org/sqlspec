@@ -275,11 +275,12 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically create an event and update the session's durable state.
 
-        The event insert and state update succeed together or fail together
-        within a single transaction.
+        MySQL doesn't support UPDATE...RETURNING; the UPDATE is followed by a
+        SELECT inside the same transaction so callers get the refreshed row
+        without acquiring a second connection.
 
         Args:
             event_record: Event record to store.
@@ -302,6 +303,12 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         WHERE id = %s
         """
 
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE id = %s
+        """
+
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -316,15 +323,31 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     ),
                 )
                 cursor.execute(update_sql, (state_json, session_id))
+                cursor.execute(select_sql, (session_id,))
+                row = cursor.fetchone()
             finally:
                 cursor.close()
             conn.commit()
 
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        state_value = row[3]
+        return SessionRecord(
+            id=row[0],
+            app_name=row[1],
+            user_id=row[2],
+            state=from_json(state_value) if isinstance(state_value, str) else state_value,
+            create_time=row[4],
+            update_time=row[5],
+        )
+
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state."""
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _insert_event(self, event_record: EventRecord) -> None:
         event_json = event_record["event_json"]

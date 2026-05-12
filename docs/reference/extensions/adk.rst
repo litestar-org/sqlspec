@@ -2,7 +2,7 @@
 Google ADK
 ==========
 
-Session, event, memory, and artifact storage backends for
+Session, event, memory, and artifact service contracts for
 `Google Agent Development Kit <https://google.github.io/adk-docs/>`_.
 
 Session Service

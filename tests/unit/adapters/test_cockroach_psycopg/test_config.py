@@ -9,12 +9,12 @@ Tests cover:
 
 import pytest
 
-from sqlspec.adapters.cockroach_psycopg.config import (
+from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
     CockroachPsycopgDriverFeatures,
+    CockroachPsycopgRetryConfig,
     CockroachPsycopgSyncConfig,
 )
-from sqlspec.adapters.cockroach_psycopg.core import CockroachPsycopgRetryConfig
 
 
 @pytest.mark.xdist_group("cockroachdb")

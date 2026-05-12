@@ -2,12 +2,18 @@
 Schema
 ======
 
-ADK stores create tables for sessions, events, memory entries, and artifact
-metadata. Table names are configurable via ``extension_config["adk"]``.
+ADK stores create tables for sessions, events, and memory entries. The artifact
+metadata table contract is documented for deployments that provide a concrete
+artifact metadata store. Table names are configurable via
+``extension_config["adk"]``.
 
 You can programmatically create the schema with ``create_tables()`` or
 ``ensure_tables()`` on a store. For managed deployments, configure SQLSpec
 migrations for the target database and run ``sqlspec upgrade`` instead.
+
+When ADK migrations are enabled from ``extension_config["adk"]``, SQLSpec
+checks that the selected adapter has the session and memory store classes used
+to generate this schema before the migration starts.
 
 .. contents:: On this page
    :local:
@@ -240,12 +246,12 @@ FTS engine (tsvector, FTS5, InnoDB FT, etc.).
 
 .. _artifact-schema:
 
-Artifact Metadata Table
-=======================
+Artifact Metadata Table Contract
+================================
 
-The artifact table stores versioning metadata for binary artifacts. Content
-bytes are stored separately in object storage; this table tracks ownership,
-versioning, and canonical URIs.
+Concrete artifact metadata stores use this table shape to store versioning
+metadata for binary artifacts. Content bytes are stored separately in object
+storage; this table tracks ownership, versioning, and canonical URIs.
 
 Default name: ``adk_artifact_versions``
 
@@ -299,7 +305,7 @@ All table names are configurable:
                "session_table": "my_sessions",        # default: "adk_sessions"
                "events_table": "my_events",            # default: "adk_events"
                "memory_table": "my_memory",            # default: "adk_memory_entries"
-               "artifact_table": "my_artifacts",       # default: "adk_artifact_versions"
+               "artifact_table": "my_artifacts",       # artifact metadata stores
            }
        },
    )

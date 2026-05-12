@@ -20,6 +20,7 @@ from sqlspec.typing import (
     BaseModel,
     attrs_asdict,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
 from sqlspec.utils.uuids import UUID_UTILS_INSTALLED, _load_uuid_utils
 
@@ -40,6 +41,7 @@ __all__ = (
 
 
 TypeEncodersMap = Mapping[type, Callable[[Any], Any]]
+StructuralEncoder = Callable[[Any], Any]
 
 
 def _get_uuid_utils_type() -> "type[Any] | None":
@@ -52,6 +54,7 @@ def _get_uuid_utils_type() -> "type[Any] | None":
 
 
 _UUID_UTILS_TYPE: "type[Any] | None" = _get_uuid_utils_type()
+logger = get_logger(__name__)
 
 
 def convert_datetime_to_gmt_iso(value: datetime.datetime) -> str:
@@ -130,6 +133,11 @@ def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
 
 
 DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _build_default_type_encoders()
+_STRUCTURAL_ENCODER_CACHE: Final["dict[type[Any], StructuralEncoder | None]"] = {}
+
+
+def _dump_attrs_instance(value: Any) -> Any:
+    return attrs_asdict(value, recurse=True)
 
 
 def _resolve_structural_encoder(value: Any) -> Any:
@@ -139,12 +147,23 @@ def _resolve_structural_encoder(value: Any) -> Any:
     rather than ``isinstance`` against a single base type, so they can't live
     in the type-keyed registry.
     """
+    value_type = type(value)
+    encoder = _STRUCTURAL_ENCODER_CACHE.get(value_type)
+    if encoder is not None:
+        return encoder(value)
+    if value_type in _STRUCTURAL_ENCODER_CACHE:
+        return None
+
     if is_dataclass_instance(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = dataclass_to_dict
         return dataclass_to_dict(value)
     if is_attrs_instance(value):
-        return attrs_asdict(value, recurse=True)
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_attrs_instance
+        return _dump_attrs_instance(value)
     if is_msgspec_struct(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_msgspec_struct
         return _dump_msgspec_struct(value)
+    _STRUCTURAL_ENCODER_CACHE[value_type] = None
     return None
 
 
@@ -186,6 +205,17 @@ def _normalize_supported_value(value: Any) -> Any:
 
 def _is_explicit_unsupported_error(exc: Exception) -> bool:
     return "unsupported json value" in str(exc).lower()
+
+
+def _log_msgspec_encode_fallback(exc: Exception) -> None:
+    fallback_name = "orjson" if ORJSON_INSTALLED else "standard library json"
+    logger.debug(
+        "Msgspec JSON encode failed with %s: %s; falling back to %s",
+        exc.__class__.__name__,
+        exc,
+        fallback_name,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
 
 
 class JSONSerializer(Protocol):
@@ -261,10 +291,12 @@ class MsgspecSerializer(BaseJSONSerializer):
         except TypeError as exc:
             if _is_explicit_unsupported_error(exc):
                 raise
+            _log_msgspec_encode_fallback(exc)
             if ORJSON_INSTALLED:
                 return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
             return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)
-        except ValueError:
+        except ValueError as exc:
+            _log_msgspec_encode_fallback(exc)
             if ORJSON_INSTALLED:
                 return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
             return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)

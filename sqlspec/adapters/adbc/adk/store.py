@@ -714,12 +714,14 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically insert an event and update the session's durable state.
 
-        The event insert and state update are executed within a single
-        connection and committed together.  If either statement fails the
-        transaction is rolled back so the two writes remain consistent.
+        The event insert, state update, and refresh-SELECT are executed within
+        a single connection and committed together.  ADBC drivers wrap a
+        variety of backends (Postgres, SQLite, DuckDB, ...) so we use a
+        SELECT-after-UPDATE rather than relying on RETURNING which not every
+        backend supports.
 
         Args:
             event_record: Event record to store.
@@ -735,6 +737,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
         WHERE id = ?
         """
         state_json = self._serialize_state(state)
@@ -754,6 +761,8 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                     ),
                 )
                 cursor.execute(update_sql, (state_json, session_id))
+                cursor.execute(select_sql, (session_id,))
+                row = cursor.fetchone()
                 conn.commit()
             except Exception:
                 with contextlib.suppress(Exception):
@@ -762,11 +771,24 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row[0],
+            app_name=row[1],
+            user_id=row[2],
+            state=self._deserialize_state(row[3]),
+            create_time=row[4],
+            update_time=row[5],
+        )
+
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state."""
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None

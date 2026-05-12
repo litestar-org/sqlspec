@@ -126,7 +126,7 @@ class _RunWrapper(Generic[ParamSpecT, ReturnT]):
                     return future.result()
             return asyncio.run(partial_f())
         if uvloop and sys.platform != "win32":
-            uvloop.install()  # pyright: ignore[reportUnknownMemberType]
+            return uvloop.run(partial_f())  # pyright: ignore[reportUnknownMemberType]
         return asyncio.run(partial_f())
 
 

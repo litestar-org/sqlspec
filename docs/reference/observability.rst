@@ -42,6 +42,10 @@ Statement Observer
    :members:
    :show-inheritance:
 
+.. autoclass:: sqlspec.observability.StatementObserver
+   :members:
+   :show-inheritance:
+
 .. autofunction:: sqlspec.observability.create_statement_observer
 
 .. autofunction:: sqlspec.observability.default_statement_observer

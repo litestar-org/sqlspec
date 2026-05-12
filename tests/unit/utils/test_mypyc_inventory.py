@@ -87,7 +87,6 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/dialects/postgres/_generators.py",
         "sqlspec/dialects/postgres/_operators.py",
         "sqlspec/dialects/spanner/_generators.py",
-        "sqlspec/extensions/_filter_aliases.py",
         "sqlspec/extensions/events/_hints.py",
         "sqlspec/extensions/events/_payload.py",
         "sqlspec/extensions/adk/_types.py",
@@ -122,13 +121,16 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/dialects/postgres/_generators.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/postgres/_operators.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/spanner/_generators.py" in payload["compiled_modules"]
-    assert "sqlspec/extensions/_filter_aliases.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_hints.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_payload.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/_types.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/memory/_types.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/artifact/_types.py" in payload["compiled_modules"]
     assert "sqlspec/migrations/runner.py" in payload["compiled_modules"]
+    assert "sqlspec/adapters/asyncpg/driver.py" in payload["interpreted_modules"]
+    assert "sqlspec/adapters/psycopg/driver.py" in payload["interpreted_modules"]
+    assert "sqlspec/adapters/cockroach_asyncpg/driver.py" in payload["interpreted_modules"]
+    assert "sqlspec/adapters/cockroach_psycopg/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/sqlite/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/aiosqlite/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/events/_channel.py" in payload["interpreted_modules"]
@@ -139,8 +141,8 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/extensions/events/_models.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/events/_queue.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/fastapi/providers.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/litestar/providers.py" in payload["interpreted_modules"]
+    assert "sqlspec/extensions/fastapi/providers.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/litestar/providers.py" in payload["compiled_modules"]
     assert "sqlspec/storage/_arrow_payload.py" in payload["interpreted_modules"]
     assert "sqlspec/observability/_formatting.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/events/_models.py" in payload["preserved_exclusions"]
@@ -149,6 +151,10 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert payload["adapter_pool_runtimes"]["status"] == "compiled"
     assert payload["adapter_driver_shells"]["classification"] == "prove_separately"
     assert payload["adapter_driver_shells"]["status"] == "blocked"
+    assert "sqlspec/adapters/asyncpg/driver.py" in payload["adapter_driver_shells"]["modules"]
+    assert "sqlspec/adapters/psycopg/driver.py" in payload["adapter_driver_shells"]["modules"]
+    assert "sqlspec/adapters/cockroach_asyncpg/driver.py" in payload["adapter_driver_shells"]["modules"]
+    assert "sqlspec/adapters/cockroach_psycopg/driver.py" in payload["adapter_driver_shells"]["modules"]
 
 
 def test_mypy_2_toolchain_policy_is_explicit_and_parallel_gate_is_default() -> None:

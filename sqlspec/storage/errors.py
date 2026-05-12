@@ -2,7 +2,7 @@
 
 import errno
 import logging
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, NoReturn, TypeVar
 
 from sqlspec.exceptions import FileNotFoundInStorageError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -66,7 +66,7 @@ def _normalize_storage_error(error: Exception, *, backend: str, operation: str, 
     )
 
 
-def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> None:
+def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> NoReturn:
     is_missing = _is_missing_error(error)
     normalized = _normalize_storage_error(error, backend=backend, operation=operation, path=path)
 
@@ -91,7 +91,6 @@ def execute_sync_storage_operation(func: "Callable[[], T]", *, backend: str, ope
         return func()
     except Exception as error:
         raise_storage_error(error, backend=backend, operation=operation, path=path)
-        raise
 
 
 async def execute_async_storage_operation(
@@ -101,4 +100,3 @@ async def execute_async_storage_operation(
         return await func()
     except Exception as error:
         raise_storage_error(error, backend=backend, operation=operation, path=path)
-        raise

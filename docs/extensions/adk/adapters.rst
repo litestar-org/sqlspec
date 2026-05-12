@@ -12,11 +12,11 @@ Use async adapters for best performance with ADK runners:
 
 - **PostgreSQL** (recommended): ``asyncpg``, ``psycopg`` (async mode), ``psqlpy``
 - **CockroachDB**: ``cockroach_asyncpg``, ``cockroach_psycopg`` (full FTS support)
-- **MySQL/MariaDB**: ``asyncmy``
+- **MySQL/MariaDB**: ``aiomysql``, ``asyncmy``
 - **SQLite**: ``aiosqlite`` (development and single-process)
 - **Oracle**: ``oracledb``
 - **DuckDB**: ``duckdb`` (analytics; reduced-scope for ADK)
-- **ADBC**: ``adbc`` (Arrow-native, driver-agnostic)
+- **ADBC**: ``adbc`` (Arrow-native portability; reduced-scope for ADK)
 - **Spanner**: ``spanner`` (Google Cloud, globally distributed)
 
 Sync adapters (``psycopg`` sync mode, ``sqlite``, ``mysqlconnector``, ``pymysql``)
@@ -25,11 +25,10 @@ work but require wrapping with ``anyio`` for async ADK runners.
 Each Adapter Provides
 =====================
 
-Every adapter with ADK support ships three store classes:
+Every adapter with ADK support ships session/event and memory stores:
 
 - **Session store** (e.g., ``AsyncpgADKStore``) -- sessions and events.
 - **Memory store** (e.g., ``AsyncpgADKMemoryStore``) -- long-term memory with FTS.
-- **Artifact store** (e.g., ``AsyncpgADKArtifactStore``) -- artifact metadata.
 
 Import from the adapter's ``adk`` subpackage:
 
@@ -38,8 +37,11 @@ Import from the adapter's ``adk`` subpackage:
    from sqlspec.adapters.asyncpg.adk import (
        AsyncpgADKStore,
        AsyncpgADKMemoryStore,
-       AsyncpgADKArtifactStore,
    )
+
+Artifact service base classes live under ``sqlspec.extensions.adk.artifact``.
+They require a concrete metadata-store implementation and are not exported from
+adapter ``adk`` packages.
 
 Example
 =======

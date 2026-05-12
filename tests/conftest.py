@@ -108,12 +108,37 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-bigquery-tests",
         action="store_true",
         default=False,
-        help="Run BigQuery ADBC tests (requires valid GCP credentials)",
+        help="Run BigQuery integration tests locally (enabled by default in CI; otherwise requires SQLSPEC_ENABLE_BIGQUERY_TESTS=1)",
+    )
+    parser.addoption(
+        "--run-spanner-tests",
+        action="store_true",
+        default=False,
+        help="Run Spanner integration tests locally (enabled by default in CI; otherwise requires SQLSPEC_ENABLE_SPANNER_TESTS=1)",
     )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip ADBC-marked tests when running against compiled modules."""
+    """Apply environment-sensitive collection skips."""
+    bigquery_enabled = os.getenv("CI") == "true" or bool(
+        config.getoption("--run-bigquery-tests", default=False) and os.getenv("SQLSPEC_ENABLE_BIGQUERY_TESTS") == "1"
+    )
+    spanner_enabled = os.getenv("CI") == "true" or bool(
+        config.getoption("--run-spanner-tests", default=False) and os.getenv("SQLSPEC_ENABLE_SPANNER_TESTS") == "1"
+    )
+    skip_bigquery = pytest.mark.skip(
+        reason="BigQuery integration tests run by default in CI; local runs require SQLSPEC_ENABLE_BIGQUERY_TESTS=1 and --run-bigquery-tests"
+    )
+    skip_spanner = pytest.mark.skip(
+        reason="Spanner integration tests run by default in CI; local runs require SQLSPEC_ENABLE_SPANNER_TESTS=1 and --run-spanner-tests"
+    )
+    for item in items:
+        item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
+        if "tests/integration/adapters/bigquery" in item_path and not bigquery_enabled:
+            item.add_marker(skip_bigquery)
+        if "tests/integration/adapters/spanner" in item_path and not spanner_enabled:
+            item.add_marker(skip_spanner)
+
     if not is_compiled():
         return
 

@@ -8,8 +8,11 @@ Tests cover:
 
 import pytest
 
-from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig, CockroachAsyncpgDriverFeatures
-from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig
+from sqlspec.adapters.cockroach_asyncpg import (
+    CockroachAsyncpgConfig,
+    CockroachAsyncpgDriverFeatures,
+    CockroachAsyncpgRetryConfig,
+)
 
 
 @pytest.mark.xdist_group("cockroachdb")

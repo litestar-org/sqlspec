@@ -4,19 +4,22 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
-from sqlspec.observability._config import LoggingConfig, ObservabilityConfig
+from sqlspec.observability._config import LoggingConfig, ObservabilityConfig, StatementObserver
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
-from sqlspec.observability._observer import StatementObserver, create_event, create_statement_observer
+from sqlspec.observability._observer import create_event, create_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.type_guards import has_span_attribute
-
-_LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from sqlspec.storage import StorageTelemetry
+
+__all__ = ("ObservabilityRuntime",)
+
+
+_LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
 
 
 class ObservabilityRuntime:
@@ -434,6 +437,3 @@ def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(value) <= max_chars:
         return value, False
     return value[:max_chars], True
-
-
-__all__ = ("ObservabilityRuntime",)

@@ -2,17 +2,9 @@
 
 from typing import Any
 
-from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, resolve_storage_path
 from sqlspec.utils.module_loader import ensure_pyarrow
 
-__all__ = (
-    "FILE_PROTOCOL",
-    "FILE_SCHEME_PREFIX",
-    "import_pyarrow",
-    "import_pyarrow_csv",
-    "import_pyarrow_parquet",
-    "resolve_storage_path",
-)
+__all__ = ("import_pyarrow", "import_pyarrow_csv", "import_pyarrow_parquet")
 
 
 def import_pyarrow() -> "Any":

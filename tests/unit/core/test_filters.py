@@ -28,6 +28,7 @@ from sqlspec.core import (
     OrderByFilter,
     SearchFilter,
     apply_filter,
+    canonicalize_filters,
 )
 from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.filters import NotInSearchFilter
@@ -41,6 +42,33 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import Statement
 
 pytestmark = pytest.mark.xdist_group("core")
+
+
+def test_public_canonicalize_filters_uses_statement_filter_implementation() -> None:
+    """The public core export canonicalizes SQL statement filters."""
+    assert canonicalize_filters.__module__ == "sqlspec.core.filters"
+
+
+def test_canonicalize_filters_deduplicates_and_sorts_by_class_and_field() -> None:
+    """Duplicate filters collapse while ordering remains class and field aware."""
+    filters = [
+        OrderByFilter("zeta", "desc"),
+        InCollectionFilter("status", ["active"]),
+        SearchFilter("name", "needle"),
+        OrderByFilter("alpha", "asc"),
+        InCollectionFilter("status", ["active"]),
+        InCollectionFilter("status", ["pending"]),
+    ]
+
+    result = canonicalize_filters(filters)
+
+    assert [filter_.get_cache_key() for filter_ in result] == [
+        ("InCollectionFilter", "status", ("active",)),
+        ("InCollectionFilter", "status", ("pending",)),
+        ("OrderByFilter", "alpha", "asc"),
+        ("OrderByFilter", "zeta", "desc"),
+        ("SearchFilter", "name", "needle", False),
+    ]
 
 
 def test_before_after_filter_uses_column_based_parameters() -> None:

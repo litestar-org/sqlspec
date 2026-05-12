@@ -3,10 +3,11 @@
 from pathlib import Path
 from typing import Final
 
+__all__ = ("FILE_PROTOCOL", "FILE_SCHEME_PREFIX", "resolve_storage_path")
+
+
 FILE_PROTOCOL: Final[str] = "file"
 FILE_SCHEME_PREFIX: Final[str] = "file://"
-
-__all__ = ("FILE_PROTOCOL", "FILE_SCHEME_PREFIX", "resolve_storage_path")
 
 
 def resolve_storage_path(

@@ -192,10 +192,9 @@ class SQLSpecArtifactService(BaseArtifactService):
         registry: Storage registry to use.  Defaults to the global singleton.
 
     Example:
-        from sqlspec.adapters.asyncpg.adk.artifact_store import AsyncpgADKArtifactStore
         from sqlspec.extensions.adk.artifact import SQLSpecArtifactService
 
-        artifact_store = AsyncpgADKArtifactStore(config)
+        artifact_store = MyArtifactMetadataStore(config)
         await artifact_store.ensure_table()
 
         service = SQLSpecArtifactService(

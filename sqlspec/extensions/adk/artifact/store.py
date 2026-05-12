@@ -5,20 +5,20 @@ artifact version metadata.  Content storage is handled separately by
 ``sqlspec/storage/`` backends; these stores only manage the relational
 metadata rows.
 
-Adapter-specific subclasses (e.g., ``AsyncpgADKArtifactStore``) implement
-the abstract methods with dialect-specific SQL.
+Concrete subclasses implement the abstract methods with dialect-specific SQL.
 """
 
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
+from sqlspec.extensions.adk._config_utils import _get_adk_artifact_store_config, _get_adk_config_from_extension
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from sqlspec.config import ADKConfig, DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.artifact._types import ArtifactRecord
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
@@ -82,8 +82,8 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        adk_config = self._get_adk_config()
-        self._artifact_table: str = str(adk_config.get("artifact_table", "adk_artifact_versions"))
+        store_config = _get_adk_artifact_store_config(self._config)
+        self._artifact_table: str = store_config["artifact_table"]
         _validate_table_name(self._artifact_table)
 
     def _get_adk_config(self) -> "dict[str, Any]":
@@ -92,8 +92,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with ADK configuration values.
         """
-        extension_config = self._config.extension_config
-        return dict(cast("ADKConfig", extension_config.get("adk", {})))
+        return _get_adk_config_from_extension(self._config)
 
     @property
     def config(self) -> ConfigT:
@@ -238,8 +237,8 @@ class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        adk_config = self._get_adk_config()
-        self._artifact_table: str = str(adk_config.get("artifact_table", "adk_artifact_versions"))
+        store_config = _get_adk_artifact_store_config(self._config)
+        self._artifact_table: str = store_config["artifact_table"]
         _validate_table_name(self._artifact_table)
 
     def _get_adk_config(self) -> "dict[str, Any]":
@@ -248,8 +247,7 @@ class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with ADK configuration values.
         """
-        extension_config = self._config.extension_config
-        return dict(cast("ADKConfig", extension_config.get("adk", {})))
+        return _get_adk_config_from_extension(self._config)
 
     @property
     def config(self) -> ConfigT:

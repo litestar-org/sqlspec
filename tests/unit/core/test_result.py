@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+import sqlspec.core.result as result_package
 import sqlspec.core.result._base as result_base
 from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, create_sql_result
 from sqlspec.typing import PYARROW_INSTALLED
@@ -13,6 +14,15 @@ from sqlspec.typing import PYARROW_INSTALLED
 pytestmark = pytest.mark.xdist_group("core")
 
 _RESULT_BASE_COMPILED = (result_base.__file__ or "").endswith((".so", ".pyd"))
+
+
+def test_fast_dml_result_alias_is_not_exported() -> None:
+    """The no-op fast DML alias should stay out of the public result API."""
+    alias_name = "Fast" + "DMLResult"
+    assert alias_name not in result_base.__all__
+    assert alias_name not in result_package.__all__
+    assert not hasattr(result_base, alias_name)
+    assert not hasattr(result_package, alias_name)
 
 
 @pytest.fixture

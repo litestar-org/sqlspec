@@ -98,7 +98,7 @@ def enable_metrics(
 
     ensure_prometheus()
 
-    observer = PrometheusStatementObserver(
+    observer: StatementObserver = PrometheusStatementObserver(
         namespace=namespace,
         subsystem=subsystem,
         registry=registry,

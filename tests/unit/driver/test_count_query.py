@@ -1,7 +1,11 @@
 """Tests for count query helpers and edge cases."""
 
+import ast
+import inspect
 import sqlite3
+from collections import UserDict
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -10,6 +14,7 @@ from sqlspec import SQL
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.core import StatementConfig, get_default_config
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver import _common as driver_common
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
 
@@ -93,6 +98,16 @@ def test_create_count_query_compiles_missing_expression(sqlite_driver: "SqliteDr
 
     assert count_sql.expression is not None
     assert "count" in compiled_sql.lower()
+
+
+def test_extract_pagination_placeholders_uses_module_sqlglot_import() -> None:
+    """Pagination placeholder extraction should avoid per-call import lookups."""
+    source = inspect.getsource(driver_common._extract_pagination_placeholders)
+    tree = ast.parse(source)
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
+
+    assert hasattr(driver_common, "sqlglot")
+    assert imports == []
 
 
 def test_create_count_query_with_cte_keeps_with_clause(sqlite_driver: "SqliteDriver") -> None:
@@ -455,6 +470,42 @@ def test_add_count_over_column_preserves_limit_offset(mock_driver: "MockSyncDriv
     count_str = str(modified_sql)
     assert "LIMIT" in count_str.upper()
     assert "OFFSET" in count_str.upper()
+
+
+def test_extract_total_from_rows_handles_empty_rows(mock_driver: "MockSyncDriver") -> None:
+    """Window-count row extraction should return empty data and zero total for empty results."""
+    assert mock_driver._extract_total_from_rows([]) == ([], 0)
+
+
+def test_extract_total_from_rows_handles_dict_rows(mock_driver: "MockSyncDriver") -> None:
+    """Window-count row extraction should strip the total column from dict rows."""
+    rows = [{"id": 1, "_total_count": 2}, {"id": 2, "_total_count": 2}]
+
+    data, total = mock_driver._extract_total_from_rows(rows)
+
+    assert total == 2
+    assert data == [{"id": 1}, {"id": 2}]
+
+
+def test_extract_total_from_rows_handles_mapping_rows(mock_driver: "MockSyncDriver") -> None:
+    """Window-count row extraction should support mapping-like database rows."""
+    rows = [UserDict({"id": 1, "_total_count": 2}), UserDict({"id": 2, "_total_count": 2})]
+
+    data, total = mock_driver._extract_total_from_rows(rows)
+
+    assert total == 2
+    assert data == [{"id": 1}, {"id": 2}]
+
+
+def test_extract_total_from_rows_handles_asdict_rows(mock_driver: "MockSyncDriver") -> None:
+    """Window-count row extraction should support namedtuple-style rows."""
+    first_row = SimpleNamespace(id=1, _total_count=2, _asdict=lambda: {"id": 1, "_total_count": 2})
+    second_row = SimpleNamespace(id=2, _total_count=2, _asdict=lambda: {"id": 2, "_total_count": 2})
+
+    data, total = mock_driver._extract_total_from_rows([first_row, second_row])
+
+    assert total == 2
+    assert data == [{"id": 1}, {"id": 2}]
 
 
 def test_add_count_over_column_custom_alias(mock_driver: "MockSyncDriver") -> None:

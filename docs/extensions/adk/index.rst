@@ -2,10 +2,11 @@
 Google ADK Extension
 ====================
 
-SQLSpec provides a full-featured backend for
+SQLSpec provides SQL-backed persistence for
 `Google Agent Development Kit <https://google.github.io/adk-docs/>`_,
-covering session, event, memory, and artifact storage with SQL-backed
-persistence across 14 database adapters.
+covering session, event, and memory storage across 15 backend packages. The
+artifact service contracts are available for deployments that provide a
+concrete artifact metadata store.
 
 Key capabilities:
 
@@ -17,8 +18,8 @@ Key capabilities:
   state visibility and persistence across sessions.
 - **Memory service** with database-native full-text search (tsvector, FTS5,
   InnoDB FT) for long-term agent context.
-- **Artifact service** with append-only versioning, SQL metadata, and pluggable
-  object storage backends.
+- **Artifact service contracts** for append-only versioning, SQL metadata, and
+  pluggable object storage backends.
 
 Choose a guide
 ==============
@@ -37,7 +38,7 @@ Choose a guide
       :link: quickstart
       :link-type: doc
 
-      Persist sessions, memory, and artifacts with minimal setup.
+      Persist sessions and memory with minimal setup.
 
    .. grid-item-card:: Support Matrix
       :link: backends

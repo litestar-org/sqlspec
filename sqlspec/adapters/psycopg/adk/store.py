@@ -258,7 +258,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
             session_id, invocation_id, author, timestamp, event_json
@@ -269,6 +269,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
         WHERE id = %s
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
 
         event_json_value = event_record["event_json"]
@@ -286,7 +287,21 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                 ),
             )
             await cur.execute(update_query, (Jsonb(state), session_id))
+            row = await cur.fetchone()
             await conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -567,7 +582,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
             session_id, invocation_id, author, timestamp, event_json
@@ -578,6 +593,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
         WHERE id = %s
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
 
         event_json_value = event_record["event_json"]
@@ -595,13 +611,27 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
                 ),
             )
             cur.execute(update_query, (Jsonb(state), session_id))
+            row = cur.fetchone()
             conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state."""
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None

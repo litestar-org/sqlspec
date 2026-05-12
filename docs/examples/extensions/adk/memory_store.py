@@ -25,24 +25,16 @@ def test_adk_memory_store() -> None:
         )
 
         event_record = {
-            "id": "evt_1",
-            "app_name": "docs",
-            "user_id": "user_1",
             "session_id": session["id"],
             "invocation_id": "inv_1",
             "author": "user",
-            "branch": "main",
-            "actions": b"",
-            "long_running_tool_ids_json": None,
             "timestamp": datetime.now(timezone.utc),
-            "content": {"text": "Hello"},
-            "grounding_metadata": None,
-            "custom_metadata": None,
-            "partial": False,
-            "turn_complete": True,
-            "interrupted": None,
-            "error_code": None,
-            "error_message": None,
+            "event_json": {
+                "id": "evt_1",
+                "invocation_id": "inv_1",
+                "author": "user",
+                "content": {"parts": [{"text": "Hello"}]},
+            },
         }
         await store.append_event(event_record)
         events = await store.get_events(session_id=session["id"])

@@ -10,6 +10,9 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_opentelemetry
 from sqlspec.utils.type_guards import has_tracer_provider
 
+__all__ = ("SpanManager", "resolve_db_system")
+
+
 logger = get_logger("sqlspec.observability.spans")
 
 
@@ -156,6 +159,3 @@ class SpanManager:
         self._status_cls = status_cls
         self._status_code_cls = status_code_cls
         self._span_kind = span_kind_cls.CLIENT
-
-
-__all__ = ("SpanManager", "resolve_db_system")

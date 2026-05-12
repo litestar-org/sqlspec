@@ -4,12 +4,13 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.storage._utils import import_pyarrow_parquet, resolve_storage_path
+from sqlspec.storage._paths import resolve_storage_path
+from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 __all__ = ("FSSpecBackend",)
 
 logger = get_logger(__name__)
+
+_OBJECT_STORE_PROTOCOLS = {"s3", "gs", "az", "gcs"}
 
 
 def _log_storage_event(
@@ -72,7 +75,9 @@ class FSSpecBackend:
     All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
-    __slots__ = ("_fs_uri", "backend_type", "base_path", "fs", "protocol")
+    __slots__ = ("_fs_uri", "base_path", "fs", "protocol")
+
+    backend_type: ClassVar[str] = "fsspec"
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         """Initialize the fsspec-backed storage backend.
@@ -99,7 +104,7 @@ class FSSpecBackend:
             self.protocol = uri.split("://", maxsplit=1)[0]
             self._fs_uri = uri
 
-            if self.protocol in {"s3", "gs", "az", "gcs"}:
+            if self.protocol in _OBJECT_STORE_PROTOCOLS:
                 parsed = urlparse(uri)
                 if parsed.netloc:
                     uri_base_path = parsed.netloc
@@ -125,8 +130,6 @@ class FSSpecBackend:
         self.base_path = explicit_base_path.rstrip("/") if explicit_base_path else ""
 
         self.fs = fsspec.filesystem(self.protocol, **kwargs)
-        self.backend_type = "fsspec"
-
         _log_storage_event(
             "storage.backend.ready",
             backend_type=self.backend_type,

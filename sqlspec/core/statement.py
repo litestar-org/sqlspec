@@ -143,7 +143,7 @@ class ProcessedState:
         input_named_parameters: "tuple[str, ...] | None" = None,
         applied_wrap_types: bool = False,
         filter_hash: int = 0,
-        parameter_fingerprint: str | None = None,
+        parameter_fingerprint: Any | None = None,
         parameter_casts: "dict[int, str] | None" = None,
         validation_errors: "list[str] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
@@ -712,7 +712,7 @@ class SQL:
         if state.filter_hash != hash_filters(self._filters):
             return False
         params = self._named_parameters or self._positional_parameters
-        return structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint
+        return bool(structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint)
 
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
@@ -795,7 +795,7 @@ class SQL:
         input_named_parameters: "tuple[str, ...] | None",
         applied_wrap_types: bool,
         filter_hash: int,
-        parameter_fingerprint: str | None,
+        parameter_fingerprint: Any | None,
         parameter_casts: "dict[int, str] | None",
         parameter_profile: "ParameterProfile | None",
         operation_profile: "OperationProfile | None",

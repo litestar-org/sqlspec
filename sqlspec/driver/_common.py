@@ -8,6 +8,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
+import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from typing_extensions import Self
@@ -33,7 +34,14 @@ from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary._loader import get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
-from sqlspec.driver._storage_helpers import CAPABILITY_HINTS
+from sqlspec.driver._storage_helpers import (
+    CAPABILITY_HINTS,
+    arrow_table_to_rows,
+    attach_partition_telemetry,
+    build_ingest_telemetry,
+    coerce_arrow_table,
+    create_storage_job,
+)
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
@@ -43,11 +51,14 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.type_guards import (
     has_array_interface,
+    has_asdict_method,
     has_cursor_metadata,
     has_dtype_str,
     has_statement_type,
     has_typecode,
     has_typecode_and_len,
+    is_dict_row,
+    is_mapping_like,
     is_statement_filter,
 )
 
@@ -56,12 +67,18 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from sqlspec.core import FilterTypeT, StatementFilter
+    from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
-    from sqlspec.storage import AsyncStoragePipeline, StorageCapabilities, SyncStoragePipeline
-    from sqlspec.typing import ForeignKeyMetadata, SchemaT, StatementParameters
+    from sqlspec.storage import (
+        AsyncStoragePipeline,
+        StorageBridgeJob,
+        StorageCapabilities,
+        StorageTelemetry,
+        SyncStoragePipeline,
+    )
+    from sqlspec.typing import ArrowTable, ForeignKeyMetadata, SchemaT, StatementParameters
 
 
 __all__ = (
@@ -160,8 +177,6 @@ def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
         Set of placeholder names found in LIMIT/OFFSET clauses.
 
     """
-    import sqlglot
-
     # First try: use statement_expression if available and has named placeholders
     stmt_expr = original_sql.statement_expression
     if stmt_expr is not None:
@@ -223,6 +238,19 @@ class AsyncExceptionHandler(Protocol):
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
     ) -> bool: ...
+
+
+def _raise_database_exception(
+    exc_handler: "AsyncExceptionHandler | SyncExceptionHandler", exc: Exception | None
+) -> None:
+    """Raise any mapped database exception captured by a deferred exception handler."""
+    pending_exception = exc_handler.pending_exception
+    if pending_exception is not None:
+        if exc is None:
+            raise pending_exception from None
+        raise pending_exception from exc
+    if exc is not None:
+        raise exc
 
 
 logger = get_logger("sqlspec.driver")
@@ -489,7 +517,7 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     """Return a readable representation of a stack statement for diagnostics."""
     if isinstance(statement, str):
         return statement
-    if isinstance(statement, StatementProtocol):  # pyright: ignore[reportUnnecessaryIsInstance]
+    if isinstance(statement, StatementProtocol):
         return statement.raw_sql or statement.sql
     return repr(statement)
 
@@ -841,6 +869,13 @@ DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
 
+_CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
+    ParameterStyle.NAMED_COLON.value,
+    ParameterStyle.NAMED_AT.value,
+    ParameterStyle.NAMED_DOLLAR.value,
+    ParameterStyle.NAMED_PYFORMAT.value,
+))
+
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
@@ -894,7 +929,7 @@ class CommonDriverAttributesMixin:
         self._update_stmt_cache_flag()
 
     def _update_stmt_cache_flag(self) -> None:
-        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)  # pyright: ignore[reportPrivateUsage]
+        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)
 
     @property
     def observability(self) -> "ObservabilityRuntime":
@@ -975,7 +1010,13 @@ class CommonDriverAttributesMixin:
     def stmt_cache_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
         """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
-        if not cached.input_named_parameters and not cached.applied_wrap_types and not config.type_coercion_map:
+        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
+        if (
+            not cached.input_named_parameters
+            and not cached.applied_wrap_types
+            and not config.type_coercion_map
+            and not needs_style_remap
+        ):
             return params
         processor = ParameterProcessor(
             converter=self.statement_config.parameter_converter,
@@ -983,7 +1024,7 @@ class CommonDriverAttributesMixin:
             cache_max_size=0,
             validator_cache_max_size=0,
         )
-        return processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+        return processor._transform_cached_parameters(
             params,
             cached.parameter_profile,
             config,
@@ -1030,7 +1071,7 @@ class CommonDriverAttributesMixin:
             is_many=False,
         )
         # Fast-path: directly set internal attributes to avoid constructor overhead.
-        return SQL._create_cached_direct(sql, self.statement_config, direct_state)  # pyright: ignore[reportPrivateUsage]
+        return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
     def _stmt_cache_prepare_direct(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQL | None":
         """Prepare direct execution if cache hit.
@@ -1115,7 +1156,10 @@ class CommonDriverAttributesMixin:
             else:
                 needs_rebind = any(type(p) in coercion_types for p in params)
 
-        if not needs_rebind and not config._has_output_transformer:  # pyright: ignore[reportPrivateUsage]
+        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
+            needs_rebind = True
+
+        if not needs_rebind and not config._has_output_transformer:
             return self._stmt_cache_execute_direct(statement, params, cached)
 
         # Fallback to standard path (builds SQL object)
@@ -1127,8 +1171,9 @@ class CommonDriverAttributesMixin:
             params_are_simple = True
 
         compiled_sql = cached.compiled_sql
-        if config._has_output_transformer:  # pyright: ignore[reportPrivateUsage]
-            compiled_sql, rebound_params = config.output_transformer(compiled_sql, rebound_params)  # type: ignore[misc]
+        output_transformer = config.output_transformer
+        if output_transformer is not None:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
             params_are_simple = False
 
         prepared = self._stmt_cache_build_direct(
@@ -1558,7 +1603,7 @@ class CommonDriverAttributesMixin:
         parameters: "StatementParameters | list[StatementParameters] | tuple[StatementParameters, ...]",
         statement_config: "StatementConfig",
         is_many: bool = False,
-        prepared_statement: Any | None = None,  # pyright: ignore[reportUnusedParameter]
+        prepared_statement: Any | None = None,
     ) -> "ConvertedParameters":
         """Prepare parameters for database driver consumption.
 
@@ -2042,7 +2087,7 @@ class CommonDriverAttributesMixin:
 
         expr = original_sql.expression
         cte: exp.Expr | None = None
-        if isinstance(expr, exp.Expression):  # pyright: ignore
+        if isinstance(expr, exp.Expression):
             cte = expr.args.get("with_")
             if cte is not None:
                 expr = expr.copy()
@@ -2193,3 +2238,49 @@ class CommonDriverAttributesMixin:
             statement_config=original_sql.statement_config,
             **original_sql.named_parameters,
         )
+
+    def _extract_total_from_rows(self, rows: "list[Any]") -> "tuple[list[dict[str, Any]], int]":
+        """Extract window-count totals and remove the synthetic total column from rows."""
+        if not rows:
+            return ([], 0)
+
+        first_row = rows[0]
+        if is_dict_row(first_row):
+            total = cast("int", first_row.get("_total_count", 0))
+            return ([{k: v for k, v in row.items() if k != "_total_count"} for row in rows], total)
+        if is_mapping_like(first_row):
+            total = cast("int", dict(first_row).get("_total_count", 0))
+            return ([{k: v for k, v in dict(row).items() if k != "_total_count"} for row in rows], total)
+        if has_asdict_method(first_row):
+            total = cast("int", getattr(first_row, "_total_count", 0))
+            return ([{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows], total)
+
+        return ([{} for _ in rows], 0)
+
+    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
+        """Coerce various sources to a PyArrow Table."""
+        return coerce_arrow_table(source)
+
+    @staticmethod
+    def _arrow_table_to_rows(
+        table: "ArrowTable", columns: "list[str] | None" = None
+    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
+        """Convert Arrow table to column names and row tuples."""
+        return arrow_table_to_rows(table, columns)
+
+    @staticmethod
+    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
+        """Build telemetry dict from Arrow table statistics."""
+        return build_ingest_telemetry(table, format_label=format_label)
+
+    def _attach_partition_telemetry(
+        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
+    ) -> None:
+        """Attach partitioner info to telemetry dict."""
+        attach_partition_telemetry(telemetry, partitioner)
+
+    def _create_storage_job(
+        self, produced: "StorageTelemetry", provided: "StorageTelemetry | None" = None, *, status: str = "completed"
+    ) -> "StorageBridgeJob":
+        """Create a StorageBridgeJob from telemetry data."""
+        return create_storage_job(produced, provided, status=status)

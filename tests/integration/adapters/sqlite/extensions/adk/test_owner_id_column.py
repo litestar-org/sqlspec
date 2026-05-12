@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionParams
-from sqlspec.adapters.sqlite.adk.store import SqliteADKStore
+from sqlspec.adapters.sqlite.adk import SqliteADKStore
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.sqlite, pytest.mark.integration]
 

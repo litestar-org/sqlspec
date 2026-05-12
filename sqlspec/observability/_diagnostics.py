@@ -9,6 +9,9 @@ from sqlspec.storage.pipeline import (
     get_storage_bridge_diagnostics,
 )
 
+__all__ = ("DiagnosticsPayload", "TelemetryDiagnostics", "collect_diagnostics")
+
+
 DiagnosticsPayload = dict[str, float | list[StorageTelemetry]]
 
 
@@ -69,6 +72,3 @@ def collect_diagnostics(sections: Iterable[tuple[str, dict[str, int]]]) -> Diagn
     for prefix, counters in sections:
         diag.add_lifecycle_snapshot(prefix, counters)
     return diag.snapshot()
-
-
-__all__ = ("DiagnosticsPayload", "TelemetryDiagnostics", "collect_diagnostics")

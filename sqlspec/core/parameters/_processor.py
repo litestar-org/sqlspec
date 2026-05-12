@@ -22,13 +22,7 @@ from sqlspec.core.parameters._types import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.dispatch import TypeDispatcher
 
-__all__ = (
-    "ParameterProcessor",
-    "_structural_fingerprint",
-    "_value_fingerprint",
-    "structural_fingerprint",
-    "value_fingerprint",
-)
+__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
 
 # Threshold for sampling execute_many parameters instead of full iteration
 _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
@@ -39,7 +33,23 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
-def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
+def _make_cache_key_tuple(
+    sql: str,
+    param_fingerprint: Any,
+    input_style: str,
+    exec_style: str,
+    dialect: str | None,
+    is_many: bool,
+    wrap_types: bool | None = None,
+    normalize_for_parsing: bool | None = None,
+) -> tuple[Any, ...]:
+    """Build the shared SQL and parameter processor cache key tuple."""
+    if wrap_types is None and normalize_for_parsing is None:
+        return (sql, param_fingerprint, input_style, exec_style, dialect, is_many)
+    return (sql, param_fingerprint, input_style, exec_style, dialect, is_many, wrap_types, normalize_for_parsing)
+
+
+def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
     """Return a structural fingerprint for caching parameter payloads.
 
     Returns a hashable tuple representing the structure (keys, types, count).
@@ -57,7 +67,7 @@ def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = Fals
 
     # Handle dict (most common Mapping type) - fast path
     if param_type is dict:
-        dict_params: dict[str, Any] = parameters  # type: ignore[assignment]
+        dict_params = cast("dict[str, Any]", parameters)
         if not dict_params:
             return ("dict",)
         # Use dict insertion order (Python 3.7+ guaranteed) instead of sorted()
@@ -69,7 +79,7 @@ def _structural_fingerprint(parameters: "ParameterPayload", is_many: bool = Fals
 
     # Handle list and tuple (most common Sequence types) - fast path
     if param_type is list or param_type is tuple:
-        seq_params: Sequence[Any] = parameters  # type: ignore[assignment]
+        seq_params = cast("Sequence[Any]", parameters)
         if not seq_params:
             return ("seq",)
 
@@ -152,40 +162,11 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
     return ("many_scalar", type_sig, param_count)
 
 
-def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> str:
-    """Return a structural fingerprint for parameter payloads.
-
-    This fingerprint is based on parameter STRUCTURE (keys, types, count) only,
-    NOT on actual values. This improves cache hit rates for repeated queries
-    with different parameter values.
-
-    Args:
-        parameters: Original parameter payload supplied by the caller.
-        is_many: Whether this is for execute_many operation.
-
-    Returns:
-        Deterministic fingerprint string derived from parameter structure.
-    """
-    return str(_structural_fingerprint(parameters, is_many))
-
-
-def value_fingerprint(parameters: "ParameterPayload") -> str:
+def value_fingerprint(parameters: "ParameterPayload") -> Any:
     """Return a value-based fingerprint for parameter payloads.
 
     Unlike structural_fingerprint, this includes actual parameter VALUES in the hash.
     Used for static script compilation where SQL has values embedded directly.
-
-    Args:
-        parameters: Original parameter payload supplied by the caller.
-
-    Returns:
-        Deterministic fingerprint string including parameter values.
-    """
-    return str(_value_fingerprint(parameters))
-
-
-def _value_fingerprint(parameters: "ParameterPayload") -> Any:
-    """Return a value-based fingerprint for parameter payloads.
 
     Args:
         parameters: Original parameter payload supplied by the caller.
@@ -262,7 +243,7 @@ def _coerce_parameter_value(
     value_type = type(value)
     # Fast path: check TypedParameter by type identity (2-4x faster than isinstance)
     if value_type is TypedParameter:
-        typed_param: TypedParameter = value  # type: ignore[assignment]
+        typed_param = cast("TypedParameter", value)
         wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
@@ -525,13 +506,13 @@ class ParameterProcessor:
                     wrapped_values = source[:idx]
                 wrapped_values.append(wrapped)
             if wrapped_values is None:
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_values
         if param_type is tuple:
             tuple_source = cast("tuple[Any, ...]", parameters)
             wrapped_values = [wrap_with_type(value) for value in tuple_source]
             if all(wrapped is value for wrapped, value in zip(wrapped_values, tuple_source, strict=False)):
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_values
         if param_type is dict:
             source_mapping = cast("dict[str, Any]", parameters)
@@ -544,13 +525,13 @@ class ParameterProcessor:
                     wrapped_mapping = dict(source_mapping)
                 wrapped_mapping[key] = wrapped
             if wrapped_mapping is None:
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_mapping
         # Fallback to ABC checks for custom types
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             wrapped_values = [wrap_with_type(value) for value in parameters]
             if all(wrapped is value for wrapped, value in zip(wrapped_values, parameters, strict=False)):
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return wrapped_values
         if isinstance(parameters, Mapping):
             fallback_mapping: dict[str, Any] | None = None
@@ -562,7 +543,7 @@ class ParameterProcessor:
                     fallback_mapping = dict(parameters)
                 fallback_mapping[key] = wrapped
             if fallback_mapping is None:
-                return parameters  # type: ignore[return-value]
+                return cast("ConvertedParameters", parameters)
             return fallback_mapping
         return None
 
@@ -579,11 +560,11 @@ class ParameterProcessor:
             return None
         result_type = type(result)
         if result_type is dict:
-            return result  # type: ignore[return-value]
+            return cast("ConvertedParameters", result)
         if result_type is list:
-            return result  # type: ignore[return-value]
+            return cast("ConvertedParameters", result)
         if result_type is tuple:
-            return result  # type: ignore[return-value]
+            return cast("ConvertedParameters", result)
         return None
 
     def _store_cached_result(
@@ -627,30 +608,74 @@ class ParameterProcessor:
         if parameters is None:
             return None
 
-        processed: ConvertedParameters = parameters  # type: ignore[assignment]
+        processed = cast("ConvertedParameters", parameters)
 
-        # Step 1: Type wrapping (must happen before coercion)
         if apply_wrap_types and processed:
             processed = self._wrap_parameter_types(processed)
 
-        # Step 2: Type coercion
         if config.type_coercion_map and processed:
             processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
 
-        # Step 3: Named-to-positional mapping only when cached SQL uses positional placeholders.
-        if input_named_parameters and processed:
+        if processed:
             positional_styles = {
                 ParameterStyle.QMARK.value,
                 ParameterStyle.NUMERIC.value,
                 ParameterStyle.POSITIONAL_COLON.value,
                 ParameterStyle.POSITIONAL_PYFORMAT.value,
             }
-            if any(style in positional_styles for style in cached_profile.styles):
+            named_styles = {
+                ParameterStyle.NAMED_COLON.value,
+                ParameterStyle.NAMED_AT.value,
+                ParameterStyle.NAMED_DOLLAR.value,
+                ParameterStyle.NAMED_PYFORMAT.value,
+            }
+            cached_styles = cached_profile.styles
+            if input_named_parameters and any(style in positional_styles for style in cached_styles):
                 processed = self._map_named_to_positional(
                     processed, input_named_parameters, is_many, strict=config.strict_named_parameters
                 )
+            elif any(style in named_styles for style in cached_styles):
+                processed = self._map_positional_to_named(processed, cached_profile, is_many)
 
         return processed
+
+    def _map_positional_to_named(
+        self, parameters: "ConvertedParameters", cached_profile: "ParameterProfile", is_many: bool
+    ) -> "ConvertedParameters":
+        """Map a positional sequence to a dict keyed by cached placeholder names."""
+        cached_param_info = cached_profile.parameters
+        if not cached_param_info:
+            return parameters
+
+        if is_many and isinstance(parameters, (list, tuple)):
+            rows = cast("Sequence[Any]", parameters)
+            mapped_rows: list[Any] = []
+            for row in rows:
+                if isinstance(row, Mapping):
+                    mapped_rows.append(row)
+                    continue
+                if isinstance(row, (list, tuple)) and not isinstance(row, (str, bytes, bytearray)):
+                    mapped_rows.append({
+                        (param.name or f"param_{param.ordinal}"): row[idx]
+                        for idx, param in enumerate(cached_param_info)
+                        if idx < len(row)
+                    })
+                    continue
+                mapped_rows.append(row)
+            return mapped_rows
+
+        if isinstance(parameters, Mapping):
+            return parameters
+
+        if isinstance(parameters, (list, tuple)) and not isinstance(parameters, (str, bytes, bytearray)):
+            seq = cast("Sequence[Any]", parameters)
+            return {
+                (param.name or f"param_{param.ordinal}"): seq[idx]
+                for idx, param in enumerate(cached_param_info)
+                if idx < len(seq)
+            }
+
+        return parameters
 
     def _map_named_to_positional(
         self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool, strict: bool = False
@@ -715,14 +740,15 @@ class ParameterProcessor:
             return updated_rows
 
         if param_type is dict:
+            dict_parameters = cast("dict[str, Any]", parameters)
             if strict:
-                missing = [name for name in named_order if name not in parameters]  # type: ignore[operator]
+                missing = [name for name in named_order if name not in dict_parameters]
                 if missing:
                     from sqlspec.exceptions import SQLSpecError
 
                     msg = f"Missing required parameters: {missing}"
                     raise SQLSpecError(msg)
-            return tuple(parameters.get(name) for name in named_order)  # type: ignore[union-attr]
+            return tuple(dict_parameters.get(name) for name in named_order)
 
         # Fallback for custom Mapping types
         if isinstance(parameters, Mapping):
@@ -826,10 +852,10 @@ class ParameterProcessor:
             # For static script compilation, we must include actual values in the fingerprint
             # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
             if config.needs_static_script_compilation:
-                param_fingerprint = _value_fingerprint(parameters)
+                param_fingerprint = value_fingerprint(parameters)
             else:
                 # Use structural fingerprint (keys + types, not values) for better cache hit rates
-                param_fingerprint = _structural_fingerprint(parameters, is_many)
+                param_fingerprint = structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
         # Include both input and execution parameter styles to avoid cache collisions
         # (e.g., MySQL asyncmy uses ? for input but %s for execution)
@@ -838,18 +864,8 @@ class ParameterProcessor:
             config.default_execution_parameter_style.value if config.default_execution_parameter_style else input_style
         )
 
-        # Optimize: Use tuple as cache key instead of hashing the string representation.
-        # This avoids expensive repr() and blake2b hashing of the SQL string on every call.
-        # Python's dict/OrderedDict handles tuple keys efficiently using hash().
-        return (
-            sql,
-            param_fingerprint,
-            input_style,
-            exec_style,
-            is_many,
-            dialect_marker,
-            wrap_types,
-            normalize_for_parsing,
+        return _make_cache_key_tuple(
+            sql, param_fingerprint, input_style, exec_style, dialect_marker, is_many, wrap_types, normalize_for_parsing
         )
 
     def process(

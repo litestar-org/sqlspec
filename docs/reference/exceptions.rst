@@ -25,10 +25,6 @@ Configuration
    :members:
    :show-inheritance:
 
-.. autoclass:: BackendNotRegisteredError
-   :members:
-   :show-inheritance:
-
 .. autoclass:: MissingDependencyError
    :members:
    :show-inheritance:
@@ -214,7 +210,6 @@ Inheritance Tree
    SQLSpecError
    +-- ImproperConfigurationError
    +-- ConfigResolverError
-   +-- BackendNotRegisteredError
    +-- MissingDependencyError
    +-- EventChannelError
    +-- SQLParsingError

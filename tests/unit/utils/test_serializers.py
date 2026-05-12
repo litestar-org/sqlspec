@@ -5,6 +5,7 @@ Tests for the canonical JSON serialization surface and contract-level regression
 
 import json
 import math
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from sqlspec.core.filters import OffsetPagination
 from sqlspec.utils.serializers import (
     __all__,
     from_json,
+    get_collection_serializer,
     numpy_array_dec_hook,
     numpy_array_enc_hook,
     numpy_array_predicate,
@@ -708,6 +710,86 @@ def test_numpy_serialization_with_to_json() -> None:
     assert decoded_list == [1.0, 2.0, 3.0]
 
 
+def test_structural_encoder_resolution_is_cached_by_exact_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Structural probes should run once per concrete type."""
+    from sqlspec.utils.serializers import _json as json_module
+
+    json_module._STRUCTURAL_ENCODER_CACHE.clear()
+
+    @dataclass
+    class _Payload:
+        id: int
+
+    original_probe = json_module.is_dataclass_instance
+    call_count = 0
+
+    def count_probe(value: Any) -> bool:
+        nonlocal call_count
+        call_count += 1
+        return original_probe(value)
+
+    monkeypatch.setattr(json_module, "is_dataclass_instance", count_probe)
+
+    assert json_module._resolve_structural_encoder(_Payload(id=1)) == {"id": 1}
+    assert json_module._resolve_structural_encoder(_Payload(id=2)) == {"id": 2}
+    assert call_count == 1
+
+    json_module._STRUCTURAL_ENCODER_CACHE.clear()
+
+
+def test_schema_serializer_cache_is_lru_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema serializer cache should evict least-recently-used entries."""
+    from sqlspec.utils.serializers import _schema as schema_module
+
+    reset_serializer_cache()
+    monkeypatch.setattr(schema_module, "_SCHEMA_SERIALIZER_CACHE_MAX_SIZE", 2)
+
+    @dataclass
+    class _First:
+        id: int
+
+    @dataclass
+    class _Second:
+        id: int
+
+    @dataclass
+    class _Third:
+        id: int
+
+    first = get_collection_serializer(_First(id=1))
+    second = get_collection_serializer(_Second(id=1))
+    assert len(schema_module._SCHEMA_SERIALIZERS) == 2
+
+    assert get_collection_serializer(_First(id=2)) is first
+    third = get_collection_serializer(_Third(id=1))
+
+    assert len(schema_module._SCHEMA_SERIALIZERS) == 2
+    assert schema_module._make_serializer_key(_First(id=3), True, False) in schema_module._SCHEMA_SERIALIZERS
+    assert schema_module._make_serializer_key(_Third(id=2), True, False) in schema_module._SCHEMA_SERIALIZERS
+    assert schema_module._make_serializer_key(_Second(id=2), True, False) not in schema_module._SCHEMA_SERIALIZERS
+    assert get_collection_serializer(_Second(id=3)) is not second
+    assert third.dump_one(_Third(id=4)) == {"id": 4}
+
+
+def test_schema_serializer_cache_handles_concurrent_registration() -> None:
+    """Concurrent cold-cache registrations should publish one serializer per key."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    reset_serializer_cache()
+
+    @dataclass
+    class _Payload:
+        id: int
+
+    def get_serializer(index: int) -> int:
+        return id(get_collection_serializer(_Payload(id=index)))
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        serializer_ids = set(executor.map(get_serializer, range(32)))
+
+    assert len(serializer_ids) == 1
+
+
 class TestSchemaDumpWireFormatOptOut:
     """``wire_format=False`` opts msgspec into Python attribute names (ignores rename=)."""
 
@@ -748,6 +830,65 @@ class TestSchemaDumpWireFormatOptOut:
         assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
         assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
         assert schema_dump(obj) == {"user_id": "abc"}  # default is wire_format=False
+
+    @pytest.mark.parametrize(
+        ("exclude_unset", "wire_format", "expected_key"),
+        [(False, False, "user_id"), (False, True, "userId"), (True, False, "user_id"), (True, True, "userId")],
+    )
+    def test_msgspec_fields_are_precomputed_per_serializer(
+        self, monkeypatch: pytest.MonkeyPatch, exclude_unset: bool, wire_format: bool, expected_key: str
+    ) -> None:
+        """Serializer registration should precompute immutable msgspec field metadata once."""
+        import msgspec
+
+        from sqlspec.utils.serializers import _schema as schema_module
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+
+        original_fields = schema_module.msgspec_fields
+        call_count = 0
+
+        def count_fields(schema_type: type[Any]) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return original_fields(schema_type)
+
+        monkeypatch.setattr(schema_module, "msgspec_fields", count_fields)
+
+        pipeline = get_collection_serializer(
+            _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format
+        )
+        assert call_count == 1
+
+        dumped = pipeline.dump_many([_User(user_id="first"), _User(user_id="second")])
+
+        assert dumped == [{expected_key: "first"}, {expected_key: "second"}]
+        assert call_count == 1
+
+    def test_msgspec_dump_modes_use_one_parameterized_function(self) -> None:
+        """All msgspec serializer modes should share one dump implementation."""
+        import msgspec
+
+        from sqlspec.utils.serializers import _schema as schema_module
+
+        class _User(msgspec.Struct, rename="camel"):
+            user_id: str
+
+        dump_function = getattr(schema_module, "_dump_msgspec_struct")
+        removed_function_names = (
+            "_dump_msgspec_fields",
+            "_dump_msgspec_excluding_unset",
+            "_dump_msgspec_fields_python",
+            "_dump_msgspec_excluding_unset_python",
+        )
+        assert not any(hasattr(schema_module, name) for name in removed_function_names)
+
+        for exclude_unset, wire_format in ((False, False), (False, True), (True, False), (True, True)):
+            pipeline = get_collection_serializer(
+                _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format
+            )
+            assert getattr(getattr(pipeline, "_dump"), "func") is dump_function
 
     def test_pydantic_unaffected_by_wire_format(self) -> None:
         pytest.importorskip("pydantic")

@@ -16,26 +16,19 @@ from sqlspec.driver._common import (
     DataDictionaryMixin,
     ExecutionResult,
     StackExecutionObserver,
+    _raise_database_exception,
     describe_stack_statement,
     handle_single_row_error,
 )
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._storage_helpers import (
-    arrow_table_to_rows,
-    attach_partition_telemetry,
-    build_ingest_telemetry,
-    coerce_arrow_table,
-    create_storage_job,
-    stringify_storage_target,
-)
+from sqlspec.driver._storage_helpers import stringify_storage_target
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import ValueT, to_value_type
-from sqlspec.utils.type_guards import has_asdict_method, is_dict_row, is_mapping_like
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
@@ -180,17 +173,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         if exc_handler.pending_exception is not None:
             raise exc_handler.pending_exception from None
 
-    @staticmethod
-    def _raise_async_database_exception(exc_handler: AsyncExceptionHandler, exc: Exception | None) -> None:
-        """Raise any mapped database exception captured by the async handler."""
-        pending_exception = exc_handler.pending_exception
-        if pending_exception is not None:
-            if exc is None:
-                raise pending_exception from None
-            raise pending_exception from exc
-        if exc is not None:
-            raise exc
-
     @final
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -204,9 +186,31 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
         try:
-            runtime = self.observability
+            runtime = self._observability
             compiled_sql, execution_parameters = statement.compile()
             _ = cast("ProcessedState", statement.get_processed_state())
+            result: SQLResult | None = None
+
+            # FAST PATH: Skip all instrumentation if runtime is absent or idle.
+            if runtime is None or runtime.is_idle:
+                exc_handler = self.handle_database_exceptions()
+                async with exc_handler, self.with_cursor(connection) as cursor:
+                    special_result = await self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        result = special_result
+                    elif statement.is_script:
+                        execution_result = await self.dispatch_execute_script(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    elif statement.is_many:
+                        execution_result = await self.dispatch_execute_many(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                    else:
+                        execution_result = await self.dispatch_execute(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
+                self._check_pending_exception(exc_handler)
+                assert result is not None
+                return result
+
             operation = statement.operation_type
             query_context = {
                 "sql": compiled_sql,
@@ -220,7 +224,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
             started = perf_counter()
 
-            result: SQLResult | None = None
             exc_handler = self.handle_database_exceptions()
             try:
                 async with exc_handler, self.with_cursor(connection) as cursor:
@@ -242,17 +245,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                     mapped_exc = pending_exception
                     runtime.span_manager.end_span(span, error=mapped_exc)
                     runtime.emit_error(mapped_exc, **query_context)
-                    self._raise_async_database_exception(exc_handler, exc)
+                    _raise_database_exception(exc_handler, exc)
                 runtime.span_manager.end_span(span, error=exc)
                 runtime.emit_error(exc, **query_context)
-                self._raise_async_database_exception(exc_handler, exc)
+                _raise_database_exception(exc_handler, exc)
 
             pending_exception = exc_handler.pending_exception
             if pending_exception is not None:
                 mapped_exc = pending_exception
                 runtime.span_manager.end_span(span, error=mapped_exc)
                 runtime.emit_error(mapped_exc, **query_context)
-                self._raise_async_database_exception(exc_handler, None)
+                _raise_database_exception(exc_handler, None)
 
             assert result is not None  # Guaranteed: no exception means result was assigned
 
@@ -1192,27 +1195,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             modified_sql = self._add_count_over_column(sql_statement)
             result = await self.dispatch_statement_execution(modified_sql, self.connection)
             rows = result.all()
-
-            # Batch-level type detection: check first row type once, use specialized list comprehension
-            # All rows from a result set share the same type, so checking first_row is sufficient
-            if not rows:
-                total = 0
-                data: list[dict[str, Any]] = []
-            else:
-                first_row = rows[0]
-                # Extract total count from first row
-                if is_dict_row(first_row):
-                    total = first_row.get("_total_count", 0)
-                    data = [{k: v for k, v in row.items() if k != "_total_count"} for row in rows]
-                elif is_mapping_like(first_row):
-                    total = dict(first_row).get("_total_count", 0)
-                    data = [{k: v for k, v in dict(row).items() if k != "_total_count"} for row in rows]
-                elif has_asdict_method(first_row):
-                    total = getattr(first_row, "_total_count", 0)
-                    data = [{k: v for k, v in row._asdict().items() if k != "_total_count"} for row in rows]  # type: ignore[attr-defined]
-                else:
-                    total = 0
-                    data = [{} for _ in rows]
+            data, total = self._extract_total_from_rows(rows)
 
             if schema_type is not None:
                 return ([schema_type(**r) for r in data], total)
@@ -1730,76 +1713,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         telemetry = runtime.annotate_storage_telemetry(telemetry)
         runtime.end_storage_span(span, telemetry=telemetry)
         return table, telemetry
-
-    def _coerce_arrow_table(self, source: "ArrowResult | Any") -> "ArrowTable":
-        """Coerce various sources to a PyArrow Table.
-
-        Args:
-            source: ArrowResult, PyArrow Table, RecordBatch, or iterable of dicts.
-
-        Returns:
-            PyArrow Table.
-
-        """
-        return coerce_arrow_table(source)
-
-    @staticmethod
-    def _arrow_table_to_rows(
-        table: "ArrowTable", columns: "list[str] | None" = None
-    ) -> "tuple[list[str], list[tuple[Any, ...]]]":
-        """Convert Arrow table to column names and row tuples.
-
-        Args:
-            table: Arrow table to convert.
-            columns: Optional list of columns to extract.
-
-        Returns:
-            Tuple of (column_names, list of row tuples).
-
-        """
-        return arrow_table_to_rows(table, columns)
-
-    @staticmethod
-    def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
-        """Build telemetry dict from Arrow table statistics.
-
-        Args:
-            table: Arrow table to extract statistics from.
-            format_label: Format label for telemetry.
-
-        Returns:
-            StorageTelemetry dict with row/byte counts.
-
-        """
-        return build_ingest_telemetry(table, format_label=format_label)
-
-    def _attach_partition_telemetry(
-        self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"
-    ) -> None:
-        """Attach partitioner info to telemetry dict.
-
-        Args:
-            telemetry: Telemetry dict to update.
-            partitioner: Partitioner configuration or None.
-
-        """
-        attach_partition_telemetry(telemetry, partitioner)
-
-    def _create_storage_job(
-        self, produced: "StorageTelemetry", provided: "StorageTelemetry | None" = None, *, status: str = "completed"
-    ) -> "StorageBridgeJob":
-        """Create a StorageBridgeJob from telemetry data.
-
-        Args:
-            produced: Telemetry from the production side of the operation.
-            provided: Optional telemetry from the source side.
-            status: Job status string.
-
-        Returns:
-            StorageBridgeJob instance.
-
-        """
-        return create_storage_job(produced, provided, status=status)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

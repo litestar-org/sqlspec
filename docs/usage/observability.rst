@@ -16,7 +16,8 @@ Custom Statement Observers
 
 Create a custom observer to capture ``StatementEvent`` objects for logging, metrics,
 or alerting. Each observer is a callable that receives a ``StatementEvent`` after
-every SQL execution.
+every SQL execution. Custom observers conform to the public
+``sqlspec.observability.StatementObserver`` protocol.
 
 .. literalinclude:: /examples/patterns/observability/custom_observer.py
    :language: python
@@ -91,6 +92,11 @@ Metrics exposed:
 - ``myapp_sql_query_total``: Counter of executed queries.
 - ``myapp_sql_query_duration_seconds``: Histogram of execution duration.
 - ``myapp_sql_query_rows``: Histogram of rows affected.
+
+OpenTelemetry tracing is span-based and does not register a statement observer.
+Use ``statement_observers`` for callback-style integrations such as metrics,
+audit sinks, or custom log emission; use ``TelemetryConfig`` or
+``enable_tracing()`` for OpenTelemetry spans.
 
 SQLCommenter
 ------------

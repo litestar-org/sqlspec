@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.adapters.oracledb import (
+from sqlspec.adapters.oracledb._json_handlers import (
     json_converter_in_blob,
     json_converter_in_clob,
     json_converter_out_blob,

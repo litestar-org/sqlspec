@@ -92,13 +92,6 @@ class MissingDependencyError(SQLSpecError):
         )
 
 
-class BackendNotRegisteredError(SQLSpecError):
-    """Raised when a requested storage backend key is not registered."""
-
-    def __init__(self, backend_key: str) -> None:
-        super().__init__(f"Storage backend '{backend_key}' is not registered. Please register it before use.")
-
-
 class EventChannelError(SQLSpecError):
     """Raised when event channel operations fail."""
 
