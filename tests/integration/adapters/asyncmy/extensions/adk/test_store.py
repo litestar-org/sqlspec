@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sqlspec.adapters.asyncmy.adk.store import AsyncmyADKStore
+from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.extensions.adk import EventRecord
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncmy, pytest.mark.integration]

@@ -1,7 +1,8 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
+import sqlite3
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
+SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 
 __all__ = ("AiosqliteADKMemoryStore", "AiosqliteADKStore")
 
@@ -133,14 +135,19 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Notes:
             - TEXT for IDs, names, and JSON state
             - REAL for Julian Day timestamps
+            - Optional owner ID column for multi-tenant scenarios
             - Composite index on (app_name, user_id)
             - Index on update_time DESC for recent session queries
         """
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id TEXT PRIMARY KEY,
             app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
+            user_id TEXT NOT NULL{owner_id_line},
             state TEXT NOT NULL DEFAULT '{{}}',
             create_time REAL NOT NULL,
             update_time REAL NOT NULL
@@ -263,22 +270,27 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         WHERE id = ?
         """
 
-        async with self._config.provide_connection() as conn:
-            await self._apply_pragmas(conn)
-            cursor = await conn.execute(sql, (session_id,))
-            row = await cursor.fetchone()
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, (session_id,))
+                row = await cursor.fetchone()
 
-            if row is None:
+                if row is None:
+                    return None
+
+                return SessionRecord(
+                    id=row[0],
+                    app_name=row[1],
+                    user_id=row[2],
+                    state=from_json(row[3]) if row[3] else {},
+                    create_time=_julian_to_datetime(row[4]),
+                    update_time=_julian_to_datetime(row[5]),
+                )
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
                 return None
-
-            return SessionRecord(
-                id=row[0],
-                app_name=row[1],
-                user_id=row[2],
-                state=from_json(row[3]) if row[3] else {},
-                create_time=_julian_to_datetime(row[4]),
-                update_time=_julian_to_datetime(row[5]),
-            )
+            raise
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
@@ -336,22 +348,27 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             """
             params = (app_name, user_id)
 
-        async with self._config.provide_connection() as conn:
-            await self._apply_pragmas(conn)
-            cursor = await conn.execute(sql, params)
-            rows = await cursor.fetchall()
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, params)
+                rows = await cursor.fetchall()
 
-            return [
-                SessionRecord(
-                    id=row[0],
-                    app_name=row[1],
-                    user_id=row[2],
-                    state=from_json(row[3]) if row[3] else {},
-                    create_time=_julian_to_datetime(row[4]),
-                    update_time=_julian_to_datetime(row[5]),
-                )
-                for row in rows
-            ]
+                return [
+                    SessionRecord(
+                        id=row[0],
+                        app_name=row[1],
+                        user_id=row[2],
+                        state=from_json(row[3]) if row[3] else {},
+                        create_time=_julian_to_datetime(row[4]),
+                        update_time=_julian_to_datetime(row[5]),
+                    )
+                    for row in rows
+                ]
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return []
+            raise
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
@@ -409,11 +426,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
         Inserts the event and updates the session state + update_time in a
-        single transaction. Both operations succeed or fail together.
+        single transaction. Both operations succeed or fail together. Returns
+        the updated SessionRecord via SQLite RETURNING (3.35+).
 
         Args:
             event_record: Event record to store.
@@ -439,6 +457,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE id = ?
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
         async with self._config.provide_connection() as conn:
@@ -454,8 +473,22 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     event_data_json,
                 ),
             )
-            await conn.execute(update_sql, (state_json, now_julian, session_id))
+            cursor = await conn.execute(update_sql, (state_json, now_julian, session_id))
+            row = await cursor.fetchone()
             await conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row[0],
+            app_name=row[1],
+            user_id=row[2],
+            state=from_json(row[3]) if row[3] else {},
+            create_time=_julian_to_datetime(row[4]),
+            update_time=_julian_to_datetime(row[5]),
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -491,21 +524,26 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         ORDER BY timestamp ASC{limit_clause}
         """
 
-        async with self._config.provide_connection() as conn:
-            await self._apply_pragmas(conn)
-            cursor = await conn.execute(sql, params)
-            rows = await cursor.fetchall()
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, params)
+                rows = await cursor.fetchall()
 
-            return [
-                EventRecord(
-                    session_id=row[1],
-                    invocation_id=row[2],
-                    author=row[3],
-                    timestamp=_julian_to_datetime(row[4]),
-                    event_json=from_json(row[5]) if row[5] else {},
-                )
-                for row in rows
-            ]
+                return [
+                    EventRecord(
+                        session_id=row[1],
+                        invocation_id=row[2],
+                        author=row[3],
+                        timestamp=_julian_to_datetime(row[4]),
+                        event_json=from_json(row[5]) if row[5] else {},
+                    )
+                    for row in rows
+                ]
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return []
+            raise
 
 
 class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
@@ -525,7 +563,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
     Example:
         from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
+        from sqlspec.adapters.aiosqlite.adk import AiosqliteADKMemoryStore
 
         config = AiosqliteConfig(
             connection_config={"database": ":memory:"},

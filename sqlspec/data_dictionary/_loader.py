@@ -1,4 +1,5 @@
-from pathlib import Path
+from importlib import resources
+from importlib.resources import as_file
 from typing import TYPE_CHECKING
 
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -6,13 +7,20 @@ from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.loader import SQLFileLoader
 
 if TYPE_CHECKING:
+    from importlib.abc import Traversable
+
     from sqlspec.core.statement import SQL
     from sqlspec.data_dictionary._types import DialectConfig
 
 __all__ = ("DataDictionaryLoader", "get_data_dictionary_loader")
 
 
-SQL_DIR = Path(__file__).parent / "sql"
+SQL_RESOURCE_PACKAGE = "sqlspec.data_dictionary"
+SQL_RESOURCE_NAME = "sql"
+
+
+def _sql_resource_root() -> "Traversable":
+    return resources.files(SQL_RESOURCE_PACKAGE).joinpath(SQL_RESOURCE_NAME)
 
 
 class DataDictionaryLoader:
@@ -51,11 +59,12 @@ class DataDictionaryLoader:
         """
         if dialect in self._loaded_dialects:
             return
-        dialect_path = SQL_DIR / dialect
-        if not dialect_path.exists():
-            raise SQLFileNotFoundError(str(dialect_path))
+        dialect_resource = _sql_resource_root().joinpath(dialect)
+        if not dialect_resource.is_dir():
+            raise SQLFileNotFoundError(str(dialect_resource))
         loader = self._get_loader(dialect)
-        loader.load_sql(dialect_path)
+        with as_file(dialect_resource) as dialect_path:
+            loader.load_sql(dialect_path)
         self._loaded_dialects.add(dialect)
 
     def get_query(self, dialect: str, query_name: str) -> "SQL":
@@ -103,9 +112,10 @@ class DataDictionaryLoader:
         Returns:
             List of dialect names with SQL directories.
         """
-        if not SQL_DIR.exists():
+        sql_root = _sql_resource_root()
+        if not sql_root.is_dir():
             return []
-        return sorted([path.name for path in SQL_DIR.iterdir() if path.is_dir()])
+        return sorted([path.name for path in sql_root.iterdir() if path.is_dir()])
 
 
 _loader_instance: DataDictionaryLoader | None = None

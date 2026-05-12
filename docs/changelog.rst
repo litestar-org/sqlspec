@@ -68,6 +68,20 @@ v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
   rejected before SQL construction, preserving the existing identifier
   allowlist.
 
+**Performance:**
+
+* Performance builds now compile SQLSpec's custom sqlglot dialect helper
+  modules alongside ``sqlglot[c]``: generator transforms, operator registries,
+  and compatibility helpers. Selected extension helper modules are also
+  compiled: shared filter alias resolution, event payload codecs/runtime hints,
+  and ADK record type modules. SQLGlot
+  subclass/registration modules, dynamic framework provider modules, and
+  adapter-local data-dictionary classes remain interpreted by design. Event
+  dataclass and table-queue modules also stay interpreted to preserve runtime
+  slot/class-attribute behavior. The ``performance`` extra now includes
+  ``librt`` for measured string-assembly wins in the compiled splitter and
+  ``psqlpy`` copy-encoding hot paths.
+
 v0.46.1 - Litestar Filter Provider Binding Fix
 ----------------------------------------------
 

@@ -7,8 +7,8 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnecti
 from sqlspec.adapters.aiosqlite.driver import AiosqliteSessionContext
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig
-from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
+from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
+from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConfig
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig

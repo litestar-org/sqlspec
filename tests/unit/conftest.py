@@ -1,13 +1,11 @@
 """Global conftest.py for SQLSpec unit tests.
 
 Provides fixtures for configuration, caching, SQL statements, mock databases,
-cleanup, and performance testing with proper scoping and test isolation.
+and test isolation.
 """
 
 import sqlite3
-import time
-from collections.abc import AsyncGenerator, Callable, Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator
 from decimal import Decimal
 from typing import Any
 
@@ -68,18 +66,13 @@ async def aiosqlite_async_driver() -> AsyncGenerator[TestAiosqliteDriver, None]:
 
 __all__ = (
     "aiosqlite_async_driver",
-    "benchmark_tracker",
     "cache_config_disabled",
     "cache_config_enabled",
     "cache_statistics_tracker",
-    "cleanup_test_state",
-    "compilation_metrics",
     "complex_sql_with_joins",
-    "memory_profiler",
     "mock_lru_cache",
     "parameter_style_config_advanced",
     "parameter_style_config_basic",
-    "performance_timer",
     "reset_cache_state",
     "reset_global_state",
     "sample_delete_sql",
@@ -306,126 +299,11 @@ def test_isolation() -> "Generator[None, None, None]":
     yield
 
 
-@pytest.fixture
-def cleanup_test_state() -> "Generator[Callable[[Callable[[], None]], None], None, None]":
-    """Fixture that provides a cleanup function for test state management."""
-    cleanup_functions = []
-
-    def register_cleanup(func: "Callable[[], None]") -> None:
-        """Register a cleanup function to be called during teardown."""
-        cleanup_functions.append(func)
-
-    yield register_cleanup
-
-    for cleanup_func in reversed(cleanup_functions):
-        try:
-            cleanup_func()
-        except Exception:
-            pass
-
-
 @pytest.fixture(scope="session", autouse=True)
 def reset_global_state() -> "Generator[None, None, None]":
     """Session-scoped fixture to reset global state before and after test session."""
 
     yield
-
-
-@pytest.fixture
-def performance_timer() -> "Generator[Any, None, None]":
-    """Performance timer fixture for measuring execution time during tests."""
-    times = {}
-
-    @contextmanager
-    def timer(operation_name: str) -> "Generator[None, None, None]":
-        """Time a specific operation."""
-        start_time = time.perf_counter()
-        yield
-        end_time = time.perf_counter()
-        times[operation_name] = end_time - start_time
-
-    timer.times = times  # pyright: ignore[reportFunctionMemberAccess]
-    yield timer
-
-
-@pytest.fixture
-def benchmark_tracker() -> dict[str, Any]:
-    """Benchmark tracking fixture for collecting performance metrics during tests."""
-    return {
-        "operations": [],
-        "timings": {},
-        "memory_usage": {},
-        "cache_statistics": {},
-        "sql_compilation_times": [],
-        "parameter_processing_times": [],
-    }
-
-
-@pytest.fixture
-def memory_profiler() -> "Generator[Callable[[], dict[str, Any]], None, None]":
-    """Memory profiling fixture for tracking memory usage during tests."""
-    try:
-        import os
-
-        import psutil
-
-        process = psutil.Process(os.getpid())
-
-        def get_memory_usage() -> dict[str, Any]:
-            """Get current memory usage statistics."""
-            memory_info = process.memory_info()
-            return {"rss": memory_info.rss, "vms": memory_info.vms, "percent": process.memory_percent()}
-
-        yield get_memory_usage
-
-    except ImportError:
-
-        def get_memory_usage() -> dict[str, Any]:
-            return {"rss": 0, "vms": 0, "percent": 0.0}
-
-        yield get_memory_usage
-
-
-@pytest.fixture
-def compilation_metrics() -> "Generator[Any, None, None]":
-    """Compilation metrics tracking for SQL compilation performance testing."""
-    metrics: dict[str, Any] = {
-        "compilation_count": 0,
-        "cache_hits": 0,
-        "cache_misses": 0,
-        "parse_times": [],
-        "transform_times": [],
-        "total_compilation_times": [],
-    }
-
-    def record_compilation(
-        parse_time: float, transform_time: float, total_time: float, was_cached: bool = False
-    ) -> None:
-        """Record compilation metrics."""
-        metrics["compilation_count"] += 1
-        if was_cached:
-            metrics["cache_hits"] += 1
-        else:
-            metrics["cache_misses"] += 1
-        metrics["parse_times"].append(parse_time)
-        metrics["transform_times"].append(transform_time)
-        metrics["total_compilation_times"].append(total_time)
-
-    record_compilation.metrics = metrics  # pyright: ignore[reportFunctionMemberAccess]
-    yield record_compilation
-
-
-def pytest_configure(config: Any) -> None:
-    """Configure pytest with custom markers for fixture categories."""
-    config.addinivalue_line("markers", "config: Tests for configuration fixtures")
-    config.addinivalue_line("markers", "cache: Tests for cache-related fixtures")
-    config.addinivalue_line("markers", "sql: Tests for SQL statement fixtures")
-    config.addinivalue_line("markers", "mock_db: Tests for mock database fixtures")
-    config.addinivalue_line("markers", "cleanup: Tests for cleanup and isolation fixtures")
-    config.addinivalue_line("markers", "performance: Tests for performance measurement fixtures")
-    config.addinivalue_line("markers", "slow: Slow-running tests that require extra time")
-    config.addinivalue_line("markers", "unit: Unit tests with isolated components")
-    config.addinivalue_line("markers", "integration: Integration tests with multiple components")
 
 
 def create_test_sql_statement(sql: str, *params: Any, **kwargs: Any) -> SQL:

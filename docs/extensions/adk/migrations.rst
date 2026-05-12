@@ -8,14 +8,13 @@ used by your ADK backend, then run them with the SQLSpec migration CLI.
 Schema Bootstrapping
 ====================
 
-You can programmatically create ADK tables with ``create_tables()`` /
-``ensure_tables()``:
+You can programmatically create ADK session/event and memory tables with
+``create_tables()`` / ``ensure_tables()``:
 
 .. code-block:: python
 
    await session_store.ensure_tables()
    await memory_store.ensure_tables()
-   await artifact_store.ensure_table()
 
 Alternatively, configure SQLSpec migrations on the database config and run the
 migration CLI ahead of deployment:
@@ -62,6 +61,7 @@ note the following schema changes:
   ``timestamp``) plus ``event_json``.
 - **Artifact table**: New table (``adk_artifact_versions``) for artifact
   metadata. Create this table when enabling the artifact service.
-- **BigQuery**: Removed. Migrate to PostgreSQL or any other supported backend.
+- **BigQuery**: Removed. Migrate to Spanner, PostgreSQL, or any other
+  supported backend.
 
 See :doc:`/usage/migrations` for the full workflow and commands.

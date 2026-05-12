@@ -47,8 +47,6 @@ class SqliteExceptionHandler(BaseSyncExceptionHandler):
     to avoid ABI boundary violations with compiled code.
     """
 
-    __slots__ = ()
-
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
@@ -451,20 +449,20 @@ class SqliteDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = f"DELETE FROM {format_identifier(table)}"
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.execute(statement)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            try:
+                with self.with_cursor(self.connection) as cursor:
+                    cursor.execute(statement)
+            except sqlite3.Error as exc:
+                raise create_mapped_exception(exc) from exc
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.executemany(insert_sql, records)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            try:
+                with self.with_cursor(self.connection) as cursor:
+                    cursor.executemany(insert_sql, records)
+            except sqlite3.Error as exc:
+                raise create_mapped_exception(exc) from exc
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table

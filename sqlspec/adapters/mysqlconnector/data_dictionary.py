@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
@@ -57,10 +58,7 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
         version_info = self.get_version(driver)
 
         if type_category == "json":
-            json_version = config.get_feature_version("supports_json")
-            if version_info and json_version and version_info >= json_version:
-                return "JSON"
-            return "TEXT"
+            return resolve_mysql_json_type(version_info)
 
         return config.get_optimal_type(type_category)
 
@@ -166,10 +164,7 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            json_version = config.get_feature_version("supports_json")
-            if version_info and json_version and version_info >= json_version:
-                return "JSON"
-            return "TEXT"
+            return resolve_mysql_json_type(version_info)
 
         return config.get_optimal_type(type_category)
 

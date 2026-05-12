@@ -50,6 +50,53 @@ Writing and running tests
 
 .. todo:: Write this section
 
+Mypyc and performance gates
++++++++++++++++++++++++++++
+
+SQLSpec keeps a narrow compiled surface for hot paths. If a change touches
+``pyproject.toml`` mypyc includes or excludes, ``tools/scripts/bench*.py``,
+``tools/scripts/mypyc_*.py``, compiled ``sqlspec/core`` or ``sqlspec/driver``
+modules, storage registry/pipeline code, data dictionary registry code, or
+adapter ``core.py`` / ``type_converter.py`` files, run the focused gates below
+before opening a pull request:
+
+.. code-block:: console
+
+   make test-mypyc
+   uv run python tools/scripts/mypyc_inventory.py
+
+For pull requests that change build hooks, wheel workflows, or compiled import
+boundaries, also run:
+
+.. code-block:: console
+
+   make build-performance
+   uv run python tools/scripts/mypyc_smoke.py
+
+Benchmark claims need current artifacts rather than estimates. Use JSON output
+when capturing baselines for review:
+
+.. code-block:: console
+
+   uv run python tools/scripts/bench.py --json-output /tmp/sqlspec-bench.json
+   uv run python tools/scripts/bench_gate.py --json-output /tmp/sqlspec-bench-gate.json
+   uv run python tools/scripts/bench_subsystems.py --json-output /tmp/sqlspec-bench-subsystems.json
+
+CI gate ownership:
+
+- Pull requests always run lint, mypy, pyright, slotscheck, docs, and the Python
+  test matrix through ``.github/workflows/ci.yml``.
+- Pull requests that touch build configuration run
+  ``.github/workflows/test-build.yml``. The default pull-request path builds a
+  subset mypyc wheel matrix; maintainers can dispatch the full architecture
+  matrix when release confidence is needed.
+- Releases run ``.github/workflows/publish.yml`` with standard wheels, mypyc
+  wheels, PGO on Linux and macOS, and mypyc smoke imports before publishing.
+- ``.github/workflows/pgo-validate.yml`` is manual Linux PGO validation. It is
+  useful for build-hook changes but is not required for every pull request.
+- Optional services and container-backed adapter benchmarks remain manual unless
+  their owning PR explicitly opts into those dependencies.
+
 Project documentation
 ---------------------
 

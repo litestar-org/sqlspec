@@ -74,6 +74,30 @@ def _special_terminator_true(_tokens: "list[Token]", _pos: int) -> bool:
     return True
 
 
+_STRING_WRITER_TYPE: "type[Any] | None" = None
+_STRING_WRITER_RESOLVED = False
+
+
+def _get_librt_string_writer() -> "type[Any] | None":
+    """Return librt's StringWriter when the optional performance helper exists."""
+    global _STRING_WRITER_RESOLVED, _STRING_WRITER_TYPE
+    if _STRING_WRITER_RESOLVED:
+        return _STRING_WRITER_TYPE
+    try:
+        from librt.strings import StringWriter
+    except ImportError:
+        _STRING_WRITER_TYPE = None
+    else:
+        _STRING_WRITER_TYPE = StringWriter
+    _STRING_WRITER_RESOLVED = True
+    return _STRING_WRITER_TYPE
+
+
+def _join_string_fragments(fragments: "list[str]") -> str:
+    """Join fragments with the standard list-join path."""
+    return "".join(fragments)
+
+
 class TokenType(Enum):
     """Types of tokens recognized by the SQL lexer."""
 
@@ -813,13 +837,20 @@ class StatementSplitter:
         """
         statements = []
         current_statement_tokens = []
-        current_statement_chars = []
+        string_writer_type = _get_librt_string_writer()
+        current_statement_writer = string_writer_type() if string_writer_type is not None else None
+        current_statement_chars: list[str] = []
+        current_statement_fragment_count = 0
         block_stack = []
 
         all_tokens = list(self._tokenize(sql))
 
         for token_idx, token in enumerate(all_tokens):
-            current_statement_chars.append(token.value)
+            current_statement_fragment_count += 1
+            if current_statement_writer is None:
+                current_statement_chars.append(token.value)
+            else:
+                current_statement_writer.write(token.value)
 
             if token.type in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
                 current_statement_tokens.append(token)
@@ -858,7 +889,10 @@ class StatementSplitter:
                     is_terminator = True
 
             if is_terminator:
-                statement = "".join(current_statement_chars).strip()
+                if current_statement_writer is None:
+                    statement = _join_string_fragments(current_statement_chars).strip()
+                else:
+                    statement = cast("str", current_statement_writer.getvalue()).strip()
 
                 is_plsql_block = self._is_plsql_block(current_statement_tokens)
 
@@ -873,10 +907,15 @@ class StatementSplitter:
                 if statement and self._contains_executable_content(statement):
                     statements.append(statement)
                 current_statement_tokens = []
+                current_statement_writer = string_writer_type() if string_writer_type is not None else None
                 current_statement_chars = []
+                current_statement_fragment_count = 0
 
-        if current_statement_chars:
-            statement = "".join(current_statement_chars).strip()
+        if current_statement_fragment_count:
+            if current_statement_writer is None:
+                statement = _join_string_fragments(current_statement_chars).strip()
+            else:
+                statement = cast("str", current_statement_writer.getvalue()).strip()
             if statement and self._contains_executable_content(statement):
                 statements.append(statement)
 

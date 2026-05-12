@@ -407,7 +407,7 @@ class QueryBuilder(ABC):
             A new expression with literals replaced by parameter placeholders
 
         """
-        return cast("exp.Expr", expression.transform(_ExpressionParameterizer(self), copy=False))
+        return expression.transform(_ExpressionParameterizer(self), copy=False)
 
     def add_parameter(self: Self, value: Any, name: str | None = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
@@ -554,7 +554,7 @@ class QueryBuilder(ABC):
             Updated expression with new placeholder names
 
         """
-        return cast("exp.Expr", expression.transform(_PlaceholderReplacer(param_mapping), copy=False))
+        return expression.transform(_PlaceholderReplacer(param_mapping), copy=False)
 
     def _generate_builder_cache_key(self, config: "StatementConfig | None" = None) -> str:
         """Generate cache key based on builder state and configuration.
@@ -936,7 +936,8 @@ class QueryBuilder(ABC):
 
     def _unquote_identifiers_for_oracle(self, expression: exp.Expr) -> exp.Expr:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
-        return cast("exp.Expr", expression.copy().transform(_unquote_identifier, copy=False))
+        # SQLGlot transform(copy=True) deep-copies internally. Copy once here, then mutate that copy.
+        return expression.copy().transform(_unquote_identifier, copy=False)
 
     def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
         for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):

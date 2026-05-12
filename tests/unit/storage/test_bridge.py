@@ -23,7 +23,7 @@ from sqlspec.adapters.psqlpy import default_statement_config as psqlpy_statement
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
-from sqlspec.storage.pipeline import StorageDestination
+from sqlspec.storage.pipeline import AsyncStoragePipeline, StagedArtifact, StorageDestination
 from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
@@ -91,6 +91,92 @@ class DummyAsyncmyConnection:
 
     def cursor(self) -> DummyAsyncmyCursorImpl:
         return DummyAsyncmyCursorImpl(self.operations)
+
+
+class _CountingStorageBackend:
+    backend_type = "counting"
+
+    def __init__(self) -> None:
+        self.deleted_paths: list[str] = []
+
+    def delete_sync(self, path: str) -> None:
+        self.deleted_paths.append(path)
+
+    async def delete_async(self, path: str) -> None:
+        self.deleted_paths.append(path)
+
+
+class _CountingStorageRegistry:
+    def __init__(self) -> None:
+        self.backend = _CountingStorageBackend()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get(self, destination: str, **options: Any) -> _CountingStorageBackend:
+        self.calls.append((destination, dict(options)))
+        return self.backend
+
+
+def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:
+    registry = _CountingStorageRegistry()
+    pipeline = SyncStoragePipeline(registry=cast(Any, registry))
+
+    first_backend, first_path, first_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", None)
+    second_backend, second_path, second_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", {})
+
+    assert first_backend is second_backend
+    assert first_backend is cast("Any", registry.backend)
+    assert first_path == second_path == "tmp/payload.jsonl"
+    assert first_backend_name == second_backend_name == "counting"
+    assert registry.calls == [("file://tmp/payload.jsonl", {})]
+
+    pipeline.clear_cache()
+    pipeline._resolve_backend("file://tmp/payload.jsonl", None)
+    assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
+
+
+def test_sync_pipeline_bypasses_resolution_cache_for_storage_options() -> None:
+    registry = _CountingStorageRegistry()
+    pipeline = SyncStoragePipeline(registry=cast(Any, registry))
+
+    pipeline._resolve_backend("file://tmp/payload.jsonl", {"backend": "local"})
+    pipeline._resolve_backend("file://tmp/payload.jsonl", {"backend": "local"})
+
+    assert registry.calls == [
+        ("file://tmp/payload.jsonl", {"backend": "local"}),
+        ("file://tmp/payload.jsonl", {"backend": "local"}),
+    ]
+
+
+async def test_async_pipeline_cleanup_reuses_cached_backend_resolution() -> None:
+    registry = _CountingStorageRegistry()
+    pipeline = AsyncStoragePipeline(registry=cast(Any, registry))
+    artifacts: list[StagedArtifact] = [
+        {
+            "partition_id": "0",
+            "uri": "file://tmp/payload.jsonl",
+            "cleanup_token": "cleanup::0",
+            "ttl_seconds": 0,
+            "expires_at": 0.0,
+            "correlation_id": "cleanup",
+        },
+        {
+            "partition_id": "1",
+            "uri": "file://tmp/payload.jsonl",
+            "cleanup_token": "cleanup::1",
+            "ttl_seconds": 0,
+            "expires_at": 0.0,
+            "correlation_id": "cleanup",
+        },
+    ]
+
+    await pipeline.cleanup_staging_artifacts(artifacts)
+
+    assert registry.calls == [("file://tmp/payload.jsonl", {})]
+    assert registry.backend.deleted_paths == ["tmp/payload.jsonl", "tmp/payload.jsonl"]
+
+    pipeline.clear_cache()
+    await pipeline.cleanup_staging_artifacts(artifacts[:1])
+    assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
 
 
 async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -338,8 +424,8 @@ def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPat
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> tuple[_Backend, str]:
-        return backend, "objects/data.jsonl"
+    ) -> tuple[_Backend, str, str]:
+        return backend, "objects/data.jsonl", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -389,8 +475,8 @@ def test_write_arrow_csv_default_options(monkeypatch: pytest.MonkeyPatch) -> Non
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/output.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -413,8 +499,8 @@ def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> No
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/output.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -428,6 +514,26 @@ def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> No
     assert "|" in text.split("\n")[0]
 
 
+def test_write_arrow_csv_uses_pipeline_storage_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Write an Arrow table using storage options bound at pipeline construction."""
+    backend = _CsvTestBackend()
+    pipeline = SyncStoragePipeline(storage_options={"write_options": {"delimiter": "|"}})
+
+    def _fake_resolve(
+        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
+
+    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+
+    table = pa.table({"x": [10], "y": [20]})
+    pipeline.write_arrow(table, "data/output.csv", format_hint="csv")
+
+    payload = backend.payloads["data/output.csv"]
+    text = payload.decode()
+    assert "|" in text.split("\n")[0]
+
+
 def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
     """Write an Arrow table as CSV without header row."""
     backend = _CsvTestBackend()
@@ -435,8 +541,8 @@ def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/output.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/output.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 
@@ -477,8 +583,8 @@ def test_read_arrow_csv(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _fake_resolve(
         self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str]":
-        return backend, "data/input.csv"
+    ) -> "tuple[_CsvTestBackend, str, str]":
+        return backend, "data/input.csv", backend.backend_type
 
     monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
 

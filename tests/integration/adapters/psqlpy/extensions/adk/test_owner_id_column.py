@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 
-from sqlspec.adapters.psqlpy.adk.store import PsqlpyADKStore
+from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.mark.integration]

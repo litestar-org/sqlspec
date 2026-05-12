@@ -83,7 +83,7 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
     if has_expression_and_sql(column_input):
         if column_input.expression is not None and isinstance(column_input.expression, exp.Expr):
             _merge_sql_parameters(column_input, builder)
-            return cast("exp.Expr", column_input.expression)
+            return column_input.expression
 
         _merge_sql_parameters(column_input, builder)
         sql_str = column_input.sql
@@ -238,7 +238,7 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
 
     if value.expression is not None and isinstance(value.expression, exp.Expr):
         _merge_sql_parameters(value, builder)
-        return cast("exp.Expr", value.expression)
+        return value.expression
 
     _merge_sql_parameters(value, builder)
     sql_text = value.sql if not callable(value.sql) else str(value)

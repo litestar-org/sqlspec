@@ -442,7 +442,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Synchronous implementation of append_event_and_update_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
@@ -458,6 +458,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE id = ?
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
         with self._config.provide_connection() as conn:
@@ -471,16 +472,32 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                     event_json_str,
                 ),
             )
-            conn.execute(update_sql, (state_json, now, session_id))
+            cursor = conn.execute(update_sql, (state_json, now, session_id))
+            row = cursor.fetchone()
             conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        session_id_val, app_name, user_id, state_data, create_time, update_time = row
+        return SessionRecord(
+            id=session_id_val,
+            app_name=app_name,
+            user_id=user_id,
+            state=from_json(state_data) if isinstance(state_data, str) else state_data,
+            create_time=create_time,
+            update_time=update_time,
+        )
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
         The event insert and state update succeed together or fail together
-        within a single DuckDB transaction.
+        within a single DuckDB transaction; the updated SessionRecord is
+        returned via UPDATE...RETURNING.
 
         Args:
             event_record: Event record to store (5-key shape).
@@ -488,7 +505,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
             state: Post-append durable state snapshot (``temp:`` keys already
                 stripped by the service layer).
         """
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -565,7 +582,7 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
 
     Example:
         from sqlspec.adapters.duckdb import DuckDBConfig
-        from sqlspec.adapters.duckdb.adk.store import DuckdbADKMemoryStore
+        from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
 
         config = DuckDBConfig(
             database="app.ddb",
@@ -632,6 +649,7 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
                 f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
                 f"stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
             )
+            conn.commit()
         except Exception as exc:
             logger.debug("Failed to create DuckDB FTS index: %s", exc)
 
@@ -644,14 +662,12 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
         if not self._ensure_fts_extension(conn):
             return
 
-        with contextlib.suppress(Exception):
-            conn.execute(f"PRAGMA drop_fts_index('{self._memory_table}')")
-
         try:
             conn.execute(
                 f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
                 f"overwrite=1, stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
             )
+            conn.commit()
         except Exception as exc:
             logger.debug("Failed to refresh DuckDB FTS index: %s", exc)
 
@@ -823,9 +839,15 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
             return []
 
         limit_value = limit or self._max_results
-        if self._use_fts:
-            # Use match_bm25() -- the correct DuckDB FTS syntax
-            sql = f"""
+        use_fts = self._use_fts
+
+        with self._config.provide_connection() as conn:
+            if use_fts and not self._ensure_fts_extension(conn):
+                use_fts = False
+
+            if use_fts:
+                # Use match_bm25() -- the correct DuckDB FTS syntax
+                sql = f"""
             SELECT m.*
             FROM {self._memory_table} m
             JOIN (
@@ -836,17 +858,16 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
             ORDER BY fts.score DESC
             LIMIT ?
             """
-            params = (query, app_name, user_id, limit_value)
-        else:
-            sql = f"""
+                params = (query, app_name, user_id, limit_value)
+            else:
+                sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE app_name = ? AND user_id = ? AND content_text ILIKE ?
             ORDER BY timestamp DESC
             LIMIT ?
             """
-            params = (app_name, user_id, f"%{query}%", limit_value)
+                params = (app_name, user_id, f"%{query}%", limit_value)
 
-        with self._config.provide_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
             columns = [col[0] for col in conn.description or []]
         records: list[MemoryRecord] = []

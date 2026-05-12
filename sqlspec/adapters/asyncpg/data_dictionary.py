@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, ClassVar
 
+from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
@@ -87,13 +88,7 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            jsonb_version = config.get_feature_version("supports_jsonb")
-            json_version = config.get_feature_version("supports_json")
-            if version_info and jsonb_version and version_info >= jsonb_version:
-                return "JSONB"
-            if version_info and json_version and version_info >= json_version:
-                return "JSON"
-            return "TEXT"
+            return resolve_postgres_json_type(version_info)
 
         return config.get_optimal_type(type_category)
 

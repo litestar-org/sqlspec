@@ -51,3 +51,33 @@ def test_chapter_rollout_order_starts_with_guardrails_and_parameter_work() -> No
         "compiled-coercion-engine",
         "adapter-runtime-boundaries",
     )
+
+
+def test_gate_json_report_records_thresholds_and_result(tmp_path: Path) -> None:
+    module = _load_bench_gate_module()
+    output_path = tmp_path / "gate.json"
+
+    module._write_json_results(
+        [
+            {
+                "scenario": "read_heavy",
+                "raw_time": 0.1,
+                "sqlspec_time": 0.11,
+                "overhead_pct": 10.0,
+                "threshold_pct": 12.0,
+                "passed": True,
+            }
+        ],
+        output_path,
+        rows=100,
+        iterations=1,
+        warmup=0,
+        thresholds={"read_heavy": 12.0},
+        all_passed=True,
+    )
+
+    payload = output_path.read_text()
+
+    assert '"all_passed": true' in payload
+    assert '"thresholds": {' in payload
+    assert '"read_heavy": 12.0' in payload

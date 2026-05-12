@@ -82,6 +82,23 @@ PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
+_STRING_WRITER_TYPE: "type[Any] | None" = None
+_STRING_WRITER_RESOLVED = False
+
+
+def _get_librt_string_writer() -> "type[Any] | None":
+    """Return librt's StringWriter when the optional performance helper exists."""
+    global _STRING_WRITER_RESOLVED, _STRING_WRITER_TYPE
+    if _STRING_WRITER_RESOLVED:
+        return _STRING_WRITER_TYPE
+    try:
+        from librt.strings import StringWriter
+    except ImportError:
+        _STRING_WRITER_TYPE = None
+    else:
+        _STRING_WRITER_TYPE = StringWriter
+    _STRING_WRITER_RESOLVED = True
+    return _STRING_WRITER_TYPE
 
 
 def _get_jsonb_type() -> "type[Any] | None":
@@ -347,6 +364,20 @@ def _format_copy_value(value: Any) -> str:
 
 def encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
     """Encode row tuples into a bytes payload compatible with binary_copy_to_table."""
+
+    string_writer_type = _get_librt_string_writer()
+    if string_writer_type is not None:
+        writer = string_writer_type()
+        for record in records:
+            first = True
+            for value in record:
+                if first:
+                    first = False
+                else:
+                    writer.write("\t")
+                writer.write(_escape_copy_text(_format_copy_value(value)))
+            writer.write("\n")
+        return cast("str", writer.getvalue()).encode("utf-8")
 
     buffer = io.StringIO()
     for record in records:

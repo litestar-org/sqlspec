@@ -12,7 +12,7 @@ Run with::
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 from rich.console import Console
@@ -44,23 +44,31 @@ def _load_results(path: str) -> dict[str, Any]:
         msg = f"Invalid benchmark file {path}: missing 'results' key"
         raise click.ClickException(msg)
 
-    return data
+    return cast("dict[str, Any]", data)
 
 
-def _build_lookup(data: dict[str, Any]) -> dict[tuple[str, str, str], float]:
+def _build_lookup(data: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
     """Build a lookup table from benchmark results.
 
     Args:
         data: Parsed benchmark JSON data.
 
     Returns:
-        Dictionary mapping (driver, library, scenario) to median time.
+        Dictionary mapping (driver, library, scenario) to result payload.
     """
-    lookup: dict[tuple[str, str, str], float] = {}
+    lookup: dict[tuple[str, str, str], dict[str, Any]] = {}
     for result in data["results"]:
         key = (result["driver"], result["library"], result["scenario"])
-        lookup[key] = result["time"]
+        lookup[key] = result
     return lookup
+
+
+def _format_time(result: dict[str, Any]) -> str:
+    time_value = float(result["time"])
+    stddev = result.get("stddev")
+    if isinstance(stddev, int | float):
+        return f"{time_value:.4f} +/- {float(stddev):.4f}"
+    return f"{time_value:.4f}"
 
 
 def _status_text(change_pct: float, threshold: float = 5.0) -> tuple[str, str]:
@@ -116,17 +124,24 @@ def print_comparison_table(baseline: dict[str, Any], current: dict[str, Any], *,
 
     for key in all_keys:
         driver, library, scenario = key
-        baseline_time = baseline_lookup.get(key)
-        current_time = current_lookup.get(key)
+        baseline_result = baseline_lookup.get(key)
+        current_result = current_lookup.get(key)
 
-        if baseline_time is None:
-            table.add_row(driver, library, scenario, "n/a", f"{current_time:.4f}", "n/a", "n/a", "[dim]NEW[/dim]")
+        if baseline_result is None:
+            assert current_result is not None
+            table.add_row(
+                driver, library, scenario, "n/a", _format_time(current_result), "n/a", "n/a", "[dim]NEW[/dim]"
+            )
             continue
 
-        if current_time is None:
-            table.add_row(driver, library, scenario, f"{baseline_time:.4f}", "n/a", "n/a", "n/a", "[dim]REMOVED[/dim]")
+        if current_result is None:
+            table.add_row(
+                driver, library, scenario, _format_time(baseline_result), "n/a", "n/a", "n/a", "[dim]REMOVED[/dim]"
+            )
             continue
 
+        baseline_time = float(baseline_result["time"])
+        current_time = float(current_result["time"])
         abs_change = current_time - baseline_time
         pct_change = abs_change / baseline_time * 100.0 if baseline_time > 0 else 0.0
 
@@ -146,8 +161,8 @@ def print_comparison_table(baseline: dict[str, Any], current: dict[str, Any], *,
             driver,
             library,
             scenario,
-            f"{baseline_time:.4f}",
-            f"{current_time:.4f}",
+            _format_time(baseline_result),
+            _format_time(current_result),
             f"[{change_style}]{abs_change:+.4f}[/{change_style}]",
             f"[{change_style}]{pct_change:+.1f}%[/{change_style}]",
             f"[{status_style}]{status_text}[/{status_style}]",
@@ -207,8 +222,8 @@ def main(baseline: str, current: str, threshold: float) -> None:
     baseline_lookup = _build_lookup(baseline_data)
     regressions = 0
     for key in set(baseline_lookup.keys()) & set(current_lookup.keys()):
-        bt = baseline_lookup[key]
-        ct = current_lookup[key]
+        bt = float(baseline_lookup[key]["time"])
+        ct = float(current_lookup[key]["time"])
         if bt > 0 and ((ct - bt) / bt) * 100.0 > threshold:
             regressions += 1
 

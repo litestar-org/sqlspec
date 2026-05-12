@@ -40,6 +40,7 @@ class MockStore:
         # Track calls to the new combined method
         self.append_event_and_update_state_calls: list[dict[str, Any]] = []
         self.append_event_and_update_state_called = False
+        self.get_session_calls = 0
 
         # Track calls to create_session
         self.create_session_calls: list[dict[str, Any]] = []
@@ -54,15 +55,24 @@ class MockStore:
             "update_time": datetime.now(timezone.utc),
         }
 
-    async def append_event_and_update_state(self, event_record: Any, session_id: str, state: "dict[str, Any]") -> None:
+    async def append_event_and_update_state(
+        self, event_record: Any, session_id: str, state: "dict[str, Any]"
+    ) -> "dict[str, Any]":
         self.append_event_and_update_state_called = True
         self.append_event_and_update_state_calls.append({
             "event_record": event_record,
             "session_id": session_id,
             "state": state,
         })
+        # Return the updated SessionRecord — caller no longer needs a follow-up get_session().
+        updated = dict(self._session_record)
+        updated["state"] = state
+        updated["update_time"] = datetime.now(timezone.utc)
+        self._session_record = updated
+        return updated
 
     async def get_session(self, session_id: str) -> "dict[str, Any] | None":
+        self.get_session_calls += 1
         return self._session_record
 
     async def create_session(
@@ -144,6 +154,29 @@ async def test_append_event_calls_append_event_and_update_state() -> None:
 
     assert store.append_event_and_update_state_called, (
         "append_event_and_update_state was never called — state will not be persisted"
+    )
+
+
+@pytest.mark.anyio
+async def test_append_event_uses_returned_record_no_extra_get_session() -> None:
+    """The post-append get_session round-trip must be eliminated.
+
+    With the atomic-return contract, append_event_and_update_state returns the
+    updated SessionRecord; the service must use it directly instead of calling
+    get_session again. We expect exactly 1 get_session call (the stale-check
+    BEFORE the append) per append_event.
+    """
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"key": "v0"})
+    event = _make_event(state_delta={"key": "v1"})
+
+    await service.append_event(session, event)
+
+    assert store.get_session_calls == 1, (
+        f"append_event must do exactly one get_session (the stale-check); "
+        f"got {store.get_session_calls}. The returned record from "
+        f"append_event_and_update_state should be used instead of a follow-up read."
     )
 
 
@@ -422,7 +455,9 @@ async def test_append_event_updates_inmemory_after_persist() -> None:
     """In-memory session.events is only updated after persistence succeeds."""
 
     class FailingStore(MockStore):
-        async def append_event_and_update_state(self, event_record: Any, session_id: str, state: Any) -> None:
+        async def append_event_and_update_state(
+            self, event_record: Any, session_id: str, state: Any
+        ) -> "dict[str, Any]":
             raise RuntimeError("Simulated DB failure")
 
     store = FailingStore()

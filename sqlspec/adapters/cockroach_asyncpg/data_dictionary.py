@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
@@ -49,6 +50,8 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
 
     async def get_optimal_type(self, driver: "CockroachAsyncpgDriver", type_category: str) -> str:
         config = self.get_dialect_config()
+        if type_category == "json":
+            return resolve_cockroachdb_json_type(await self.get_version(driver))
         return config.get_optimal_type(type_category)
 
     async def get_tables(self, driver: "CockroachAsyncpgDriver", schema: "str | None" = None) -> "list[TableMetadata]":

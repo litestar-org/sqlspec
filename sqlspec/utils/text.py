@@ -9,6 +9,9 @@ import re
 import unicodedata
 from functools import lru_cache
 
+__all__ = ("camelize", "kebabize", "pascalize", "slugify", "snake_case")
+
+
 _SLUGIFY_REMOVE_NON_ALPHANUMERIC = re.compile(r"[^\w]+", re.UNICODE)
 _SLUGIFY_HYPHEN_COLLAPSE = re.compile(r"-+")
 
@@ -17,8 +20,6 @@ _SNAKE_CASE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])", re.UN
 _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 _SNAKE_CASE_REMOVE_NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
-
-__all__ = ("camelize", "kebabize", "pascalize", "slugify", "snake_case")
 
 
 def slugify(value: str, allow_unicode: bool = False, separator: str | None = None) -> str:

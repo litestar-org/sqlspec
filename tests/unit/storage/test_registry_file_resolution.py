@@ -72,7 +72,7 @@ class TestStorageRegistryFilePathResolution:
             sql_file.write_text("-- name: hello_world\nSELECT 1;\n")
 
             s = SQLSpec()
-            loader = s._ensure_sql_loader()
+            loader = s._sql_files._ensure_loader()
 
             backend_from_file = loader.storage_registry.get(str(sql_file))
             backend_from_dir = loader.storage_registry.get(tmpdir)

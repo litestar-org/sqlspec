@@ -5,6 +5,9 @@ from typing import Any, Literal
 
 from sqlspec.utils.logging import get_logger
 
+__all__ = ("LifecycleContext", "LifecycleDispatcher", "LifecycleHook")
+
+
 logger = get_logger("sqlspec.observability.lifecycle")
 
 LifecycleContext = dict[str, Any]
@@ -149,6 +152,3 @@ class LifecycleDispatcher:
             callback(context)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("Lifecycle hook failed: event=%s error=%s", event, exc)
-
-
-__all__ = ("LifecycleContext", "LifecycleDispatcher", "LifecycleHook")

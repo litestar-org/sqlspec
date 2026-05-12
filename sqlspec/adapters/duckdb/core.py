@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -196,6 +196,74 @@ def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], descriptio
     return exc
 
 
+_EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
+_EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
+_CONSTRAINT_EXCEPTION_TYPE: "type[BaseException] | None" = None
+
+
+def _register_duckdb_exception_mappings() -> None:
+    """Populate the native-type dispatch table from the installed duckdb module.
+
+    Falls back silently when duckdb isn't importable so the substring-based
+    fallback in create_mapped_exception still works for tests and probe paths.
+    """
+    try:
+        import duckdb as _duckdb_module
+    except ImportError:
+        return
+
+    global _CONSTRAINT_EXCEPTION_TYPE
+    constraint_cls = getattr(_duckdb_module, "ConstraintException", None)
+    if isinstance(constraint_cls, type) and issubclass(constraint_cls, BaseException):
+        _CONSTRAINT_EXCEPTION_TYPE = constraint_cls
+
+    direct_mappings: tuple[tuple[str, tuple[type[SQLSpecError], str]], ...] = (
+        ("CatalogException", (NotFoundError, "catalog error")),
+        ("ParserException", (SQLParsingError, "SQL parsing error")),
+        ("BinderException", (SQLParsingError, "SQL parsing error")),
+        ("PermissionException", (PermissionDeniedError, "permission denied")),
+        ("InterruptException", (QueryTimeoutError, "query interrupted")),
+        ("IOException", (OperationalError, "operational error")),
+        ("ConversionException", (DataError, "data error")),
+    )
+    for attr_name, target in direct_mappings:
+        cls = getattr(_duckdb_module, attr_name, None)
+        if isinstance(cls, type) and issubclass(cls, BaseException):
+            _EXCEPTION_MAPPING[cls] = target
+
+
+def _resolve_duckdb_exception_mapping(error_type: "type[BaseException]") -> "tuple[type[SQLSpecError], str] | None":
+    cached = _EXCEPTION_MAPPING_CACHE.get(error_type)
+    if cached is not None:
+        return cached
+    direct = _EXCEPTION_MAPPING.get(error_type)
+    if direct is not None:
+        _EXCEPTION_MAPPING_CACHE[error_type] = direct
+        return direct
+    for base in error_type.__mro__[1:]:
+        mapped = _EXCEPTION_MAPPING.get(base)
+        if mapped is not None:
+            _EXCEPTION_MAPPING_CACHE[error_type] = mapped
+            return mapped
+    return None
+
+
+def _classify_duckdb_constraint(error: "BaseException") -> SQLSpecError:
+    error_msg = str(error).lower()
+    if "unique" in error_msg or "duplicate" in error_msg:
+        return _create_duckdb_error(error, UniqueViolationError, "unique constraint violation")
+    if "foreign key" in error_msg or "violates foreign key" in error_msg:
+        return _create_duckdb_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if "not null" in error_msg or "null value" in error_msg:
+        return _create_duckdb_error(error, NotNullViolationError, "not-null constraint violation")
+    if "check constraint" in error_msg or "check condition" in error_msg:
+        return _create_duckdb_error(error, CheckViolationError, "check constraint violation")
+    return _create_duckdb_error(error, IntegrityError, "integrity constraint violation")
+
+
+_register_duckdb_exception_mappings()
+
+
 def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseException") -> SQLSpecError:
     """Map DuckDB exceptions to SQLSpec exceptions.
 
@@ -204,9 +272,11 @@ def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseExcepti
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. Exception type name patterns (most reliable for DuckDB)
-    2. Error message patterns
-    3. Default SQLSpecError fallback
+    1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
+    2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
+    3. Type-name substring fallback (for environments without duckdb importable)
+    4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
+    5. Default SQLSpecError fallback
 
     Args:
         exc_type: The exception type (class)
@@ -215,47 +285,36 @@ def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseExcepti
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    error_msg = str(error).lower()
+    if _CONSTRAINT_EXCEPTION_TYPE is not None and isinstance(error, _CONSTRAINT_EXCEPTION_TYPE):
+        return _classify_duckdb_constraint(error)
+
+    mapped = _resolve_duckdb_exception_mapping(exc_type)
+    if mapped is not None:
+        error_class, description = mapped
+        return _create_duckdb_error(error, error_class, description)
+
     exc_name = exc_type.__name__.lower()
-
-    # Constraint violations (check type name first, then message patterns)
     if "constraintexception" in exc_name:
-        if "unique" in error_msg or "duplicate" in error_msg:
-            return _create_duckdb_error(error, UniqueViolationError, "unique constraint violation")
-        if "foreign key" in error_msg or "violates foreign key" in error_msg:
-            return _create_duckdb_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-        if "not null" in error_msg or "null value" in error_msg:
-            return _create_duckdb_error(error, NotNullViolationError, "not-null constraint violation")
-        if "check constraint" in error_msg or "check condition" in error_msg:
-            return _create_duckdb_error(error, CheckViolationError, "check constraint violation")
-        return _create_duckdb_error(error, IntegrityError, "integrity constraint violation")
-
-    # Catalog/schema errors
+        return _classify_duckdb_constraint(error)
     if "catalogexception" in exc_name:
         return _create_duckdb_error(error, NotFoundError, "catalog error")
-
-    # SQL parsing errors
     if "parserexception" in exc_name or "binderexception" in exc_name:
         return _create_duckdb_error(error, SQLParsingError, "SQL parsing error")
-
-    # Permission/access errors (DuckDB can have file permission issues)
     if "permissionexception" in exc_name:
         return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
-    if "permission denied" in error_msg or "access denied" in error_msg:
-        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
-
-    # Interrupt/cancellation errors (DuckDB supports query interruption)
     if "interruptexception" in exc_name:
         return _create_duckdb_error(error, QueryTimeoutError, "query interrupted")
-    if "interrupt" in error_msg or "cancel" in error_msg:
-        return _create_duckdb_error(error, QueryTimeoutError, "query canceled")
-
-    # I/O errors
     if "ioexception" in exc_name:
         return _create_duckdb_error(error, OperationalError, "operational error")
+    if "conversionexception" in exc_name:
+        return _create_duckdb_error(error, DataError, "data error")
 
-    # Data type errors
-    if "conversionexception" in exc_name or "type mismatch" in error_msg:
+    error_msg = str(error).lower()
+    if "permission denied" in error_msg or "access denied" in error_msg:
+        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
+    if "interrupt" in error_msg or "cancel" in error_msg:
+        return _create_duckdb_error(error, QueryTimeoutError, "query canceled")
+    if "type mismatch" in error_msg:
         return _create_duckdb_error(error, DataError, "data error")
 
     return _create_duckdb_error(error, SQLSpecError, "database error")

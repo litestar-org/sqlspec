@@ -11,6 +11,11 @@ Import ``sqlspec.dialects`` to ensure all dialects are registered::
 
    import sqlspec.dialects  # registers pgvector, paradedb, spanner, spangres
 
+Performance builds compile the custom dialect helper modules alongside
+``sqlglot[c]``: generator transforms, operator registries, and compatibility
+helpers. The small SQLGlot subclass/registration modules stay interpreted
+because native-compiling those tokenizer/dialect classes is not runtime-safe.
+
 PostgreSQL Extensions
 =====================
 

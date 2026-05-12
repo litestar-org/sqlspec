@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate
+from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -67,6 +67,50 @@ MYSQL_CR_CONN_HOST_ERROR = 2003
 MYSQL_CR_UNKNOWN_HOST = 2005
 MYSQL_CR_SERVER_GONE_ERROR = 2006
 MYSQL_CR_SERVER_LOST = 2013
+MYSQL_SYNTAX_ERROR_MIN = 1064
+MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE = 1100
+
+_MYSQL_MIGRATION_ERROR_CODES = frozenset((1061, 1091))
+_MYSQL_SQLSTATE_EXACT_DISPATCH: dict[str, tuple[type[SQLSpecError], str]] = {
+    "23505": (UniqueViolationError, "unique constraint violation"),
+    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
+    "23502": (NotNullViolationError, "not-null constraint violation"),
+    "23514": (CheckViolationError, "check constraint violation"),
+}
+_MYSQL_SQLSTATE_PREFIX_DISPATCH: dict[str, tuple[type[SQLSpecError], str]] = {
+    "23": (IntegrityError, "integrity constraint violation"),
+    "28": (PermissionDeniedError, "authorization error"),
+    "40": (TransactionError, "transaction error"),
+    "42": (SQLParsingError, "SQL syntax error"),
+    "08": (DatabaseConnectionError, "connection error"),
+    "22": (DataError, "data error"),
+}
+_MYSQL_CONSTRAINT_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    MYSQL_ER_DUP_ENTRY: (UniqueViolationError, "unique constraint violation"),
+    1216: (ForeignKeyViolationError, "foreign key constraint violation"),
+    1217: (ForeignKeyViolationError, "foreign key constraint violation"),
+    1451: (ForeignKeyViolationError, "foreign key constraint violation"),
+    1452: (ForeignKeyViolationError, "foreign key constraint violation"),
+    1048: (NotNullViolationError, "not-null constraint violation"),
+    MYSQL_ER_NO_DEFAULT_FOR_FIELD: (NotNullViolationError, "not-null constraint violation"),
+    MYSQL_ER_CHECK_CONSTRAINT_VIOLATED: (CheckViolationError, "check constraint violation"),
+}
+_MYSQL_ACCESS_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
+}
+_MYSQL_TRANSACTION_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
+    MYSQL_ER_LOCK_WAIT_TIMEOUT: (QueryTimeoutError, "lock wait timeout"),
+}
+_MYSQL_CONNECTION_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
+    MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
+    MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
+    MYSQL_CR_UNKNOWN_HOST: (DatabaseConnectionError, "connection error"),
+    MYSQL_CR_SERVER_GONE_ERROR: (DatabaseConnectionError, "connection error"),
+}
 
 
 def _bool_to_int(value: bool) -> int:
@@ -193,66 +237,60 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     Returns:
         True to suppress expected migration errors, or a SQLSpec exception
     """
-    error_code = error.args[0] if len(getattr(error, "args", [])) >= 1 and isinstance(error.args[0], int) else None
-    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
-    sqlstate = sqlstate_attr if sqlstate_attr is not None else None
+    error_args = getattr(error, "args", ())
+    error_code = error_args[0] if error_args and isinstance(error_args[0], int) else None
+    sqlstate_attr = getattr(error, "sqlstate", None)
+    sqlstate = sqlstate_attr if isinstance(sqlstate_attr, str) else None
+    sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
     # Migration-specific errors to suppress
-    if error_code in {1061, 1091}:
+    if error_code in _MYSQL_MIGRATION_ERROR_CODES:
         if logger is not None:
             logger.warning("PyMySQL expected migration error (ignoring): %s", error)
         return True
 
-    # Integrity constraint violations
-    if sqlstate == "23505" or error_code == MYSQL_ER_DUP_ENTRY:
-        return _create_mysql_error(error, sqlstate, error_code, UniqueViolationError, "unique constraint violation")
-    if sqlstate == "23503" or error_code in {1216, 1217, 1451, 1452}:
-        return _create_mysql_error(
-            error, sqlstate, error_code, ForeignKeyViolationError, "foreign key constraint violation"
-        )
-    if sqlstate == "23502" or error_code in {1048, MYSQL_ER_NO_DEFAULT_FOR_FIELD}:
-        return _create_mysql_error(error, sqlstate, error_code, NotNullViolationError, "not-null constraint violation")
-    if sqlstate == "23514" or error_code == MYSQL_ER_CHECK_CONSTRAINT_VIOLATED:
-        return _create_mysql_error(error, sqlstate, error_code, CheckViolationError, "check constraint violation")
-    if sqlstate and sqlstate.startswith("23"):
-        return _create_mysql_error(error, sqlstate, error_code, IntegrityError, "integrity constraint violation")
+    dispatch = _MYSQL_SQLSTATE_EXACT_DISPATCH.get(sqlstate) if sqlstate is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    # Permission/access errors (check specific codes first)
-    if error_code in {MYSQL_ER_DBACCESS_DENIED, MYSQL_ER_ACCESS_DENIED, MYSQL_ER_TABLEACCESS_DENIED}:
-        return _create_mysql_error(error, sqlstate, error_code, PermissionDeniedError, "access denied")
-    if sqlstate and sqlstate.startswith("28"):
-        return _create_mysql_error(error, sqlstate, error_code, PermissionDeniedError, "authorization error")
+    dispatch = _MYSQL_CONSTRAINT_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    # Transaction errors (deadlock vs lock wait timeout)
-    if error_code == MYSQL_ER_LOCK_DEADLOCK:
-        return _create_mysql_error(error, sqlstate, error_code, DeadlockError, "deadlock detected")
-    if error_code == MYSQL_ER_LOCK_WAIT_TIMEOUT:
-        return _create_mysql_error(error, sqlstate, error_code, QueryTimeoutError, "lock wait timeout")
-    if sqlstate and sqlstate.startswith("40"):
-        return _create_mysql_error(error, sqlstate, error_code, TransactionError, "transaction error")
+    if sqlstate_prefix == "23":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["23"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    # SQL syntax errors
-    if sqlstate and sqlstate.startswith("42"):
-        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
-    if error_code in range(1064, 1100):
+    dispatch = _MYSQL_ACCESS_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if sqlstate_prefix == "28":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["28"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
+    dispatch = _MYSQL_TRANSACTION_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if sqlstate_prefix == "40":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
+    if sqlstate_prefix == "42":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["42"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if isinstance(error_code, int) and MYSQL_SYNTAX_ERROR_MIN <= error_code < MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE:
         return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
 
-    # Connection errors
-    if sqlstate and sqlstate.startswith("08"):
-        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
-    if error_code == MYSQL_CR_SERVER_LOST:
-        return _create_mysql_error(error, sqlstate, error_code, ConnectionTimeoutError, "connection lost")
-    if error_code in {
-        MYSQL_CR_CONNECTION_ERROR,
-        MYSQL_CR_CONN_HOST_ERROR,
-        MYSQL_CR_UNKNOWN_HOST,
-        MYSQL_CR_SERVER_GONE_ERROR,
-    }:
-        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "connection error")
+    if sqlstate_prefix == "08":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["08"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    dispatch = _MYSQL_CONNECTION_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    # Data errors
-    if sqlstate and sqlstate.startswith("22"):
-        return _create_mysql_error(error, sqlstate, error_code, DataError, "data error")
+    if sqlstate_prefix == "22":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 

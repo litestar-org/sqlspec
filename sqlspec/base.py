@@ -2,9 +2,9 @@ import asyncio
 import atexit
 from collections.abc import Awaitable, Coroutine
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeGuard, cast, overload
 
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -43,22 +43,42 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpec",)
 
 logger = get_logger()
+ContextValueT = TypeVar("ContextValueT")
 
 
 def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:
     return isinstance(obj, AbstractAsyncContextManager)
 
 
-class _RuntimeConnectionContext(AbstractContextManager[ConnectionT]):
-    def __init__(self, context: "AbstractContextManager[ConnectionT]", runtime: "ObservabilityRuntime") -> None:
+class _RuntimeContext(Generic[ContextValueT]):
+    __slots__ = ("_config", "_context", "_runtime", "_value")
+
+    def __init__(
+        self,
+        context: "AbstractContextManager[Any]",
+        runtime: "ObservabilityRuntime",
+        config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> None:
         self._context = context
         self._runtime = runtime
-        self._connection: ConnectionT | None = None
+        self._config = config
+        self._value: Any | None = None
 
-    def __enter__(self) -> ConnectionT:
-        self._connection = self._context.__enter__()
-        self._runtime.emit_connection_create(self._connection)
-        return self._connection
+    def __enter__(self) -> ContextValueT:
+        value = self._context.__enter__()
+        config = self._config
+        if config is not None:
+            driver = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+            self._value = driver
+            connection = driver.connection
+            if connection is not None:
+                self._runtime.emit_connection_create(connection)
+            self._runtime.emit_session_start(driver)
+            return cast("ContextValueT", driver)
+
+        self._value = value
+        self._runtime.emit_connection_create(value)
+        return cast("ContextValueT", value)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -66,21 +86,47 @@ class _RuntimeConnectionContext(AbstractContextManager[ConnectionT]):
         try:
             return self._context.__exit__(exc_type, exc_val, exc_tb)
         finally:
-            if self._connection is not None:
-                self._runtime.emit_connection_destroy(self._connection)
-                self._connection = None
+            value = self._value
+            if value is not None:
+                if self._config is None:
+                    self._runtime.emit_connection_destroy(value)
+                else:
+                    self._runtime.emit_session_end(value)
+                    connection = value.connection
+                    if connection is not None:
+                        self._runtime.emit_connection_destroy(connection)
+                self._value = None
 
 
-class _RuntimeAsyncConnectionContext(AbstractAsyncContextManager[ConnectionT]):
-    def __init__(self, context: "AbstractAsyncContextManager[ConnectionT]", runtime: "ObservabilityRuntime") -> None:
+class _RuntimeAsyncContext(Generic[ContextValueT]):
+    __slots__ = ("_config", "_context", "_runtime", "_value")
+
+    def __init__(
+        self,
+        context: "AbstractAsyncContextManager[Any]",
+        runtime: "ObservabilityRuntime",
+        config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> None:
         self._context = context
         self._runtime = runtime
-        self._connection: ConnectionT | None = None
+        self._config = config
+        self._value: Any | None = None
 
-    async def __aenter__(self) -> ConnectionT:
-        self._connection = await self._context.__aenter__()
-        self._runtime.emit_connection_create(self._connection)
-        return self._connection
+    async def __aenter__(self) -> ContextValueT:
+        value = await self._context.__aenter__()
+        config = self._config
+        if config is not None:
+            driver = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+            self._value = driver
+            connection = driver.connection
+            if connection is not None:
+                self._runtime.emit_connection_create(connection)
+            self._runtime.emit_session_start(driver)
+            return cast("ContextValueT", driver)
+
+        self._value = value
+        self._runtime.emit_connection_create(value)
+        return cast("ContextValueT", value)
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -88,99 +134,149 @@ class _RuntimeAsyncConnectionContext(AbstractAsyncContextManager[ConnectionT]):
         try:
             return await self._context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            if self._connection is not None:
-                self._runtime.emit_connection_destroy(self._connection)
-                self._connection = None
+            value = self._value
+            if value is not None:
+                if self._config is None:
+                    self._runtime.emit_connection_destroy(value)
+                else:
+                    self._runtime.emit_session_end(value)
+                    connection = value.connection
+                    if connection is not None:
+                        self._runtime.emit_connection_destroy(connection)
+                self._value = None
 
 
-class _RuntimeSessionContext(AbstractContextManager[DriverT]):
-    def __init__(
-        self,
-        context: "AbstractContextManager[DriverT]",
-        runtime: "ObservabilityRuntime",
-        config: "DatabaseConfigProtocol[Any, Any, DriverT]",
+class _CacheManager:
+    """Private coordinator for global SQLSpec cache helpers."""
+
+    __slots__ = ()
+
+    @staticmethod
+    def get_cache_config() -> CacheConfig:
+        return get_cache_config()
+
+    @staticmethod
+    def update_cache_config(config: CacheConfig) -> None:
+        update_cache_config(config)
+
+    @staticmethod
+    def get_cache_stats() -> "dict[str, Any]":
+        return get_cache_statistics()
+
+    @staticmethod
+    def reset_cache_stats() -> None:
+        reset_cache_stats()
+
+    @staticmethod
+    def log_cache_stats() -> None:
+        log_cache_stats()
+
+    @staticmethod
+    def configure_cache(
+        *,
+        sql_cache_size: int | None = None,
+        fragment_cache_size: int | None = None,
+        optimized_cache_size: int | None = None,
+        sql_cache_enabled: bool | None = None,
+        fragment_cache_enabled: bool | None = None,
+        optimized_cache_enabled: bool | None = None,
     ) -> None:
-        self._context = context
-        self._runtime = runtime
-        self._config = config
-        self._driver: DriverT | None = None
-
-    def __enter__(self) -> DriverT:
-        session = self._context.__enter__()
-        driver = self._config._prepare_driver(session)  # pyright: ignore[reportPrivateUsage]
-        self._driver = driver
-        connection = driver.connection
-        if connection is not None:
-            self._runtime.emit_connection_create(connection)
-        self._runtime.emit_session_start(driver)
-        return driver
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        try:
-            return self._context.__exit__(exc_type, exc_val, exc_tb)
-        finally:
-            if self._driver is not None:
-                self._runtime.emit_session_end(self._driver)
-                connection = self._driver.connection
-                if connection is not None:
-                    self._runtime.emit_connection_destroy(connection)
-                self._driver = None
+        current_config = get_cache_config()
+        update_cache_config(
+            CacheConfig(
+                sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
+                fragment_cache_size=fragment_cache_size
+                if fragment_cache_size is not None
+                else current_config.fragment_cache_size,
+                optimized_cache_size=optimized_cache_size
+                if optimized_cache_size is not None
+                else current_config.optimized_cache_size,
+                sql_cache_enabled=sql_cache_enabled
+                if sql_cache_enabled is not None
+                else current_config.sql_cache_enabled,
+                fragment_cache_enabled=fragment_cache_enabled
+                if fragment_cache_enabled is not None
+                else current_config.fragment_cache_enabled,
+                optimized_cache_enabled=optimized_cache_enabled
+                if optimized_cache_enabled is not None
+                else current_config.optimized_cache_enabled,
+            )
+        )
 
 
-class _RuntimeAsyncSessionContext(AbstractAsyncContextManager[DriverT]):
-    def __init__(
-        self,
-        context: "AbstractAsyncContextManager[DriverT]",
-        runtime: "ObservabilityRuntime",
-        config: "DatabaseConfigProtocol[Any, Any, DriverT]",
-    ) -> None:
-        self._context = context
-        self._runtime = runtime
-        self._config = config
-        self._driver: DriverT | None = None
+class _SQLFileManager:
+    """Private coordinator for SQL file loader lifecycle and delegation."""
 
-    async def __aenter__(self) -> DriverT:
-        session = await self._context.__aenter__()
-        driver = self._config._prepare_driver(session)  # pyright: ignore[reportPrivateUsage]
-        self._driver = driver
-        connection = driver.connection
-        if connection is not None:
-            self._runtime.emit_connection_create(connection)
-        self._runtime.emit_session_start(driver)
-        return driver
+    __slots__ = ("_loader", "runtime")
 
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        try:
-            return await self._context.__aexit__(exc_type, exc_val, exc_tb)
-        finally:
-            if self._driver is not None:
-                self._runtime.emit_session_end(self._driver)
-                connection = self._driver.connection
-                if connection is not None:
-                    self._runtime.emit_connection_destroy(connection)
-                self._driver = None
+    def __init__(self, loader: "SQLFileLoader | None", runtime: "ObservabilityRuntime") -> None:
+        self._loader = loader
+        self.runtime = runtime
+        if self._loader is not None:
+            self._loader.set_observability_runtime(runtime)
+
+    def _ensure_loader(self) -> SQLFileLoader:
+        if self._loader is None:
+            self._loader = SQLFileLoader(runtime=self.runtime)
+        else:
+            self._loader.set_observability_runtime(self.runtime)
+        return self._loader
+
+    def load_sql_files(self, *paths: "str | Path") -> None:
+        loader = self._ensure_loader()
+        loader.load_sql(*paths)
+        logger.debug("Loaded SQL files: %s", paths)
+
+    def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
+        loader = self._ensure_loader()
+        loader.add_named_sql(name, sql, dialect)
+        logger.debug("Added named SQL: %s", name)
+
+    def get_sql(self, name: str) -> "SQL":
+        return self._ensure_loader().get_sql(name)
+
+    def list_sql_queries(self) -> "list[str]":
+        if self._loader is None:
+            return []
+        return self._loader.list_queries()
+
+    def has_sql_query(self, name: str) -> bool:
+        if self._loader is None:
+            return False
+        return self._loader.has_query(name)
+
+    def clear_sql_cache(self) -> None:
+        if self._loader is not None:
+            self._loader.clear_cache()
+            logger.debug("Cleared SQL cache")
+
+    def reload_sql_files(self) -> None:
+        if self._loader is not None:
+            self._loader.clear_cache()
+            logger.debug("Cleared SQL cache for reload")
+
+    def get_sql_files(self) -> "list[str]":
+        if self._loader is None:
+            return []
+        return self._loader.list_files()
+
+
+_CACHE_MANAGER = _CacheManager()
 
 
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config", "_loader_runtime", "_observability_config", "_sql_loader")
+    __slots__ = ("_configs", "_observability_config", "_sql_files")
 
     def __init__(
         self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
     ) -> None:
         self._configs: dict[int, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_sync_pools)
-        self._instance_cache_config: CacheConfig | None = None
-        self._sql_loader: SQLFileLoader | None = loader
         self._observability_config = observability_config
-        self._loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
-        if self._sql_loader is not None:
-            self._sql_loader.set_observability_runtime(self._loader_runtime)
+        loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
+        self._sql_files = _SQLFileManager(loader, loader_runtime)
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -351,7 +447,7 @@ class SQLSpec:
         """Return aggregated diagnostics across all registered configurations."""
 
         diagnostics = TelemetryDiagnostics()
-        loader_metrics = self._loader_runtime.metrics_snapshot()
+        loader_metrics = self._sql_files.runtime.metrics_snapshot()
         if loader_metrics:
             diagnostics.add_metric_snapshot(loader_metrics)
         for config in self._configs.values():
@@ -361,15 +457,6 @@ class SQLSpec:
             if metrics_snapshot:
                 diagnostics.add_metric_snapshot(metrics_snapshot)
         return diagnostics.snapshot()
-
-    def _ensure_sql_loader(self) -> SQLFileLoader:
-        """Return a SQLFileLoader instance configured with observability runtime."""
-
-        if self._sql_loader is None:
-            self._sql_loader = SQLFileLoader(runtime=self._loader_runtime)
-        else:
-            self._sql_loader.set_observability_runtime(self._loader_runtime)
-        return self._sql_loader
 
     @overload
     def get_connection(
@@ -489,10 +576,10 @@ class SQLSpec:
 
         if _is_async_context_manager(connection_context):
             async_context = cast("AbstractAsyncContextManager[ConnectionT]", connection_context)
-            return _RuntimeAsyncConnectionContext(async_context, runtime)
+            return _RuntimeAsyncContext[ConnectionT](async_context, runtime)
 
         sync_context = cast("AbstractContextManager[ConnectionT]", connection_context)
-        return _RuntimeConnectionContext(sync_context, runtime)
+        return _RuntimeContext[ConnectionT](sync_context, runtime)
 
     @overload
     def provide_session(
@@ -534,15 +621,15 @@ class SQLSpec:
 
         if _is_async_context_manager(session_context):
             async_session = cast("AbstractAsyncContextManager[DriverT]", session_context)
-            return _RuntimeAsyncSessionContext(async_session, runtime, config)
+            return _RuntimeAsyncContext[DriverT](async_session, runtime, config)
 
         sync_session = cast("AbstractContextManager[DriverT]", session_context)
-        return _RuntimeSessionContext(sync_session, runtime, config)
+        return _RuntimeContext[DriverT](sync_session, runtime, config)
 
     @overload
     def get_pool(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]"
-    ) -> "None": ...
+    ) -> None: ...
     @overload
     def get_pool(self, config: "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]") -> "type[PoolT]": ...
     @overload
@@ -570,7 +657,7 @@ class SQLSpec:
     @overload
     def close_pool(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
-    ) -> "None": ...
+    ) -> None: ...
 
     @overload
     def close_pool(
@@ -603,7 +690,7 @@ class SQLSpec:
         Returns:
             The current cache configuration.
         """
-        return get_cache_config()
+        return _CACHE_MANAGER.get_cache_config()
 
     @staticmethod
     def update_cache_config(config: CacheConfig) -> None:
@@ -612,7 +699,7 @@ class SQLSpec:
         Args:
             config: The new cache configuration to apply.
         """
-        update_cache_config(config)
+        _CACHE_MANAGER.update_cache_config(config)
 
     @staticmethod
     def get_cache_stats() -> "dict[str, Any]":
@@ -621,17 +708,17 @@ class SQLSpec:
         Returns:
             Cache statistics object with detailed metrics.
         """
-        return get_cache_statistics()
+        return _CACHE_MANAGER.get_cache_stats()
 
     @staticmethod
     def reset_cache_stats() -> None:
         """Reset all cache statistics to zero."""
-        reset_cache_stats()
+        _CACHE_MANAGER.reset_cache_stats()
 
     @staticmethod
     def log_cache_stats() -> None:
         """Log current cache statistics using the configured logger."""
-        log_cache_stats()
+        _CACHE_MANAGER.log_cache_stats()
 
     @staticmethod
     def configure_cache(
@@ -653,26 +740,13 @@ class SQLSpec:
             fragment_cache_enabled: Enable/disable expression/parameter/file cache.
             optimized_cache_enabled: Enable/disable optimized expression cache.
         """
-        current_config = get_cache_config()
-        update_cache_config(
-            CacheConfig(
-                sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
-                fragment_cache_size=fragment_cache_size
-                if fragment_cache_size is not None
-                else current_config.fragment_cache_size,
-                optimized_cache_size=optimized_cache_size
-                if optimized_cache_size is not None
-                else current_config.optimized_cache_size,
-                sql_cache_enabled=sql_cache_enabled
-                if sql_cache_enabled is not None
-                else current_config.sql_cache_enabled,
-                fragment_cache_enabled=fragment_cache_enabled
-                if fragment_cache_enabled is not None
-                else current_config.fragment_cache_enabled,
-                optimized_cache_enabled=optimized_cache_enabled
-                if optimized_cache_enabled is not None
-                else current_config.optimized_cache_enabled,
-            )
+        _CACHE_MANAGER.configure_cache(
+            sql_cache_size=sql_cache_size,
+            fragment_cache_size=fragment_cache_size,
+            optimized_cache_size=optimized_cache_size,
+            sql_cache_enabled=sql_cache_enabled,
+            fragment_cache_enabled=fragment_cache_enabled,
+            optimized_cache_enabled=optimized_cache_enabled,
         )
 
     def load_sql_files(self, *paths: "str | Path") -> None:
@@ -681,9 +755,7 @@ class SQLSpec:
         Args:
             *paths: One or more file paths or directory paths to load.
         """
-        loader = self._ensure_sql_loader()
-        loader.load_sql(*paths)
-        logger.debug("Loaded SQL files: %s", paths)
+        self._sql_files.load_sql_files(*paths)
 
     def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
         """Add a named SQL query directly.
@@ -693,9 +765,7 @@ class SQLSpec:
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
         """
-        loader = self._ensure_sql_loader()
-        loader.add_named_sql(name, sql, dialect)
-        logger.debug("Added named SQL: %s", name)
+        self._sql_files.add_named_sql(name, sql, dialect)
 
     def get_sql(self, name: str) -> "SQL":
         """Get a SQL object by name.
@@ -707,8 +777,7 @@ class SQLSpec:
         Returns:
             SQL object ready for execution.
         """
-        loader = self._ensure_sql_loader()
-        return loader.get_sql(name)
+        return self._sql_files.get_sql(name)
 
     def list_sql_queries(self) -> "list[str]":
         """List all available query names.
@@ -716,9 +785,7 @@ class SQLSpec:
         Returns:
             Sorted list of query names.
         """
-        if self._sql_loader is None:
-            return []
-        return self._sql_loader.list_queries()
+        return self._sql_files.list_sql_queries()
 
     def has_sql_query(self, name: str) -> bool:
         """Check if a SQL query exists.
@@ -729,15 +796,11 @@ class SQLSpec:
         Returns:
             True if the query exists in the loader.
         """
-        if self._sql_loader is None:
-            return False
-        return self._sql_loader.has_query(name)
+        return self._sql_files.has_sql_query(name)
 
     def clear_sql_cache(self) -> None:
         """Clear the SQL file cache."""
-        if self._sql_loader is not None:
-            self._sql_loader.clear_cache()
-            logger.debug("Cleared SQL cache")
+        self._sql_files.clear_sql_cache()
 
     def reload_sql_files(self) -> None:
         """Reload all SQL files.
@@ -745,9 +808,7 @@ class SQLSpec:
         Note:
             This clears the cache and requires calling load_sql_files again.
         """
-        if self._sql_loader is not None:
-            self._sql_loader.clear_cache()
-            logger.debug("Cleared SQL cache for reload")
+        self._sql_files.reload_sql_files()
 
     def get_sql_files(self) -> "list[str]":
         """Get list of loaded SQL files.
@@ -755,6 +816,4 @@ class SQLSpec:
         Returns:
             Sorted list of file paths.
         """
-        if self._sql_loader is None:
-            return []
-        return self._sql_loader.list_files()
+        return self._sql_files.get_sql_files()

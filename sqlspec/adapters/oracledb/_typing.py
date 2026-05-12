@@ -7,6 +7,7 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
+import oracledb as _oracledb
 from oracledb import (
     DB_TYPE_BLOB,
     DB_TYPE_CLOB,
@@ -16,6 +17,7 @@ from oracledb import (
     AsyncCursor,
     Connection,
     Cursor,
+    DatabaseError,
 )
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
@@ -53,6 +55,11 @@ if not TYPE_CHECKING:
     OracleAsyncConnectionPool = AsyncConnectionPool
     OracleSyncRawCursor = Cursor
     OracleAsyncRawCursor = AsyncCursor
+
+AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
+AQMSG_VISIBLE: int | None = getattr(_oracledb, "AQMSG_VISIBLE", None)
+AQMSG_INVISIBLE: int | None = getattr(_oracledb, "AQMSG_INVISIBLE", None)
+AQMSG_PAYLOAD_TYPE_JSON: Any | None = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
 
 
 class OracleSyncCursor:
@@ -226,11 +233,16 @@ class OracleAsyncSessionContext:
 
 
 __all__ = (
+    "AQMSG_INVISIBLE",
+    "AQMSG_PAYLOAD_TYPE_JSON",
+    "AQMSG_VISIBLE",
     "DB_TYPE_BLOB",
     "DB_TYPE_CLOB",
     "DB_TYPE_JSON",
     "DB_TYPE_RAW",
     "DB_TYPE_VECTOR",
+    "AQDequeueOptions",
+    "DatabaseError",
     "OracleAsyncConnection",
     "OracleAsyncConnectionPool",
     "OracleAsyncCursor",

@@ -5,6 +5,20 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
+from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary.dialects.oracle import (
+    extract_oracle_version_value,
+    list_oracle_available_features,
+    merge_oracle_table_lists,
+    oracle_supports_json_blob,
+    oracle_supports_native_json,
+    oracle_supports_oson_blob,
+    parse_oracle_compatible_major,
+    parse_oracle_version_components,
+    resolve_oracle_feature_flag,
+    resolve_oracle_json_type,
+)
+from sqlspec.typing import TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
@@ -130,6 +144,58 @@ def oracle_async_driver(oracle_component_rows: "list[dict[str, Any]]") -> "_Fake
     """Build a fake async Oracle driver using the canonical component row."""
 
     return _FakeAsyncOracleDriver(oracle_component_rows, compatible="23.20.0.0.0", service="AUTONOMOUS AI")
+
+
+def test_oracle_dialect_helpers_resolve_shared_version_rules() -> None:
+    """Ensure Oracle dialect helpers cover sync and async dictionary rules."""
+
+    config = get_dialect_config("oracle")
+
+    assert extract_oracle_version_value({"VERSION": "23.26.0.0.0"}) == "23.26.0.0.0"
+    assert extract_oracle_version_value(("19.20.0.0.0",)) == "19.20.0.0.0"
+    assert parse_oracle_version_components("23.26.0.0.0") == (23, 26, 0)
+    assert parse_oracle_compatible_major("23.20.0.0.0") == 23
+
+    assert oracle_supports_native_json(23, 20) is True
+    assert oracle_supports_native_json(21, 19) is False
+    assert oracle_supports_oson_blob(19, True) is True
+    assert oracle_supports_oson_blob(19, False) is False
+    assert oracle_supports_json_blob(12) is True
+
+    assert resolve_oracle_json_type(VersionInfo(23, 0, 0), compatible_major=20, is_autonomous=False) == "JSON"
+    assert resolve_oracle_json_type(VersionInfo(21, 0, 0), compatible_major=19, is_autonomous=False) == "BLOB"
+    assert resolve_oracle_json_type(VersionInfo(11, 0, 0), compatible_major=None, is_autonomous=False) == "CLOB"
+    assert resolve_oracle_json_type(None, compatible_major=None, is_autonomous=False) == "CLOB"
+
+    assert (
+        resolve_oracle_feature_flag(
+            config, VersionInfo(23, 0, 0), "supports_native_json", compatible_major=20, is_autonomous=False
+        )
+        is True
+    )
+    assert (
+        resolve_oracle_feature_flag(
+            config, VersionInfo(19, 0, 0), "supports_oson_blob", compatible_major=None, is_autonomous=True
+        )
+        is True
+    )
+    assert (
+        resolve_oracle_feature_flag(
+            config, VersionInfo(19, 0, 0), "is_autonomous", compatible_major=None, is_autonomous=True
+        )
+        is True
+    )
+    assert "supports_native_json" in list_oracle_available_features(config)
+
+
+def test_oracle_dialect_helper_merges_ordered_tables_with_remainder() -> None:
+    """Ensure Oracle table merge helper preserves dependency order and coverage."""
+
+    ordered: list[TableMetadata] = [{"table_name": "parent"}]
+    all_tables: list[TableMetadata] = [{"table_name": "child"}, {"table_name": "parent"}]
+
+    assert merge_oracle_table_lists(ordered, all_tables) == [{"table_name": "parent"}, {"table_name": "child"}]
+    assert merge_oracle_table_lists([], all_tables) == [{"table_name": "child"}, {"table_name": "parent"}]
 
 
 def test_sync_data_dictionary_detects_native_json_type(oracle_sync_driver: "_FakeSyncOracleDriver") -> None:

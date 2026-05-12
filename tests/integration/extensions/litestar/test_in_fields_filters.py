@@ -37,6 +37,44 @@ def _clear_dependency_cache() -> Any:
     dep_cache.dependencies.clear()
 
 
+def _schema_value(value: Any) -> str:
+    return str(getattr(value, "value", value)).lower()
+
+
+def _schema_has_type(schema: Any, schema_type: str) -> bool:
+    if schema is None:
+        return False
+    schema_types = getattr(schema, "type", None)
+    if isinstance(schema_types, list):
+        return any(_schema_value(schema_type_value) == schema_type for schema_type_value in schema_types)
+    return schema_types is not None and _schema_value(schema_types) == schema_type
+
+
+def _find_schema_type(schema: Any, schema_type: str) -> Any:
+    if _schema_has_type(schema, schema_type):
+        return schema
+    for key in ("any_of", "one_of", "all_of"):
+        for branch in getattr(schema, key, None) or ():
+            if found := _find_schema_type(branch, schema_type):
+                return found
+    return None
+
+
+def _named_param(params: list[Any], name: str) -> Any:
+    return next((param for param in params if getattr(param, "name", None) == name), None)
+
+
+def _assert_array_items_schema(params: list[Any], name: str, item_type: str, item_format: str | None = None) -> None:
+    param = _named_param(params, name)
+    assert param is not None
+    array_schema = _find_schema_type(param.schema, "array")
+    assert array_schema is not None
+    items_schema = getattr(array_schema, "items", None)
+    assert _schema_has_type(items_schema, item_type)
+    if item_format is not None:
+        assert _schema_value(getattr(items_schema, "format", None)) == item_format
+
+
 def test_litestar_in_fields_filter_dependency() -> None:
     """Test in_fields filter dependency with actual Litestar HTTP request (issue #405)."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
@@ -457,6 +495,36 @@ def test_litestar_order_by_openapi_schema_uses_alias_default() -> None:
         return False
 
     assert is_string_type(order_by_schema)
+
+
+def test_litestar_collection_filter_openapi_schema_preserves_configured_value_types() -> None:
+    """Collection filter query parameters keep the configured item type in OpenAPI."""
+    sql = SQLSpec()
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    sql.add_config(config)
+
+    filter_deps = create_filter_dependencies({
+        "in_fields": [FieldNameType("owner_id", UUID), FieldNameType("age", int)],
+        "not_in_fields": [FieldNameType("status", str), FieldNameType("score", int)],
+    })
+
+    @get("/users", dependencies=filter_deps)
+    async def list_users(filters: list[FilterTypes] = Dependency(skip_validation=True)) -> dict[str, Any]:
+        return {"filters": len(filters)}
+
+    app = Litestar(route_handlers=[list_users], plugins=[SQLSpecPlugin(sqlspec=sql)])
+
+    paths = app.openapi_schema.paths
+    assert paths is not None
+    operation = paths["/users"].get
+    assert operation is not None
+    params = operation.parameters
+    assert params is not None
+
+    _assert_array_items_schema(params, "ownerIdIn", "string", "uuid")
+    _assert_array_items_schema(params, "ageIn", "integer")
+    _assert_array_items_schema(params, "statusNotIn", "string")
+    _assert_array_items_schema(params, "scoreNotIn", "integer")
 
 
 # Regression tests for issue #435 (cross-binding across providers in the same family).

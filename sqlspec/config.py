@@ -1,3 +1,13 @@
+"""Database configuration surfaces for SQLSpec adapters.
+
+This module is intentionally interpreted even though compiled modules consume
+its config classes. The public configuration API is stability-critical for
+compiled callers: keep constructor fields, protocol attributes, migration
+refresh behavior, storage capability hooks, and provider context managers
+runtime-visible and backwards coherent. Move small pure helpers into compiled
+modules only after proving the boundary with installed-wheel smoke coverage.
+"""
+
 import asyncio
 import threading
 from abc import ABC, abstractmethod
@@ -509,7 +519,7 @@ class ADKPartitionConfig(TypedDict):
     - list: Partition by discrete value lists
     - hash: Partition by hash of the partition key
 
-    Supported by: PostgreSQL, MySQL 8+, Oracle, BigQuery, Spanner.
+    Supported by: PostgreSQL, MySQL 8+, Oracle, Spanner.
     Ignored by: SQLite, DuckDB.
     """
 
@@ -520,12 +530,27 @@ class ADKPartitionConfig(TypedDict):
     like 'created_at'. For hash partitioning, this is typically the primary key.
     """
 
+    session_partition_key: NotRequired[str]
+    """Session-table partition key override for adapters that create separate ADK tables."""
+
+    events_partition_key: NotRequired[str]
+    """Event-table partition key override for adapters that create separate ADK tables."""
+
+    memory_partition_key: NotRequired[str]
+    """Memory-table partition key override for adapters that create separate ADK tables."""
+
     interval: NotRequired[str]
     """Partition interval for range partitioning.
 
     Examples: 'day', 'week', 'month', 'year'.
     Only meaningful when strategy is 'range'.
     """
+
+    partition_count: NotRequired[int]
+    """Number of hash partitions for adapters that support hash-partitioned ADK tables."""
+
+    initial_less_than: NotRequired[str]
+    """Initial range-partition upper bound for adapters that require a seed partition."""
 
 
 class ADKRetentionConfig(TypedDict):
@@ -771,7 +796,6 @@ class ADKConfig(TypedDict):
     - SQLite: FTS5 virtual table
     - DuckDB: FTS extension with match_bm25
     - Oracle: CONTAINS() with CTXSYS.CONTEXT index
-    - BigQuery: SEARCH() function (requires search index)
     - Spanner: TOKENIZE_FULLTEXT with search index
     - MySQL: MATCH...AGAINST with FULLTEXT index
 
@@ -935,7 +959,7 @@ class ADKConfig(TypedDict):
     Controls how ADK tables are partitioned for improved query performance
     and data management at scale. See ``ADKPartitionConfig`` for options.
 
-    Supported by: PostgreSQL, MySQL 8+, Oracle, BigQuery, Spanner.
+    Supported by: PostgreSQL, MySQL 8+, Oracle, Spanner.
     Ignored by: SQLite, DuckDB.
     """
 
@@ -1071,7 +1095,14 @@ ExtensionConfigs: TypeAlias = dict[
 
 
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
-    """Protocol defining the interface for database configurations."""
+    """Protocol defining the stability-critical config contract.
+
+    Compiled callers rely on these attributes and methods remaining
+    runtime-visible while ``sqlspec.config`` stays interpreted. Changes to
+    migration setup, pool/session provider behavior, storage capabilities, or
+    observability bootstrap must preserve this contract or move behind a
+    separately verified compiled helper boundary.
+    """
 
     __slots__ = (
         "_migration_commands",
@@ -1211,6 +1242,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         adk_settings = extension_settings.get("adk")
         if adk_settings is not None and "adk" not in exclude_extensions:
+            from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+
+            _validate_adk_store_registration(self)
             extensions_to_add.append("adk")
 
         events_settings = extension_settings.get("events")

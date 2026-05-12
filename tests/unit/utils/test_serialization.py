@@ -5,13 +5,17 @@ Tests for the byte-aware serialization system through the canonical
 """
 
 import json
+import logging
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
+from sqlspec.typing import MSGSPEC_INSTALLED
 from sqlspec.utils.serializers import from_json as decode_json
 from sqlspec.utils.serializers import to_json as encode_json
+from sqlspec.utils.serializers._json import MsgspecSerializer
 
 
 def test_encode_json_as_string() -> None:
@@ -225,6 +229,34 @@ def test_msgspec_fallback() -> None:
         assert isinstance(result, bytes)
     except (ValueError, TypeError):
         pass
+
+
+@pytest.mark.skipif(not MSGSPEC_INSTALLED, reason="msgspec not installed")
+def test_msgspec_encode_fallback_logs_original_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """Msgspec fallback logs the original encode exception."""
+
+    class FailingEncoder:
+        def encode(self, data: Any) -> bytes:
+            msg = "msgspec encode failure"
+            raise ValueError(msg)
+
+    data = {"key": "value"}
+    serializer = MsgspecSerializer()
+    object.__setattr__(serializer, "_encoder", FailingEncoder())
+
+    with caplog.at_level(logging.DEBUG, logger="sqlspec.utils.serializers._json"):
+        result = serializer.encode(data, as_bytes=True)
+
+    assert isinstance(result, bytes)
+    assert json.loads(result) == data
+    fallback_records = [
+        record
+        for record in caplog.records
+        if record.name == "sqlspec.utils.serializers._json" and "Msgspec JSON encode failed" in record.getMessage()
+    ]
+    assert len(fallback_records) == 1
+    assert "ValueError" in fallback_records[0].getMessage()
+    assert "msgspec encode failure" in fallback_records[0].getMessage()
 
 
 def test_numpy_array_serialization_1d() -> None:

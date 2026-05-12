@@ -6,13 +6,14 @@ Provides statement builders (select, insert, update, etc.) and column expression
 import hashlib
 import logging
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
+from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._column import Column
 from sqlspec.builder._ddl import (
     AlterTable,
@@ -91,6 +92,8 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.builder.factory")
+
+BuilderT = TypeVar("BuilderT", bound=QueryBuilder)
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -757,19 +760,27 @@ class SQLFactory:
 
         return False
 
-    def _populate_insert_from_sql(
-        self, builder: "Insert", sql_string: str, parsed_expr: "exp.Expr | None" = None
-    ) -> "Insert":
-        """Parse SQL string and populate INSERT builder using SQLGlot directly."""
+    def _populate_builder_from_sql(
+        self, builder: BuilderT, sql_string: str, expected_type: type[exp.Expr], parsed_expr: "exp.Expr | None" = None
+    ) -> BuilderT:
+        """Parse SQL string and populate a builder using SQLGlot directly."""
+        builder_name = expected_type.__name__.lower()
         try:
             if parsed_expr is None:
                 parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
 
-            if isinstance(parsed_expr, exp.Insert):
+            if expected_type is exp.Select and isinstance(parsed_expr, exp.With):
+                base_expression = parsed_expr.this
+                if isinstance(builder, Select) and isinstance(base_expression, exp.Select):
+                    builder.set_expression(base_expression)
+                    builder.load_ctes(list(parsed_expr.expressions))
+                    return builder
+
+            if isinstance(parsed_expr, expected_type):
                 builder.set_expression(parsed_expr)
                 return builder
 
-            if isinstance(parsed_expr, exp.Select):
+            if expected_type is exp.Insert and isinstance(parsed_expr, exp.Select):
                 logger.debug(
                     "Detected SELECT statement for INSERT; builder requires explicit target table",
                     extra={"builder": "insert"},
@@ -777,121 +788,49 @@ class SQLFactory:
                 return builder
 
             logger.debug(
-                "Cannot create INSERT from parsed statement type",
-                extra={"builder": "insert", "parsed_type": type(parsed_expr).__name__},
+                "Cannot create %s from parsed statement type",
+                builder_name.upper(),
+                extra={"builder": builder_name, "parsed_type": type(parsed_expr).__name__},
             )
 
         except Exception:
             logger.debug(
-                "Failed to parse INSERT SQL; falling back to traditional mode",
+                "Failed to parse %s SQL; falling back to traditional mode",
+                builder_name.upper(),
                 exc_info=True,
-                extra={"builder": "insert"},
+                extra={"builder": builder_name},
             )
         return builder
+
+    def _populate_insert_from_sql(
+        self, builder: "Insert", sql_string: str, parsed_expr: "exp.Expr | None" = None
+    ) -> "Insert":
+        """Parse SQL string and populate INSERT builder using SQLGlot directly."""
+        return self._populate_builder_from_sql(builder, sql_string, exp.Insert, parsed_expr)
 
     def _populate_select_from_sql(
         self, builder: "Select", sql_string: str, parsed_expr: "exp.Expr | None" = None
     ) -> "Select":
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
-        try:
-            if parsed_expr is None:
-                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-
-            if isinstance(parsed_expr, exp.With):
-                base_expression = parsed_expr.this
-                if isinstance(base_expression, exp.Select):
-                    builder.set_expression(base_expression)
-                    builder.load_ctes(list(parsed_expr.expressions))
-                    return builder
-            if isinstance(parsed_expr, exp.Select):
-                builder.set_expression(parsed_expr)
-                return builder
-
-            logger.debug(
-                "Cannot create SELECT from parsed statement type",
-                extra={"builder": "select", "parsed_type": type(parsed_expr).__name__},
-            )
-
-        except Exception:
-            logger.debug(
-                "Failed to parse SELECT SQL; falling back to traditional mode",
-                exc_info=True,
-                extra={"builder": "select"},
-            )
-        return builder
+        return self._populate_builder_from_sql(builder, sql_string, exp.Select, parsed_expr)
 
     def _populate_update_from_sql(
         self, builder: "Update", sql_string: str, parsed_expr: "exp.Expr | None" = None
     ) -> "Update":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
-        try:
-            if parsed_expr is None:
-                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-
-            if isinstance(parsed_expr, exp.Update):
-                builder.set_expression(parsed_expr)
-                return builder
-
-            logger.debug(
-                "Cannot create UPDATE from parsed statement type",
-                extra={"builder": "update", "parsed_type": type(parsed_expr).__name__},
-            )
-
-        except Exception:
-            logger.debug(
-                "Failed to parse UPDATE SQL; falling back to traditional mode",
-                exc_info=True,
-                extra={"builder": "update"},
-            )
-        return builder
+        return self._populate_builder_from_sql(builder, sql_string, exp.Update, parsed_expr)
 
     def _populate_delete_from_sql(
         self, builder: "Delete", sql_string: str, parsed_expr: "exp.Expr | None" = None
     ) -> "Delete":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
-        try:
-            if parsed_expr is None:
-                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-
-            if isinstance(parsed_expr, exp.Delete):
-                builder.set_expression(parsed_expr)
-                return builder
-
-            logger.debug(
-                "Cannot create DELETE from parsed statement type",
-                extra={"builder": "delete", "parsed_type": type(parsed_expr).__name__},
-            )
-
-        except Exception:
-            logger.debug(
-                "Failed to parse DELETE SQL; falling back to traditional mode",
-                exc_info=True,
-                extra={"builder": "delete"},
-            )
-        return builder
+        return self._populate_builder_from_sql(builder, sql_string, exp.Delete, parsed_expr)
 
     def _populate_merge_from_sql(
         self, builder: "Merge", sql_string: str, parsed_expr: "exp.Expr | None" = None
     ) -> "Merge":
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
-        try:
-            if parsed_expr is None:
-                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-
-            if isinstance(parsed_expr, exp.Merge):
-                builder.set_expression(parsed_expr)
-                return builder
-
-            logger.debug(
-                "Cannot create MERGE from parsed statement type",
-                extra={"builder": "merge", "parsed_type": type(parsed_expr).__name__},
-            )
-
-        except Exception:
-            logger.debug(
-                "Failed to parse MERGE SQL; falling back to traditional mode", exc_info=True, extra={"builder": "merge"}
-            )
-        return builder
+        return self._populate_builder_from_sql(builder, sql_string, exp.Merge, parsed_expr)
 
     def column(self, name: str, table: str | None = None) -> Column:
         """Create a column reference.

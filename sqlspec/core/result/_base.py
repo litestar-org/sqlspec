@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
-__all__ = ("ArrowResult", "DMLResult", "EmptyResult", "FastDMLResult", "SQLResult", "StackResult", "StatementResult")
+__all__ = ("ArrowResult", "DMLResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
@@ -1044,9 +1044,6 @@ class DMLResult(SQLResult):
             self.metadata = {key: value}
             return
         self.metadata[key] = value
-
-
-FastDMLResult = DMLResult
 
 
 class StackResult:

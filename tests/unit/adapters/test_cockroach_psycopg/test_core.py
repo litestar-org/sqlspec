@@ -8,11 +8,8 @@ Tests cover:
 
 import pytest
 
-from sqlspec.adapters.cockroach_psycopg.core import (
-    CockroachPsycopgRetryConfig,
-    calculate_backoff_seconds,
-    is_retryable_error,
-)
+from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgRetryConfig
+from sqlspec.adapters.cockroach_psycopg.core import calculate_backoff_seconds, is_retryable_error
 
 
 @pytest.mark.xdist_group("cockroachdb")

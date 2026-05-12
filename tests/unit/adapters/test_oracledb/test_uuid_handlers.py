@@ -3,7 +3,7 @@
 import uuid
 from unittest.mock import Mock, patch
 
-from sqlspec.adapters.oracledb import (
+from sqlspec.adapters.oracledb._uuid_handlers import (
     register_uuid_handlers,
     uuid_converter_in,
     uuid_converter_out,

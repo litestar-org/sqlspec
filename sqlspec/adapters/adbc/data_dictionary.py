@@ -11,6 +11,14 @@ from sqlspec.data_dictionary import (
     list_registered_dialects,
     normalize_dialect_name,
 )
+from sqlspec.data_dictionary.dialects.bigquery import (
+    format_bigquery_information_schema_tables,
+    format_bigquery_schema_prefix,
+)
+from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
+from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
+from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
+from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
@@ -138,8 +146,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return self.get_default_type_mapping().get(type_category, "TEXT")
 
         if type_category == "json":
-            json_version = config.get_feature_version("supports_json")
             version_info = self.get_version(driver)
+            if dialect == "postgres":
+                return resolve_postgres_json_type(version_info)
+            if dialect == "sqlite":
+                return resolve_sqlite_json_type(version_info)
+            if dialect == "mysql":
+                return resolve_mysql_json_type(version_info)
+            if dialect == "cockroachdb":
+                return resolve_cockroachdb_json_type(version_info)
+
+            json_version = config.get_feature_version("supports_json")
             if json_version and (version_info is None or version_info < json_version):
                 return "TEXT"
 
@@ -152,14 +169,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
 
         if dialect == "bigquery":
-            if schema_name:
-                tables_table = f"`{schema_name}.INFORMATION_SCHEMA.TABLES`"
-                kcu_table = f"`{schema_name}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
-                rc_table = f"`{schema_name}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
-            else:
-                tables_table = "INFORMATION_SCHEMA.TABLES"
-                kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
-                rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+            tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(schema_name)
             query_text = self._get_query_text(dialect, "tables_by_schema").format(
                 tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
             )
@@ -186,7 +196,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
 
         if dialect == "bigquery":
-            schema_prefix = f"`{schema_name}`." if schema_name else ""
+            schema_prefix = format_bigquery_schema_prefix(schema_name)
             if table is None:
                 query_text = self._get_query_text(dialect, "columns_by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
@@ -293,12 +303,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
 
         if dialect == "bigquery":
-            if schema_name:
-                kcu_table = f"`{schema_name}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`"
-                rc_table = f"`{schema_name}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`"
-            else:
-                kcu_table = "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
-                rc_table = "INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"
+            _, kcu_table, rc_table = format_bigquery_information_schema_tables(schema_name)
             if table is None:
                 query_text = self._get_query_text(dialect, "foreign_keys_by_schema").format(
                     kcu_table=kcu_table, rc_table=rc_table

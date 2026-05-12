@@ -1,7 +1,8 @@
 """SQLite sync ADK store for Google Agent Development Kit session/event storage."""
 
+import sqlite3
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
+SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 
 __all__ = ("SqliteADKMemoryStore", "SqliteADKStore")
 
@@ -277,22 +279,27 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         WHERE id = ?
         """
 
-        with self._config.provide_connection() as conn:
-            self._apply_pragmas(conn)
-            cursor = conn.execute(sql, (session_id,))
-            row = cursor.fetchone()
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, (session_id,))
+                row = cursor.fetchone()
 
-            if row is None:
+                if row is None:
+                    return None
+
+                return SessionRecord(
+                    id=row[0],
+                    app_name=row[1],
+                    user_id=row[2],
+                    state=from_json(row[3]) if row[3] else {},
+                    create_time=_julian_to_datetime(row[4]),
+                    update_time=_julian_to_datetime(row[5]),
+                )
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
                 return None
-
-            return SessionRecord(
-                id=row[0],
-                app_name=row[1],
-                user_id=row[2],
-                state=from_json(row[3]) if row[3] else {},
-                create_time=_julian_to_datetime(row[4]),
-                update_time=_julian_to_datetime(row[5]),
-            )
+            raise
 
     async def get_session(self, session_id: str) -> "SessionRecord | None":
         """Get session by ID.
@@ -358,22 +365,27 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             """
             params = (app_name, user_id)
 
-        with self._config.provide_connection() as conn:
-            self._apply_pragmas(conn)
-            cursor = conn.execute(sql, params)
-            rows = cursor.fetchall()
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, params)
+                rows = cursor.fetchall()
 
-            return [
-                SessionRecord(
-                    id=row[0],
-                    app_name=row[1],
-                    user_id=row[2],
-                    state=from_json(row[3]) if row[3] else {},
-                    create_time=_julian_to_datetime(row[4]),
-                    update_time=_julian_to_datetime(row[5]),
-                )
-                for row in rows
-            ]
+                return [
+                    SessionRecord(
+                        id=row[0],
+                        app_name=row[1],
+                        user_id=row[2],
+                        state=from_json(row[3]) if row[3] else {},
+                        create_time=_julian_to_datetime(row[4]),
+                        update_time=_julian_to_datetime(row[5]),
+                    )
+                    for row in rows
+                ]
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return []
+            raise
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app, optionally filtered by user.
@@ -455,7 +467,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Synchronous implementation of append_event_and_update_state."""
         import uuid
 
@@ -475,6 +487,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE id = ?
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
         with self._config.provide_connection() as conn:
@@ -490,16 +503,30 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                     event_data_json,
                 ),
             )
-            conn.execute(update_sql, (state_json, now_julian, session_id))
+            cursor = conn.execute(update_sql, (state_json, now_julian, session_id))
+            row = cursor.fetchone()
             conn.commit()
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row[0],
+            app_name=row[1],
+            user_id=row[2],
+            state=from_json(row[3]) if row[3] else {},
+            create_time=_julian_to_datetime(row[4]),
+            update_time=_julian_to_datetime(row[5]),
+        )
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
         Inserts the event and updates the session state + update_time in a
-        single transaction. Both operations succeed or fail together.
+        single transaction, returning the updated SessionRecord via RETURNING.
 
         Args:
             event_record: Event record to store.
@@ -507,7 +534,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             state: Post-append durable state snapshot (temp: keys already
                 stripped by the service layer).
         """
-        await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -530,21 +557,26 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         ORDER BY timestamp ASC{limit_clause}
         """
 
-        with self._config.provide_connection() as conn:
-            self._apply_pragmas(conn)
-            cursor = conn.execute(sql, params)
-            rows = cursor.fetchall()
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, params)
+                rows = cursor.fetchall()
 
-            return [
-                EventRecord(
-                    session_id=row[1],
-                    invocation_id=row[2],
-                    author=row[3],
-                    timestamp=_julian_to_datetime(row[4]),
-                    event_json=from_json(row[5]) if row[5] else {},
-                )
-                for row in rows
-            ]
+                return [
+                    EventRecord(
+                        session_id=row[1],
+                        invocation_id=row[2],
+                        author=row[3],
+                        timestamp=_julian_to_datetime(row[4]),
+                        event_json=from_json(row[5]) if row[5] else {},
+                    )
+                    for row in rows
+                ]
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return []
+            raise
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -583,7 +615,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
     Example:
         from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore
+        from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
 
         config = SqliteConfig(
             database="app.db",

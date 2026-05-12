@@ -1,3 +1,5 @@
+from typing import NoReturn, get_type_hints
+
 import pytest
 
 from sqlspec.exceptions import FileNotFoundInStorageError, StorageOperationFailedError
@@ -6,6 +8,10 @@ from sqlspec.storage.errors import (
     execute_sync_storage_operation,
     raise_storage_error,
 )
+
+
+def test_raise_storage_error_is_typed_as_no_return() -> None:
+    assert get_type_hints(raise_storage_error)["return"] is NoReturn
 
 
 def test_raise_normalized_storage_error_for_missing_file() -> None:

@@ -1,7 +1,7 @@
 """Integration tests for FastAPI filter dependencies with real HTTP requests."""
 
 from collections.abc import Generator
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,7 +12,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.base import SQLSpec
 from sqlspec.core import BeforeAfterFilter, FilterTypes, LimitOffsetFilter, OrderByFilter
 from sqlspec.extensions.fastapi import SQLSpecPlugin
-from sqlspec.extensions.fastapi.providers import dep_cache
+from sqlspec.extensions.fastapi.providers import FieldNameType, dep_cache
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -23,6 +23,32 @@ def _clear_dependency_cache() -> Generator[None, None, None]:
     dep_cache.dependencies.clear()
     yield
     dep_cache.dependencies.clear()
+
+
+def _find_schema_type(schema: dict[str, Any], schema_type: str) -> dict[str, Any]:
+    if schema.get("type") == schema_type:
+        return schema
+    for key in ("anyOf", "oneOf", "allOf"):
+        for branch in schema.get(key, []):
+            if found := _find_schema_type(branch, schema_type):
+                return found
+    return {}
+
+
+def _query_param_schema(endpoint: dict[str, Any], name: str) -> dict[str, Any]:
+    param = next(param for param in endpoint.get("parameters", []) if param["name"] == name)
+    return cast("dict[str, Any]", param["schema"])
+
+
+def _assert_array_items_schema(
+    endpoint: dict[str, Any], name: str, item_type: str, item_format: str | None = None
+) -> None:
+    array_schema = _find_schema_type(_query_param_schema(endpoint, name), "array")
+    assert array_schema
+    items_schema = array_schema.get("items", {})
+    assert items_schema.get("type") == item_type
+    if item_format is not None:
+        assert items_schema.get("format") == item_format
 
 
 def test_fastapi_id_filter_dependency() -> None:
@@ -436,6 +462,39 @@ def test_fastapi_openapi_schema_uses_order_by_alias_default() -> None:
 
     assert schema["default"] == "createdAt"
     assert schema["type"] == "string"
+
+
+def test_fastapi_collection_filter_openapi_schema_preserves_configured_value_types() -> None:
+    """Collection filter query parameters keep the configured item type in OpenAPI."""
+    sqlspec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"fastapi": {"commit_mode": "manual"}}
+    )
+    sqlspec.add_config(config)
+
+    app = FastAPI()
+    db_ext = SQLSpecPlugin(sqlspec, app=app)
+
+    @app.get("/users")
+    async def list_users(
+        filters: Annotated[
+            list[FilterTypes],
+            Depends(
+                db_ext.provide_filters({
+                    "in_fields": [FieldNameType("owner_id", UUID), FieldNameType("age", int)],
+                    "not_in_fields": [FieldNameType("status", str), FieldNameType("score", int)],
+                })
+            ),
+        ],
+    ) -> dict[str, Any]:
+        return {"filters": len(filters)}
+
+    user_endpoint = app.openapi()["paths"]["/users"]["get"]
+
+    _assert_array_items_schema(user_endpoint, "ownerIdIn", "string", "uuid")
+    _assert_array_items_schema(user_endpoint, "ageIn", "integer")
+    _assert_array_items_schema(user_endpoint, "statusNotIn", "string")
+    _assert_array_items_schema(user_endpoint, "scoreNotIn", "integer")
 
 
 def test_fastapi_filter_validation_error() -> None:

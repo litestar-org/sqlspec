@@ -3,15 +3,16 @@
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
+from sqlspec.extensions.adk._config_utils import _get_adk_session_store_config
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from sqlspec.config import ADKConfig, DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
@@ -141,18 +142,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with session_table, events_table, and optionally owner_id_column.
         """
-        extension_config = self._config.extension_config
-        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
-        session_table = adk_config.get("session_table")
-        events_table = adk_config.get("events_table")
-        result: dict[str, Any] = {
-            "session_table": session_table if session_table is not None else "adk_sessions",
-            "events_table": events_table if events_table is not None else "adk_events",
-        }
-        owner_id = adk_config.get("owner_id_column")
-        if owner_id is not None:
-            result["owner_id_column"] = owner_id
-        return result
+        return dict(_get_adk_session_store_config(self._config))
 
     @property
     def config(self) -> ConfigT:
@@ -253,18 +243,26 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     @abstractmethod
     async def append_event_and_update_state(
         self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> "SessionRecord":
         """Atomically append an event and update the session's durable state.
 
         This is the authoritative durable write boundary for post-creation
         session mutations.  The event insert and state update must succeed
-        together or fail together.
+        together or fail together, and the updated session record is returned
+        in the same round-trip so callers don't need a follow-up read.
 
         Args:
             event_record: Event record to store.
             session_id: Session identifier whose state should be updated.
             state: Post-append durable state snapshot (``temp:`` keys already
                 stripped by the service layer).
+
+        Returns:
+            The updated SessionRecord reflecting the new state and update_time.
+
+        Raises:
+            ValueError: If the session row no longer exists at update time
+                (raced with delete_session).
         """
         raise NotImplementedError
 
@@ -394,18 +392,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         Returns:
             Dict with session_table, events_table, and optionally owner_id_column.
         """
-        extension_config = self._config.extension_config
-        adk_config = cast("ADKConfig", extension_config.get("adk", {}))
-        session_table = adk_config.get("session_table")
-        events_table = adk_config.get("events_table")
-        result: dict[str, Any] = {
-            "session_table": session_table if session_table is not None else "adk_sessions",
-            "events_table": events_table if events_table is not None else "adk_events",
-        }
-        owner_id = adk_config.get("owner_id_column")
-        if owner_id is not None:
-            result["owner_id_column"] = owner_id
-        return result
+        return dict(_get_adk_session_store_config(self._config))
 
     @property
     def config(self) -> ConfigT:

@@ -1,8 +1,6 @@
 from sqlspec.core.compiler import SQLProcessor
-from sqlspec.core.parameters import _structural_fingerprint
+from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.statement import SQL, get_default_config
-
-# pyright: reportPrivateUsage=false
 
 
 def test_sql_processor_cache_key_stability() -> None:
@@ -13,12 +11,12 @@ def test_sql_processor_cache_key_stability() -> None:
     params1 = (1,)
 
     # _make_cache_key expects a precomputed fingerprint, not raw params
-    fp1 = _structural_fingerprint(params1)
+    fp1 = structural_fingerprint(params1)
     key1 = processor._make_cache_key(sql1, fp1)
 
     # Same SQL, different param value (same structure)
     params2 = (2,)
-    fp2 = _structural_fingerprint(params2)
+    fp2 = structural_fingerprint(params2)
     key2 = processor._make_cache_key(sql1, fp2)
 
     assert key1 == key2, "Cache key should be stable for same structure"
@@ -26,7 +24,7 @@ def test_sql_processor_cache_key_stability() -> None:
     # Different SQL
     sql3 = "SELECT * FROM table WHERE id = ? AND active = ?"
     params3 = (1, True)
-    fp3 = _structural_fingerprint(params3)
+    fp3 = structural_fingerprint(params3)
     key3 = processor._make_cache_key(sql3, fp3)
 
     assert key1 != key3
@@ -56,8 +54,8 @@ def test_structural_fingerprint_list_vs_tuple() -> None:
 
     sql = "SELECT ?"
     # _make_cache_key expects a precomputed fingerprint, not raw params
-    fp_list = _structural_fingerprint([1])
-    fp_tuple = _structural_fingerprint((1,))
+    fp_list = structural_fingerprint([1])
+    fp_tuple = structural_fingerprint((1,))
     key_list = processor._make_cache_key(sql, fp_list)
     key_tuple = processor._make_cache_key(sql, fp_tuple)
 

@@ -4,6 +4,7 @@ import pytest
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage import resolve_storage_path
+from sqlspec.storage._paths import resolve_storage_path as resolve_compiled_storage_path
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.module_loader import ensure_pyarrow
 
@@ -73,3 +74,12 @@ def test_resolve_storage_path_pathlib_input() -> None:
 
     result = resolve_storage_path(Path("data") / "file.txt", base_path="", protocol="file")
     assert result == "data/file.txt"
+
+
+def test_compiled_storage_path_helper_matches_public_reexport() -> None:
+    """The compiled path helper should preserve the public storage re-export behavior."""
+    path = "file:///tmp/data/file.txt"
+
+    assert resolve_compiled_storage_path(path, base_path="/tmp", protocol="file", strip_file_scheme=True) == (
+        resolve_storage_path(path, base_path="/tmp", protocol="file", strip_file_scheme=True)
+    )

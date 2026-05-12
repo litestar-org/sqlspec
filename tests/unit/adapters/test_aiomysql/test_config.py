@@ -52,7 +52,7 @@ def test_aiomysql_signature_namespace_exposes_pool_type() -> None:
     assert namespace["AiomysqlPool"] is aiomysql.Pool
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_aiomysql_cursor_omits_class_arg_when_unset() -> None:
     """AiomysqlCursor with cursor_class=None must call conn.cursor() without args.
 
@@ -71,7 +71,7 @@ async def test_aiomysql_cursor_omits_class_arg_when_unset() -> None:
     connection.cursor.assert_awaited_once_with()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_aiomysql_cursor_forwards_class_arg_when_set() -> None:
     """AiomysqlCursor with cursor_class=AiomysqlRawCursor must forward it.
 

@@ -6,8 +6,10 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 .ONESHELL:
+.SHELLFLAGS := -eu -o pipefail -c
 .EXPORT_ALL_VARIABLES:
 MAKEFLAGS += --no-print-directory
+MYPY_WORKERS ?= 2
 
 # -----------------------------------------------------------------------------
 # Display Formatting and Colors
@@ -105,10 +107,37 @@ build-performance:                                 ## Build package with mypyc c
 .PHONY: test-mypyc
 test-mypyc:                                        ## Test mypyc compilation on individual modules
 	@echo "${INFO} Testing mypyc compilation... 🔧"
-	@uv run mypyc --check-untyped-defs sqlspec/utils/statement_hashing.py
-	@uv run mypyc --check-untyped-defs sqlspec/utils/text.py
-	@uv run mypyc --check-untyped-defs sqlspec/utils/sync_tools.py
-	@uv run mypyc --check-untyped-defs sqlspec/statement/cache.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/text.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/sync_tools.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/cache.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/hashing.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/parameters/_processor.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/result/_base.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/splitter.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/driver/_query_cache.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/core.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/psqlpy/core.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/pool.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_paths.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/_loader.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/bigquery.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/cockroachdb.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/duckdb.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/mysql.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/oracle.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/postgres.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/spanner.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/sqlite.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/_compat.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_generators.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_operators.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/spanner/_generators.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_hints.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_payload.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/_types.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/memory/_types.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/artifact/_types.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/migrations/version.py
 	@echo "${OK} Mypyc compilation tests passed ✨"
 
 
@@ -195,9 +224,18 @@ coverage:                                           ## Run tests with coverage r
 
 .PHONY: mypy
 mypy:                                               ## Run mypy
-	@echo "${INFO} Running mypy... 🔍"
-	@uv run dmypy run
+	@echo "${INFO} Running mypy with $(MYPY_WORKERS) workers... 🔍"
+	@uv run mypy -n $(MYPY_WORKERS) --no-incremental --no-warn-unused-configs --show-traceback --no-error-summary -p sqlspec
 	@echo "${OK} Mypy checks passed ✨"
+
+.PHONY: dmypy
+dmypy:                                              ## Run mypy daemon
+	@echo "${INFO} Running mypy daemon... 🔍"
+	@uv run dmypy run
+	@echo "${OK} Mypy daemon checks passed ✨"
+
+.PHONY: mypy-parallel
+mypy-parallel: mypy                                 ## Run mypy parallel checking
 
 .PHONY: pyright
 pyright:                                            ## Run pyright

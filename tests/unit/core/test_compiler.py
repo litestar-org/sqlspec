@@ -14,6 +14,7 @@ Test Coverage:
 8. Performance characteristics - Compilation speed and efficiency testing
 """
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -39,6 +40,7 @@ from sqlspec.core import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core.parameters._processor import _make_cache_key_tuple
 from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
@@ -308,13 +310,13 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     are based on parameter STRUCTURE (types, keys) not VALUES. Same SQL with same
     parameter structure produces the same cache key regardless of actual values.
     """
-    from sqlspec.core.parameters import _structural_fingerprint
+    from sqlspec.core.parameters import structural_fingerprint
 
     processor = SQLProcessor(basic_statement_config)
 
     # _make_cache_key expects a precomputed fingerprint, not raw params
     # Same SQL and parameter structure = same key
-    fp1 = _structural_fingerprint([123])
+    fp1 = structural_fingerprint([123])
     key1 = processor._make_cache_key("SELECT * FROM users", fp1)
     key2 = processor._make_cache_key("SELECT * FROM users", fp1)
     assert key1 == key2
@@ -324,21 +326,24 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     assert key1 != key3
 
     # Same SQL with same parameter STRUCTURE (list of one int) = SAME key (structural fingerprinting)
-    fp4 = _structural_fingerprint([456])
+    fp4 = structural_fingerprint([456])
     key4 = processor._make_cache_key("SELECT * FROM users", fp4)
     assert key1 == key4  # Structural fingerprinting: same structure = same key
 
     # Different parameter STRUCTURE = different key
-    fp5 = _structural_fingerprint({"id": 123})  # dict vs list
+    fp5 = structural_fingerprint({"id": 123})  # dict vs list
     key5 = processor._make_cache_key("SELECT * FROM users", fp5)
     assert key1 != key5
 
-    fp6 = _structural_fingerprint([123, "extra"])  # different type signature
+    fp6 = structural_fingerprint([123, "extra"])  # different type signature
     key6 = processor._make_cache_key("SELECT * FROM users", fp6)
     assert key1 != key6
 
     # Cache keys are now tuples for better performance
     assert isinstance(key1, tuple)
+    assert key1 == _make_cache_key_tuple(
+        "SELECT * FROM users", fp1, processor._input_style, processor._exec_style, processor._dialect_str, False
+    )
 
 
 def test_cache_eviction(basic_statement_config: "StatementConfig") -> None:
@@ -377,6 +382,33 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
     assert key1 in processor._cache
     assert key2 not in processor._cache
     assert key3 in processor._cache
+
+
+def test_micro_cache_hit_does_not_touch_lru_order(basic_statement_config: "StatementConfig") -> None:
+    """The 1-entry cache should return before the full LRU cache is updated."""
+    processor = SQLProcessor(basic_statement_config, max_cache_size=2)
+    processor.compile("SELECT 1", None)
+    processor.compile("SELECT 2", None)
+
+    class TrackingCache(OrderedDict[Any, CompiledSQL]):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.move_to_end_calls = 0
+
+        def move_to_end(self, key: Any, last: bool = True) -> None:
+            self.move_to_end_calls += 1
+            super().move_to_end(key, last=last)
+
+    tracked_cache = TrackingCache(processor._cache)
+    processor._cache = tracked_cache
+
+    processor.compile("SELECT 2", None)
+    assert tracked_cache.move_to_end_calls == 0
+    assert processor._cache_hits == 1
+
+    processor.compile("SELECT 1", None)
+    assert tracked_cache.move_to_end_calls == 1
+    assert processor._cache_hits == 2
 
 
 @pytest.mark.parametrize(
@@ -468,6 +500,38 @@ def test_parameter_processing_integration(basic_statement_config: "StatementConf
         result = processor.compile(sql, params)
         assert isinstance(result, CompiledSQL)
         assert result.execution_parameters is not None
+
+
+@pytest.mark.parametrize(
+    "validation_enabled,final_params,raw_parameters,is_many,expected",
+    [
+        (False, None, None, False, False),
+        (False, [1], None, False, False),
+        (False, None, None, True, False),
+        (False, [1], None, True, False),
+        (True, None, None, False, False),
+        (True, [], {}, False, False),
+        (True, [1], None, False, True),
+        (True, None, {"id": 1}, False, True),
+        (True, None, None, True, True),
+        (True, [1], None, True, True),
+    ],
+)
+def test_should_validate_parameters_truth_table(
+    basic_statement_config: "StatementConfig",
+    validation_enabled: bool,
+    final_params: Any,
+    raw_parameters: Any,
+    is_many: bool,
+    expected: bool,
+) -> None:
+    """Parameter validation depends only on validation config, parameters, and execute_many."""
+    config = basic_statement_config.replace(enable_validation=validation_enabled)
+    processor = SQLProcessor(config)
+
+    should_validate = processor._should_validate_parameters(final_params, raw_parameters, is_many)
+
+    assert should_validate is expected
 
 
 def test_compilation_with_transformations(basic_statement_config: "StatementConfig") -> None:
@@ -744,6 +808,27 @@ def test_compilation_exception_recovery(basic_statement_config: "StatementConfig
     assert result.operation_type == "COMMAND"
 
 
+@pytest.mark.parametrize("exception_cls", (RuntimeError, ValueError, TypeError))
+def test_unexpected_compile_exception_is_not_swallowed(
+    basic_statement_config: "StatementConfig", exception_cls: type[Exception]
+) -> None:
+    """Unexpected compiler failures should surface instead of returning COMMAND fallback."""
+
+    def _raise_unexpected(_expression: "exp.Expr", _parameters: Any) -> "tuple[exp.Expr, Any]":
+        raise exception_cls("boom")
+
+    config = basic_statement_config.replace(statement_transformers=(_raise_unexpected,))
+    processor = SQLProcessor(config)
+
+    with patch("sqlspec.core.compiler.log_with_context") as mock_log, pytest.raises(exception_cls, match="boom"):
+        processor.compile("SELECT * FROM users", None)
+
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] is logging.ERROR
+    assert mock_log.call_args.args[2] == "sql.compile"
+    assert mock_log.call_args.kwargs["status"] == "error"
+
+
 def test_cache_statistics(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache statistics collection."""
     processor = SQLProcessor(basic_statement_config)
@@ -855,7 +940,6 @@ def test_processor_memory_efficiency_with_slots() -> None:
         assert set(slots) == expected_slots
 
 
-@pytest.mark.performance
 def test_compilation_speed_benchmark(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:

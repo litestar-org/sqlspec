@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore
+from sqlspec.adapters.aiosqlite.adk import AiosqliteADKMemoryStore
 from sqlspec.extensions.adk import MemoryRecord
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -50,6 +50,55 @@ async def test_aiosqlite_memory_store_insert_search_dedup() -> None:
 
         deduped = await store.insert_memory_entries([record1])
         assert deduped == 0
+
+        await config.close_pool()
+
+
+async def test_aiosqlite_memory_store_fts_search() -> None:
+    """FTS-enabled memory stores search through the FTS5 virtual table."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        config = AiosqliteConfig(
+            connection_config={"database": tmp.name}, extension_config={"adk": {"memory_use_fts": True}}
+        )
+        store = AiosqliteADKMemoryStore(config)
+        await store.create_tables()
+
+        now = datetime.now(timezone.utc)
+        record1 = _build_record(session_id="s1", event_id="evt-fts-1", content_text="espresso roast", inserted_at=now)
+        record2 = _build_record(session_id="s1", event_id="evt-fts-2", content_text="latte foam", inserted_at=now)
+        await store.insert_memory_entries([record1, record2])
+
+        results = await store.search_entries(query="espresso", app_name="app", user_id="user")
+
+        assert len(results) == 1
+        assert results[0]["event_id"] == "evt-fts-1"
+
+        await config.close_pool()
+
+
+async def test_aiosqlite_memory_store_disabled_lifecycle() -> None:
+    """Disabled memory stores skip table creation and reject memory operations."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        config = AiosqliteConfig(
+            connection_config={"database": tmp.name}, extension_config={"adk": {"enable_memory": False}}
+        )
+        store = AiosqliteADKMemoryStore(config)
+        await store.create_tables()
+
+        async with config.provide_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory_entries",)
+            )
+            row = await cursor.fetchone()
+
+        assert row is None
+
+        now = datetime.now(timezone.utc)
+        record = _build_record(session_id="s1", event_id="evt-disabled", content_text="espresso", inserted_at=now)
+        with pytest.raises(RuntimeError, match="Memory store is disabled"):
+            await store.insert_memory_entries([record])
+        with pytest.raises(RuntimeError, match="Memory store is disabled"):
+            await store.search_entries(query="espresso", app_name="app", user_id="user")
 
         await config.close_pool()
 

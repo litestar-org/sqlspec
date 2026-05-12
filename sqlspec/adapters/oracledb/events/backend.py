@@ -13,10 +13,32 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
+_ORACLEDB_AVAILABLE = False
+OracleDatabaseError: Any
+
 try:  # pragma: no cover - optional dependency path
-    import oracledb
+    from sqlspec.adapters.oracledb._typing import AQMSG_INVISIBLE as _AQMSG_INVISIBLE
+    from sqlspec.adapters.oracledb._typing import AQMSG_PAYLOAD_TYPE_JSON as _AQMSG_PAYLOAD_TYPE_JSON
+    from sqlspec.adapters.oracledb._typing import AQMSG_VISIBLE as _AQMSG_VISIBLE
+    from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
+    from sqlspec.adapters.oracledb._typing import AQDequeueOptions as _AQDequeueOptions
+    from sqlspec.adapters.oracledb._typing import DatabaseError as _OracleDatabaseErrorImported
 except ImportError:  # pragma: no cover - optional dependency path
-    oracledb = None  # type: ignore[assignment]
+    _AQDequeueOptions = None
+    _AQMSG_INVISIBLE = None
+    _AQMSG_PAYLOAD_TYPE_JSON = None
+    _AQMSG_VISIBLE = None
+    _DB_TYPE_JSON = None
+    OracleDatabaseError = None
+else:  # pragma: no cover - optional dependency path
+    _ORACLEDB_AVAILABLE = True
+    OracleDatabaseError = _OracleDatabaseErrorImported
+
+AQDequeueOptions: Any = _AQDequeueOptions
+AQMSG_INVISIBLE: int | None = _AQMSG_INVISIBLE
+AQMSG_PAYLOAD_TYPE_JSON: Any = _AQMSG_PAYLOAD_TYPE_JSON
+AQMSG_VISIBLE: int | None = _AQMSG_VISIBLE
+DB_TYPE_JSON: Any = _DB_TYPE_JSON
 
 logger = get_logger("sqlspec.events.oracle")
 
@@ -26,19 +48,16 @@ _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
 _DEFAULT_VISIBILITY: int | None
 _VISIBILITY_LOOKUP: "dict[str, int]"
 
-if oracledb is None:
+if AQDequeueOptions is None:
     _DEFAULT_VISIBILITY = None
     _VISIBILITY_LOOKUP = {}
 else:
-    try:
-        _DEFAULT_VISIBILITY = oracledb.AQMSG_VISIBLE  # type: ignore[attr-defined]
-    except AttributeError:
-        _DEFAULT_VISIBILITY = None
+    _DEFAULT_VISIBILITY = AQMSG_VISIBLE
     _VISIBILITY_LOOKUP = {}
     if _DEFAULT_VISIBILITY is not None:
         _VISIBILITY_LOOKUP["AQMSG_VISIBLE"] = _DEFAULT_VISIBILITY
-    with contextlib.suppress(AttributeError):
-        _VISIBILITY_LOOKUP["AQMSG_INVISIBLE"] = oracledb.AQMSG_INVISIBLE  # type: ignore[attr-defined]
+    if AQMSG_INVISIBLE is not None:
+        _VISIBILITY_LOOKUP["AQMSG_INVISIBLE"] = AQMSG_INVISIBLE
 
 
 def _resolve_visibility_setting(value: Any) -> int | None:
@@ -72,7 +91,7 @@ class OracleSyncAQEventBackend:
         if config.is_async:
             msg = "OracleSyncAQEventBackend requires a sync adapter"
             raise ImproperConfigurationError(msg)
-        if oracledb is None:
+        if not _ORACLEDB_AVAILABLE:
             msg = "oracledb"
             raise MissingDependencyError(msg, install_package="oracledb")
         self._config = config
@@ -123,7 +142,10 @@ class OracleSyncAQEventBackend:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
             queue = _get_queue(connection, channel, self._queue_name)
-            options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
+            if AQDequeueOptions is None:
+                msg = "oracledb AQDequeueOptions"
+                raise MissingDependencyError(msg, install_package="oracledb")
+            options = AQDequeueOptions()
             options.wait = max(int(self._wait_seconds), 0)
             if self._visibility is not None:
                 options.visibility = self._visibility
@@ -132,7 +154,7 @@ class OracleSyncAQEventBackend:
             try:
                 message = queue.deqone(options=options)
             except Exception as error:  # pragma: no cover - driver surfaced runtime
-                if oracledb is None or not isinstance(error, oracledb.DatabaseError):
+                if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
                     logger,
@@ -187,7 +209,7 @@ class OracleAsyncAQEventBackend:
         if not config.is_async:
             msg = "OracleAsyncAQEventBackend requires an async adapter"
             raise ImproperConfigurationError(msg)
-        if oracledb is None:
+        if not _ORACLEDB_AVAILABLE:
             msg = "oracledb"
             raise MissingDependencyError(msg, install_package="oracledb")
         self._config = config
@@ -220,7 +242,10 @@ class OracleAsyncAQEventBackend:
                 msg = "Oracle driver does not expose a raw connection"
                 raise EventChannelError(msg)
             queue = _get_queue(connection, channel, self._queue_name)
-            options = oracledb.AQDequeueOptions()  # type: ignore[attr-defined]
+            if AQDequeueOptions is None:
+                msg = "oracledb AQDequeueOptions"
+                raise MissingDependencyError(msg, install_package="oracledb")
+            options = AQDequeueOptions()
             options.wait = max(int(self._wait_seconds), 0)
             if self._visibility is not None:
                 options.visibility = self._visibility
@@ -229,7 +254,7 @@ class OracleAsyncAQEventBackend:
             try:
                 message = await queue.deqone(options=options)
             except Exception as error:  # pragma: no cover - driver surfaced runtime
-                if oracledb is None or not isinstance(error, oracledb.DatabaseError):
+                if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
                     logger,
@@ -270,21 +295,18 @@ class OracleAsyncAQEventBackend:
 
 def _get_queue(connection: Any, channel: str, queue_name: str) -> Any:
     """Get Oracle AQ queue handle."""
-    if oracledb is None:
+    if not _ORACLEDB_AVAILABLE:
         msg = "oracledb"
         raise MissingDependencyError(msg, install_package="oracledb")
     if isinstance(queue_name, str) and "{" in queue_name:
         with contextlib.suppress(Exception):
             queue_name = queue_name.format(channel=channel.upper())
     try:
-        payload_type = oracledb.DB_TYPE_JSON
-    except AttributeError:
+        payload_type = DB_TYPE_JSON
+    except NameError:
         payload_type = None
     if payload_type is None:
-        try:
-            payload_type = oracledb.AQMSG_PAYLOAD_TYPE_JSON  # type: ignore[attr-defined]
-        except AttributeError:
-            payload_type = None
+        payload_type = AQMSG_PAYLOAD_TYPE_JSON
     return connection.queue(queue_name, payload_type=payload_type)
 
 

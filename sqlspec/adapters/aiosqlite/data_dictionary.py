@@ -6,6 +6,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.aiosqlite.core import format_identifier
 from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_features, resolve_sqlite_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
@@ -37,11 +38,7 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
 
     def list_available_features(self) -> "list[str]":
         """List available feature flags for this dialect."""
-        config = self.get_dialect_config()
-        features = {"supports_transactions", "supports_prepared_statements"}
-        features.update(config.feature_flags.keys())
-        features.update(config.feature_versions.keys())
-        return sorted(features)
+        return list_sqlite_available_features()
 
     async def get_version(self, driver: "AiosqliteDriver") -> "VersionInfo | None":
         """Get SQLite database version information.
@@ -104,10 +101,7 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            json_version = config.get_feature_version("supports_json")
-            if version_info and json_version and version_info >= json_version:
-                return "JSON"
-            return "TEXT"
+            return resolve_sqlite_json_type(version_info)
 
         return config.get_optimal_type(type_category)
 

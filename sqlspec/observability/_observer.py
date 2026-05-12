@@ -1,11 +1,10 @@
 """Statement observer primitives for SQL execution events."""
 
 import logging
-from collections.abc import Callable
 from time import time
 from typing import Any
 
-from sqlspec.observability._config import LoggingConfig
+from sqlspec.observability._config import LoggingConfig, StatementObserver
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
@@ -26,9 +25,6 @@ SQL_LOGGER_NAME = "sqlspec.sql"
 sql_logger = get_logger(SQL_LOGGER_NAME)
 
 _DEFAULT_LOGGING_CONFIG = LoggingConfig()
-
-
-StatementObserver = Callable[["StatementEvent"], None]
 
 
 class StatementEvent:

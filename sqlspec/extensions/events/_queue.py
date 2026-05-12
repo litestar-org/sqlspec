@@ -140,6 +140,7 @@ class _BaseTableEventQueue:
             payload_obj = from_json(payload_raw)
         else:
             payload_obj = {}
+        metadata_obj: Any | None
         if isinstance(metadata_raw, dict):
             metadata_obj = metadata_raw
         elif metadata_raw is not None:

@@ -4,7 +4,9 @@ __pycache__/
 *$py.class
 
 # Generated demo GIFs
-docs/_static/demos/
+docs/_static/demos/*
+!docs/_static/demos/.gitkeep
+!docs/_static/demos/*.gif
 
 # folders
 .auto_pytabs_cache/
@@ -74,3 +76,4 @@ tools/scripts/profiles/*.prof
 .dolt/
 .beads-credential-key
 .codex
+.mypy_worker*

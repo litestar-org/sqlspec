@@ -38,7 +38,6 @@ __all__ = (
     "FiltersView",
     "LRUCache",
     "NamespacedCache",
-    "canonicalize_filters",
     "create_cache_key",
     "get_cache",
     "get_cache_config",
@@ -556,15 +555,6 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
-def get_cache_stats() -> "dict[str, CacheStats]":
-    """Get cache statistics from all caches.
-
-    Returns:
-        Dictionary of cache statistics
-    """
-    return get_cache_statistics()
-
-
 def reset_cache_stats() -> None:
     """Reset all cache statistics."""
     clear_all_caches()
@@ -573,7 +563,7 @@ def reset_cache_stats() -> None:
 def log_cache_stats() -> None:
     """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
-    stats = get_cache_stats()
+    stats = get_cache_statistics()
     stats_summary = {
         name: {
             "hits": stat.hits,
@@ -997,7 +987,7 @@ class Filter:
         return hash((self.field_name, self.operation, self.value))
 
 
-def canonicalize_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
+def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
     """Create canonical representation of filters for cache keys.
 
     Args:
@@ -1080,7 +1070,7 @@ class FiltersView:
             elif has_filter_attributes(f):
                 filter_objects.append(Filter(f.field_name, f.operation, f.value))
 
-        return canonicalize_filters(filter_objects)
+        return _canonicalize_cache_filters(filter_objects)
 
 
 def get_pipeline_metrics() -> "list[dict[str, Any]]":

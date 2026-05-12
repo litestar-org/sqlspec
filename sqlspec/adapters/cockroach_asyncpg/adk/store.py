@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any, cast
 
+import asyncpg
+
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -123,19 +125,22 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         WHERE id = $1
         """
 
-        async with self._config.provide_connection() as conn:
-            row = await conn.fetchrow(sql, session_id)
-            if row is None:
-                return None
+        try:
+            async with self._config.provide_connection() as conn:
+                row = await conn.fetchrow(sql, session_id)
+                if row is None:
+                    return None
 
-            return SessionRecord(
-                id=row["id"],
-                app_name=row["app_name"],
-                user_id=row["user_id"],
-                state=row["state"],
-                create_time=row["create_time"],
-                update_time=row["update_time"],
-            )
+                return SessionRecord(
+                    id=row["id"],
+                    app_name=row["app_name"],
+                    user_id=row["user_id"],
+                    state=row["state"],
+                    create_time=row["create_time"],
+                    update_time=row["update_time"],
+                )
+        except asyncpg.exceptions.UndefinedTableError:
+            return None
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
@@ -171,8 +176,11 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             """
             params = (app_name, user_id)
 
-        async with self._config.provide_connection() as conn:
-            rows = await conn.fetch(sql, *params)
+        try:
+            async with self._config.provide_connection() as conn:
+                rows = await conn.fetch(sql, *params)
+        except asyncpg.exceptions.UndefinedTableError:
+            return []
 
         return [
             SessionRecord(
@@ -205,7 +213,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
     async def append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             session_id, invocation_id, author, timestamp, event_json
@@ -215,6 +223,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         UPDATE {self._session_table}
         SET state = $1, update_time = CURRENT_TIMESTAMP
         WHERE id = $2
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
         async with self._config.provide_connection() as conn, conn.transaction():
@@ -226,7 +235,20 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["timestamp"],
                 event_record["event_json"],
             )
-            await conn.execute(update_sql, state, session_id)
+            row = await conn.fetchrow(update_sql, state, session_id)
+
+        if row is None:
+            msg = f"Session {session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+
+        return SessionRecord(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -250,8 +272,11 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         ORDER BY timestamp ASC{limit_clause}
         """
 
-        async with self._config.provide_connection() as conn:
-            rows = await conn.fetch(sql, *params)
+        try:
+            async with self._config.provide_connection() as conn:
+                rows = await conn.fetch(sql, *params)
+        except asyncpg.exceptions.UndefinedTableError:
+            return []
 
         return [
             EventRecord(

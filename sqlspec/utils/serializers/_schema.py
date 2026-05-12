@@ -1,11 +1,12 @@
 """Schema dumping and cache helpers for ``sqlspec.utils.serializers``."""
 
 import os
+from collections import OrderedDict
 from functools import partial
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.typing import UNSET, ArrowReturnFormat, attrs_asdict
+from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, attrs_asdict, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
@@ -32,6 +33,8 @@ __all__ = (
 
 DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
 _PRIMITIVE_TYPES: Final[tuple[type[Any], ...]] = (str, bytes, int, float, bool)
+_PRIMITIVE_TYPES_SET: Final[frozenset[type[Any]]] = frozenset(_PRIMITIVE_TYPES)
+_SCHEMA_SERIALIZER_CACHE_MAX_SIZE: Final[int] = 1000
 
 
 def _is_truthy(value: "str | None") -> bool:
@@ -41,8 +44,7 @@ def _is_truthy(value: "str | None") -> bool:
     return normalized in {"1", "true", "yes", "on"}
 
 
-def _metrics_enabled() -> bool:
-    return _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+_METRICS_ENABLED: Final[bool] = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
 
 
 class _SerializerCacheMetrics:
@@ -55,14 +57,14 @@ class _SerializerCacheMetrics:
         self.max_size = 0
 
     def record_hit(self, cache_size: int) -> None:
-        if not _metrics_enabled():
+        if not _METRICS_ENABLED:
             return
         self.hits += 1
         self.size = cache_size
         self.max_size = max(self.max_size, cache_size)
 
     def record_miss(self, cache_size: int) -> None:
-        if not _metrics_enabled():
+        if not _METRICS_ENABLED:
             return
         self.misses += 1
         self.size = cache_size
@@ -76,10 +78,10 @@ class _SerializerCacheMetrics:
 
     def snapshot(self) -> "dict[str, int]":
         return {
-            "hits": self.hits if _metrics_enabled() else 0,
-            "misses": self.misses if _metrics_enabled() else 0,
-            "max_size": self.max_size if _metrics_enabled() else 0,
-            "size": self.size if _metrics_enabled() else 0,
+            "hits": self.hits if _METRICS_ENABLED else 0,
+            "misses": self.misses if _METRICS_ENABLED else 0,
+            "max_size": self.max_size if _METRICS_ENABLED else 0,
+            "size": self.size if _METRICS_ENABLED else 0,
         }
 
 
@@ -110,7 +112,7 @@ class SchemaSerializer:
 
 
 _SERIALIZER_LOCK: RLock = RLock()
-_SCHEMA_SERIALIZERS: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
+_SCHEMA_SERIALIZERS: "OrderedDict[tuple[type[Any] | None, bool, bool], SchemaSerializer]" = OrderedDict()
 _SERIALIZER_METRICS = _SerializerCacheMetrics()
 
 
@@ -124,37 +126,25 @@ def _dump_identity_dict(value: Any) -> "dict[str, Any]":
     return cast("dict[str, Any]", value)
 
 
-def _dump_msgspec_fields(value: Any) -> "dict[str, Any]":
-    from msgspec import structs
+def _get_msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
+    if not MSGSPEC_INSTALLED:
+        msg = "msgspec is required to serialize msgspec.Struct values"
+        raise RuntimeError(msg)
 
-    return {field.encode_name: value.__getattribute__(field.name) for field in structs.fields(type(value))}
+    if wire_format:
+        return tuple((field.encode_name, field.name) for field in msgspec_fields(schema_type))
+    return tuple((field.name, field.name) for field in msgspec_fields(schema_type))
 
 
-def _dump_msgspec_excluding_unset(value: Any) -> "dict[str, Any]":
-    from msgspec import structs
-
+def _dump_msgspec_struct(
+    value: Any, *, field_pairs: "tuple[tuple[str, str], ...]", exclude_unset: bool
+) -> "dict[str, Any]":
+    if not exclude_unset:
+        return {output_name: value.__getattribute__(field_name) for output_name, field_name in field_pairs}
     return {
-        field.encode_name: field_value
-        for field in structs.fields(type(value))
-        if (field_value := value.__getattribute__(field.name)) != UNSET
-    }
-
-
-def _dump_msgspec_fields_python(value: Any) -> "dict[str, Any]":
-    """Dump msgspec Struct keyed by Python attribute names (ignores rename=)."""
-    from msgspec import structs
-
-    return {field.name: value.__getattribute__(field.name) for field in structs.fields(type(value))}
-
-
-def _dump_msgspec_excluding_unset_python(value: Any) -> "dict[str, Any]":
-    """Dump msgspec Struct (Python names, exclude UNSET fields)."""
-    from msgspec import structs
-
-    return {
-        field.name: field_value
-        for field in structs.fields(type(value))
-        if (field_value := value.__getattribute__(field.name)) != UNSET
+        output_name: field_value
+        for output_name, field_name in field_pairs
+        if (field_value := value.__getattribute__(field_name)) != UNSET
     }
 
 
@@ -178,6 +168,16 @@ def _dump_mapping(value: Any) -> "dict[str, Any]":
     return dict(value)
 
 
+def _build_msgspec_dump_function(
+    sample: Any, *, exclude_unset: bool, wire_format: bool
+) -> "Callable[[Any], dict[str, Any]]":
+    field_pairs = _get_msgspec_field_pairs(type(sample), wire_format=wire_format)
+    return cast(
+        "Callable[[Any], dict[str, Any]]",
+        partial(_dump_msgspec_struct, field_pairs=field_pairs, exclude_unset=exclude_unset),
+    )
+
+
 def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
     if sample is None or isinstance(sample, dict):
         return _dump_identity_dict
@@ -186,13 +186,7 @@ def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) ->
     if is_pydantic_model(sample):
         return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
-        if wire_format:
-            if exclude_unset:
-                return _dump_msgspec_excluding_unset
-            return _dump_msgspec_fields
-        if exclude_unset:
-            return _dump_msgspec_excluding_unset_python
-        return _dump_msgspec_fields_python
+        return _build_msgspec_dump_function(sample, exclude_unset=exclude_unset, wire_format=wire_format)
     if is_attrs_instance(sample):
         return _dump_attrs
     if has_dict_attribute(sample):
@@ -205,15 +199,28 @@ def get_collection_serializer(
 ) -> "SchemaSerializer":
     """Return cached serializer pipeline for the provided sample object."""
     key = _make_serializer_key(sample, exclude_unset, wire_format)
+    pipeline = _SCHEMA_SERIALIZERS.get(key)
+    if pipeline is not None:
+        try:
+            _SCHEMA_SERIALIZERS.move_to_end(key)
+        except KeyError:
+            pipeline = None
+        else:
+            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
+            return pipeline
+
     with _SERIALIZER_LOCK:
         pipeline = _SCHEMA_SERIALIZERS.get(key)
         if pipeline is not None:
+            _SCHEMA_SERIALIZERS.move_to_end(key)
             _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
             return pipeline
 
         dump = _build_dump_function(sample, exclude_unset, wire_format)
         pipeline = SchemaSerializer(key, dump)
         _SCHEMA_SERIALIZERS[key] = pipeline
+        if len(_SCHEMA_SERIALIZERS) > _SCHEMA_SERIALIZER_CACHE_MAX_SIZE:
+            _SCHEMA_SERIALIZERS.popitem(last=False)
         _SERIALIZER_METRICS.record_miss(len(_SCHEMA_SERIALIZERS))
         return pipeline
 
@@ -226,7 +233,7 @@ def serialize_collection(
     cache: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
 
     for item in items:
-        if isinstance(item, _PRIMITIVE_TYPES) or item is None or isinstance(item, dict):
+        if type(item) in _PRIMITIVE_TYPES_SET or item is None or isinstance(item, dict):
             serialized.append(item)
             continue
 
@@ -271,7 +278,7 @@ def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = Fa
     """
     if is_dict(data):
         return data
-    if isinstance(data, _PRIMITIVE_TYPES) or data is None:
+    if type(data) in _PRIMITIVE_TYPES_SET or data is None:
         return data
 
     serializer = get_collection_serializer(data, exclude_unset=exclude_unset, wire_format=wire_format)

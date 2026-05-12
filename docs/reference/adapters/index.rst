@@ -49,11 +49,29 @@ exports a typed config class and a driver implementation.
 
       Sync + Async Oracle via oracledb.
 
-   .. grid-item-card:: MySQL
-      :link: mysql
+   .. grid-item-card:: mysql-connector-python
+      :link: mysqlconnector
       :link-type: doc
 
-      MySQL via mysql-connector, PyMySQL, asyncmy, and aiomysql.
+      Sync + Async MySQL via mysql-connector-python.
+
+   .. grid-item-card:: PyMySQL
+      :link: pymysql
+      :link-type: doc
+
+      Sync MySQL via PyMySQL.
+
+   .. grid-item-card:: asyncmy
+      :link: asyncmy
+      :link-type: doc
+
+      Async MySQL via asyncmy.
+
+   .. grid-item-card:: aiomysql
+      :link: aiomysql
+      :link-type: doc
+
+      Async MySQL via aiomysql.
 
    .. grid-item-card:: BigQuery
       :link: bigquery
@@ -67,11 +85,17 @@ exports a typed config class and a driver implementation.
 
       Google Cloud Spanner.
 
-   .. grid-item-card:: CockroachDB
-      :link: cockroach
+   .. grid-item-card:: CockroachDB + AsyncPG
+      :link: cockroach_asyncpg
       :link-type: doc
 
-      CockroachDB via asyncpg or psycopg.
+      Async CockroachDB via asyncpg.
+
+   .. grid-item-card:: CockroachDB + Psycopg
+      :link: cockroach_psycopg
+      :link-type: doc
+
+      Sync + Async CockroachDB via psycopg.
 
    .. grid-item-card:: ADBC
       :link: adbc
@@ -198,8 +222,12 @@ Feature Comparison
    aiosqlite
    duckdb
    oracledb
-   mysql
+   mysqlconnector
+   pymysql
+   asyncmy
+   aiomysql
    bigquery
    spanner
-   cockroach
+   cockroach_asyncpg
+   cockroach_psycopg
    adbc

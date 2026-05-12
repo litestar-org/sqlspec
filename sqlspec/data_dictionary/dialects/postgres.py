@@ -3,6 +3,9 @@ import re
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 from sqlspec.typing import VersionInfo
 
+__all__ = ("resolve_postgres_json_type",)
+
+
 POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")
 
 POSTGRES_FEATURE_VERSIONS: "FeatureVersions" = {
@@ -44,3 +47,23 @@ POSTGRES_CONFIG = DialectConfig(
 )
 
 register_dialect(POSTGRES_CONFIG)
+
+
+def resolve_postgres_json_type(version_info: "VersionInfo | None") -> str:
+    """Resolve the best PostgreSQL JSON storage type for a database version.
+
+    Args:
+        version_info: Parsed PostgreSQL version, or None when version detection failed.
+
+    Returns:
+        JSONB when available, JSON before JSONB support, otherwise TEXT.
+    """
+    jsonb_version = POSTGRES_CONFIG.get_feature_version("supports_jsonb")
+    if version_info and jsonb_version and version_info >= jsonb_version:
+        return "JSONB"
+
+    json_version = POSTGRES_CONFIG.get_feature_version("supports_json")
+    if version_info and json_version and version_info >= json_version:
+        return "JSON"
+
+    return "TEXT"

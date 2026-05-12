@@ -23,8 +23,7 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from psqlpy import Listener
-
+    from sqlspec.adapters.psqlpy._typing import PsqlpyListener
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 
@@ -173,7 +172,7 @@ class PsqlpyEventsBackend:
             await self._listener.shutdown()
             self._listener = None
 
-    async def _ensure_listener(self, channel: str) -> "Listener":
+    async def _ensure_listener(self, channel: str) -> "PsqlpyListener":
         """Ensure a listener is created for receiving notifications."""
         _normalize_channel(channel)
         if self._listener is None:
@@ -255,7 +254,7 @@ class PsqlpyHybridEventsBackend:
             await self._listener.shutdown()
             self._listener = None
 
-    async def _ensure_listener(self, channel: str) -> "Listener":
+    async def _ensure_listener(self, channel: str) -> "PsqlpyListener":
         """Ensure a listener is created for receiving notifications."""
         _normalize_channel(channel)
         if self._listener is None:

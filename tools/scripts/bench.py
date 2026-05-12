@@ -5,6 +5,7 @@ Originally contributed by euri10 (Benoit Barthelet) in PR #354.
 
 import asyncio
 import cProfile
+import gc
 import inspect
 import json
 import pstats
@@ -101,6 +102,9 @@ __all__ = (
 
 ROWS_TO_INSERT = 10_000
 POOL_SIZE = 5  # Default pool size for async adapters
+DEFAULT_BENCH_ITERATIONS = 7
+DEFAULT_BENCH_WARMUP = 3
+NOISY_STDDEV_RATIO = 0.10
 
 
 @click.command()
@@ -120,8 +124,12 @@ POOL_SIZE = 5  # Default pool size for async adapters
     show_default=True,
     help="Connection pool size for async adapters (1=single connection, matches sync behavior)",
 )
-@click.option("--iterations", default=3, show_default=True, help="Number of timed iterations per scenario")
-@click.option("--warmup", default=1, show_default=True, help="Number of warmup iterations (not timed)")
+@click.option(
+    "--iterations", default=DEFAULT_BENCH_ITERATIONS, show_default=True, help="Number of timed iterations per scenario"
+)
+@click.option(
+    "--warmup", default=DEFAULT_BENCH_WARMUP, show_default=True, help="Number of warmup iterations (not timed)"
+)
 @click.option("--json-output", default=None, type=click.Path(), help="Write results to a JSON file")
 @click.option("--extended/--no-extended", default=False, help="Include extended benchmark scenarios")
 @click.option("--profile/--no-profile", default=False, help="Enable cProfile profiling for each scenario")
@@ -188,7 +196,78 @@ def main(
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
 
 
-def run_benchmark(driver: str, errors: list[str], *, iterations: int = 3, warmup: int = 1) -> list[dict[str, Any]]:
+def _new_benchmark_loop() -> asyncio.AbstractEventLoop:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop
+
+
+def _close_benchmark_loop(loop: asyncio.AbstractEventLoop) -> None:
+    try:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        if hasattr(loop, "shutdown_default_executor"):
+            loop.run_until_complete(loop.shutdown_default_executor())
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+def _run_scenario_once(func: Any, loop: asyncio.AbstractEventLoop | None) -> None:
+    if loop is not None:
+        loop.run_until_complete(func())
+    else:
+        func()
+
+
+def _run_benchmark_iterations(
+    func: Any, *, is_async: bool, iterations: int, warmup: int, profiler: cProfile.Profile | None = None
+) -> list[float]:
+    loop = _new_benchmark_loop() if is_async else None
+    try:
+        for _ in range(warmup):
+            _run_scenario_once(func, loop)
+
+        times: list[float] = []
+        for _ in range(iterations):
+            gc.collect()
+            gc_was_enabled = gc.isenabled()
+            if gc_was_enabled:
+                gc.disable()
+            start = time.perf_counter()
+            try:
+                if profiler is not None:
+                    profiler.enable()
+                _run_scenario_once(func, loop)
+            finally:
+                if profiler is not None:
+                    profiler.disable()
+                if gc_was_enabled:
+                    gc.enable()
+            times.append(time.perf_counter() - start)
+        return times
+    finally:
+        if loop is not None:
+            _close_benchmark_loop(loop)
+
+
+def _summarize_times(times: list[float]) -> dict[str, float | bool]:
+    median_time = statistics.median(times)
+    stddev = statistics.stdev(times) if len(times) > 1 else 0.0
+    quartiles = statistics.quantiles(times, n=4, method="inclusive") if len(times) > 1 else (0.0, 0.0, 0.0)
+    iqr = quartiles[2] - quartiles[0]
+    noise_ratio = stddev / median_time if median_time > 0 else 0.0
+    return {
+        "time": median_time,
+        "stddev": stddev,
+        "iqr": iqr,
+        "noise_ratio": noise_ratio,
+        "noisy": noise_ratio > NOISY_STDDEV_RATIO,
+    }
+
+
+def run_benchmark(
+    driver: str, errors: list[str], *, iterations: int = DEFAULT_BENCH_ITERATIONS, warmup: int = DEFAULT_BENCH_WARMUP
+) -> list[dict[str, Any]]:
     """Run all benchmark scenarios for a driver.
 
     Args:
@@ -214,32 +293,10 @@ def run_benchmark(driver: str, errors: list[str], *, iterations: int = 3, warmup
             is_async = inspect.iscoroutinefunction(func)
 
             try:
-                # Warmup iterations (not timed)
-                for _ in range(warmup):
-                    if is_async:
-                        asyncio.run(func())
-                    else:
-                        func()
-
-                # Timed iterations
-                times: list[float] = []
-                for _ in range(iterations):
-                    start = time.perf_counter()
-                    if is_async:
-                        asyncio.run(func())
-                    else:
-                        func()
-                    times.append(time.perf_counter() - start)
-
-                median_time = statistics.median(times)
+                times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
+                stats = _summarize_times(times)
                 label = SQLSPEC_LABEL if lib == "sqlspec" else lib
-                results.append({
-                    "driver": driver,
-                    "library": label,
-                    "scenario": scenario,
-                    "time": median_time,
-                    "times": times,
-                })
+                results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -247,7 +304,12 @@ def run_benchmark(driver: str, errors: list[str], *, iterations: int = 3, warmup
 
 
 def run_benchmark_profiled(
-    driver: str, errors: list[str], *, iterations: int = 3, warmup: int = 1, profile_scenario: str | None = None
+    driver: str,
+    errors: list[str],
+    *,
+    iterations: int = DEFAULT_BENCH_ITERATIONS,
+    warmup: int = DEFAULT_BENCH_WARMUP,
+    profile_scenario: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run benchmark scenarios with cProfile profiling enabled.
 
@@ -288,34 +350,12 @@ def run_benchmark_profiled(
             prof_name = f"{driver}_{lib}_{scenario}"
 
             try:
-                # Warmup iterations (not timed, not profiled)
-                for _ in range(warmup):
-                    if is_async:
-                        asyncio.run(func())
-                    else:
-                        func()
-
-                # Profiled + timed iterations
                 profiler = cProfile.Profile()
-                times: list[float] = []
-                for _ in range(iterations):
-                    start = time.perf_counter()
-                    profiler.enable()
-                    if is_async:
-                        asyncio.run(func())
-                    else:
-                        func()
-                    profiler.disable()
-                    times.append(time.perf_counter() - start)
-
-                median_time = statistics.median(times)
-                results.append({
-                    "driver": driver,
-                    "library": label,
-                    "scenario": scenario,
-                    "time": median_time,
-                    "times": times,
-                })
+                times = _run_benchmark_iterations(
+                    func, is_async=is_async, iterations=iterations, warmup=warmup, profiler=profiler
+                )
+                summary = _summarize_times(times)
+                results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **summary})
 
                 # Save profile data
                 prof_path = profiles_dir / f"{prof_name}.prof"
@@ -324,10 +364,10 @@ def run_benchmark_profiled(
 
                 # Print top 20 summary
                 console.print(f"\n  [bold cyan]Profile summary: {prof_name}[/bold cyan]")
-                stats = pstats.Stats(profiler)
-                stats.strip_dirs()
-                stats.sort_stats("cumulative")
-                stats.print_stats(20)
+                profile_stats = pstats.Stats(profiler)
+                profile_stats.strip_dirs()
+                profile_stats.sort_stats("cumulative")
+                profile_stats.print_stats(20)
 
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
@@ -336,7 +376,7 @@ def run_benchmark_profiled(
 
 
 def run_extended_benchmark(
-    driver: str, errors: list[str], *, iterations: int = 3, warmup: int = 1
+    driver: str, errors: list[str], *, iterations: int = DEFAULT_BENCH_ITERATIONS, warmup: int = DEFAULT_BENCH_WARMUP
 ) -> list[dict[str, Any]]:
     """Run extended benchmark scenarios for a driver.
 
@@ -367,32 +407,10 @@ def run_extended_benchmark(
             is_async = inspect.iscoroutinefunction(func)
 
             try:
-                # Warmup iterations (not timed)
-                for _ in range(warmup):
-                    if is_async:
-                        asyncio.run(func())
-                    else:
-                        func()
-
-                # Timed iterations
-                times: list[float] = []
-                for _ in range(iterations):
-                    start = time.perf_counter()
-                    if is_async:
-                        asyncio.run(func())
-                    else:
-                        func()
-                    times.append(time.perf_counter() - start)
-
-                median_time = statistics.median(times)
+                times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
+                stats = _summarize_times(times)
                 label = SQLSPEC_LABEL if lib == "sqlspec" else lib
-                results.append({
-                    "driver": driver,
-                    "library": label,
-                    "scenario": scenario,
-                    "time": median_time,
-                    "times": times,
-                })
+                results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -426,6 +444,10 @@ def _write_json_results(
                 "scenario": r["scenario"],
                 "time": r["time"],
                 "times": r.get("times", [r["time"]]),
+                "stddev": r.get("stddev", 0.0),
+                "iqr": r.get("iqr", 0.0),
+                "noise_ratio": r.get("noise_ratio", 0.0),
+                "noisy": r.get("noisy", False),
             }
             for r in results
         ],
@@ -1779,6 +1801,9 @@ def print_benchmark_table(results: list[dict[str, Any]]) -> None:
     table.add_column("Library", style="magenta")
     table.add_column("Scenario", style="green")
     table.add_column("Time (s)", justify="right", style="yellow")
+    table.add_column("Stddev", justify="right")
+    table.add_column("IQR", justify="right")
+    table.add_column("Noise", justify="center")
     table.add_column("% Slower vs Raw", justify="right", style="red")
 
     # Check if any result has multiple iterations
@@ -1788,7 +1813,7 @@ def print_benchmark_table(results: list[dict[str, Any]]) -> None:
     raw_times: dict[tuple[str, str], float] = {}
     for row in results:
         if row["library"] == "raw":
-            raw_times[(row["driver"], row["scenario"])] = row["time"]
+            raw_times[row["driver"], row["scenario"]] = row["time"]
 
     for row in results:
         driver = row["driver"]
@@ -1796,13 +1821,16 @@ def print_benchmark_table(results: list[dict[str, Any]]) -> None:
         lib = row["library"]
         t = row["time"]
         times = row.get("times", [t])
+        stddev = float(row.get("stddev", 0.0))
+        iqr = float(row.get("iqr", 0.0))
+        noise = "yes" if row.get("noisy", False) else ""
         if lib == "raw":
             percent_slower = "---"
         else:
             raw_time = raw_times.get((driver, scenario))
             percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%" if raw_time and raw_time > 0 else "n/a"
         time_str = f"{t:.4f} ({min(times):.4f}-{max(times):.4f})" if multi_iter and len(times) > 1 else f"{t:.4f}"
-        table.add_row(driver, lib, scenario, time_str, percent_slower)
+        table.add_row(driver, lib, scenario, time_str, f"{stddev:.4f}", f"{iqr:.4f}", noise, percent_slower)
     console.print(table)
 
 

@@ -22,7 +22,7 @@ Public API exports:
 
 Example (with extension_config):
     from sqlspec.adapters.asyncpg import AsyncpgConfig
-    from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKStore
+    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
     from sqlspec.extensions.adk import SQLSpecSessionService
 
     config = AsyncpgConfig(

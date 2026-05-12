@@ -261,6 +261,15 @@ class ParameterConverter:
                 param_dict[name] = parameters[i]
         return param_dict
 
+    def _align_mapping_for_named_style(
+        self, parameters: "Mapping[str, Any]", param_info: "list[ParameterInfo]"
+    ) -> "NamedParameterOutput":
+        """Align a mapping with the placeholder names of a named-style target."""
+        expected_names = {param.name or f"param_{param.ordinal}" for param in param_info}
+        if expected_names.issubset(parameters.keys()):
+            return dict(parameters)
+        return self._convert_sequence_to_dict(list(parameters.values()), param_info)
+
     def _extract_param_value_mixed_styles(
         self, param: "ParameterInfo", parameters: "ParameterMapping", param_keys: "list[str]"
     ) -> "tuple[object | None, bool]":
@@ -377,7 +386,6 @@ class ParameterConverter:
             and isinstance(parameters, Sequence)
             and not isinstance(parameters, (str, bytes, bytearray))
             and parameters
-            and isinstance(parameters[0], Mapping)
         ):
             normalized_sets: list[Any] = [
                 self._convert_parameter_format(
@@ -389,8 +397,6 @@ class ParameterConverter:
                     is_many=False,
                     strict_named_parameters=strict_named_parameters,
                 )
-                if isinstance(param_set, Mapping)
-                else param_set
                 for param_set in parameters
             ]
             if preserve_parameter_format and isinstance(parameters, tuple):
@@ -405,7 +411,7 @@ class ParameterConverter:
         }
         if is_named_style:
             if isinstance(parameters, Mapping):
-                return dict(parameters)
+                return self._align_mapping_for_named_style(parameters, param_info)
             if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
                 return self._convert_sequence_to_dict(parameters, param_info)
 

@@ -17,6 +17,16 @@ from sqlspec.utils.sync_tools import CapacityLimiter
 if TYPE_CHECKING:
     from types import TracebackType
 
+__all__ = (
+    "AsyncArrowBatchIterator",
+    "AsyncBytesIterator",
+    "AsyncChunkedBytesIterator",
+    "AsyncObStoreStreamIterator",
+    "AsyncThreadedBytesIterator",
+    "ObjectStoreBase",
+)
+
+
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
 _StopAsync = type("_StopAsync", (_StopAsyncBase,), {})
 storage_limiter = CapacityLimiter(100)
@@ -362,13 +372,3 @@ class ObjectStoreBase(ABC):
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         """Stream Arrow record batches from storage asynchronously."""
         raise NotImplementedError
-
-
-__all__ = (
-    "AsyncArrowBatchIterator",
-    "AsyncBytesIterator",
-    "AsyncChunkedBytesIterator",
-    "AsyncObStoreStreamIterator",
-    "AsyncThreadedBytesIterator",
-    "ObjectStoreBase",
-)

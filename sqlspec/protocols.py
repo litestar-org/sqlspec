@@ -4,7 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from typing import TYPE_CHECKING, Any, Protocol, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, overload, runtime_checkable
 
 from typing_extensions import Self
 
@@ -482,7 +482,7 @@ class ObjectStoreProtocol(Protocol):
     """
 
     protocol: str
-    backend_type: str
+    backend_type: ClassVar[str]
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
@@ -715,6 +715,10 @@ class HasParameterBuilderProtocol(Protocol):
 
     def add_parameter(self, value: Any, name: "str | None" = None) -> tuple[Any, str]:
         """Add a parameter to the builder."""
+        ...
+
+    def generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate a unique public parameter name."""
         ...
 
     def get_expression(self) -> "exp.Expr | None":

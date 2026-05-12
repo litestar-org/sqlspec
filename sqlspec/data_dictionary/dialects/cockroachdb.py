@@ -3,6 +3,9 @@ import re
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 from sqlspec.typing import VersionInfo
 
+__all__ = ("resolve_cockroachdb_json_type",)
+
+
 COCKROACHDB_VERSION_PATTERN = re.compile(r"CockroachDB (?:CCL )?v(\d+)\.(\d+)\.(\d+)")
 
 COCKROACHDB_FEATURE_VERSIONS: "FeatureVersions" = {
@@ -41,3 +44,11 @@ COCKROACHDB_CONFIG = DialectConfig(
 )
 
 register_dialect(COCKROACHDB_CONFIG)
+
+
+def resolve_cockroachdb_json_type(version_info: "VersionInfo | None") -> str:
+    """Resolve the best CockroachDB JSON storage type for a database version."""
+    json_version = COCKROACHDB_CONFIG.get_feature_version("supports_json")
+    if version_info and json_version and version_info >= json_version:
+        return COCKROACHDB_CONFIG.get_optimal_type("json")
+    return "TEXT"

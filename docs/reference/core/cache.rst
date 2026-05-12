@@ -68,8 +68,6 @@ Module-Level Functions
 
 .. autofunction:: get_cache_statistics
 
-.. autofunction:: get_cache_stats
-
 .. autofunction:: log_cache_stats
 
 .. autofunction:: reset_cache_stats
