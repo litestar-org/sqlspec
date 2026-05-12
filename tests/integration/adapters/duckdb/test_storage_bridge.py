@@ -1,4 +1,4 @@
-"""Storage bridge integration tests for DuckDB using MinIO."""
+"""Storage bridge integration tests for DuckDB using RustFS."""
 
 from typing import TYPE_CHECKING
 
@@ -7,11 +7,11 @@ import pytest
 from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
-from tests.integration.adapters._storage_bridge_helpers import register_minio_alias
+from tests.fixtures.rustfs import rustfs_object_size
+from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
 
 if TYPE_CHECKING:  # pragma: no cover
-    from minio import Minio
-    from pytest_databases.docker.minio import MinioService
+    from pytest_databases.docker.rustfs import RustfsService
 
 pytestmark = [
     pytest.mark.xdist_group("storage"),
@@ -20,18 +20,15 @@ pytestmark = [
 ]
 
 
-def test_duckdb_storage_bridge_with_minio(
-    duckdb_basic_session: DuckDBDriver,
-    minio_service: "MinioService",
-    minio_client: "Minio",
-    minio_default_bucket_name: str,
+def test_duckdb_storage_bridge_with_rustfs(
+    duckdb_basic_session: DuckDBDriver, rustfs_service: "RustfsService", rustfs_bucket_name: str
 ) -> None:
     alias = "storage_bridge_duckdb"
     destination_path = "alias://storage_bridge_duckdb/duckdb/export.parquet"
 
     storage_registry.clear()
     try:
-        prefix = register_minio_alias(alias, minio_service, minio_default_bucket_name)
+        prefix = register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name)
 
         duckdb_basic_session.execute("DROP TABLE IF EXISTS storage_bridge_duckdb_source")
         duckdb_basic_session.execute("DROP TABLE IF EXISTS storage_bridge_duckdb_target")
@@ -60,9 +57,7 @@ def test_duckdb_storage_bridge_with_minio(
         assert rows == [(1, "alpha"), (2, "beta"), (3, "gamma")]
 
         object_name = f"{prefix}/duckdb/export.parquet"
-        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
-        object_size = stat.size if stat.size is not None else 0
-        assert object_size > 0
+        assert rustfs_object_size(rustfs_service, rustfs_bucket_name, object_name) > 0
     finally:
         storage_registry.clear()
         duckdb_basic_session.execute("DROP TABLE IF EXISTS storage_bridge_duckdb_source")

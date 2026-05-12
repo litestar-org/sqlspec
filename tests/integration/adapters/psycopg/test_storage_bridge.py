@@ -9,11 +9,11 @@ from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver, Psy
 from sqlspec.core import SQLResult
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
-from tests.integration.adapters._storage_bridge_helpers import register_minio_alias
+from tests.fixtures.rustfs import rustfs_object_size
+from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
 
 if TYPE_CHECKING:  # pragma: no cover
-    from minio import Minio
-    from pytest_databases.docker.minio import MinioService
+    from pytest_databases.docker.rustfs import RustfsService
 
 pytestmark = [
     pytest.mark.xdist_group("postgres"),
@@ -34,11 +34,8 @@ async def psycopg_async_session(psycopg_async_config: PsycopgAsyncConfig) -> Asy
         yield session
 
 
-def test_psycopg_sync_storage_bridge_with_minio(
-    psycopg_sync_config: PsycopgSyncConfig,
-    minio_service: "MinioService",
-    minio_client: "Minio",
-    minio_default_bucket_name: str,
+def test_psycopg_sync_storage_bridge_with_rustfs(
+    psycopg_sync_config: PsycopgSyncConfig, rustfs_service: "RustfsService", rustfs_bucket_name: str
 ) -> None:
     alias = "storage_bridge_psycopg_sync"
     destination = f"alias://{alias}/psycopg_sync/export.parquet"
@@ -47,7 +44,7 @@ def test_psycopg_sync_storage_bridge_with_minio(
 
     storage_registry.clear()
     try:
-        prefix = register_minio_alias(alias, minio_service, minio_default_bucket_name)
+        prefix = register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name)
 
         with psycopg_sync_config.provide_session() as session:
             session.execute_script(f"DROP TABLE IF EXISTS {source_table} CASCADE")
@@ -89,9 +86,7 @@ def test_psycopg_sync_storage_bridge_with_minio(
             ]
 
         object_name = f"{prefix}/psycopg_sync/export.parquet"
-        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
-        object_size = stat.size if stat.size is not None else 0
-        assert object_size > 0
+        assert rustfs_object_size(rustfs_service, rustfs_bucket_name, object_name) > 0
     finally:
         storage_registry.clear()
         with psycopg_sync_config.provide_session() as cleanup:
@@ -101,11 +96,8 @@ def test_psycopg_sync_storage_bridge_with_minio(
 
 
 @pytest.mark.anyio
-async def test_psycopg_async_storage_bridge_with_minio(
-    psycopg_async_session: PsycopgAsyncDriver,
-    minio_service: "MinioService",
-    minio_client: "Minio",
-    minio_default_bucket_name: str,
+async def test_psycopg_async_storage_bridge_with_rustfs(
+    psycopg_async_session: PsycopgAsyncDriver, rustfs_service: "RustfsService", rustfs_bucket_name: str
 ) -> None:
     alias = "storage_bridge_psycopg_async"
     destination = f"alias://{alias}/psycopg_async/export.parquet"
@@ -114,7 +106,7 @@ async def test_psycopg_async_storage_bridge_with_minio(
 
     storage_registry.clear()
     try:
-        prefix = register_minio_alias(alias, minio_service, minio_default_bucket_name)
+        prefix = register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name)
 
         await psycopg_async_session.execute_script(f"DROP TABLE IF EXISTS {source_table} CASCADE")
         await psycopg_async_session.execute_script(f"DROP TABLE IF EXISTS {target_table} CASCADE")
@@ -146,9 +138,7 @@ async def test_psycopg_async_storage_bridge_with_minio(
         assert rows == [{"id": 1, "label": "north"}, {"id": 2, "label": "south"}, {"id": 3, "label": "east"}]
 
         object_name = f"{prefix}/psycopg_async/export.parquet"
-        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
-        object_size = stat.size if stat.size is not None else 0
-        assert object_size > 0
+        assert rustfs_object_size(rustfs_service, rustfs_bucket_name, object_name) > 0
     finally:
         storage_registry.clear()
         await psycopg_async_session.execute_script(f"DROP TABLE IF EXISTS {source_table} CASCADE")

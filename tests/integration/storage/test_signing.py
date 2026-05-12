@@ -1,6 +1,6 @@
 """Integration tests for storage backend URL signing with real cloud services.
 
-Tests URL signing functionality against S3-compatible storage (MinIO) using
+Tests URL signing functionality against S3-compatible storage (RustFS) using
 pytest-databases fixtures. These tests verify that actual signed URLs are
 generated and can be used for download/upload operations.
 """
@@ -8,12 +8,12 @@ generated and can be used for download/upload operations.
 from typing import TYPE_CHECKING
 
 import pytest
-from minio import Minio
 
 from sqlspec.typing import OBSTORE_INSTALLED
+from tests.fixtures.rustfs import rustfs_obstore_kwargs
 
 if TYPE_CHECKING:
-    from pytest_databases.docker.minio import MinioService
+    from pytest_databases.docker.rustfs import RustfsService
 
     from sqlspec.protocols import ObjectStoreProtocol
 
@@ -22,22 +22,12 @@ TEST_TEXT_CONTENT = "Hello, SQLSpec URL signing test!"
 
 
 @pytest.fixture
-def obstore_s3_backend(
-    minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
-) -> "ObjectStoreProtocol":
+def obstore_s3_backend(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> "ObjectStoreProtocol":
     """Set up ObStore S3 backend for signing tests."""
-    _ = minio_client
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
-    s3_uri = f"s3://{minio_default_bucket_name}"
-    return ObStoreBackend(
-        s3_uri,
-        aws_endpoint=f"http://{minio_service.endpoint}",
-        aws_access_key_id=minio_service.access_key,
-        aws_secret_access_key=minio_service.secret_key,
-        aws_virtual_hosted_style_request=False,
-        client_options={"allow_http": True},
-    )
+    s3_uri = f"s3://{rustfs_bucket_name}"
+    return ObStoreBackend(s3_uri, **rustfs_obstore_kwargs(rustfs_service))
 
 
 @pytest.mark.xdist_group("storage")

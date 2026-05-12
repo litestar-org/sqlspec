@@ -7,11 +7,11 @@ import pytest
 from sqlspec.adapters.psqlpy import PsqlpyDriver
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
-from tests.integration.adapters._storage_bridge_helpers import register_minio_alias
+from tests.fixtures.rustfs import rustfs_object_size
+from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
 
 if TYPE_CHECKING:  # pragma: no cover
-    from minio import Minio
-    from pytest_databases.docker.minio import MinioService
+    from pytest_databases.docker.rustfs import RustfsService
 
 pytestmark = [
     pytest.mark.xdist_group("postgres"),
@@ -21,8 +21,8 @@ pytestmark = [
 
 
 @pytest.mark.anyio
-async def test_psqlpy_storage_bridge_with_minio(
-    psqlpy_driver: PsqlpyDriver, minio_service: "MinioService", minio_client: "Minio", minio_default_bucket_name: str
+async def test_psqlpy_storage_bridge_with_rustfs(
+    psqlpy_driver: PsqlpyDriver, rustfs_service: "RustfsService", rustfs_bucket_name: str
 ) -> None:
     alias = "storage_bridge_psqlpy"
     destination = f"alias://{alias}/psqlpy/export.parquet"
@@ -31,7 +31,7 @@ async def test_psqlpy_storage_bridge_with_minio(
 
     storage_registry.clear()
     try:
-        prefix = register_minio_alias(alias, minio_service, minio_default_bucket_name)
+        prefix = register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name)
 
         await psqlpy_driver.execute(f"DROP TABLE IF EXISTS {source_table}")
         await psqlpy_driver.execute(f"DROP TABLE IF EXISTS {target_table}")
@@ -54,9 +54,7 @@ async def test_psqlpy_storage_bridge_with_minio(
         assert rows == [{"id": 1, "label": "delta"}, {"id": 2, "label": "omega"}, {"id": 3, "label": "zeta"}]
 
         object_name = f"{prefix}/psqlpy/export.parquet"
-        stat = minio_client.stat_object(bucket_name=minio_default_bucket_name, object_name=object_name)
-        object_size = stat.size if stat.size is not None else 0
-        assert object_size > 0
+        assert rustfs_object_size(rustfs_service, rustfs_bucket_name, object_name) > 0
     finally:
         storage_registry.clear()
         await psqlpy_driver.execute(f"DROP TABLE IF EXISTS {source_table}")
