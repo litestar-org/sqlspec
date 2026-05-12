@@ -59,9 +59,9 @@ note the following schema changes:
   Individual event columns (``content``, ``actions``, ``branch``, etc.) have
   been replaced by indexed scalar columns (``invocation_id``, ``author``,
   ``timestamp``) plus ``event_json``.
-- **Artifact table**: ``adk_artifact_versions`` is the metadata-table contract
-  used by artifact-service deployments that provide a concrete metadata store.
-- **BigQuery**: Removed. Migrate to Spanner for Google-managed operational ADK
-  storage, or to a transactional OLTP backend such as PostgreSQL.
+- **Artifact table**: New table (``adk_artifact_versions``) for artifact
+  metadata. Create this table when enabling the artifact service.
+- **BigQuery**: Removed. Migrate to Spanner, PostgreSQL, or any other
+  supported backend.
 
 See :doc:`/usage/migrations` for the full workflow and commands.
