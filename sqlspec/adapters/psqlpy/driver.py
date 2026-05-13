@@ -303,9 +303,17 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                     logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
                     insert_sql = build_insert_statement(table, columns)
                     formatted_records = coerce_records_for_execute_many(records)
-                    insert_operation = cursor.execute_many(insert_sql, formatted_records)
-                    if inspect.isawaitable(insert_operation):
-                        await insert_operation
+                    try:
+                        insert_operation = cursor.execute_many(insert_sql, formatted_records)
+                        if inspect.isawaitable(insert_operation):
+                            await insert_operation
+                    except (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error) as fallback_exc:
+                        if "PyJSON must be dict, list, or tuple" not in str(fallback_exc):
+                            raise
+                        formatted_records = coerce_records_for_execute_many(records, parse_json_text=True)
+                        insert_operation = cursor.execute_many(insert_sql, formatted_records)
+                        if inspect.isawaitable(insert_operation):
+                            await insert_operation
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 

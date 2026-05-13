@@ -45,6 +45,12 @@ v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
 
 **Fixed:**
 
+* AsyncPG and CockroachDB AsyncPG connections now register binary ``json`` and
+  ``jsonb`` codecs by default. ``load_from_arrow()`` can bulk load Arrow tables
+  into PostgreSQL ``JSON`` / ``JSONB`` columns without asyncpg rejecting binary
+  ``jsonb`` payloads. (`#452
+  <https://github.com/litestar-org/sqlspec/issues/452>`_)
+
 * Missing named SQL statements now raise ``SQLStatementNotFoundError``, a
   ``SQLFileNotFoundError`` subclass with structured lookup context and bounded
   messages that report the loaded statement count instead of dumping available

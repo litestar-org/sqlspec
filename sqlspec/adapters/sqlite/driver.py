@@ -1,7 +1,7 @@
 """SQLite driver implementation."""
 
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
@@ -458,9 +458,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
+            prepared_records = (
+                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                if self._arrow_table_needs_parameter_preparation(arrow_table)
+                else records
+            )
             try:
                 with self.with_cursor(self.connection) as cursor:
-                    cursor.executemany(insert_sql, records)
+                    cursor.executemany(insert_sql, cast("Any", prepared_records))
             except sqlite3.Error as exc:
                 raise create_mapped_exception(exc) from exc
 

@@ -1,11 +1,22 @@
 from unittest.mock import MagicMock, Mock
 
+import pyarrow as pa
 import pytest
 from google.cloud.spanner_v1 import Transaction
 from google.cloud.spanner_v1.streamed import StreamedResultSet
 
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.exceptions import SQLConversionError
+
+CAPABILITIES = {
+    "arrow_export_enabled": True,
+    "arrow_import_enabled": True,
+    "parquet_export_enabled": True,
+    "parquet_import_enabled": True,
+    "requires_staging_for_load": False,
+    "staging_protocols": [],
+    "partition_strategies": ["fixed"],
+}
 
 
 @pytest.fixture
@@ -105,3 +116,28 @@ def test_execute_many_caches_inferred_param_types(mock_transaction: MagicMock, m
 
     assert result.rowcount_override == 2
     assert infer_call_count == 1
+
+
+def test_load_from_arrow_caches_inferred_param_types(
+    mock_transaction: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    driver = SpannerSyncDriver(mock_transaction, driver_features={"storage_capabilities": CAPABILITIES})
+
+    infer_call_count = 0
+
+    def _mock_infer_param_types(params: dict[str, object] | list[object] | tuple[object, ...] | None) -> dict[str, str]:
+        nonlocal infer_call_count
+        infer_call_count += 1
+        if not isinstance(params, dict):
+            return {}
+        return dict.fromkeys(params, "TYPE")
+
+    monkeypatch.setattr("sqlspec.adapters.spanner.driver.Transaction", type(mock_transaction))
+    monkeypatch.setattr("sqlspec.adapters.spanner.driver.infer_param_types", _mock_infer_param_types)
+    arrow_table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
+
+    result = driver.load_from_arrow("users", arrow_table)
+
+    assert result.telemetry["rows_processed"] == 2
+    assert infer_call_count == 1
+    mock_transaction.batch_update.assert_called_once()

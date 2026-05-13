@@ -313,10 +313,20 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         if records:
             insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('@p' + str(i) for i in range(len(columns)))})"
             batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
+            param_types_cache: dict[tuple[tuple[str, type[Any]], ...], dict[str, Any]] = {}
+            empty_param_types: dict[str, Any] = {}
             for record in records:
                 params = {f"p{i}": val for i, val in enumerate(record)}
                 coerced = self._coerce_params(params)
-                batch_args.append((insert_sql, coerced, self._infer_param_types(coerced)))
+                if not coerced:
+                    batch_args.append((insert_sql, {}, empty_param_types))
+                    continue
+                signature = build_param_type_signature(coerced)
+                param_types = param_types_cache.get(signature)
+                if param_types is None:
+                    param_types = self._infer_param_types(coerced)
+                    param_types_cache[signature] = param_types
+                batch_args.append((insert_sql, coerced, param_types))
 
             conn = self.connection
             if not isinstance(conn, Transaction):

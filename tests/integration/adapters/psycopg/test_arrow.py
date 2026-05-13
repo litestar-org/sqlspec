@@ -1,9 +1,14 @@
 """Integration tests for psycopg Arrow support."""
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 from sqlspec.typing import PYARROW_INSTALLED
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.psycopg import PsycopgSyncConfig
 
 pytestmark = [
     pytest.mark.xdist_group("postgres"),
@@ -198,3 +203,49 @@ async def test_select_to_arrow_postgres_array(psycopg_config: PsycopgAsyncConfig
         df = result.to_pandas()
         assert len(df) == 2
         assert isinstance(df["tags"].iloc[0], (list, object))
+
+
+async def test_psycopg_async_load_from_arrow_jsonb(psycopg_config: PsycopgAsyncConfig) -> None:
+    """Test async Arrow import into PostgreSQL JSONB columns."""
+    import pyarrow as pa
+
+    async with psycopg_config.provide_session() as session:
+        table_name = "arrow_jsonb_ingest_psycopg_async"
+        await session.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+        await session.execute(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY, payload JSONB NOT NULL)")
+        try:
+            arrow_table = pa.table({"id": [1, 2], "payload": ['{"name":"alpha"}', '{"name":"beta"}']})
+
+            job = await session.load_from_arrow(table_name, arrow_table)
+
+            result = await session.execute(f"SELECT id, payload FROM {table_name} ORDER BY id")
+            assert result.get_data() == [
+                {"id": 1, "payload": {"name": "alpha"}},
+                {"id": 2, "payload": {"name": "beta"}},
+            ]
+            assert job.telemetry["rows_processed"] == 2
+        finally:
+            await session.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+
+
+def test_psycopg_sync_load_from_arrow_jsonb(psycopg_sync_config: "PsycopgSyncConfig") -> None:
+    """Test sync Arrow import into PostgreSQL JSONB columns."""
+    import pyarrow as pa
+
+    with psycopg_sync_config.provide_session() as session:
+        table_name = "arrow_jsonb_ingest_psycopg_sync"
+        session.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+        session.execute(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY, payload JSONB NOT NULL)")
+        try:
+            arrow_table = pa.table({"id": [1, 2], "payload": ['{"name":"alpha"}', '{"name":"beta"}']})
+
+            job = session.load_from_arrow(table_name, arrow_table)
+
+            result = session.execute(f"SELECT id, payload FROM {table_name} ORDER BY id")
+            assert result.get_data() == [
+                {"id": 1, "payload": {"name": "alpha"}},
+                {"id": 2, "payload": {"name": "beta"}},
+            ]
+            assert job.telemetry["rows_processed"] == 2
+        finally:
+            session.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")

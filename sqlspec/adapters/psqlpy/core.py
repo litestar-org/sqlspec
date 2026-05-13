@@ -31,7 +31,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
 
@@ -653,5 +653,42 @@ def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> 
     return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
 
 
-def coerce_records_for_execute_many(records: "list[tuple[Any, ...]]") -> "list[list[Any]]":
-    return format_execute_many_parameters(records, coerce_numeric=True)
+def _coerce_json_text_for_execute_many(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.lstrip()
+    if not stripped or stripped[0] not in "{[":
+        return value
+    try:
+        decoded = from_json(value)
+    except Exception:
+        return value
+    return decoded if isinstance(decoded, (dict, list, tuple)) else value
+
+
+def _coerce_json_text_rows(rows: "list[list[Any]]") -> "list[list[Any]]":
+    coerced_rows: list[list[Any]] | None = None
+    for row_index, row in enumerate(rows):
+        coerced_row: list[Any] | None = None
+        for value_index, value in enumerate(row):
+            coerced_value = _coerce_json_text_for_execute_many(value)
+            if coerced_row is None:
+                if coerced_value is value:
+                    continue
+                coerced_row = list(row)
+            coerced_row[value_index] = coerced_value
+        if coerced_row is None:
+            if coerced_rows is not None:
+                coerced_rows.append(row)
+            continue
+        if coerced_rows is None:
+            coerced_rows = list(rows[:row_index])
+        coerced_rows.append(coerced_row)
+    return rows if coerced_rows is None else coerced_rows
+
+
+def coerce_records_for_execute_many(
+    records: "list[tuple[Any, ...]]", *, parse_json_text: bool = False
+) -> "list[list[Any]]":
+    formatted = format_execute_many_parameters(records, coerce_numeric=True)
+    return _coerce_json_text_rows(formatted) if parse_json_text else formatted

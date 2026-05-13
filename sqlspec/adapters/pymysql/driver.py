@@ -206,9 +206,14 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
+            prepared_records = (
+                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                if self._arrow_table_needs_parameter_preparation(arrow_table)
+                else records
+            )
             exc_handler = self.handle_database_exceptions()
             with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.executemany(insert_sql, records)
+                cursor.executemany(insert_sql, cast("Any", prepared_records))
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
