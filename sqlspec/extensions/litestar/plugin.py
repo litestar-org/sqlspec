@@ -39,7 +39,7 @@ from sqlspec.extensions.litestar.handlers import (
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook, numpy_array_predicate
+from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -76,6 +76,7 @@ TRACE_CONTEXT_FALLBACK_HEADERS: tuple[str, ...] = (
     "x-client-trace-id",
 )
 CORRELATION_STATE_KEY = "sqlspec_correlation_id"
+_LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
 
 __all__ = (
     "CORRELATION_STATE_KEY",
@@ -142,6 +143,50 @@ class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
         )
 
 
+class _NumpySignatureNamespace:
+    """Proxy ``numpy`` module namespace that maps ``ndarray`` to SQLSpec's decoder-safe subclass."""
+
+    __slots__ = ("_numpy", "ndarray")
+
+    def __init__(self, numpy_module: Any, ndarray_type: type[Any]) -> None:
+        self._numpy = numpy_module
+        self.ndarray = ndarray_type
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._numpy, name)
+
+
+def _get_litestar_numpy_array_type() -> type[Any] | None:
+    """Return a mutable ndarray subclass Litestar can attach a decoder to."""
+    if not NUMPY_INSTALLED:
+        return None
+
+    global _LITESTAR_NUMPY_ARRAY_TYPE
+    if _LITESTAR_NUMPY_ARRAY_TYPE is None:
+        import numpy as np
+
+        class SQLSpecNumpyArray(np.ndarray):
+            pass
+
+        _LITESTAR_NUMPY_ARRAY_TYPE = SQLSpecNumpyArray
+    return _LITESTAR_NUMPY_ARRAY_TYPE
+
+
+def _litestar_numpy_array_predicate(target_type: Any) -> bool:
+    ndarray_type = _get_litestar_numpy_array_type()
+    return ndarray_type is not None and target_type is ndarray_type
+
+
+def _litestar_numpy_array_dec_hook(target_type: type[Any], value: Any) -> Any:
+    decoded = numpy_array_dec_hook(target_type, value)
+    if NUMPY_INSTALLED:
+        import numpy as np
+
+        if isinstance(decoded, np.ndarray) and isinstance(target_type, type) and not isinstance(decoded, target_type):
+            return decoded.view(target_type)
+    return decoded
+
+
 def _normalize_header_list(headers: Any) -> list[str]:
     if headers is None:
         return []
@@ -188,7 +233,7 @@ def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callab
     """
     decoders: list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]] = []
     if NUMPY_INSTALLED:
-        decoders.append((numpy_array_predicate, numpy_array_dec_hook))
+        decoders.append((_litestar_numpy_array_predicate, _litestar_numpy_array_dec_hook))
     with suppress(ImportError):
         import uuid_utils  # pyright: ignore[reportMissingImports]
 
@@ -480,6 +525,16 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)
+
+        if NUMPY_INSTALLED and (ndarray_type := _get_litestar_numpy_array_type()) is not None:
+            import numpy as np
+
+            numpy_namespace = _NumpySignatureNamespace(np, ndarray_type)
+            app_config.signature_namespace.update({
+                "np": numpy_namespace,
+                "numpy": numpy_namespace,
+                "ndarray": ndarray_type,
+            })
 
         if not any(isinstance(p, _OffsetPaginationSchemaPlugin) for p in app_config.plugins):
             app_config.plugins.append(_OffsetPaginationSchemaPlugin())
