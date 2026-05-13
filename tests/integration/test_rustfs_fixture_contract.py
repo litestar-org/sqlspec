@@ -12,10 +12,7 @@ LIVE_TEST_PATHS = (
     INTEGRATION_CONFTEST,
     PROJECT_ROOT / "tests" / "integration" / "storage",
     PROJECT_ROOT / "tests" / "integration" / "adapters" / "_storage_bridge_helpers.py",
-    PROJECT_ROOT / "tests" / "integration" / "adapters" / "asyncpg" / "test_storage_bridge.py",
-    PROJECT_ROOT / "tests" / "integration" / "adapters" / "duckdb" / "test_storage_bridge.py",
-    PROJECT_ROOT / "tests" / "integration" / "adapters" / "psqlpy" / "test_storage_bridge.py",
-    PROJECT_ROOT / "tests" / "integration" / "adapters" / "psycopg" / "test_storage_bridge.py",
+    PROJECT_ROOT / "tests" / "integration" / "adapters" / "contracts" / "test_storage_bridge.py",
 )
 STALE_MINIO_MARKERS = (
     "from minio import",
