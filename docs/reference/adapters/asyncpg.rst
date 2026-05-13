@@ -12,6 +12,16 @@ Configuration
    :members:
    :show-inheritance:
 
+JSON and JSONB Codecs
+=====================
+
+AsyncPG connections register binary ``json`` and ``jsonb`` codecs by default.
+This lets regular statement execution and ``load_from_arrow()`` pass Python
+``dict`` and ``list`` values into PostgreSQL ``JSON`` / ``JSONB`` columns while
+preserving asyncpg's binary COPY protocol expectations for ``jsonb`` payloads.
+Set ``driver_features={"enable_json_codecs": False}`` when an application needs
+to manage asyncpg JSON codecs manually.
+
 .. autoclass:: sqlspec.adapters.asyncpg.config.AsyncpgPoolConfig
    :members:
    :show-inheritance:

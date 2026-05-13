@@ -36,6 +36,7 @@ from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
 from sqlspec.driver._storage_helpers import (
     CAPABILITY_HINTS,
+    arrow_table_needs_parameter_preparation,
     arrow_table_to_rows,
     attach_partition_telemetry,
     build_ingest_telemetry,
@@ -2267,6 +2268,11 @@ class CommonDriverAttributesMixin:
     ) -> "tuple[list[str], list[tuple[Any, ...]]]":
         """Convert Arrow table to column names and row tuples."""
         return arrow_table_to_rows(table, columns)
+
+    @staticmethod
+    def _arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
+        """Return whether Arrow rows may contain nested values needing preparation."""
+        return arrow_table_needs_parameter_preparation(table)
 
     @staticmethod
     def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":

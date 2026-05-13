@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.storage import StorageBridgeJob, StorageTelemetry, create_storage_bridge_job
+from sqlspec.utils.arrow_helpers import (
+    arrow_table_needs_parameter_preparation as _arrow_table_needs_parameter_preparation,
+)
 from sqlspec.utils.arrow_helpers import arrow_table_to_rows as _arrow_table_to_rows_impl
 from sqlspec.utils.arrow_helpers import build_ingest_telemetry as _build_ingest_telemetry_impl
 from sqlspec.utils.arrow_helpers import coerce_arrow_table as _coerce_arrow_table_impl
@@ -20,6 +23,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "CAPABILITY_HINTS",
+    "arrow_table_needs_parameter_preparation",
     "arrow_table_to_rows",
     "attach_partition_telemetry",
     "build_ingest_telemetry",
@@ -87,6 +91,11 @@ def arrow_table_to_rows(
 
     """
     return _arrow_table_to_rows_impl(table, columns)
+
+
+def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
+    """Return whether Arrow rows may contain nested values needing preparation."""
+    return _arrow_table_needs_parameter_preparation(table)
 
 
 def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":

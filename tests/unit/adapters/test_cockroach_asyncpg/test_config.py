@@ -6,6 +6,8 @@ Tests cover:
 - Connection config normalization
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from sqlspec.adapters.cockroach_asyncpg import (
@@ -81,6 +83,49 @@ class TestCockroachAsyncpgConfig:
         """Bind key should be stored for multi-database setups."""
         config = CockroachAsyncpgConfig(bind_key="cockroach_primary")
         assert config.bind_key == "cockroach_primary"
+
+    async def test_init_connection_registers_json_codecs_before_user_hook(self) -> None:
+        """Connection init should install JSON codecs before user callbacks."""
+        events: list[str] = []
+
+        async def user_hook(connection: object) -> None:
+            events.append("user")
+
+        async def register_json(connection: object, **_: object) -> None:
+            events.append("json")
+
+        config = CockroachAsyncpgConfig(driver_features={"on_connection_create": user_hook})
+        connection = AsyncMock()
+
+        with patch(
+            "sqlspec.adapters.cockroach_asyncpg.config.register_json_codecs",
+            new=AsyncMock(side_effect=register_json),
+            create=True,
+        ) as register_mock:
+            await config._init_connection(connection)
+
+        register_mock.assert_awaited_once()
+        assert events == ["json", "user"]
+
+    async def test_init_connection_skips_json_codecs_when_disabled(self) -> None:
+        """Disabling JSON codecs should preserve the user callback."""
+        events: list[str] = []
+
+        async def user_hook(connection: object) -> None:
+            events.append("user")
+
+        config = CockroachAsyncpgConfig(
+            driver_features={"enable_json_codecs": False, "on_connection_create": user_hook}
+        )
+        connection = AsyncMock()
+
+        with patch(
+            "sqlspec.adapters.cockroach_asyncpg.config.register_json_codecs", new_callable=AsyncMock, create=True
+        ) as register_mock:
+            await config._init_connection(connection)
+
+        register_mock.assert_not_awaited()
+        assert events == ["user"]
 
 
 @pytest.mark.xdist_group("cockroachdb")

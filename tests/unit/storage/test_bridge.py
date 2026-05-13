@@ -10,6 +10,9 @@ import duckdb
 import pyarrow as pa
 import pytest
 
+import sqlspec.utils.arrow_helpers as arrow_helpers
+from sqlspec.adapters.aiomysql import AiomysqlDriver
+from sqlspec.adapters.aiomysql import default_statement_config as aiomysql_statement_config
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.adapters.aiosqlite import default_statement_config as aiosqlite_statement_config
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
@@ -18,8 +21,12 @@ from sqlspec.adapters.asyncpg import AsyncpgConnection, AsyncpgDriver
 from sqlspec.adapters.asyncpg import default_statement_config as asyncpg_statement_config
 from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.adapters.duckdb import default_statement_config as duckdb_statement_config
+from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
+from sqlspec.adapters.mysqlconnector import default_statement_config as mysqlconnector_statement_config
 from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver
 from sqlspec.adapters.psqlpy import default_statement_config as psqlpy_statement_config
+from sqlspec.adapters.pymysql import PyMysqlDriver
+from sqlspec.adapters.pymysql import default_statement_config as pymysql_statement_config
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
@@ -91,6 +98,43 @@ class DummyAsyncmyConnection:
 
     def cursor(self) -> DummyAsyncmyCursorImpl:
         return DummyAsyncmyCursorImpl(self.operations)
+
+
+class DummyAwaitableCursorConnection(DummyAsyncmyConnection):
+    async def cursor(self, *_args: Any, **_kwargs: Any) -> DummyAsyncmyCursorImpl:  # type: ignore[override]
+        return DummyAsyncmyCursorImpl(self.operations)
+
+
+class DummySyncCursorImpl:
+    def __init__(self, operations: "list[tuple[str, Any, Any | None]]") -> None:
+        self.operations = operations
+
+    def executemany(self, sql: str, params: Any) -> None:
+        self.operations.append(("executemany", sql, params))
+
+    def execute(self, sql: str, params: Any | None = None) -> None:
+        self.operations.append(("execute", sql, params))
+
+    def close(self) -> None:
+        return None
+
+
+class DummySyncConnection:
+    def __init__(self) -> None:
+        self.operations: list[tuple[str, Any, Any | None]] = []
+
+    def cursor(self) -> DummySyncCursorImpl:
+        return DummySyncCursorImpl(self.operations)
+
+
+class TrackingAsyncmyDriver(AsyncmyDriver):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.prepare_calls = 0
+
+    def prepare_driver_parameters(self, *args: Any, **kwargs: Any) -> Any:
+        self.prepare_calls += 1
+        return super().prepare_driver_parameters(*args, **kwargs)
 
 
 class _CountingStorageBackend:
@@ -248,6 +292,24 @@ async def test_psqlpy_load_from_arrow_overwrite() -> None:
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
 
+async def test_psqlpy_load_from_arrow_serializes_nested_json_values() -> None:
+    arrow_table = pa.table({"id": [1], "payload": pa.array([{"name": "alpha"}]), "tags": pa.array([["north", "east"]])})
+    dummy_connection = DummyPsqlpyConnection()
+    driver = PsqlpyDriver(
+        connection=cast(PsqlpyConnection, dummy_connection),
+        statement_config=asyncpg_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+
+    await driver.load_from_arrow("analytics.events", arrow_table)
+
+    payload = dummy_connection.copy_calls[0]["records"]
+    if isinstance(payload, bytes):
+        assert payload == b'1\t{"name":"alpha"}\t["north","east"]\n'
+    else:
+        assert payload == [(1, {"name": "alpha"}, ["north", "east"])]
+
+
 async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     arrow_table = pa.table({"id": [1, 2], "name": ["north", "south"]})
     dummy_connection = DummyPsqlpyConnection()
@@ -291,6 +353,31 @@ async def test_aiosqlite_load_from_arrow_overwrite() -> None:
         assert rows == [(1, "alpha"), (2, "beta")]  # type: ignore[comparison-overlap]
         assert job.telemetry["destination"] == "ingest"
         assert job.telemetry["rows_processed"] == arrow_table.num_rows
+    finally:
+        await connection.close()
+
+
+async def test_aiosqlite_load_from_arrow_serializes_nested_json_values() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        await connection.execute("CREATE TABLE events (id INTEGER, payload TEXT, tags TEXT)")
+        await connection.commit()
+        driver = AiosqliteDriver(
+            connection=connection,
+            statement_config=aiosqlite_statement_config,
+            driver_features={"storage_capabilities": CAPABILITIES},
+        )
+        arrow_table = pa.table({
+            "id": [1],
+            "payload": pa.array([{"name": "alpha"}]),
+            "tags": pa.array([["north", "east"]]),
+        })
+
+        await driver.load_from_arrow("events", arrow_table)
+
+        async with connection.execute("SELECT id, payload, tags FROM events") as cursor:
+            rows = await cursor.fetchall()
+        assert rows == [(1, '{"name":"alpha"}', '["north","east"]')]  # type: ignore[comparison-overlap]
     finally:
         await connection.close()
 
@@ -346,6 +433,29 @@ def test_sqlite_load_from_arrow_overwrite() -> None:
         connection.close()
 
 
+def test_sqlite_load_from_arrow_serializes_nested_json_values() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE events (id INTEGER, payload TEXT, tags TEXT)")
+        driver = SqliteDriver(
+            connection=connection,
+            statement_config=sqlite_statement_config,
+            driver_features={"storage_capabilities": CAPABILITIES},
+        )
+        arrow_table = pa.table({
+            "id": [1],
+            "payload": pa.array([{"name": "alpha"}]),
+            "tags": pa.array([["north", "east"]]),
+        })
+
+        driver.load_from_arrow("events", arrow_table)
+
+        rows = connection.execute("SELECT id, payload, tags FROM events").fetchall()
+        assert rows == [(1, '{"name":"alpha"}', '["north","east"]')]
+    finally:
+        connection.close()
+
+
 def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = sqlite3.connect(":memory:")
     try:
@@ -387,6 +497,104 @@ async def test_asyncmy_load_from_arrow_overwrite() -> None:
     assert connection.operations[0][1].startswith("TRUNCATE TABLE `analytics`.`scores`")
     assert connection.operations[1][0] == "executemany"
     assert job.telemetry["destination"] == "analytics.scores"
+
+
+async def test_asyncmy_load_from_arrow_serializes_nested_json_values() -> None:
+    connection = DummyAsyncmyConnection()
+    driver = TrackingAsyncmyDriver(
+        connection=cast(AsyncmyConnection, connection),
+        statement_config=asyncmy_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+    arrow_table = pa.table({"id": [1], "payload": pa.array([{"name": "alpha"}]), "tags": pa.array([["north", "east"]])})
+
+    await driver.load_from_arrow("analytics.events", arrow_table)
+
+    assert connection.operations[0][0] == "executemany"
+    assert connection.operations[0][2] == [(1, '{"name":"alpha"}', '["north","east"]')]
+    assert driver.prepare_calls == 1
+
+
+async def test_asyncmy_load_from_arrow_skips_preparation_for_scalar_columns() -> None:
+    connection = DummyAsyncmyConnection()
+    driver = TrackingAsyncmyDriver(
+        connection=cast(AsyncmyConnection, connection),
+        statement_config=asyncmy_statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+    arrow_table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
+
+    await driver.load_from_arrow("analytics.events", arrow_table)
+
+    assert connection.operations[0][0] == "executemany"
+    assert connection.operations[0][2] == [(1, "alpha"), (2, "beta")]
+    assert driver.prepare_calls == 0
+
+
+def test_arrow_parameter_preparation_decision_is_cached_by_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    arrow_helpers._arrow_schema_needs_parameter_preparation.cache_clear()
+    calls = 0
+    original = arrow_helpers._arrow_type_needs_parameter_preparation
+
+    def _spy(data_type: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(data_type)
+
+    monkeypatch.setattr(arrow_helpers, "_arrow_type_needs_parameter_preparation", _spy)
+    schema = pa.schema([("id", pa.int64()), ("payload", pa.struct([("name", pa.string())]))])
+    first_table = pa.Table.from_pylist([{"id": 1, "payload": {"name": "alpha"}}], schema=schema)
+    second_table = pa.Table.from_pylist([{"id": 2, "payload": {"name": "beta"}}], schema=schema)
+
+    try:
+        assert arrow_helpers.arrow_table_needs_parameter_preparation(first_table) is True
+        assert arrow_helpers.arrow_table_needs_parameter_preparation(second_table) is True
+        assert calls == 2
+        assert arrow_helpers._arrow_schema_needs_parameter_preparation.cache_info().hits == 1
+    finally:
+        arrow_helpers._arrow_schema_needs_parameter_preparation.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("driver_type", "statement_config"),
+    [(AiomysqlDriver, aiomysql_statement_config), (MysqlConnectorAsyncDriver, mysqlconnector_statement_config)],
+)
+async def test_async_mysql_load_from_arrow_serializes_nested_json_values(
+    driver_type: type[AiomysqlDriver | MysqlConnectorAsyncDriver], statement_config: Any
+) -> None:
+    connection = DummyAwaitableCursorConnection()
+    driver = driver_type(
+        connection=cast(Any, connection),
+        statement_config=statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+    arrow_table = pa.table({"id": [1], "payload": pa.array([{"name": "alpha"}]), "tags": pa.array([["north", "east"]])})
+
+    await driver.load_from_arrow("analytics.events", arrow_table)
+
+    assert connection.operations[0][0] == "executemany"
+    assert connection.operations[0][2] == [(1, '{"name":"alpha"}', '["north","east"]')]
+
+
+@pytest.mark.parametrize(
+    ("driver_type", "statement_config"),
+    [(PyMysqlDriver, pymysql_statement_config), (MysqlConnectorSyncDriver, mysqlconnector_statement_config)],
+)
+def test_sync_mysql_load_from_arrow_serializes_nested_json_values(
+    driver_type: type[PyMysqlDriver | MysqlConnectorSyncDriver], statement_config: Any
+) -> None:
+    connection = DummySyncConnection()
+    driver = driver_type(
+        connection=cast(Any, connection),
+        statement_config=statement_config,
+        driver_features={"storage_capabilities": CAPABILITIES},
+    )
+    arrow_table = pa.table({"id": [1], "payload": pa.array([{"name": "alpha"}]), "tags": pa.array([["north", "east"]])})
+
+    driver.load_from_arrow("analytics.events", arrow_table)
+
+    assert connection.operations[0][0] == "executemany"
+    assert connection.operations[0][2] == [(1, '{"name":"alpha"}', '["north","east"]')]
 
 
 async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch) -> None:

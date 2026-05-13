@@ -204,3 +204,43 @@ async def test_select_to_arrow_postgres_array(asyncpg_async_driver: AsyncpgDrive
     assert isinstance(df["tags"].iloc[0], (list, object))
 
     await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_array_test CASCADE")
+
+
+async def test_load_from_arrow_json_and_jsonb(asyncpg_async_driver: AsyncpgDriver) -> None:
+    """Test Arrow import into PostgreSQL JSON and JSONB columns."""
+    import pyarrow as pa
+
+    table_name = "arrow_json_ingest_asyncpg"
+    await asyncpg_async_driver.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+    await asyncpg_async_driver.execute(
+        f"""
+        CREATE TABLE {table_name} (
+            id INTEGER PRIMARY KEY,
+            payload_json JSON NOT NULL,
+            payload_jsonb JSONB NOT NULL
+        )
+        """
+    )
+
+    try:
+        arrow_table = pa.table({
+            "id": [1, 2],
+            "payload_json": ['{"name":"alpha","items":[1,2]}', '{"name":"beta","items":[3]}'],
+            "payload_jsonb": ['{"status":"ready","count":1}', '{"status":"done","count":2}'],
+        })
+
+        job = await asyncpg_async_driver.load_from_arrow(table_name, arrow_table)
+
+        result = await asyncpg_async_driver.execute(f"SELECT * FROM {table_name} ORDER BY id")
+        rows = result.get_data()
+        assert rows == [
+            {
+                "id": 1,
+                "payload_json": {"name": "alpha", "items": [1, 2]},
+                "payload_jsonb": {"count": 1, "status": "ready"},
+            },
+            {"id": 2, "payload_json": {"name": "beta", "items": [3]}, "payload_jsonb": {"count": 2, "status": "done"}},
+        ]
+        assert job.telemetry["rows_processed"] == 2
+    finally:
+        await asyncpg_async_driver.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")

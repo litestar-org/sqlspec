@@ -93,6 +93,17 @@ def test_coerce_records_for_execute_many_delegates_to_formatter() -> None:
     assert formatted[1] == [3, "y"]
 
 
+def test_coerce_records_for_execute_many_parses_json_text_values() -> None:
+    """JSON object and array text from Arrow rows should become psqlpy JSON values."""
+    records = [(1, '{"name":"alpha"}', '["north","east"]', "plain")]
+
+    unparsed = coerce_records_for_execute_many(records)
+    formatted = coerce_records_for_execute_many(records, parse_json_text=True)
+
+    assert unparsed == [[1, '{"name":"alpha"}', '["north","east"]', "plain"]]
+    assert formatted == [[1, {"name": "alpha"}, ["north", "east"], "plain"]]
+
+
 def test_encode_records_for_binary_copy_preserves_copy_format() -> None:
     """The public copy encoder should keep the same escaped wire payload."""
     records = [("plain", "needs\tescape", "line\nbreak", None, True, b"bytes")]

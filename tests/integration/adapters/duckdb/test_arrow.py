@@ -193,3 +193,22 @@ def test_select_to_arrow_type_preservation(duckdb_basic_session: "DuckDBDriver")
         assert df["active"].dtype == "bool"
     finally:
         _drop_table(driver, "arrow_types_test")
+
+
+def test_load_from_arrow_json(duckdb_basic_session: "DuckDBDriver") -> None:
+    """Test Arrow import into DuckDB JSON columns."""
+    import pyarrow as pa
+
+    driver = duckdb_basic_session
+    table_name = "arrow_json_ingest_duckdb"
+    driver.execute(f"CREATE TABLE {table_name} (id INTEGER, payload JSON)")
+    try:
+        arrow_table = pa.table({"id": [1, 2], "payload": ['{"name":"alpha"}', '{"name":"beta"}']})
+
+        job = driver.load_from_arrow(table_name, arrow_table)
+
+        result = driver.execute(f"SELECT id, payload::VARCHAR AS payload FROM {table_name} ORDER BY id")
+        assert result.get_data() == [{"id": 1, "payload": '{"name":"alpha"}'}, {"id": 2, "payload": '{"name":"beta"}'}]
+        assert job.telemetry["rows_processed"] == 2
+    finally:
+        _drop_table(driver, table_name)

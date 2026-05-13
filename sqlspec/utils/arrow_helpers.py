@@ -8,6 +8,7 @@ when compiled drivers touch Arrow objects.
 """
 
 from collections.abc import Iterable
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from sqlspec.utils.dispatch import TypeDispatcher
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "arrow_table_column_names",
+    "arrow_table_needs_parameter_preparation",
     "arrow_table_num_columns",
     "arrow_table_num_rows",
     "arrow_table_to_pandas",
@@ -35,6 +37,7 @@ __all__ = (
     "ensure_arrow_table",
 )
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
+_ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
 
 
 @overload
@@ -290,6 +293,40 @@ def arrow_table_to_rows(
     # Transpose columns to rows using zip
     records: list[tuple[Any, ...]] = [tuple(row) for row in zip(*col_data, strict=False)]
     return resolved_columns, records
+
+
+def _arrow_type_needs_parameter_preparation(data_type: Any) -> bool:
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(data_type):
+        return _arrow_type_needs_parameter_preparation(data_type.value_type)
+
+    is_extension = getattr(pa.types, "is_extension", None)
+    if is_extension is not None and is_extension(data_type):
+        return _arrow_type_needs_parameter_preparation(data_type.storage_type)
+
+    nested_type_checks = (
+        "is_struct",
+        "is_list",
+        "is_large_list",
+        "is_fixed_size_list",
+        "is_map",
+        "is_union",
+        "is_list_view",
+        "is_large_list_view",
+    )
+    return any(getattr(pa.types, check, lambda _: False)(data_type) for check in nested_type_checks)
+
+
+@lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
+def _arrow_schema_needs_parameter_preparation(schema: Any) -> bool:
+    return any(_arrow_type_needs_parameter_preparation(field.type) for field in schema)
+
+
+def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
+    """Return whether Arrow rows may emit nested values needing driver preparation."""
+    return _arrow_schema_needs_parameter_preparation(table.schema)
 
 
 def arrow_table_to_pylist(table: "ArrowTable") -> "list[dict[str, Any]]":

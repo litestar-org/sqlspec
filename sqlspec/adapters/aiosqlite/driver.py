@@ -240,9 +240,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             insert_sql = build_insert_statement(table, columns)
+            prepared_records = (
+                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                if self._arrow_table_needs_parameter_preparation(arrow_table)
+                else records
+            )
             try:
                 async with self.with_cursor(self.connection) as cursor:
-                    await cursor.executemany(insert_sql, records)
+                    await cursor.executemany(insert_sql, cast("Any", prepared_records))
             except (aiosqlite.Error, sqlite3.Error) as exc:
                 raise create_mapped_exception(exc) from exc
 

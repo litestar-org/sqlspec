@@ -48,6 +48,29 @@ async def test_select_to_arrow_basic(oracle_async_session: "OracleAsyncDriver") 
         await _safe_drop_table(driver, "arrow_users_oracledb_async")
 
 
+async def test_load_from_arrow_json(oracle_async_session: "OracleAsyncDriver") -> None:
+    """Test Arrow import into Oracle JSON columns."""
+    import pyarrow as pa
+
+    driver = oracle_async_session
+    table_name = "arrow_json_test_oracledb_async"
+    await _safe_drop_table(driver, table_name)
+    await driver.execute(f"CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, payload JSON)")
+    await driver.commit()
+
+    try:
+        payload = {"name": "alpha", "tags": ["north", "east"]}
+        arrow_table = pa.table({"id": [1], "payload": pa.array([payload])})
+
+        job = await driver.load_from_arrow(table_name, arrow_table)
+
+        row = await driver.select_one(f"SELECT payload FROM {table_name} WHERE id = 1")
+        assert row["payload"] == payload
+        assert job.telemetry["rows_processed"] == arrow_table.num_rows
+    finally:
+        await _safe_drop_table(driver, table_name)
+
+
 async def test_select_to_arrow_table_format(oracle_async_session: "OracleAsyncDriver") -> None:
     """Test select_to_arrow with table return format (default)."""
     import pyarrow as pa

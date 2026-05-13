@@ -199,3 +199,23 @@ async def test_select_to_arrow_type_preservation(psqlpy_driver: "PsqlpyDriver") 
         assert list(df["name"]) == ["Item 1", "Item 2"]
     finally:
         await _drop_table(driver, "arrow_types_test_psqlpy")
+
+
+async def test_load_from_arrow_jsonb(psqlpy_driver: "PsqlpyDriver") -> None:
+    """Test Arrow import into PostgreSQL JSONB columns."""
+    import pyarrow as pa
+
+    driver = psqlpy_driver
+    table_name = "arrow_jsonb_ingest_psqlpy"
+    await driver.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+    await driver.execute(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY, payload JSONB NOT NULL)")
+    try:
+        arrow_table = pa.table({"id": [1, 2], "payload": ['{"name":"alpha"}', '{"name":"beta"}']})
+
+        job = await driver.load_from_arrow(table_name, arrow_table)
+
+        rows = await driver.select(f"SELECT id, payload FROM {table_name} ORDER BY id")
+        assert rows == [{"id": 1, "payload": {"name": "alpha"}}, {"id": 2, "payload": {"name": "beta"}}]
+        assert job.telemetry["rows_processed"] == 2
+    finally:
+        await _drop_table(driver, table_name)

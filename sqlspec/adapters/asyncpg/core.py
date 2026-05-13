@@ -67,6 +67,7 @@ EXPECTED_REGEX_GROUPS = 3
 
 logger = get_logger("sqlspec.adapters.asyncpg.core")
 _PGVECTOR_MISSING_LOGGED = False
+_JSONB_BINARY_VERSION = b"\x01"
 
 
 class NormalizedStackOperation(NamedTuple):
@@ -221,11 +222,69 @@ def build_statement_config(
 default_statement_config = build_statement_config()
 
 
+def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, str):
+        return value.encode("utf-8")
+
+    encoded = encoder(value)
+    if isinstance(encoded, bytes):
+        return encoded
+    if isinstance(encoded, bytearray):
+        return bytes(encoded)
+    if isinstance(encoded, memoryview):
+        return encoded.tobytes()
+    return str(encoded).encode("utf-8")
+
+
+def _decode_json_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+    if isinstance(value, str):
+        return decoder(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    return decoder(bytes(value).decode("utf-8"))
+
+
+def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
+    payload = _encode_json_payload(value, encoder)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        return payload
+    return _JSONB_BINARY_VERSION + payload
+
+
+def _decode_jsonb_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+    if isinstance(value, str):
+        return decoder(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    payload = bytes(value)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        payload = payload[1:]
+    return decoder(payload.decode("utf-8"))
+
+
 async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
     """Register JSON type codecs on asyncpg connection."""
     try:
-        await connection.set_type_codec("json", encoder=encoder, decoder=decoder, schema="pg_catalog")
-        await connection.set_type_codec("jsonb", encoder=encoder, decoder=decoder, schema="pg_catalog")
+        await connection.set_type_codec(
+            "json",
+            encoder=lambda value: _encode_json_payload(value, encoder),
+            decoder=lambda value: _decode_json_payload(value, decoder),
+            schema="pg_catalog",
+            format="binary",
+        )
+        await connection.set_type_codec(
+            "jsonb",
+            encoder=lambda value: _encode_jsonb_payload(value, encoder),
+            decoder=lambda value: _decode_jsonb_payload(value, decoder),
+            schema="pg_catalog",
+            format="binary",
+        )
     except Exception:
         logger.exception("Failed to register JSON type codecs")
 

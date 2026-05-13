@@ -5,7 +5,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.asyncpg.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    register_json_codecs,
+)
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
     CockroachAsyncpgPool,
@@ -16,6 +21,7 @@ from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -177,7 +183,14 @@ class CockroachAsyncpgConfig(
         return await asyncpg_create_pool(**config)
 
     async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
-        """Initialize connection with user callback if provided."""
+        """Initialize connection with JSON codecs and user callback."""
+        if self.driver_features.get("enable_json_codecs", True):
+            await register_json_codecs(
+                connection,
+                encoder=self.driver_features.get("json_serializer", to_json),
+                decoder=self.driver_features.get("json_deserializer", from_json),
+            )
+
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
 

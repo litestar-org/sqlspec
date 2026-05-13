@@ -8,14 +8,15 @@ import pytest
 from sqlspec.adapters.asyncpg.config import register_json_codecs, register_pgvector_support
 from sqlspec.adapters.asyncpg.core import create_mapped_exception
 from sqlspec.exceptions import PermissionDeniedError, UniqueViolationError
+from sqlspec.utils.serializers import from_json, to_json
 
 
 @pytest.mark.anyio
 async def test_register_json_codecs_success() -> None:
     """Test successful JSON codec registration."""
     connection = AsyncMock()
-    encoder = MagicMock()
-    decoder = MagicMock()
+    encoder = to_json
+    decoder = from_json
 
     await register_json_codecs(connection, encoder, decoder)
 
@@ -23,11 +24,27 @@ async def test_register_json_codecs_success() -> None:
 
     json_call = connection.set_type_codec.call_args_list[0]
     assert json_call.args == ("json",)
-    assert json_call.kwargs == {"encoder": encoder, "decoder": decoder, "schema": "pg_catalog"}
+    assert json_call.kwargs == {
+        "encoder": json_call.kwargs["encoder"],
+        "decoder": json_call.kwargs["decoder"],
+        "schema": "pg_catalog",
+        "format": "binary",
+    }
 
     jsonb_call = connection.set_type_codec.call_args_list[1]
     assert jsonb_call.args == ("jsonb",)
-    assert jsonb_call.kwargs == {"encoder": encoder, "decoder": decoder, "schema": "pg_catalog"}
+    assert jsonb_call.kwargs == {
+        "encoder": jsonb_call.kwargs["encoder"],
+        "decoder": jsonb_call.kwargs["decoder"],
+        "schema": "pg_catalog",
+        "format": "binary",
+    }
+
+    assert json_call.kwargs["encoder"]({"value": 1}) == b'{"value":1}'
+    assert json_call.kwargs["decoder"](b'{"value":1}') == {"value": 1}
+    assert jsonb_call.kwargs["encoder"]({"value": 1}) == b'\x01{"value":1}'
+    assert jsonb_call.kwargs["encoder"](b'\x01{"value":1}') == b'\x01{"value":1}'
+    assert jsonb_call.kwargs["decoder"](b'\x01{"value":1}') == {"value": 1}
 
 
 @pytest.mark.anyio
