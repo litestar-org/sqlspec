@@ -2,10 +2,10 @@
 """Cross-adapter EXPLAIN plan contract tests."""
 
 import inspect
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
 import pytest
 
@@ -20,11 +20,15 @@ from sqlspec.adapters.psycopg import PsycopgSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.builder import Explain, sql
 from sqlspec.core import SQL, ExplainOptions
-from tests.integration.adapters.contracts._mysql_async import (
-    MYSQL_ASYNC_ADAPTERS,
-    close_mysql_async_config,
-    mysql_async_config,
-)
+from tests.integration.adapters.contracts._mysql_async import close_mysql_async_config, mysql_async_config
+
+T = TypeVar("T")
+
+
+class ExecuteDriver(Protocol):
+    """Driver surface needed by the EXPLAIN execute helper."""
+
+    def execute(self, statement: Any) -> SQLResult | Awaitable[SQLResult]: ...
 
 
 @dataclass(frozen=True)
@@ -387,7 +391,7 @@ EXPLAIN_CASES = [
 ]
 
 
-async def _maybe_await(value: Any) -> Any:
+async def _maybe_await(value: T | Awaitable[T]) -> T:
     if inspect.isawaitable(value):
         return await value
     return value
@@ -457,13 +461,13 @@ async def _provide_driver(spec: ExplainAdapter, config: Any) -> AsyncGenerator[A
             with config.provide_session() as driver:
                 yield driver
     finally:
-        if spec.adapter in MYSQL_ASYNC_ADAPTERS:
+        if spec.adapter in {"aiomysql", "asyncmy"}:
             await close_mysql_async_config(config)
         else:
             await _close_config(config)
 
 
-async def _execute(driver: Any, statement: Any) -> SQLResult:
+async def _execute(driver: ExecuteDriver, statement: Any) -> SQLResult:
     result = driver.execute(statement)
     return await _maybe_await(result)
 

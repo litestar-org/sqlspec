@@ -224,8 +224,8 @@ coverage:                                           ## Run tests with coverage r
 
 .PHONY: mypy
 mypy:                                               ## Run mypy
-	@echo "${INFO} Running mypy with $(MYPY_WORKERS) workers... 🔍"
-	@uv run mypy -n $(MYPY_WORKERS) --no-incremental --no-warn-unused-configs --show-traceback --no-error-summary -p sqlspec
+	@echo "${INFO} Running mypy... 🔍"
+	@uv run mypy
 	@echo "${OK} Mypy checks passed ✨"
 
 .PHONY: dmypy
@@ -235,7 +235,10 @@ dmypy:                                              ## Run mypy daemon
 	@echo "${OK} Mypy daemon checks passed ✨"
 
 .PHONY: mypy-parallel
-mypy-parallel: mypy                                 ## Run mypy parallel checking
+mypy-parallel:                                      ## Run mypy parallel checking
+	@echo "${INFO} Running mypy with $(MYPY_WORKERS) workers... 🔍"
+	@uv run mypy -n $(MYPY_WORKERS) --no-incremental --no-warn-unused-configs --show-traceback --no-error-summary
+	@echo "${OK} Parallel mypy checks passed ✨"
 
 .PHONY: pyright
 pyright:                                            ## Run pyright

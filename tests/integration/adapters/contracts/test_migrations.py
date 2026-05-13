@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias, cast
 from uuid import uuid4
 
 import pytest
@@ -26,7 +26,29 @@ from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.pymysql import PyMysqlConfig
 from sqlspec.adapters.pymysql import default_statement_config as pymysql_statement_config
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.migrations.commands import create_migration_commands
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
+
+SyncMigrationConfig: TypeAlias = (
+    SqliteConfig
+    | AdbcConfig
+    | DuckDBConfig
+    | MysqlConnectorSyncConfig
+    | PyMysqlConfig
+    | PsycopgSyncConfig
+    | OracleSyncConfig
+)
+AsyncMigrationConfig: TypeAlias = (
+    AiosqliteConfig
+    | AiomysqlConfig
+    | AsyncmyConfig
+    | MysqlConnectorAsyncConfig
+    | AsyncpgConfig
+    | PsqlpyConfig
+    | PsycopgAsyncConfig
+    | OracleAsyncConfig
+)
+MigrationConfig: TypeAlias = SyncMigrationConfig | AsyncMigrationConfig
+MigrationCommands: TypeAlias = SyncMigrationCommands[SyncMigrationConfig] | AsyncMigrationCommands[AsyncMigrationConfig]
 
 
 @dataclass(frozen=True)
@@ -323,7 +345,9 @@ def _postgres_url(request: pytest.FixtureRequest, *, scheme: str = "postgresql")
     return f"{scheme}://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
 
 
-def _make_config(case: MigrationCase, request: pytest.FixtureRequest, tmp_path: Path, migration_dir: Path) -> Any:
+def _make_config(
+    case: MigrationCase, request: pytest.FixtureRequest, tmp_path: Path, migration_dir: Path
+) -> MigrationConfig:
     migration_config = {
         "script_location": str(migration_dir),
         "version_table_name": f"sm_{case.adapter.replace('-', '_')}_{uuid4().hex[:6]}",
@@ -408,7 +432,7 @@ def _make_config(case: MigrationCase, request: pytest.FixtureRequest, tmp_path: 
         )
     if case.adapter in {"oracle-sync", "oracle-async"}:
         service = request.getfixturevalue("oracle_23ai_service")
-        connection_config: dict[str, Any] = {
+        oracle_connection_config: dict[str, Any] = {
             "host": service.host,
             "port": service.port,
             "service_name": service.service_name,
@@ -416,11 +440,15 @@ def _make_config(case: MigrationCase, request: pytest.FixtureRequest, tmp_path: 
             "password": service.password,
         }
         if case.adapter == "oracle-async":
-            connection_config.update({"min": 1, "max": 5})
-            return OracleAsyncConfig(connection_config=connection_config, migration_config=migration_config)
-        return OracleSyncConfig(connection_config=connection_config, migration_config=migration_config)
+            oracle_connection_config.update({"min": 1, "max": 5})
+            return OracleAsyncConfig(connection_config=oracle_connection_config, migration_config=migration_config)
+        return OracleSyncConfig(connection_config=oracle_connection_config, migration_config=migration_config)
     msg = f"Unhandled migration adapter: {case.adapter}"
     raise ValueError(msg)
+
+
+def _make_commands(config: MigrationConfig) -> MigrationCommands:
+    return cast("MigrationCommands", create_migration_commands(config))
 
 
 def _short_name(prefix: str) -> str:
@@ -526,7 +554,7 @@ async def test_migration_full_workflow(case: MigrationCase, tmp_path: Path, requ
     migration_dir = tmp_path / "migrations"
     users_table = _short_name("users")
     config = _make_config(case, request, tmp_path, migration_dir)
-    commands = create_migration_commands(config)
+    commands = _make_commands(config)
 
     try:
         await _call(commands, "init", str(migration_dir), package=True)
@@ -565,7 +593,7 @@ async def test_multiple_migrations_workflow(
     users_table = _short_name("users")
     posts_table = _short_name("posts")
     config = _make_config(case, request, tmp_path, migration_dir)
-    commands = create_migration_commands(config)
+    commands = _make_commands(config)
 
     try:
         await _call(commands, "init", str(migration_dir), package=True)
@@ -611,7 +639,7 @@ async def test_migration_current_command(case: MigrationCase, tmp_path: Path, re
     migration_dir = tmp_path / "migrations"
     test_table = _short_name("current")
     config = _make_config(case, request, tmp_path, migration_dir)
-    commands = create_migration_commands(config)
+    commands = _make_commands(config)
 
     try:
         await _call(commands, "init", str(migration_dir), package=True)
@@ -632,7 +660,7 @@ async def test_migration_error_handling(case: MigrationCase, tmp_path: Path, req
     """Failed migrations do not stamp the bad revision as applied."""
     migration_dir = tmp_path / "migrations"
     config = _make_config(case, request, tmp_path, migration_dir)
-    commands = create_migration_commands(config)
+    commands = _make_commands(config)
 
     try:
         await _call(commands, "init", str(migration_dir), package=True)
@@ -664,7 +692,7 @@ async def test_migration_with_transactions(case: MigrationCase, tmp_path: Path, 
     migration_dir = tmp_path / "migrations"
     customers_table = _short_name("customers")
     config = _make_config(case, request, tmp_path, migration_dir)
-    commands = create_migration_commands(config)
+    commands = _make_commands(config)
 
     try:
         await _call(commands, "init", str(migration_dir), package=True)

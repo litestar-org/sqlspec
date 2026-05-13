@@ -113,21 +113,25 @@ async def _setup_channel(case: EventQueueCase, config: Any) -> tuple[SQLSpec, An
         spec = SQLSpec()
         spec.add_config(config)
         if case.adapter == "spanner":
-            store = SpannerSyncEventQueueStore(config)
+            spanner_store = SpannerSyncEventQueueStore(config)
             with contextlib.suppress(api_exceptions.NotFound):
-                store.drop_table()
-            store.create_table()
-        elif case.adapter == "oracle-async":
-            store = OracleAsyncEventQueueStore(config)
+                spanner_store.drop_table()
+            spanner_store.create_table()
+            return spec, spec.event_channel(config), spanner_store
+        if case.adapter == "oracle-async":
+            oracle_async_store = OracleAsyncEventQueueStore(config)
             with contextlib.suppress(Exception):
-                await store.drop_table()
-            await store.create_table()
-        else:
-            store = OracleSyncEventQueueStore(config)
+                await oracle_async_store.drop_table()
+            await oracle_async_store.create_table()
+            return spec, spec.event_channel(config), oracle_async_store
+        if case.adapter == "oracle-sync":
+            oracle_sync_store = OracleSyncEventQueueStore(config)
             with contextlib.suppress(Exception):
-                store.drop_table()
-            store.create_table()
-        return spec, spec.event_channel(config), store
+                oracle_sync_store.drop_table()
+            oracle_sync_store.create_table()
+            return spec, spec.event_channel(config), oracle_sync_store
+        msg = f"Unhandled direct event queue store adapter: {case.adapter}"
+        raise ValueError(msg)
 
     if case.adapter in ASYNC_ADAPTERS:
         spec, channel = await setup_async_event_channel(config)

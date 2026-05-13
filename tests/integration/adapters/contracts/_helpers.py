@@ -5,7 +5,7 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -314,14 +314,15 @@ def make_config(
     if adapter == "bigquery":
         service = request.getfixturevalue("bigquery_service")
         from google.api_core.client_options import ClientOptions
-        from google.auth.credentials import AnonymousCredentials
+        from google.auth.credentials import AnonymousCredentials, Credentials
 
+        credentials_factory = cast("type[Credentials]", AnonymousCredentials)
         return BigQueryConfig(
             connection_config={
                 "project": service.project,
                 "dataset_id": f"`{service.project}`.`{service.dataset}`",
                 "client_options": ClientOptions(api_endpoint=f"http://{service.host}:{service.port}"),
-                "credentials": AnonymousCredentials(),
+                "credentials": credentials_factory(),
             },
             migration_config=migration_config,
             extension_config=extension_config,
