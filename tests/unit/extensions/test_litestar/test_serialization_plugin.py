@@ -18,6 +18,7 @@ from litestar.config.app import AppConfig
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
+from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
 
 pytestmark = pytest.mark.xdist_group("extensions_litestar")
@@ -71,6 +72,25 @@ def test_user_decoders_take_precedence_in_list_order() -> None:
 
     assert app_config.type_decoders is not None
     assert app_config.type_decoders[0] == (user_predicate, user_decoder)
+
+
+@pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed")
+def test_numpy_decoder_targets_signature_namespace_alias_not_ndarray() -> None:
+    """The NumPy decoder must not match immutable ``np.ndarray`` during Litestar signature construction."""
+    import numpy as np
+
+    plugin = _build_plugin()
+    app_config = AppConfig()
+
+    plugin.on_app_init(app_config)
+
+    ndarray_type = app_config.signature_namespace["ndarray"]
+    assert ndarray_type is not np.ndarray
+    assert issubclass(ndarray_type, np.ndarray)
+    assert app_config.signature_namespace["np"].ndarray is ndarray_type
+    assert app_config.type_decoders is not None
+    assert any(predicate(ndarray_type) for predicate, _ in app_config.type_decoders)
+    assert not any(predicate(np.ndarray) for predicate, _ in app_config.type_decoders)
 
 
 def test_plugin_does_not_set_before_or_after_response_hooks() -> None:

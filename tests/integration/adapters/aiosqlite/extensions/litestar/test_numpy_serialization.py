@@ -4,6 +4,7 @@ Tests automatic NumPy array encoding/decoding in HTTP request/response cycles.
 """
 
 import tempfile
+from typing import Any
 
 import pytest
 
@@ -55,6 +56,24 @@ def test_litestar_numpy_decoder_registered() -> None:
         assert len(app.type_decoders) > 0
 
 
+def test_litestar_numpy_direct_annotation_registration() -> None:
+    """The decoder predicate must not make Litestar mutate immutable ``np.ndarray`` during registration."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+        )
+        sql.add_config(config)
+
+        @post("/vector")
+        def create_vector(data: np.ndarray, state: State) -> dict[str, bool]:
+            return {"success": isinstance(data, np.ndarray)}
+
+        app = Litestar(route_handlers=[create_vector], plugins=[SQLSpecPlugin(sql)])
+
+        assert app.routes
+
+
 def test_litestar_numpy_response_encoding() -> None:
     """Test that NumPy arrays in responses are automatically encoded to JSON."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
@@ -80,6 +99,29 @@ def test_litestar_numpy_response_encoding() -> None:
             assert data["id"] == 1
             assert data["embedding"] == [0.1, 0.2, 0.3, 0.4, 0.5]
             assert data["dimensions"] == 5
+
+
+def test_litestar_numpy_typed_request_decoding() -> None:
+    """Test NumPy array decoding at a Litestar typed request boundary."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sql = SQLSpec()
+        config = AiosqliteConfig(
+            connection_config={"database": tmp.name}, extension_config={"litestar": {"commit_mode": "manual"}}
+        )
+        sql.add_config(config)
+
+        @post("/vector")
+        def create_vector(data: "np.ndarray", state: State) -> dict[str, Any]:
+            assert isinstance(data, np.ndarray)
+            return {"success": True, "dimensions": len(data), "embedding": data}
+
+        app = Litestar(route_handlers=[create_vector], plugins=[SQLSpecPlugin(sql)])
+
+        with TestClient(app) as client:
+            response = client.post("/vector", json=[1.0, 2.0, 3.0])
+
+            assert response.status_code == HTTP_201_CREATED
+            assert response.json() == {"success": True, "dimensions": 3, "embedding": [1.0, 2.0, 3.0]}
 
 
 def test_litestar_numpy_request_decoding() -> None:
