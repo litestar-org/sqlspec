@@ -8,15 +8,17 @@ import cProfile
 import gc
 import inspect
 import json
+import os
 import pstats
 import sqlite3
 import statistics
 import tempfile
 import time
-from collections.abc import Sequence  # noqa: TC003
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import unquote, urlparse
 
 import anyio
 import click
@@ -46,10 +48,15 @@ def _is_compiled() -> bool:
 SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 __all__ = (
+    "BENCHMARK_DRIVER_MATRIX",
+    "CORE_SCENARIOS",
+    "expand_driver_selection",
     "main",
     "print_benchmark_table",
     "raw_asyncpg_initialization",
+    "raw_asyncpg_iterative_inserts",
     "raw_asyncpg_read_heavy",
+    "raw_asyncpg_repeated_queries",
     "raw_asyncpg_write_heavy",
     "raw_duckdb_initialization",
     "raw_duckdb_iterative_inserts",
@@ -68,7 +75,9 @@ __all__ = (
     "run_benchmark",
     "run_extended_benchmark",
     "sqlalchemy_asyncpg_initialization",
+    "sqlalchemy_asyncpg_iterative_inserts",
     "sqlalchemy_asyncpg_read_heavy",
+    "sqlalchemy_asyncpg_repeated_queries",
     "sqlalchemy_asyncpg_write_heavy",
     "sqlalchemy_duckdb_initialization",
     "sqlalchemy_duckdb_iterative_inserts",
@@ -81,7 +90,9 @@ __all__ = (
     "sqlalchemy_sqlite_repeated_queries",
     "sqlalchemy_sqlite_write_heavy",
     "sqlspec_asyncpg_initialization",
+    "sqlspec_asyncpg_iterative_inserts",
     "sqlspec_asyncpg_read_heavy",
+    "sqlspec_asyncpg_repeated_queries",
     "sqlspec_asyncpg_write_heavy",
     "sqlspec_duckdb_initialization",
     "sqlspec_duckdb_iterative_inserts",
@@ -105,6 +116,54 @@ POOL_SIZE = 5  # Default pool size for async adapters
 DEFAULT_BENCH_ITERATIONS = 7
 DEFAULT_BENCH_WARMUP = 3
 NOISY_STDDEV_RATIO = 0.10
+CORE_SCENARIOS = ("initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries")
+
+
+class BenchmarkDriverConfig(TypedDict):
+    """Benchmark matrix entry for a selectable driver surface."""
+
+    libraries: tuple[str, ...]
+    scenarios: tuple[str, ...]
+    tier: str
+
+
+BENCHMARK_DRIVER_MATRIX: dict[str, BenchmarkDriverConfig] = {
+    "sqlite": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "pr"},
+    "aiosqlite": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "duckdb": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "pr"},
+    "asyncpg": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "psycopg": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "psycopg_async": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "psqlpy": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "cockroach_asyncpg": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "cockroach_psycopg": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "cockroach_psycopg_async": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "aiomysql": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "asyncmy": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "pymysql": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "mysqlconnector": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "mysqlconnector_async": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "oracledb": {"libraries": ("raw", "sqlspec", "sqlalchemy"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "oracledb_async": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "adbc": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled"},
+    "spanner": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled-cloud"},
+    "bigquery": {"libraries": ("raw", "sqlspec"), "scenarios": CORE_SCENARIOS, "tier": "scheduled-cloud"},
+}
+
+
+class BenchmarkSkipError(RuntimeError):
+    """Raised when a benchmark surface is registered but unavailable locally."""
+
+
+def expand_driver_selection(drivers: Sequence[str]) -> tuple[str, ...]:
+    """Expand CLI driver selectors, including the ``all`` alias."""
+    expanded: list[str] = []
+    for driver in drivers:
+        if driver == "all":
+            expanded.extend(BENCHMARK_DRIVER_MATRIX)
+        else:
+            expanded.append(driver)
+    return tuple(dict.fromkeys(expanded))
 
 
 @click.command()
@@ -160,9 +219,10 @@ def main(
 
     results: list[dict[str, Any]] = []
     errors: list[str] = []
+    drivers = expand_driver_selection(driver)
     if _is_compiled():
         click.secho("mypyc compilation detected", fg="green")
-    for drv in driver:
+    for drv in drivers:
         click.echo(
             f"Running benchmark for driver: {drv} "
             f"(rows={rows}, pool_size={pool_size}, iterations={iterations}, warmup={warmup})"
@@ -187,13 +247,16 @@ def main(
         click.secho(f"Results written to {json_output}", fg="green")
     if errors:
         for err in errors:
-            click.secho(f"Error: {err}", fg="red")
+            if ": skipped (" in err:
+                click.secho(f"Skipped: {err}", fg="yellow")
+            else:
+                click.secho(f"Error: {err}", fg="red")
     if _leaked_pools:
         click.secho("Pool leaks detected:", fg="yellow")
         for leak in _leaked_pools:
             click.secho(f"  - {leak}", fg="yellow")
         _leaked_pools.clear()
-    click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
+    click.echo(f"Benchmarks complete for drivers: {', '.join(drivers)}")
 
 
 def _new_benchmark_loop() -> asyncio.AbstractEventLoop:
@@ -279,8 +342,12 @@ def run_benchmark(
     Returns:
         List of benchmark result dictionaries
     """
-    libraries = ["raw", "sqlspec", "sqlalchemy"]
-    scenarios = ["initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries"]
+    driver_config = BENCHMARK_DRIVER_MATRIX.get(driver)
+    if driver_config is None:
+        errors.append(f"Unknown benchmark driver: {driver}")
+        return []
+    libraries = driver_config["libraries"]
+    scenarios = driver_config["scenarios"]
     results: list[dict[str, Any]] = []
 
     for scenario in scenarios:
@@ -297,6 +364,8 @@ def run_benchmark(
                 stats = _summarize_times(times)
                 label = SQLSPEC_LABEL if lib == "sqlspec" else lib
                 results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
+            except BenchmarkSkipError as exc:
+                errors.append(f"{lib}/{driver}/{scenario}: skipped ({exc})")
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -329,8 +398,12 @@ def run_benchmark_profiled(
     profiles_dir = Path(__file__).parent / "profiles"
     profiles_dir.mkdir(exist_ok=True)
 
-    libraries = ["raw", "sqlspec", "sqlalchemy"]
-    scenarios = ["initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries"]
+    driver_config = BENCHMARK_DRIVER_MATRIX.get(driver)
+    if driver_config is None:
+        errors.append(f"Unknown benchmark driver: {driver}")
+        return []
+    libraries = driver_config["libraries"]
+    scenarios = driver_config["scenarios"]
     results: list[dict[str, Any]] = []
     console = Console()
 
@@ -369,6 +442,8 @@ def run_benchmark_profiled(
                 profile_stats.sort_stats("cumulative")
                 profile_stats.print_stats(20)
 
+            except BenchmarkSkipError as exc:
+                errors.append(f"{lib}/{driver}/{scenario}: skipped ({exc})")
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -958,6 +1033,7 @@ def sqlalchemy_sqlite_iterative_inserts() -> None:
 # Query cache scenarios - tests repeated single-row operations
 # These stress the query preparation/caching path
 SELECT_BY_VALUE = "SELECT * FROM test WHERE value = ?;"
+SELECT_BY_VALUE_ASYNCPG = "SELECT * FROM test WHERE value = $1;"
 SELECT_BY_VALUE_SQLA = "SELECT * FROM test WHERE value = :value;"
 
 
@@ -1366,7 +1442,9 @@ async def sqlalchemy_aiosqlite_repeated_queries() -> None:
 # Asyncpg implementations
 # These require asyncpg and optionally SQLAlchemy[asyncio] to be installed
 
-ASYNCPG_DSN = "postgresql://postgres:postgres@localhost/postgres"
+POSTGRES_DSN = os.getenv("SQLSPEC_POSTGRES_DSN", "postgresql://postgres:postgres@localhost/postgres")
+ASYNCPG_DSN = os.getenv("SQLSPEC_ASYNCPG_DSN", POSTGRES_DSN)
+COCKROACH_DSN = os.getenv("SQLSPEC_COCKROACH_DSN", "")
 
 
 def _get_asyncpg() -> Any:
@@ -1428,8 +1506,38 @@ async def raw_asyncpg_read_heavy() -> None:
     if connect is None:
         return
     conn = await connect(dsn=ASYNCPG_DSN)
+    await conn.execute(DROP_TEST_TABLE)
+    await conn.execute(CREATE_TEST_TABLE)
+    data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+    await conn.executemany(INSERT_TEST_VALUE_ASYNCPG, data)
     rows = await conn.fetch(SELECT_TEST_VALUES)
     assert len(rows) == ROWS_TO_INSERT
+    await conn.close()
+
+
+async def raw_asyncpg_iterative_inserts() -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        return
+    conn = await connect(dsn=ASYNCPG_DSN)
+    await conn.execute(DROP_TEST_TABLE)
+    await conn.execute(CREATE_TEST_TABLE)
+    for i in range(ROWS_TO_INSERT):
+        await conn.execute(INSERT_TEST_VALUE_ASYNCPG, f"value_{i}")
+    await conn.close()
+
+
+async def raw_asyncpg_repeated_queries() -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        return
+    conn = await connect(dsn=ASYNCPG_DSN)
+    await conn.execute(DROP_TEST_TABLE)
+    await conn.execute(CREATE_TEST_TABLE)
+    data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+    await conn.executemany(INSERT_TEST_VALUE_ASYNCPG, data)
+    for i in range(ROWS_TO_INSERT):
+        await conn.fetchrow(SELECT_BY_VALUE_ASYNCPG, f"value_{i % 100}")
     await conn.close()
 
 
@@ -1464,8 +1572,40 @@ async def sqlspec_asyncpg_read_heavy() -> None:
     spec = SQLSpec()
     config = AsyncpgConfig(connection_config={"dsn": ASYNCPG_DSN})
     async with spec.provide_session(config) as session:
+        await session.execute(DROP_TEST_TABLE)
+        await session.execute(CREATE_TEST_TABLE)
+        data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        await session.execute_many(INSERT_TEST_VALUE_ASYNCPG, data)
         rows = await session.fetch(SELECT_TEST_VALUES)
         assert len(rows) == ROWS_TO_INSERT
+
+
+async def sqlspec_asyncpg_iterative_inserts() -> None:
+    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
+    if AsyncpgConfig is None:
+        return
+    spec = SQLSpec()
+    config = AsyncpgConfig(connection_config={"dsn": ASYNCPG_DSN})
+    async with spec.provide_session(config) as session:
+        await session.execute(DROP_TEST_TABLE)
+        await session.execute(CREATE_TEST_TABLE)
+        for i in range(ROWS_TO_INSERT):
+            await session.execute(INSERT_TEST_VALUE_ASYNCPG, (f"value_{i}",))
+
+
+async def sqlspec_asyncpg_repeated_queries() -> None:
+    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
+    if AsyncpgConfig is None:
+        return
+    spec = SQLSpec()
+    config = AsyncpgConfig(connection_config={"dsn": ASYNCPG_DSN})
+    async with spec.provide_session(config) as session:
+        await session.execute(DROP_TEST_TABLE)
+        await session.execute(CREATE_TEST_TABLE)
+        data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        await session.execute_many(INSERT_TEST_VALUE_ASYNCPG, data)
+        for i in range(ROWS_TO_INSERT):
+            await session.fetch_one_or_none(SELECT_BY_VALUE_ASYNCPG, (f"value_{i % 100}",))
 
 
 async def sqlalchemy_asyncpg_initialization() -> None:
@@ -1500,9 +1640,44 @@ async def sqlalchemy_asyncpg_read_heavy() -> None:
         return
     engine = create_async_engine(f"postgresql+asyncpg://{ASYNCPG_DSN.split('://')[1]}")
     async with engine.begin() as conn:
+        await conn.execute(text(DROP_TEST_TABLE))
+        await conn.execute(text(CREATE_TEST_TABLE))
+        data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+        await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
         result = await conn.execute(text(SELECT_TEST_VALUES))
         rows = result.fetchall()
         assert len(rows) == ROWS_TO_INSERT
+    await engine.dispose()
+
+
+async def sqlalchemy_asyncpg_iterative_inserts() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    engine = create_async_engine(f"postgresql+asyncpg://{ASYNCPG_DSN.split('://')[1]}")
+    async with engine.connect() as conn:
+        await conn.execute(text(DROP_TEST_TABLE))
+        await conn.execute(text(CREATE_TEST_TABLE))
+        for i in range(ROWS_TO_INSERT):
+            await conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
+        await conn.commit()
+    await engine.dispose()
+
+
+async def sqlalchemy_asyncpg_repeated_queries() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        return
+    engine = create_async_engine(f"postgresql+asyncpg://{ASYNCPG_DSN.split('://')[1]}")
+    async with engine.connect() as conn:
+        await conn.execute(text(DROP_TEST_TABLE))
+        await conn.execute(text(CREATE_TEST_TABLE))
+        data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+        await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+        await conn.commit()
+        for i in range(ROWS_TO_INSERT):
+            result = await conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
+            result.fetchone()
     await engine.dispose()
 
 
@@ -1723,6 +1898,696 @@ def sqlspec_sqlite_thin_path_stress() -> None:
                 session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
 
 
+MYSQL_DSN = os.getenv("SQLSPEC_MYSQL_DSN", "mysql://root:mysql@localhost:3307/test")
+ORACLE_DSN = os.getenv("SQLSPEC_ORACLE_DSN", "localhost:1522/FREEPDB1")
+ORACLE_USER = os.getenv("SQLSPEC_ORACLE_USER", "system")
+ORACLE_PASSWORD = os.getenv("SQLSPEC_ORACLE_PASSWORD", "oracle")
+ADBC_DSN = os.getenv("SQLSPEC_ADBC_DSN", "")
+SPANNER_PROJECT = os.getenv("SQLSPEC_SPANNER_PROJECT", "")
+SPANNER_INSTANCE = os.getenv("SQLSPEC_SPANNER_INSTANCE", "")
+SPANNER_DATABASE = os.getenv("SQLSPEC_SPANNER_DATABASE", "")
+BIGQUERY_PROJECT = os.getenv("SQLSPEC_BIGQUERY_PROJECT", "")
+BIGQUERY_DATASET = os.getenv("SQLSPEC_BIGQUERY_DATASET", "")
+
+INSERT_TEST_VALUE_PYFORMAT = "INSERT INTO test (value) VALUES (%s);"
+SELECT_BY_VALUE_PYFORMAT = "SELECT * FROM test WHERE value = %s;"
+INSERT_TEST_VALUE_ORACLE = "INSERT INTO test (value) VALUES (:1)"
+SELECT_BY_VALUE_ORACLE = "SELECT * FROM test WHERE value = :1"
+ORACLE_DROP_TEST_TABLE = (
+    "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test PURGE'; "
+    "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+)
+ORACLE_CREATE_TEST_TABLE = "CREATE TABLE test (value VARCHAR2(255))"
+
+
+def _import_object(module_name: str, attr_name: str) -> Any:
+    try:
+        module = __import__(module_name, fromlist=[attr_name])
+    except ImportError as exc:
+        raise BenchmarkSkipError(f"{module_name} is not installed") from exc
+    return getattr(module, attr_name)
+
+
+def _mysql_connection_config(*, aiomysql: bool = False) -> dict[str, Any]:
+    parsed = urlparse(MYSQL_DSN)
+    database = parsed.path.lstrip("/") or "test"
+    config = {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 3307,
+        "user": unquote(parsed.username or "root"),
+        "password": unquote(parsed.password or "mysql"),
+        "database": database,
+    }
+    if aiomysql:
+        config["db"] = config.pop("database")
+    return config
+
+
+def _oracle_connection_config() -> dict[str, Any]:
+    return {"dsn": ORACLE_DSN, "user": ORACLE_USER, "password": ORACLE_PASSWORD}
+
+
+def _postgres_dsn_for_driver(driver: str, *, asyncpg_driver: bool = False) -> str:
+    if driver.startswith("cockroach"):
+        if not COCKROACH_DSN:
+            raise BenchmarkSkipError("set SQLSPEC_COCKROACH_DSN")
+        return COCKROACH_DSN
+    return ASYNCPG_DSN if asyncpg_driver else POSTGRES_DSN
+
+
+def _postgres_connection_config(driver: str) -> dict[str, Any]:
+    dsn = _postgres_dsn_for_driver(driver, asyncpg_driver=driver == "asyncpg")
+    if driver in {"asyncpg", "cockroach_asyncpg", "psqlpy"}:
+        return {"dsn": dsn}
+    return {"conninfo": dsn}
+
+
+def _adbc_connection_config() -> dict[str, Any]:
+    if ADBC_DSN:
+        return {"uri": ADBC_DSN}
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    return {"uri": f"sqlite://{tmp_path}"}
+
+
+def _adbc_raw_uri() -> str:
+    if ADBC_DSN.startswith("sqlite://"):
+        return ADBC_DSN.removeprefix("sqlite://")
+    if ADBC_DSN:
+        return ADBC_DSN
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    return str(tmp_path)
+
+
+def _spanner_connection_config() -> dict[str, Any]:
+    if not (SPANNER_PROJECT and SPANNER_INSTANCE and SPANNER_DATABASE):
+        raise BenchmarkSkipError("set SQLSPEC_SPANNER_PROJECT, SQLSPEC_SPANNER_INSTANCE, and SQLSPEC_SPANNER_DATABASE")
+    return {"project": SPANNER_PROJECT, "instance_id": SPANNER_INSTANCE, "database_id": SPANNER_DATABASE}
+
+
+def _bigquery_connection_config() -> dict[str, Any]:
+    if not (BIGQUERY_PROJECT and BIGQUERY_DATASET):
+        raise BenchmarkSkipError("set SQLSPEC_BIGQUERY_PROJECT and SQLSPEC_BIGQUERY_DATASET")
+    return {"project": BIGQUERY_PROJECT, "dataset_id": BIGQUERY_DATASET}
+
+
+def _sql_for_driver(driver: str) -> dict[str, str]:
+    if driver in {"oracledb", "oracledb_async"}:
+        return {
+            "drop": ORACLE_DROP_TEST_TABLE,
+            "create": ORACLE_CREATE_TEST_TABLE,
+            "insert": INSERT_TEST_VALUE_ORACLE,
+            "select_all": SELECT_TEST_VALUES,
+            "select_by": SELECT_BY_VALUE_ORACLE,
+        }
+    if driver in {"asyncpg", "psqlpy", "cockroach_asyncpg"}:
+        return {
+            "drop": DROP_TEST_TABLE,
+            "create": CREATE_TEST_TABLE,
+            "insert": INSERT_TEST_VALUE_ASYNCPG,
+            "select_all": SELECT_TEST_VALUES,
+            "select_by": SELECT_BY_VALUE_ASYNCPG,
+        }
+    if driver in {"psycopg", "psycopg_async", "cockroach_psycopg", "cockroach_psycopg_async"}:
+        return {
+            "drop": DROP_TEST_TABLE,
+            "create": CREATE_TEST_TABLE,
+            "insert": INSERT_TEST_VALUE_PYFORMAT,
+            "select_all": SELECT_TEST_VALUES,
+            "select_by": SELECT_BY_VALUE_PYFORMAT,
+        }
+    if driver in {"aiomysql", "asyncmy", "pymysql", "mysqlconnector", "mysqlconnector_async"}:
+        return {
+            "drop": DROP_TEST_TABLE,
+            "create": CREATE_TEST_TABLE,
+            "insert": INSERT_TEST_VALUE_PYFORMAT,
+            "select_all": SELECT_TEST_VALUES,
+            "select_by": SELECT_BY_VALUE_PYFORMAT,
+        }
+    return {
+        "drop": DROP_TEST_TABLE,
+        "create": CREATE_TEST_TABLE,
+        "insert": INSERT_TEST_VALUE,
+        "select_all": SELECT_TEST_VALUES,
+        "select_by": SELECT_BY_VALUE,
+    }
+
+
+def _run_sqlspec_sync_workload(driver: str, config_module: str, config_name: str, scenario: str) -> None:
+    if driver in {"spanner", "bigquery"}:
+        connection_config = _spanner_connection_config() if driver == "spanner" else _bigquery_connection_config()
+    elif driver == "adbc":
+        connection_config = _adbc_connection_config()
+    elif driver == "oracledb":
+        connection_config = _oracle_connection_config()
+    elif driver in {"pymysql", "mysqlconnector"}:
+        connection_config = _mysql_connection_config()
+    else:
+        connection_config = _postgres_connection_config(driver)
+    Config = _import_object(config_module, config_name)  # noqa: N806
+    statements = _sql_for_driver(driver)
+    config = Config(connection_config=connection_config)
+    spec = SQLSpec()
+    try:
+        with spec.provide_session(config) as session:
+            _run_sync_session_workload(session, statements, scenario)
+    finally:
+        close_pool = getattr(config, "close_pool", None)
+        if close_pool is not None:
+            close_pool()
+
+
+async def _run_sqlspec_async_workload(driver: str, config_module: str, config_name: str, scenario: str) -> None:
+    if driver == "aiomysql":
+        connection_config = _mysql_connection_config(aiomysql=True)
+    elif driver in {"asyncmy", "mysqlconnector_async"}:
+        connection_config = _mysql_connection_config()
+    elif driver == "oracledb_async":
+        connection_config = _oracle_connection_config()
+    else:
+        connection_config = _postgres_connection_config(driver)
+    Config = _import_object(config_module, config_name)  # noqa: N806
+    statements = _sql_for_driver(driver)
+    config = Config(connection_config=connection_config)
+    spec = SQLSpec()
+    try:
+        async with spec.provide_session(config) as session:
+            await _run_async_session_workload(session, statements, scenario)
+    finally:
+        close_pool = getattr(config, "close_pool", None)
+        if close_pool is not None:
+            result = close_pool()
+            if inspect.isawaitable(result):
+                await result
+
+
+def _run_sync_session_workload(session: Any, statements: dict[str, str], scenario: str) -> None:
+    session.execute(statements["drop"])
+    session.execute(statements["create"])
+    if scenario == "initialization":
+        return
+    data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+    if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+        session.execute_many(statements["insert"], data)
+    elif scenario == "iterative_inserts":
+        for value in data:
+            session.execute(statements["insert"], value)
+        return
+    if scenario == "read_heavy":
+        rows = session.fetch(statements["select_all"])
+        assert len(rows) == ROWS_TO_INSERT
+    elif scenario == "repeated_queries":
+        for i in range(ROWS_TO_INSERT):
+            session.fetch_one_or_none(statements["select_by"], (f"value_{i % 100}",))
+
+
+async def _run_async_session_workload(session: Any, statements: dict[str, str], scenario: str) -> None:
+    await session.execute(statements["drop"])
+    await session.execute(statements["create"])
+    if scenario == "initialization":
+        return
+    data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+    if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+        await session.execute_many(statements["insert"], data)
+    elif scenario == "iterative_inserts":
+        for value in data:
+            await session.execute(statements["insert"], value)
+        return
+    if scenario == "read_heavy":
+        rows = await session.fetch(statements["select_all"])
+        assert len(rows) == ROWS_TO_INSERT
+    elif scenario == "repeated_queries":
+        for i in range(ROWS_TO_INSERT):
+            await session.fetch_one_or_none(statements["select_by"], (f"value_{i % 100}",))
+
+
+def _run_dbapi_workload(connect: Any, statements: dict[str, str], scenario: str) -> None:
+    conn = connect()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(statements["drop"])
+        cursor.execute(statements["create"])
+        if scenario == "initialization":
+            return
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+            cursor.executemany(statements["insert"], data)
+        elif scenario == "iterative_inserts":
+            for value in data:
+                cursor.execute(statements["insert"], value)
+            return
+        if hasattr(conn, "commit"):
+            conn.commit()
+        if scenario == "read_heavy":
+            cursor.execute(statements["select_all"])
+            rows = cursor.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+        elif scenario == "repeated_queries":
+            for i in range(ROWS_TO_INSERT):
+                cursor.execute(statements["select_by"], (f"value_{i % 100}",))
+                cursor.fetchone()
+    finally:
+        with suppress(Exception):
+            cursor.close()
+        with suppress(Exception):
+            conn.close()
+
+
+def _raw_psycopg_connect(driver: str) -> Any:
+    psycopg = _import_object("psycopg", "connect")
+    dsn = _postgres_dsn_for_driver(driver)
+    return psycopg(dsn)
+
+
+def _raw_pymysql_connect() -> Any:
+    pymysql = _import_object("pymysql", "connect")
+    return pymysql(**_mysql_connection_config())
+
+
+def _raw_mysqlconnector_connect() -> Any:
+    connector = _import_object("mysql.connector", "connect")
+    return connector(**_mysql_connection_config())
+
+
+def _raw_oracle_connect() -> Any:
+    connect = _import_object("oracledb", "connect")
+    return connect(**_oracle_connection_config())
+
+
+def _raw_adbc_connect() -> Any:
+    dbapi = _import_object("adbc_driver_sqlite.dbapi", "connect")
+    uri = _adbc_raw_uri()
+    return dbapi(uri=uri)
+
+
+def _make_raw_dbapi_scenario(driver: str, connect: Any, scenario: str) -> Any:
+    def run() -> None:
+        _run_dbapi_workload(connect, _sql_for_driver(driver), scenario)
+
+    return run
+
+
+def _make_sqlspec_sync_scenario(driver: str, config_module: str, config_name: str, scenario: str) -> Any:
+    def run() -> None:
+        _run_sqlspec_sync_workload(driver, config_module, config_name, scenario)
+
+    return run
+
+
+def _make_sqlspec_async_scenario(driver: str, config_module: str, config_name: str, scenario: str) -> Any:
+    async def run() -> None:
+        await _run_sqlspec_async_workload(driver, config_module, config_name, scenario)
+
+    return run
+
+
+async def _run_asyncpg_like_raw_workload(driver: str, scenario: str) -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        raise BenchmarkSkipError("asyncpg is not installed")
+    statements = _sql_for_driver(driver)
+    conn = await connect(dsn=_postgres_dsn_for_driver(driver, asyncpg_driver=True))
+    try:
+        await conn.execute(statements["drop"])
+        await conn.execute(statements["create"])
+        if scenario == "initialization":
+            return
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+            await conn.executemany(statements["insert"], data)
+        elif scenario == "iterative_inserts":
+            for value in data:
+                await conn.execute(statements["insert"], value[0])
+            return
+        if scenario == "read_heavy":
+            rows = await conn.fetch(statements["select_all"])
+            assert len(rows) == ROWS_TO_INSERT
+        elif scenario == "repeated_queries":
+            for i in range(ROWS_TO_INSERT):
+                await conn.fetchrow(statements["select_by"], f"value_{i % 100}")
+    finally:
+        await conn.close()
+
+
+async def _run_aiomysql_like_raw_workload(driver: str, scenario: str) -> None:
+    module_name = "aiomysql" if driver == "aiomysql" else "asyncmy"
+    connect = _import_object(module_name, "connect")
+    conn = await connect(**_mysql_connection_config(aiomysql=driver == "aiomysql"))
+    cursor = await conn.cursor()
+    statements = _sql_for_driver(driver)
+    try:
+        await cursor.execute(statements["drop"])
+        await cursor.execute(statements["create"])
+        if scenario == "initialization":
+            return
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+            await cursor.executemany(statements["insert"], data)
+        elif scenario == "iterative_inserts":
+            for value in data:
+                await cursor.execute(statements["insert"], value)
+            return
+        await conn.commit()
+        if scenario == "read_heavy":
+            await cursor.execute(statements["select_all"])
+            rows = await cursor.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+        elif scenario == "repeated_queries":
+            for i in range(ROWS_TO_INSERT):
+                await cursor.execute(statements["select_by"], (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(Exception):
+            await cursor.close()
+        close_result = conn.close()
+        if inspect.isawaitable(close_result):
+            await close_result
+
+
+def _psqlpy_result_rows(result: Any) -> Any:
+    return result.result() if hasattr(result, "result") else result
+
+
+async def _run_psqlpy_raw_workload(scenario: str) -> None:
+    ConnectionPool = _import_object("psqlpy", "ConnectionPool")  # noqa: N806
+    pool = ConnectionPool(**_postgres_connection_config("psqlpy"))
+    statements = _sql_for_driver("psqlpy")
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(statements["drop"], [])
+            await conn.execute(statements["create"], [])
+            if scenario == "initialization":
+                return
+            data = [[f"value_{i}"] for i in range(ROWS_TO_INSERT)]
+            if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+                await conn.execute_many(statements["insert"], data)
+            elif scenario == "iterative_inserts":
+                for value in data:
+                    await conn.execute(statements["insert"], value)
+                return
+            if scenario == "read_heavy":
+                rows = _psqlpy_result_rows(await conn.fetch(statements["select_all"], []))
+                assert len(rows) == ROWS_TO_INSERT
+            elif scenario == "repeated_queries":
+                for i in range(ROWS_TO_INSERT):
+                    await conn.fetch(statements["select_by"], [f"value_{i % 100}"])
+    finally:
+        with suppress(Exception):
+            pool.close()
+
+
+async def _run_mysqlconnector_async_raw_workload(scenario: str) -> None:
+    connect = _import_object("mysql.connector.aio", "connect")
+    conn = await connect(**_mysql_connection_config())
+    cursor = await conn.cursor()
+    statements = _sql_for_driver("mysqlconnector_async")
+    try:
+        await cursor.execute(statements["drop"])
+        await cursor.execute(statements["create"])
+        if scenario == "initialization":
+            return
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+            await cursor.executemany(statements["insert"], data)
+        elif scenario == "iterative_inserts":
+            for value in data:
+                await cursor.execute(statements["insert"], value)
+            return
+        await conn.commit()
+        if scenario == "read_heavy":
+            await cursor.execute(statements["select_all"])
+            rows = await cursor.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+        elif scenario == "repeated_queries":
+            for i in range(ROWS_TO_INSERT):
+                await cursor.execute(statements["select_by"], (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(Exception):
+            await cursor.close()
+        with suppress(Exception):
+            await conn.close()
+
+
+async def _run_psycopg_async_raw_workload(driver: str, scenario: str) -> None:
+    AsyncConnection = _import_object("psycopg", "AsyncConnection")  # noqa: N806
+    dsn = _postgres_dsn_for_driver(driver)
+    conn = await AsyncConnection.connect(dsn)
+    statements = _sql_for_driver(driver)
+    try:
+        await conn.execute(statements["drop"])
+        await conn.execute(statements["create"])
+        if scenario == "initialization":
+            return
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+            async with conn.cursor() as cursor:
+                await cursor.executemany(statements["insert"], data)
+        elif scenario == "iterative_inserts":
+            for value in data:
+                await conn.execute(statements["insert"], value)
+            return
+        await conn.commit()
+        if scenario == "read_heavy":
+            cursor = await conn.execute(statements["select_all"])
+            rows = await cursor.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+        elif scenario == "repeated_queries":
+            for i in range(ROWS_TO_INSERT):
+                cursor = await conn.execute(statements["select_by"], (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        await conn.close()
+
+
+async def _run_oracle_async_raw_workload(scenario: str) -> None:
+    connect_async = _import_object("oracledb", "connect_async")
+    conn = await connect_async(**_oracle_connection_config())
+    cursor = conn.cursor()
+    statements = _sql_for_driver("oracledb_async")
+    try:
+        await cursor.execute(statements["drop"])
+        await cursor.execute(statements["create"])
+        if scenario == "initialization":
+            return
+        data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+        if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+            await cursor.executemany(statements["insert"], data)
+        elif scenario == "iterative_inserts":
+            for value in data:
+                await cursor.execute(statements["insert"], value)
+            return
+        await conn.commit()
+        if scenario == "read_heavy":
+            await cursor.execute(statements["select_all"])
+            rows = await cursor.fetchall()
+            assert len(rows) == ROWS_TO_INSERT
+        elif scenario == "repeated_queries":
+            for i in range(ROWS_TO_INSERT):
+                await cursor.execute(statements["select_by"], (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(Exception):
+            await cursor.close()
+        await conn.close()
+
+
+def _make_raw_async_scenario(driver: str, scenario: str) -> Any:
+    async def run() -> None:
+        if driver in {"asyncpg", "cockroach_asyncpg"}:
+            await _run_asyncpg_like_raw_workload(driver, scenario)
+        elif driver in {"aiomysql", "asyncmy"}:
+            await _run_aiomysql_like_raw_workload(driver, scenario)
+        elif driver == "psqlpy":
+            await _run_psqlpy_raw_workload(scenario)
+        elif driver == "mysqlconnector_async":
+            await _run_mysqlconnector_async_raw_workload(scenario)
+        elif driver in {"psycopg_async", "cockroach_psycopg_async"}:
+            await _run_psycopg_async_raw_workload(driver, scenario)
+        elif driver == "oracledb_async":
+            await _run_oracle_async_raw_workload(scenario)
+        else:
+            raise BenchmarkSkipError(f"{driver} raw async workload is not implemented")
+
+    return run
+
+
+def _resolve_benchmark_url(url: str | Callable[[], str]) -> str:
+    return url() if callable(url) else url
+
+
+def _make_sqlalchemy_sync_scenario(driver: str, url: str | Callable[[], str], scenario: str) -> Any:
+    def run() -> None:
+        create_engine, text = _get_sqlalchemy()
+        if create_engine is None:
+            raise BenchmarkSkipError("sqlalchemy is not installed")
+        statements = _sql_for_driver(driver)
+        engine = create_engine(_resolve_benchmark_url(url))
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(statements["drop"]))
+                conn.execute(text(statements["create"]))
+                if scenario == "initialization":
+                    return
+                data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+                if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+                    conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+                elif scenario == "iterative_inserts":
+                    for row in data:
+                        conn.execute(text(INSERT_TEST_VALUE_SQLA), row)
+                    conn.commit()
+                    return
+                conn.commit()
+                if scenario == "read_heavy":
+                    rows = conn.execute(text(statements["select_all"])).fetchall()
+                    assert len(rows) == ROWS_TO_INSERT
+                elif scenario == "repeated_queries":
+                    for i in range(ROWS_TO_INSERT):
+                        conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"}).fetchone()
+        finally:
+            engine.dispose()
+
+    return run
+
+
+def _make_sqlalchemy_async_scenario(driver: str, url: str | Callable[[], str], scenario: str) -> Any:
+    async def run() -> None:
+        create_async_engine, text = _get_async_sqlalchemy()
+        if create_async_engine is None:
+            raise BenchmarkSkipError("sqlalchemy async is not installed")
+        statements = _sql_for_driver(driver)
+        engine = create_async_engine(_resolve_benchmark_url(url))
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text(statements["drop"]))
+                await conn.execute(text(statements["create"]))
+                if scenario == "initialization":
+                    return
+                data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
+                if scenario in {"write_heavy", "read_heavy", "repeated_queries"}:
+                    await conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
+                elif scenario == "iterative_inserts":
+                    for row in data:
+                        await conn.execute(text(INSERT_TEST_VALUE_SQLA), row)
+                    await conn.commit()
+                    return
+                await conn.commit()
+                if scenario == "read_heavy":
+                    rows = (await conn.execute(text(statements["select_all"]))).fetchall()
+                    assert len(rows) == ROWS_TO_INSERT
+                elif scenario == "repeated_queries":
+                    for i in range(ROWS_TO_INSERT):
+                        result = await conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
+                        result.fetchone()
+        finally:
+            await engine.dispose()
+
+    return run
+
+
+def _postgres_sqlalchemy_url(driver: str, *, async_: bool = False) -> str:
+    suffix = _postgres_dsn_for_driver(driver).split("://", 1)[1]
+    if async_:
+        return f"postgresql+psycopg://{suffix}"
+    return f"postgresql+psycopg://{suffix}"
+
+
+def _make_postgres_sqlalchemy_url_resolver(driver: str, *, async_: bool = False) -> Callable[[], str]:
+    def resolve() -> str:
+        return _postgres_sqlalchemy_url(driver, async_=async_)
+
+    return resolve
+
+
+def _mysql_sqlalchemy_url(driver: str) -> str:
+    suffix = MYSQL_DSN.split("://", 1)[1]
+    if driver == "pymysql":
+        return f"mysql+pymysql://{suffix}"
+    if driver == "aiomysql":
+        return f"mysql+aiomysql://{suffix}"
+    if driver == "asyncmy":
+        return f"mysql+asyncmy://{suffix}"
+    return f"mysql+mysqlconnector://{suffix}"
+
+
+def _oracle_sqlalchemy_url() -> str:
+    return f"oracle+oracledb://{ORACLE_USER}:{ORACLE_PASSWORD}@{ORACLE_DSN}"
+
+
+def _register_pr_c_driver_scenarios(registry: dict[tuple[str, str, str], Any]) -> None:
+    sync_configs = {
+        "psycopg": ("sqlspec.adapters.psycopg", "PsycopgSyncConfig"),
+        "cockroach_psycopg": ("sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgSyncConfig"),
+        "pymysql": ("sqlspec.adapters.pymysql", "PyMysqlConfig"),
+        "mysqlconnector": ("sqlspec.adapters.mysqlconnector", "MysqlConnectorSyncConfig"),
+        "oracledb": ("sqlspec.adapters.oracledb", "OracleSyncConfig"),
+        "adbc": ("sqlspec.adapters.adbc", "AdbcConfig"),
+        "spanner": ("sqlspec.adapters.spanner", "SpannerSyncConfig"),
+        "bigquery": ("sqlspec.adapters.bigquery", "BigQueryConfig"),
+    }
+    async_configs = {
+        "psycopg_async": ("sqlspec.adapters.psycopg", "PsycopgAsyncConfig"),
+        "psqlpy": ("sqlspec.adapters.psqlpy", "PsqlpyConfig"),
+        "cockroach_asyncpg": ("sqlspec.adapters.cockroach_asyncpg", "CockroachAsyncpgConfig"),
+        "cockroach_psycopg_async": ("sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgAsyncConfig"),
+        "aiomysql": ("sqlspec.adapters.aiomysql", "AiomysqlConfig"),
+        "asyncmy": ("sqlspec.adapters.asyncmy", "AsyncmyConfig"),
+        "mysqlconnector_async": ("sqlspec.adapters.mysqlconnector", "MysqlConnectorAsyncConfig"),
+        "oracledb_async": ("sqlspec.adapters.oracledb", "OracleAsyncConfig"),
+    }
+    sync_raw = {
+        "psycopg": lambda: _raw_psycopg_connect("psycopg"),
+        "cockroach_psycopg": lambda: _raw_psycopg_connect("cockroach_psycopg"),
+        "pymysql": _raw_pymysql_connect,
+        "mysqlconnector": _raw_mysqlconnector_connect,
+        "oracledb": _raw_oracle_connect,
+        "adbc": _raw_adbc_connect,
+        "spanner": lambda: (_ for _ in ()).throw(
+            BenchmarkSkipError("Spanner raw workload requires emulator/client setup")
+        ),
+        "bigquery": lambda: (_ for _ in ()).throw(
+            BenchmarkSkipError("BigQuery raw workload requires emulator/client setup")
+        ),
+    }
+    for driver, (module_name, config_name) in sync_configs.items():
+        for scenario in CORE_SCENARIOS:
+            registry[("sqlspec", driver, scenario)] = _make_sqlspec_sync_scenario(
+                driver, module_name, config_name, scenario
+            )
+            registry[("raw", driver, scenario)] = _make_raw_dbapi_scenario(driver, sync_raw[driver], scenario)
+    for driver, (module_name, config_name) in async_configs.items():
+        for scenario in CORE_SCENARIOS:
+            registry[("sqlspec", driver, scenario)] = _make_sqlspec_async_scenario(
+                driver, module_name, config_name, scenario
+            )
+            registry[("raw", driver, scenario)] = _make_raw_async_scenario(driver, scenario)
+    for driver in ("psycopg", "cockroach_psycopg"):
+        for scenario in CORE_SCENARIOS:
+            registry[("sqlalchemy", driver, scenario)] = _make_sqlalchemy_sync_scenario(
+                driver, _make_postgres_sqlalchemy_url_resolver(driver), scenario
+            )
+    for driver in ("psycopg_async",):
+        for scenario in CORE_SCENARIOS:
+            registry[("sqlalchemy", driver, scenario)] = _make_sqlalchemy_async_scenario(
+                driver, _make_postgres_sqlalchemy_url_resolver(driver, async_=True), scenario
+            )
+    for driver in ("pymysql", "mysqlconnector", "aiomysql", "asyncmy"):
+        for scenario in CORE_SCENARIOS:
+            maker = (
+                _make_sqlalchemy_async_scenario if driver in {"aiomysql", "asyncmy"} else _make_sqlalchemy_sync_scenario
+            )
+            registry[("sqlalchemy", driver, scenario)] = maker(driver, _mysql_sqlalchemy_url(driver), scenario)
+    for scenario in CORE_SCENARIOS:
+        registry[("sqlalchemy", "oracledb", scenario)] = _make_sqlalchemy_sync_scenario(
+            "oracledb", _oracle_sqlalchemy_url(), scenario
+        )
+
+
 SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     # SQLite scenarios
     ("raw", "sqlite", "initialization"): raw_sqlite_initialization,
@@ -1776,12 +2641,18 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("raw", "asyncpg", "initialization"): raw_asyncpg_initialization,
     ("raw", "asyncpg", "write_heavy"): raw_asyncpg_write_heavy,
     ("raw", "asyncpg", "read_heavy"): raw_asyncpg_read_heavy,
+    ("raw", "asyncpg", "iterative_inserts"): raw_asyncpg_iterative_inserts,
+    ("raw", "asyncpg", "repeated_queries"): raw_asyncpg_repeated_queries,
     ("sqlspec", "asyncpg", "initialization"): sqlspec_asyncpg_initialization,
     ("sqlspec", "asyncpg", "write_heavy"): sqlspec_asyncpg_write_heavy,
     ("sqlspec", "asyncpg", "read_heavy"): sqlspec_asyncpg_read_heavy,
+    ("sqlspec", "asyncpg", "iterative_inserts"): sqlspec_asyncpg_iterative_inserts,
+    ("sqlspec", "asyncpg", "repeated_queries"): sqlspec_asyncpg_repeated_queries,
     ("sqlalchemy", "asyncpg", "initialization"): sqlalchemy_asyncpg_initialization,
     ("sqlalchemy", "asyncpg", "write_heavy"): sqlalchemy_asyncpg_write_heavy,
     ("sqlalchemy", "asyncpg", "read_heavy"): sqlalchemy_asyncpg_read_heavy,
+    ("sqlalchemy", "asyncpg", "iterative_inserts"): sqlalchemy_asyncpg_iterative_inserts,
+    ("sqlalchemy", "asyncpg", "repeated_queries"): sqlalchemy_asyncpg_repeated_queries,
     # Extended SQLite scenarios (raw vs sqlspec only)
     ("raw", "sqlite", "dict_key_transform"): raw_sqlite_dict_key_transform,
     ("sqlspec", "sqlite", "dict_key_transform"): sqlspec_sqlite_dict_key_transform,
@@ -1792,6 +2663,7 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("raw", "sqlite", "thin_path_stress"): raw_sqlite_thin_path_stress,
     ("sqlspec", "sqlite", "thin_path_stress"): sqlspec_sqlite_thin_path_stress,
 }
+_register_pr_c_driver_scenarios(SCENARIO_REGISTRY)
 
 
 def print_benchmark_table(results: list[dict[str, Any]]) -> None:

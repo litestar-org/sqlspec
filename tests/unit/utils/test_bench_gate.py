@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from click.testing import CliRunner
+
 
 def _load_bench_gate_module() -> ModuleType:
     module_path = Path(__file__).resolve().parents[3] / "tools" / "scripts" / "bench_gate.py"
@@ -81,3 +83,112 @@ def test_gate_json_report_records_thresholds_and_result(tmp_path: Path) -> None:
     assert '"all_passed": true' in payload
     assert '"thresholds": {' in payload
     assert '"read_heavy": 12.0' in payload
+
+
+def test_run_gate_passes_requested_driver_to_benchmark_runner(monkeypatch) -> None:
+    module = _load_bench_gate_module()
+    captured: dict[str, str] = {}
+
+    def fake_run_benchmark(driver: str, errors: list[str], *, iterations: int, warmup: int) -> list[dict[str, object]]:
+        captured["driver"] = driver
+        return [
+            {"library": "raw", "scenario": "read_heavy", "time": 1.0},
+            {"library": module.bench_mod.SQLSPEC_LABEL, "scenario": "read_heavy", "time": 1.05},
+        ]
+
+    monkeypatch.setattr(module.bench_mod, "run_benchmark", fake_run_benchmark)
+    monkeypatch.setattr(module, "GATE_SCENARIOS", ["read_heavy"])
+
+    results, all_passed = module.run_gate(
+        driver="duckdb", rows=100, iterations=1, warmup=0, thresholds={"read_heavy": 12.0}
+    )
+
+    assert captured == {"driver": "duckdb"}
+    assert results[0]["driver"] == "duckdb"
+    assert all_passed is True
+
+
+def test_run_gate_applies_rows_to_benchmark_runner(monkeypatch) -> None:
+    module = _load_bench_gate_module()
+    original_rows = module.bench_mod.ROWS_TO_INSERT
+    observed_rows: list[int] = []
+
+    def fake_run_benchmark(driver: str, errors: list[str], *, iterations: int, warmup: int) -> list[dict[str, object]]:
+        observed_rows.append(module.bench_mod.ROWS_TO_INSERT)
+        return [
+            {"library": "raw", "scenario": "read_heavy", "time": 1.0},
+            {"library": module.bench_mod.SQLSPEC_LABEL, "scenario": "read_heavy", "time": 1.05},
+        ]
+
+    monkeypatch.setattr(module.bench_mod, "run_benchmark", fake_run_benchmark)
+    monkeypatch.setattr(module, "GATE_SCENARIOS", ["read_heavy"])
+
+    module.run_gate(driver="sqlite", rows=123, iterations=1, warmup=0, thresholds={"read_heavy": 12.0})
+
+    assert observed_rows == [123]
+    assert module.bench_mod.ROWS_TO_INSERT == original_rows
+
+
+def test_cli_reports_regressions_without_failing_by_default(monkeypatch) -> None:
+    module = _load_bench_gate_module()
+
+    def fake_run_gate(**kwargs) -> tuple[list[dict[str, object]], bool]:
+        return (
+            [
+                {
+                    "driver": kwargs["driver"],
+                    "scenario": "read_heavy",
+                    "raw_time": 1.0,
+                    "sqlspec_time": 2.0,
+                    "overhead_pct": 100.0,
+                    "threshold_pct": 12.0,
+                    "passed": False,
+                }
+            ],
+            False,
+        )
+
+    monkeypatch.setattr(module, "run_gate", fake_run_gate)
+
+    result = CliRunner().invoke(module.main, ["--driver", "duckdb", "--rows", "100", "--iterations", "1"])
+
+    assert result.exit_code == 0
+    assert "regression report found threshold failures" in result.output
+
+
+def test_cli_can_fail_explicitly_on_regression(monkeypatch) -> None:
+    module = _load_bench_gate_module()
+
+    def fake_run_gate(**kwargs) -> tuple[list[dict[str, object]], bool]:
+        return (
+            [
+                {
+                    "driver": kwargs["driver"],
+                    "scenario": "read_heavy",
+                    "raw_time": 1.0,
+                    "sqlspec_time": 2.0,
+                    "overhead_pct": 100.0,
+                    "threshold_pct": 12.0,
+                    "passed": False,
+                }
+            ],
+            False,
+        )
+
+    monkeypatch.setattr(module, "run_gate", fake_run_gate)
+
+    result = CliRunner().invoke(
+        module.main, ["--driver", "duckdb", "--rows", "100", "--iterations", "1", "--fail-on-regression"]
+    )
+
+    assert result.exit_code == 1
+    assert "Gate FAILED" in result.output
+
+
+def test_threshold_ownership_documents_variance_and_attribution() -> None:
+    module = _load_bench_gate_module()
+
+    assert module.THRESHOLD_OWNERSHIP["owner"] == "SQLSpec maintainers"
+    assert module.THRESHOLD_OWNERSHIP["variance_policy"]
+    assert module.THRESHOLD_OWNERSHIP["shared_core_attribution"]
+    assert module.THRESHOLD_OWNERSHIP["driver_local_attribution"]

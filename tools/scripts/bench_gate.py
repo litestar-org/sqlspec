@@ -1,8 +1,8 @@
 """Performance regression gate script.
 
 Runs core benchmarks via the bench.py infrastructure, compares against
-configured thresholds, and exits non-zero if any threshold is exceeded.
-Designed for CI integration.
+configured thresholds, and reports threshold failures by default. Pass
+``--fail-on-regression`` to make threshold failures exit non-zero.
 
 Thresholds define the maximum acceptable overhead (%) of sqlspec vs raw driver:
 - iterative_inserts: < 100% overhead
@@ -34,6 +34,7 @@ __all__ = (
     "DEFAULT_THRESHOLDS",
     "GATE_SCENARIOS",
     "MODULE_ADMISSION_CRITERIA",
+    "THRESHOLD_OWNERSHIP",
     "main",
     "print_gate_table",
     "run_gate",
@@ -61,6 +62,19 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 
 # Core scenarios to gate on
 GATE_SCENARIOS = ["iterative_inserts", "repeated_queries", "write_heavy", "read_heavy"]
+
+THRESHOLD_OWNERSHIP: dict[str, str] = {
+    "owner": "SQLSpec maintainers",
+    "variance_policy": (
+        "PR and release smoke runs are advisory; scheduled artifacts own threshold changes after noisy runs are repeated."
+    ),
+    "shared_core_attribution": (
+        "Regressions across SQLite, DuckDB, ADBC SQLite, and multiple SQLSpec libraries point to shared-core paths."
+    ),
+    "driver_local_attribution": (
+        "Regressions isolated to one adapter family belong to that adapter's bind, cursor, pool, or dialect layer."
+    ),
+}
 
 # PRD benchmark matrix for mypyc expansion work. This keeps the benchmark
 # expectations next to the scripts that actually exercise them.
@@ -122,7 +136,7 @@ CHAPTER_ROLLOUT_ORDER: tuple[str, ...] = (
 
 
 def run_gate(
-    *, rows: int, iterations: int, warmup: int, thresholds: dict[str, float]
+    *, driver: str, rows: int, iterations: int, warmup: int, thresholds: dict[str, float]
 ) -> tuple[list[dict[str, Any]], bool]:
     """Run benchmark gate scenarios and check thresholds.
 
@@ -130,6 +144,7 @@ def run_gate(
     then extracts raw vs sqlspec times for the gated scenarios.
 
     Args:
+        driver: Database driver to benchmark.
         rows: Number of rows for each scenario.
         iterations: Number of timed iterations per scenario.
         warmup: Number of warmup iterations (not timed).
@@ -138,12 +153,15 @@ def run_gate(
     Returns:
         Tuple of (results list, all_passed boolean).
     """
-    # Set bench.py global rows
-    cast("Any", bench_mod).ROWS_TO_INSERT = rows
-
-    # Run benchmarks using the same infrastructure as bench.py
     errors: list[str] = []
-    bench_results = bench_mod.run_benchmark("sqlite", errors, iterations=iterations, warmup=warmup)
+    benchmark_module = cast("Any", bench_mod)
+    original_rows = benchmark_module.ROWS_TO_INSERT
+    benchmark_module.ROWS_TO_INSERT = rows
+    try:
+        # Run benchmarks using the same infrastructure as bench.py
+        bench_results = bench_mod.run_benchmark(driver, errors, iterations=iterations, warmup=warmup)
+    finally:
+        benchmark_module.ROWS_TO_INSERT = original_rows
 
     # Build lookup: (library, scenario) -> median time
     time_lookup: dict[tuple[str, str], float] = {}
@@ -165,6 +183,7 @@ def run_gate(
 
         if raw_time is None or sqlspec_time is None:
             gate_results.append({
+                "driver": driver,
                 "scenario": scenario,
                 "raw_time": raw_time,
                 "sqlspec_time": sqlspec_time,
@@ -183,6 +202,7 @@ def run_gate(
             all_passed = False
 
         gate_results.append({
+            "driver": driver,
             "scenario": scenario,
             "raw_time": raw_time,
             "sqlspec_time": sqlspec_time,
@@ -198,7 +218,7 @@ def run_gate(
     return gate_results, all_passed
 
 
-def print_gate_table(results: list[dict[str, Any]]) -> None:
+def print_gate_table(results: list[dict[str, Any]], *, driver: str = "sqlite") -> None:
     """Print a rich-formatted gate results table.
 
     Args:
@@ -206,7 +226,7 @@ def print_gate_table(results: list[dict[str, Any]]) -> None:
     """
     console = Console()
 
-    table = Table(title="Performance Regression Gate Results (sqlite)")
+    table = Table(title=f"Performance Regression Gate Results ({driver})")
     table.add_column("Scenario", style="cyan", no_wrap=True)
     table.add_column("Raw (s)", justify="right", style="yellow")
     table.add_column("sqlspec (s)", justify="right", style="yellow")
@@ -253,12 +273,14 @@ def _write_json_results(
     """Write a performance gate report to JSON."""
     output = {
         "metadata": {
+            "driver": results[0].get("driver") if results else None,
             "rows": rows,
             "iterations": iterations,
             "warmup": warmup,
             "mypyc_compiled": bench_mod._is_compiled(),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         },
+        "threshold_ownership": THRESHOLD_OWNERSHIP,
         "thresholds": thresholds,
         "all_passed": all_passed,
         "results": results,
@@ -267,6 +289,7 @@ def _write_json_results(
 
 
 @click.command()
+@click.option("--driver", default="sqlite", show_default=True, help="Driver name to benchmark")
 @click.option("--rows", default=10_000, show_default=True, help="Number of rows per scenario")
 @click.option(
     "--iterations",
@@ -309,7 +332,9 @@ def _write_json_results(
     show_default=True,
     help="Max overhead % for read_heavy",
 )
+@click.option("--fail-on-regression", is_flag=True, default=False, help="Exit non-zero when thresholds fail")
 def main(
+    driver: str,
     rows: int,
     iterations: int,
     warmup: int,
@@ -317,13 +342,14 @@ def main(
     threshold_repeated: float,
     threshold_write: float,
     threshold_read: float,
+    fail_on_regression: bool,
     json_output: str | None,
 ) -> None:
     """Run performance regression gate.
 
-    Executes core benchmark scenarios (sqlite) and checks against
-    configured overhead thresholds. Exits with code 0 if all pass,
-    non-zero if any threshold is exceeded.
+    Executes core benchmark scenarios for the selected driver and checks against
+    configured overhead thresholds. Threshold failures are report-only by
+    default and exit non-zero only with ``--fail-on-regression``.
     """
     thresholds = {
         "iterative_inserts": threshold_iterative,
@@ -332,15 +358,17 @@ def main(
         "read_heavy": threshold_read,
     }
 
-    click.echo(f"Running performance gate (rows={rows}, iterations={iterations}, warmup={warmup})")
+    click.echo(f"Running performance gate (driver={driver}, rows={rows}, iterations={iterations}, warmup={warmup})")
     click.echo(f"Thresholds: {thresholds}")
     if bench_mod._is_compiled():
         click.secho("mypyc compilation detected", fg="green")
     click.echo()
 
-    results, all_passed = run_gate(rows=rows, iterations=iterations, warmup=warmup, thresholds=thresholds)
+    results, all_passed = run_gate(
+        driver=driver, rows=rows, iterations=iterations, warmup=warmup, thresholds=thresholds
+    )
 
-    print_gate_table(results)
+    print_gate_table(results, driver=driver)
     if json_output is not None:
         _write_json_results(
             results,
@@ -356,10 +384,12 @@ def main(
     if all_passed:
         click.secho("\nAll scenarios within threshold. Gate PASSED.", fg="green")
         sys.exit(0)
-    else:
-        failed = [r["scenario"] for r in results if not r["passed"]]
+    failed = [r["scenario"] for r in results if not r["passed"]]
+    if fail_on_regression:
         click.secho(f"\nGate FAILED. Scenarios exceeding threshold: {', '.join(failed)}", fg="red")
         sys.exit(1)
+    click.secho(f"\nPerformance regression report found threshold failures: {', '.join(failed)}", fg="yellow")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
