@@ -106,141 +106,6 @@ def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundErr
     raise NotFoundException(detail=detail) from exc
 
 
-class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
-    """OpenAPI schema plugin expanding OffsetPagination[T] into a concrete schema.
-
-    Defense-in-depth for sqlspec.core.filters.OffsetPagination. The msgspec.Struct
-    conversion already lets Litestar's default generator produce a correct schema;
-    this plugin guarantees the shape even if future Litestar or msgspec changes
-    break auto-detection.
-    """
-
-    @staticmethod
-    def is_plugin_supported_type(value: Any) -> bool:
-        origin = getattr(value, "__origin__", value)
-        return isinstance(origin, type) and issubclass(origin, OffsetPagination)
-
-    def to_openapi_schema(self, field_definition: "FieldDefinition", schema_creator: "SchemaCreator") -> "Schema":
-        from litestar.openapi.spec import OpenAPIType, Schema
-        from litestar.typing import FieldDefinition
-
-        inner_type: Any = Any
-        inner_args = getattr(field_definition, "inner_types", ())
-        if inner_args:
-            inner_type = inner_args[0].annotation
-
-        item_schema = schema_creator.for_field_definition(FieldDefinition.from_annotation(inner_type))
-
-        return Schema(
-            type=OpenAPIType.OBJECT,
-            properties={
-                "items": Schema(type=OpenAPIType.ARRAY, items=item_schema),
-                "limit": Schema(type=OpenAPIType.INTEGER),
-                "offset": Schema(type=OpenAPIType.INTEGER),
-                "total": Schema(type=OpenAPIType.INTEGER),
-            },
-            required=["items", "limit", "offset", "total"],
-        )
-
-
-class _NumpySignatureNamespace:
-    """Proxy ``numpy`` module namespace that maps ``ndarray`` to SQLSpec's decoder-safe subclass."""
-
-    __slots__ = ("_numpy", "ndarray")
-
-    def __init__(self, numpy_module: Any, ndarray_type: type[Any]) -> None:
-        self._numpy = numpy_module
-        self.ndarray = ndarray_type
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._numpy, name)
-
-
-def _get_litestar_numpy_array_type() -> type[Any] | None:
-    """Return a mutable ndarray subclass Litestar can attach a decoder to."""
-    if not NUMPY_INSTALLED:
-        return None
-
-    global _LITESTAR_NUMPY_ARRAY_TYPE
-    if _LITESTAR_NUMPY_ARRAY_TYPE is None:
-        import numpy as np
-
-        class SQLSpecNumpyArray(np.ndarray):
-            pass
-
-        _LITESTAR_NUMPY_ARRAY_TYPE = SQLSpecNumpyArray
-    return _LITESTAR_NUMPY_ARRAY_TYPE
-
-
-def _litestar_numpy_array_predicate(target_type: Any) -> bool:
-    ndarray_type = _get_litestar_numpy_array_type()
-    return ndarray_type is not None and target_type is ndarray_type
-
-
-def _litestar_numpy_array_dec_hook(target_type: type[Any], value: Any) -> Any:
-    decoded = numpy_array_dec_hook(target_type, value)
-    if NUMPY_INSTALLED:
-        import numpy as np
-
-        if isinstance(decoded, np.ndarray) and isinstance(target_type, type) and not isinstance(decoded, target_type):
-            return decoded.view(target_type)
-    return decoded
-
-
-def _normalize_header_list(headers: Any) -> list[str]:
-    if headers is None:
-        return []
-    if isinstance(headers, str):
-        return [headers.lower()]
-    if isinstance(headers, Iterable):
-        normalized: list[str] = []
-        for header in headers:
-            if not isinstance(header, str):
-                msg = "litestar correlation headers must be strings"
-                raise ImproperConfigurationError(msg)
-            normalized.append(header.lower())
-        return normalized
-    msg = "litestar correlation_headers must be a string or iterable of strings"
-    raise ImproperConfigurationError(msg)
-
-
-def _dedupe_headers(headers: Iterable[str]) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for header in headers:
-        lowered = header.lower()
-        if lowered in seen or not lowered:
-            continue
-        seen.add(lowered)
-        ordered.append(lowered)
-    return ordered
-
-
-def _build_correlation_headers(*, primary: str, configured: list[str], auto_trace_headers: bool) -> tuple[str, ...]:
-    header_order: list[str] = [primary.lower()]
-    header_order.extend(configured)
-    if auto_trace_headers:
-        header_order.extend(TRACE_CONTEXT_FALLBACK_HEADERS)
-    return tuple(_dedupe_headers(header_order))
-
-
-def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]]":
-    """Build the Litestar-specific ``type_decoders`` list.
-
-    Decoders are predicate-tuples consumed by Litestar's request-body parsing,
-    not part of sqlspec's serializer registry — so they live here rather than
-    in :data:`sqlspec.utils.serializers.DEFAULT_TYPE_ENCODERS`.
-    """
-    decoders: list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]] = []
-    if NUMPY_INSTALLED:
-        decoders.append((_litestar_numpy_array_predicate, _litestar_numpy_array_dec_hook))
-    with suppress(ImportError):
-        import uuid_utils  # pyright: ignore[reportMissingImports]
-
-        decoders.append((lambda t: t is uuid_utils.UUID, lambda t, v: t(str(v))))
-    return decoders
-
-
 class CorrelationMiddleware:
     __slots__ = ("_app", "_headers")
 
@@ -1064,3 +929,138 @@ class SQLCommenterMiddleware:
             await self.app(scope, receive, send)
         finally:
             SQLCommenterContext.set(previous)
+
+
+class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
+    """OpenAPI schema plugin expanding OffsetPagination[T] into a concrete schema.
+
+    Defense-in-depth for sqlspec.core.filters.OffsetPagination. The msgspec.Struct
+    conversion already lets Litestar's default generator produce a correct schema;
+    this plugin guarantees the shape even if future Litestar or msgspec changes
+    break auto-detection.
+    """
+
+    @staticmethod
+    def is_plugin_supported_type(value: Any) -> bool:
+        origin = getattr(value, "__origin__", value)
+        return isinstance(origin, type) and issubclass(origin, OffsetPagination)
+
+    def to_openapi_schema(self, field_definition: "FieldDefinition", schema_creator: "SchemaCreator") -> "Schema":
+        from litestar.openapi.spec import OpenAPIType, Schema
+        from litestar.typing import FieldDefinition
+
+        inner_type: Any = Any
+        inner_args = getattr(field_definition, "inner_types", ())
+        if inner_args:
+            inner_type = inner_args[0].annotation
+
+        item_schema = schema_creator.for_field_definition(FieldDefinition.from_annotation(inner_type))
+
+        return Schema(
+            type=OpenAPIType.OBJECT,
+            properties={
+                "items": Schema(type=OpenAPIType.ARRAY, items=item_schema),
+                "limit": Schema(type=OpenAPIType.INTEGER),
+                "offset": Schema(type=OpenAPIType.INTEGER),
+                "total": Schema(type=OpenAPIType.INTEGER),
+            },
+            required=["items", "limit", "offset", "total"],
+        )
+
+
+class _NumpySignatureNamespace:
+    """Proxy ``numpy`` module namespace that maps ``ndarray`` to SQLSpec's decoder-safe subclass."""
+
+    __slots__ = ("_numpy", "ndarray")
+
+    def __init__(self, numpy_module: Any, ndarray_type: type[Any]) -> None:
+        self._numpy = numpy_module
+        self.ndarray = ndarray_type
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._numpy, name)
+
+
+def _normalize_header_list(headers: Any) -> list[str]:
+    if headers is None:
+        return []
+    if isinstance(headers, str):
+        return [headers.lower()]
+    if isinstance(headers, Iterable):
+        normalized: list[str] = []
+        for header in headers:
+            if not isinstance(header, str):
+                msg = "litestar correlation headers must be strings"
+                raise ImproperConfigurationError(msg)
+            normalized.append(header.lower())
+        return normalized
+    msg = "litestar correlation_headers must be a string or iterable of strings"
+    raise ImproperConfigurationError(msg)
+
+
+def _dedupe_headers(headers: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for header in headers:
+        lowered = header.lower()
+        if lowered in seen or not lowered:
+            continue
+        seen.add(lowered)
+        ordered.append(lowered)
+    return ordered
+
+
+def _build_correlation_headers(*, primary: str, configured: list[str], auto_trace_headers: bool) -> tuple[str, ...]:
+    header_order: list[str] = [primary.lower()]
+    header_order.extend(configured)
+    if auto_trace_headers:
+        header_order.extend(TRACE_CONTEXT_FALLBACK_HEADERS)
+    return tuple(_dedupe_headers(header_order))
+
+
+def _get_litestar_numpy_array_type() -> type[Any] | None:
+    """Return a mutable ndarray subclass Litestar can attach a decoder to."""
+    if not NUMPY_INSTALLED:
+        return None
+
+    global _LITESTAR_NUMPY_ARRAY_TYPE
+    if _LITESTAR_NUMPY_ARRAY_TYPE is None:
+        import numpy as np
+
+        class SQLSpecNumpyArray(np.ndarray):
+            pass
+
+        _LITESTAR_NUMPY_ARRAY_TYPE = SQLSpecNumpyArray
+    return _LITESTAR_NUMPY_ARRAY_TYPE
+
+
+def _litestar_numpy_array_predicate(target_type: Any) -> bool:
+    ndarray_type = _get_litestar_numpy_array_type()
+    return ndarray_type is not None and target_type is ndarray_type
+
+
+def _litestar_numpy_array_dec_hook(target_type: type[Any], value: Any) -> Any:
+    decoded = numpy_array_dec_hook(target_type, value)
+    if NUMPY_INSTALLED:
+        import numpy as np
+
+        if isinstance(decoded, np.ndarray) and isinstance(target_type, type) and not isinstance(decoded, target_type):
+            return decoded.view(target_type)
+    return decoded
+
+
+def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]]":
+    """Build the Litestar-specific ``type_decoders`` list.
+
+    Decoders are predicate-tuples consumed by Litestar's request-body parsing,
+    not part of sqlspec's serializer registry — so they live here rather than
+    in :data:`sqlspec.utils.serializers.DEFAULT_TYPE_ENCODERS`.
+    """
+    decoders: list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]] = []
+    if NUMPY_INSTALLED:
+        decoders.append((_litestar_numpy_array_predicate, _litestar_numpy_array_dec_hook))
+    with suppress(ImportError):
+        import uuid_utils  # pyright: ignore[reportMissingImports]
+
+        decoders.append((lambda t: t is uuid_utils.UUID, lambda t, v: t(str(v))))
+    return decoders
