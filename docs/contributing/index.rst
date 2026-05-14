@@ -14,12 +14,6 @@ Thank you for your interest in contributing to SQLSpec! This section provides gu
 
       Comprehensive guide to building new database adapters for SQLSpec.
 
-    .. grid-item-card:: :octicon:`meter` Benchmarking and Gates
-      :link: benchmarking
-      :link-type: doc
-
-      Performance matrix, threshold ownership, and regression attribution.
-
     .. grid-item-card:: :octicon:`git-pull-request` Contribution Guide
       :link: ../contribution-guide
       :link-type: doc
@@ -31,7 +25,6 @@ Thank you for your interest in contributing to SQLSpec! This section provides gu
     :hidden:
 
     creating_adapters
-    benchmarking
     ../changelog
     ../contribution-guide
     ../releases

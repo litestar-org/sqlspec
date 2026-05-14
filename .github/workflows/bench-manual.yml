@@ -1,12 +1,50 @@
-name: Scheduled Benchmarks
+name: Manual Benchmarks
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * *"
+    inputs:
+      driver:
+        description: "Benchmark driver or all"
+        required: true
+        default: "sqlite"
+        type: choice
+        options:
+          - sqlite
+          - aiosqlite
+          - duckdb
+          - asyncpg
+          - psycopg
+          - psycopg_async
+          - psqlpy
+          - cockroach_asyncpg
+          - cockroach_psycopg
+          - cockroach_psycopg_async
+          - aiomysql
+          - asyncmy
+          - pymysql
+          - mysqlconnector
+          - mysqlconnector_async
+          - oracledb
+          - oracledb_async
+          - adbc
+          - spanner
+          - bigquery
+          - all
+      rows:
+        description: "Rows per scenario"
+        required: true
+        default: "500"
+      iterations:
+        description: "Timed iterations per scenario"
+        required: true
+        default: "3"
+      warmup:
+        description: "Warmup iterations"
+        required: true
+        default: "1"
 
 jobs:
-  full-matrix:
+  benchmarks:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     services:
@@ -67,10 +105,10 @@ jobs:
           SQLSPEC_ORACLE_PASSWORD: oracle
         run: >
           uv run python tools/scripts/bench.py
-          --driver all
-          --rows 500
-          --iterations 3
-          --warmup 1
+          --driver "${{ inputs.driver }}"
+          --rows "${{ inputs.rows }}"
+          --iterations "${{ inputs.iterations }}"
+          --warmup "${{ inputs.warmup }}"
           --json-output benchmark-results.json
 
       - name: Upload benchmark artifact

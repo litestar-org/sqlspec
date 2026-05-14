@@ -85,25 +85,6 @@ jobs:
       - name: Run slotscheck
         run: uv run slotscheck sqlspec
 
-  performance-report:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Performance Report
-        continue-on-error: true
-        run: uv run python tools/scripts/bench_gate.py --driver sqlite --rows 500 --iterations 1 --warmup 0
-
   test-linux:
     runs-on: ubuntu-latest
     strategy:

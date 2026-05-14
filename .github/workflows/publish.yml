@@ -161,29 +161,6 @@ jobs:
           name: wheels-mypyc-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
 
-  validate-benchmark-coverage:
-    name: Validate benchmark adapter coverage
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Validate benchmark matrix
-        run: uv run pytest tests/unit/utils/test_bench.py tests/unit/utils/test_bench_gate.py
-
-      - name: Run release benchmark gate
-        run: uv run python tools/scripts/bench_gate.py --driver sqlite --rows 500 --iterations 3 --warmup 1
-
-
   test-wheels:
     name: Test ${{ matrix.os }} py${{ matrix.python-version }}
     needs: [build-wheels-standard, build-wheels-mypyc]
@@ -231,7 +208,7 @@ jobs:
 
   publish-release:
     name: Publish to PyPI
-    needs: [build-source, build-wheels-standard, build-wheels-mypyc, test-wheels, validate-benchmark-coverage]
+    needs: [build-source, build-wheels-standard, build-wheels-mypyc, test-wheels]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
