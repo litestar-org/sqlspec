@@ -209,13 +209,13 @@ class PsycopgSyncHybridEventsBackend:
         hub = self._ensure_hub()
         payload = hub.dequeue(channel, poll_interval)
         if payload is None:
-            return self._queue.dequeue(channel, poll_interval)
+            return self._queue.dequeue(channel)
         event_id = _extract_event_id(payload)
         if event_id is not None:
             event = self._queue.dequeue_by_event_id(event_id)
             if event is not None:
                 return event
-        return self._queue.dequeue(channel, poll_interval)
+        return self._queue.dequeue(channel)
 
     def ack(self, event_id: str) -> None:
         self._queue.ack(event_id)
@@ -298,13 +298,13 @@ class PsycopgAsyncHybridEventsBackend:
         hub = self._ensure_hub()
         payload = await hub.dequeue(channel, poll_interval)
         if payload is None:
-            return await self._queue.dequeue(channel, poll_interval)
+            return await self._queue.dequeue(channel)
         event_id = _extract_event_id(payload)
         if event_id is not None:
             event = await self._queue.dequeue_by_event_id(event_id)
             if event is not None:
                 return event
-        return await self._queue.dequeue(channel, poll_interval)
+        return await self._queue.dequeue(channel)
 
     async def ack(self, event_id: str) -> None:
         await self._queue.ack(event_id)

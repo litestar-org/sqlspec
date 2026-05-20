@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import threading
+from math import ceil
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import EventChannelError, MissingDependencyError
@@ -66,7 +67,7 @@ def _resolve_options(visibility: "int | None", default_visibility: "int | None",
         msg = "oracledb AQDequeueOptions"
         raise MissingDependencyError(msg, install_package="oracledb")
     options = AQDequeueOptions()
-    options.wait = max(int(wait_seconds), 0)
+    options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
     if visibility is not None:
         options.visibility = visibility
     elif default_visibility is not None:

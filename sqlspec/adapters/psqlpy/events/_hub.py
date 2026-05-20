@@ -2,7 +2,7 @@
 
 Owns the psqlpy Listener handle for the backend's lifetime. Each channel
 gets a single driver-level callback registered once via ``add_callback``
-that dispatches into a per-channel asyncio.Queue. Subscribe / unsubscribe
+that dispatches into one queue per consumer task. Subscribe / unsubscribe
 are serialized under an asyncio.Lock; ``clear_channel_callbacks`` only
 runs on unsubscribe / shutdown so concurrent peers cannot wipe each
 other's callbacks mid-iteration.
@@ -13,6 +13,7 @@ other's callbacks mid-iteration.
 import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
+from weakref import WeakKeyDictionary
 
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.protocols import NotificationProtocol
@@ -72,7 +73,7 @@ class PsqlpyListenerHub:
     def __init__(self, config: "PsqlpyConfig") -> None:
         self._config = config
         self._lock = asyncio.Lock()
-        self._queues: dict[str, asyncio.Queue[str]] = {}
+        self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._callbacks: dict[str, _PsqlpyHubCallback] = {}
         self._listener: Any | None = None
         self._listener_started = False
@@ -88,7 +89,7 @@ class PsqlpyListenerHub:
             normalize_event_channel_name(channel)
             listener = await self._ensure_listener_locked()
             callback = _PsqlpyHubCallback(channel, self._dispatch)
-            self._queues[channel] = asyncio.Queue()
+            self._queues[channel] = WeakKeyDictionary()
             self._callbacks[channel] = callback
             try:
                 await listener.add_callback(channel=channel, callback=callback.__call__)
@@ -117,7 +118,7 @@ class PsqlpyListenerHub:
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
-        queue = self._queues.get(channel)
+        queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
         try:
@@ -151,9 +152,23 @@ class PsqlpyListenerHub:
     def is_subscribed(self, channel: str) -> bool:
         return channel in self._queues
 
+    def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - coroutine dequeue calls always run in a task
+            msg = "PsqlpyListenerHub.dequeue requires an active asyncio task"
+            raise RuntimeError(msg)
+        queues = self._queues.get(channel)
+        if queues is None:
+            return None
+        queue = queues.get(task)
+        if queue is None:
+            queue = asyncio.Queue()
+            queues[task] = queue
+        return queue
+
     async def _ensure_listener_locked(self) -> "PsqlpyListener":
         if self._listener is not None:
-            return self._listener
+            return cast("PsqlpyListener", self._listener)
         pool = await self._config.provide_pool()
         listener = pool.listener()
         await listener.startup()
@@ -161,10 +176,8 @@ class PsqlpyListenerHub:
         return listener
 
     def _dispatch(self, channel: str, payload: str) -> None:
-        queue = self._queues.get(channel)
-        if queue is None:
+        queues = self._queues.get(channel)
+        if queues is None:
             return
-        try:
+        for queue in list(queues.values()):
             queue.put_nowait(payload)
-        except asyncio.QueueFull:  # pragma: no cover - unbounded queues do not raise
-            logger.warning("psqlpy listener queue full for channel %s; dropping notification", channel)

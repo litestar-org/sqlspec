@@ -14,6 +14,7 @@ import contextlib
 import queue as stdlib_queue
 import threading
 from typing import TYPE_CHECKING, Any
+from weakref import WeakKeyDictionary
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
@@ -47,7 +48,7 @@ class PsycopgAsyncListenerHub:
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
         self._config = config
         self._lock = asyncio.Lock()
-        self._queues: dict[str, asyncio.Queue[str]] = {}
+        self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._connection_cm: Any | None = None
         self._connection: Any | None = None
         self._pump_task: asyncio.Task[None] | None = None
@@ -65,7 +66,7 @@ class PsycopgAsyncListenerHub:
             validated = normalize_event_channel_name(channel)
             connection = self._connection
             assert connection is not None
-            self._queues[channel] = asyncio.Queue()
+            self._queues[channel] = WeakKeyDictionary()
             try:
                 await connection.execute(f"LISTEN {validated}")
             except Exception:
@@ -87,7 +88,7 @@ class PsycopgAsyncListenerHub:
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
-        queue = self._queues.get(channel)
+        queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
         try:
@@ -127,6 +128,20 @@ class PsycopgAsyncListenerHub:
     def is_subscribed(self, channel: str) -> bool:
         return channel in self._queues
 
+    def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - coroutine dequeue calls always run in a task
+            msg = "PsycopgAsyncListenerHub.dequeue requires an active asyncio task"
+            raise RuntimeError(msg)
+        queues = self._queues.get(channel)
+        if queues is None:
+            return None
+        queue = queues.get(task)
+        if queue is None:
+            queue = asyncio.Queue()
+            queues[task] = queue
+        return queue
+
     async def _ensure_connection_locked(self) -> None:
         if self._connection is not None:
             return
@@ -165,13 +180,11 @@ class PsycopgAsyncListenerHub:
             return
 
     def _dispatch(self, channel: str, payload: str) -> None:
-        queue = self._queues.get(channel)
-        if queue is None:
+        queues = self._queues.get(channel)
+        if queues is None:
             return
-        try:
+        for queue in list(queues.values()):
             queue.put_nowait(payload)
-        except asyncio.QueueFull:  # pragma: no cover - unbounded queues do not raise
-            logger.warning("psycopg async listener queue full for channel %s; dropping notification", channel)
 
 
 class PsycopgSyncListenerHub:
@@ -198,7 +211,7 @@ class PsycopgSyncListenerHub:
     def __init__(self, config: "PsycopgSyncConfig") -> None:
         self._config = config
         self._lock = threading.Lock()
-        self._queues: dict[str, stdlib_queue.Queue[str]] = {}
+        self._queues: dict[str, WeakKeyDictionary[threading.Thread, stdlib_queue.Queue[str]]] = {}
         self._connection_cm: Any | None = None
         self._connection: Any | None = None
         self._stopping = threading.Event()
@@ -214,7 +227,7 @@ class PsycopgSyncListenerHub:
             if channel in self._queues:
                 return
             self._ensure_connection_locked()
-            self._queues[channel] = stdlib_queue.Queue()
+            self._queues[channel] = WeakKeyDictionary()
             try:
                 self._submit("listen", channel)
             except Exception:
@@ -231,7 +244,7 @@ class PsycopgSyncListenerHub:
     def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             self.subscribe(channel)
-        queue = self._queues.get(channel)
+        queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
         try:
@@ -254,9 +267,9 @@ class PsycopgSyncListenerHub:
             for channel in channels:
                 with contextlib.suppress(Exception):
                     self._submit("unlisten", channel)
-            self._stopping.set()
             with contextlib.suppress(Exception):
                 self._submit("stop", "", timeout=2.0)
+            self._stopping.set()
             with contextlib.suppress(Exception):
                 worker_thread.join(timeout=3.0)
         if connection_cm is not None:
@@ -267,6 +280,18 @@ class PsycopgSyncListenerHub:
 
     def is_subscribed(self, channel: str) -> bool:
         return channel in self._queues
+
+    def _get_consumer_queue(self, channel: str) -> "stdlib_queue.Queue[str] | None":
+        with self._lock:
+            queues = self._queues.get(channel)
+            if queues is None:
+                return None
+            thread = threading.current_thread()
+            queue = queues.get(thread)
+            if queue is None:
+                queue = stdlib_queue.Queue()
+                queues[thread] = queue
+            return queue
 
     def _ensure_connection_locked(self) -> None:
         if self._connection is not None:
@@ -291,6 +316,8 @@ class PsycopgSyncListenerHub:
 
     def _worker(self) -> None:
         connection = self._connection
+        if connection is None:
+            return
         while not self._stopping.is_set():
             self._drain_commands(connection)
             if self._stopping.is_set():
@@ -326,10 +353,10 @@ class PsycopgSyncListenerHub:
                 done.set()
 
     def _dispatch(self, channel: str, payload: str) -> None:
-        queue = self._queues.get(channel)
-        if queue is None:
-            return
-        try:
+        with self._lock:
+            queues = self._queues.get(channel)
+            if queues is None:
+                return
+            targets = list(queues.values())
+        for queue in targets:
             queue.put_nowait(payload)
-        except stdlib_queue.Full:  # pragma: no cover - unbounded queues do not raise
-            logger.warning("psycopg sync listener queue full for channel %s; dropping notification", channel)

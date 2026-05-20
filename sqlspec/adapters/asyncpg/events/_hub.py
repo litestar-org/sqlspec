@@ -4,7 +4,7 @@ Owns a single dedicated asyncpg connection per backend instance. Subscribe /
 unsubscribe are serialized under an asyncio.Lock so concurrent callers cannot
 race on the shared connection (the asyncpg.InterfaceError "another operation
 is in progress" hazard). asyncpg's per-channel add_listener callback fans
-notifications into a per-channel asyncio.Queue.
+notifications into one queue per consumer task.
 """
 
 # pyright: reportPrivateUsage=false
@@ -12,6 +12,7 @@ notifications into a per-channel asyncio.Queue.
 import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
+from weakref import WeakKeyDictionary
 
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import normalize_event_channel_name
@@ -36,7 +37,7 @@ class AsyncpgListenerHub:
     def __init__(self, config: "AsyncpgConfig") -> None:
         self._config = config
         self._lock = asyncio.Lock()
-        self._queues: dict[str, asyncio.Queue[str]] = {}
+        self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._callbacks: dict[str, Callable[..., None]] = {}
         self._connection_cm: Any | None = None
         self._connection: Any | None = None
@@ -57,7 +58,7 @@ class AsyncpgListenerHub:
             def _callback(_conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
                 self._dispatch(notified_channel, payload)
 
-            self._queues[channel] = asyncio.Queue()
+            self._queues[channel] = WeakKeyDictionary()
             self._callbacks[channel] = _callback
             try:
                 await connection.execute(f"LISTEN {validated}")
@@ -86,7 +87,7 @@ class AsyncpgListenerHub:
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
-        queue = self._queues.get(channel)
+        queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
         try:
@@ -124,6 +125,20 @@ class AsyncpgListenerHub:
     def is_subscribed(self, channel: str) -> bool:
         return channel in self._queues
 
+    def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - coroutine dequeue calls always run in a task
+            msg = "AsyncpgListenerHub.dequeue requires an active asyncio task"
+            raise RuntimeError(msg)
+        queues = self._queues.get(channel)
+        if queues is None:
+            return None
+        queue = queues.get(task)
+        if queue is None:
+            queue = asyncio.Queue()
+            queues[task] = queue
+        return queue
+
     async def _ensure_connection_locked(self) -> None:
         if self._connection is not None:
             return
@@ -138,10 +153,8 @@ class AsyncpgListenerHub:
         self._connection = connection
 
     def _dispatch(self, channel: str, payload: str) -> None:
-        queue = self._queues.get(channel)
-        if queue is None:
+        queues = self._queues.get(channel)
+        if queues is None:
             return
-        try:
+        for queue in list(queues.values()):
             queue.put_nowait(payload)
-        except asyncio.QueueFull:  # pragma: no cover - unbounded queues do not raise
-            logger.warning("asyncpg listener queue full for channel %s; dropping notification", channel)
