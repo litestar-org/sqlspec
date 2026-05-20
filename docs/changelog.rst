@@ -13,6 +13,31 @@ Recent Updates
 v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
 -----------------------------------------------------------
 
+**Fixed (event backends):**
+
+* ``asyncpg`` native LISTEN/NOTIFY: concurrent subscribe / unsubscribe across
+  overlapping channels no longer races on the shared connection. Previously a
+  per-iteration ``add_listener`` / ``remove_listener`` churn could surface
+  ``asyncpg.InterfaceError("another operation is in progress")``. The
+  redesigned backend uses a per-channel persistent listener hub that emits
+  ``LISTEN`` / ``UNLISTEN`` exactly once per channel.
+* ``psycopg`` async + sync native LISTEN/NOTIFY: subscribing to more than one
+  channel on the same backend now emits ``LISTEN`` for every channel. The
+  prior implementation only emitted ``LISTEN`` for the first channel that
+  touched the shared connection, silently dropping notifications for any
+  subsequent channel. The sync backend serializes all connection access on
+  a dedicated worker thread to respect psycopg's thread-safety contract.
+* ``psqlpy`` native LISTEN/NOTIFY: ``clear_channel_callbacks`` no longer runs
+  per dequeue iteration, eliminating the race where concurrent peers on the
+  same channel had each other's callbacks wiped mid-wait.
+* ``oracledb`` Advanced Queuing: ``dequeue`` now honors the caller's
+  ``poll_interval`` (capped at the configured ``aq_wait_seconds`` ceiling).
+  The previous implementation ignored ``poll_interval`` and always waited
+  the full ``aq_wait_seconds``. Per-channel queue handles are cached on a
+  single dedicated session so successive dequeues no longer re-acquire a
+  session and queue handle on every call.
+
+
 **Changed (breaking default):**
 
 * ``sqlspec.utils.serializers.schema_dump`` (and its helpers
