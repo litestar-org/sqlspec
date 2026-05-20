@@ -10,8 +10,6 @@ other's callbacks mid-iteration.
 
 # pyright: reportPrivateUsage=false
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
@@ -38,7 +36,7 @@ class _PsqlpyHubCallback:
 
     __slots__ = ("_channel", "_dispatch")
 
-    def __init__(self, channel: str, dispatch: Callable[[str, str], None]) -> None:
+    def __init__(self, channel: str, dispatch: "Callable[[str, str], None]") -> None:
         self._channel = channel
         self._dispatch = dispatch
 
@@ -61,9 +59,9 @@ class _PsqlpyHubCallback:
             elif value2 == self._channel:
                 notified_channel = value2
                 payload = value1
-        if notified_channel != self._channel or payload is None:
+        if notified_channel is None or notified_channel != self._channel or payload is None:
             return
-        self._dispatch(notified_channel, payload)
+        self._dispatch(self._channel, payload)
 
 
 class PsqlpyListenerHub:
@@ -71,7 +69,7 @@ class PsqlpyListenerHub:
 
     __slots__ = ("_callbacks", "_config", "_listener", "_listener_started", "_lock", "_queues", "_shutting_down")
 
-    def __init__(self, config: PsqlpyConfig) -> None:
+    def __init__(self, config: "PsqlpyConfig") -> None:
         self._config = config
         self._lock = asyncio.Lock()
         self._queues: dict[str, asyncio.Queue[str]] = {}
@@ -116,7 +114,7 @@ class PsqlpyListenerHub:
             with contextlib.suppress(Exception):
                 await listener.clear_channel_callbacks(channel=channel)
 
-    async def dequeue(self, channel: str, poll_interval: float) -> str | None:
+    async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
         queue = self._queues.get(channel)
@@ -153,7 +151,7 @@ class PsqlpyListenerHub:
     def is_subscribed(self, channel: str) -> bool:
         return channel in self._queues
 
-    async def _ensure_listener_locked(self) -> PsqlpyListener:
+    async def _ensure_listener_locked(self) -> "PsqlpyListener":
         if self._listener is not None:
             return self._listener
         pool = await self._config.provide_pool()

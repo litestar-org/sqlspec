@@ -12,8 +12,6 @@ without exceptions.
 
 # pyright: reportPrivateUsage=false
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import importlib
@@ -60,7 +58,7 @@ def _psqlpy_factory(service: Any) -> Any:
     return config_cls(connection_config=params_cls(dsn=dsn), extension_config={"events": {"backend": "listen_notify"}})
 
 
-_FACTORIES: dict[str, ConfigFactory] = {
+_FACTORIES: "dict[str, ConfigFactory]" = {
     "asyncpg": _asyncpg_factory,
     "psycopg_async": _psycopg_async_factory,
     "psqlpy": _psqlpy_factory,

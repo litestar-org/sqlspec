@@ -18,8 +18,6 @@ or required driver is skipped, not silently passed.
 
 # pyright: reportPrivateUsage=false
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import importlib
@@ -65,7 +63,7 @@ def _psqlpy_factory(service: Any) -> Any:
     return config_cls(connection_config=params_cls(dsn=dsn), extension_config={"events": {"backend": "listen_notify"}})
 
 
-_FACTORIES: dict[str, ConfigFactory] = {
+_FACTORIES: "dict[str, ConfigFactory]" = {
     "asyncpg": _asyncpg_factory,
     "psycopg_async": _psycopg_async_factory,
     "psqlpy": _psqlpy_factory,
@@ -83,7 +81,7 @@ def _import_or_skip(backend_key: str) -> ConfigFactory:
         raise
 
 
-async def _drain(received: list[Any], minimum: int, *, watch_tasks: tuple[Any, ...] = ()) -> None:
+async def _drain(received: "list[Any]", minimum: int, *, watch_tasks: "tuple[Any, ...]" = ()) -> None:
     deadline = asyncio.get_running_loop().time() + 3.0
     while asyncio.get_running_loop().time() < deadline:
         if len(received) >= minimum:

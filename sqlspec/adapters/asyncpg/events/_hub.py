@@ -9,8 +9,6 @@ notifications into a per-channel asyncio.Queue.
 
 # pyright: reportPrivateUsage=false
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
@@ -35,7 +33,7 @@ class AsyncpgListenerHub:
 
     __slots__ = ("_callbacks", "_config", "_connection", "_connection_cm", "_lock", "_queues", "_shutting_down")
 
-    def __init__(self, config: AsyncpgConfig) -> None:
+    def __init__(self, config: "AsyncpgConfig") -> None:
         self._config = config
         self._lock = asyncio.Lock()
         self._queues: dict[str, asyncio.Queue[str]] = {}
@@ -85,7 +83,7 @@ class AsyncpgListenerHub:
             with contextlib.suppress(Exception):
                 await connection.execute(f"UNLISTEN {validated}")
 
-    async def dequeue(self, channel: str, poll_interval: float) -> str | None:
+    async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
         queue = self._queues.get(channel)

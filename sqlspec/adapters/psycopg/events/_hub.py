@@ -9,8 +9,6 @@ queue (psycopg sync connections are not thread-safe).
 
 # pyright: reportPrivateUsage=false
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import queue as stdlib_queue
@@ -46,7 +44,7 @@ class PsycopgAsyncListenerHub:
         "_stopping",
     )
 
-    def __init__(self, config: PsycopgAsyncConfig) -> None:
+    def __init__(self, config: "PsycopgAsyncConfig") -> None:
         self._config = config
         self._lock = asyncio.Lock()
         self._queues: dict[str, asyncio.Queue[str]] = {}
@@ -86,7 +84,7 @@ class PsycopgAsyncListenerHub:
             with contextlib.suppress(Exception):
                 await connection.execute(f"UNLISTEN {validated}")
 
-    async def dequeue(self, channel: str, poll_interval: float) -> str | None:
+    async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
         queue = self._queues.get(channel)
@@ -197,7 +195,7 @@ class PsycopgSyncListenerHub:
         "_worker_thread",
     )
 
-    def __init__(self, config: PsycopgSyncConfig) -> None:
+    def __init__(self, config: "PsycopgSyncConfig") -> None:
         self._config = config
         self._lock = threading.Lock()
         self._queues: dict[str, stdlib_queue.Queue[str]] = {}
@@ -230,7 +228,7 @@ class PsycopgSyncListenerHub:
             self._queues.pop(channel, None)
             self._submit("unlisten", channel)
 
-    def dequeue(self, channel: str, poll_interval: float) -> str | None:
+    def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             self.subscribe(channel)
         queue = self._queues.get(channel)
@@ -286,7 +284,7 @@ class PsycopgSyncListenerHub:
         self._worker_thread = threading.Thread(target=self._worker, name="psycopg-sync-event-worker", daemon=True)
         self._worker_thread.start()
 
-    def _submit(self, op: str, channel: str, *, timeout: float | None = None) -> None:
+    def _submit(self, op: str, channel: str, *, timeout: "float | None" = None) -> None:
         done = threading.Event()
         self._command_queue.put((op, channel, done))
         done.wait(timeout=timeout)
