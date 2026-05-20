@@ -59,10 +59,15 @@ class AsyncpgListenerHub:
             def _callback(_conn: Any, _pid: int, notified_channel: str, payload: str) -> None:
                 self._dispatch(notified_channel, payload)
 
-            await connection.execute(f"LISTEN {validated}")
-            await connection.add_listener(channel, _callback)
-            self._callbacks[channel] = _callback
             self._queues[channel] = asyncio.Queue()
+            self._callbacks[channel] = _callback
+            try:
+                await connection.execute(f"LISTEN {validated}")
+                await connection.add_listener(channel, _callback)
+            except Exception:
+                self._queues.pop(channel, None)
+                self._callbacks.pop(channel, None)
+                raise
 
     async def unsubscribe(self, channel: str) -> None:
         async with self._lock:

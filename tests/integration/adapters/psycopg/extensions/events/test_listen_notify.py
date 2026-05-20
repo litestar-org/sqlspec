@@ -29,8 +29,7 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
     spec = SQLSpec()
     spec.add_config(config)
     channel = spec.event_channel(config)
-    backend = channel._backend
-    assert "_ensure_listener" in dir(backend)
+    assert channel._backend_name == "listen_notify"
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda message: received.append(message), poll_interval=0.2)
