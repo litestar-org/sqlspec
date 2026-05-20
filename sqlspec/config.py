@@ -700,6 +700,9 @@ class ADKConfig(TypedDict):
                 "adk": {
                     "session_table": "my_sessions",
                     "events_table": "my_events",
+                    "app_state_table": "my_app_states",
+                    "user_state_table": "my_user_states",
+                    "metadata_table": "my_adk_metadata",
                     "memory_table": "my_memories",
                     "memory_use_fts": True,
                     "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
@@ -756,6 +759,27 @@ class ADKConfig(TypedDict):
         "agent_events"
         "my_app_events"
         "tenant_acme_events"
+    """
+
+    app_state_table: NotRequired[str]
+    """Name of the app-scoped state table. Default: 'adk_app_states'
+
+    Stores normalized ``app:`` state without the prefix, keyed by app name.
+    Physical table creation is implemented by schema-parity-capable ADK stores.
+    """
+
+    user_state_table: NotRequired[str]
+    """Name of the user-scoped state table. Default: 'adk_user_states'
+
+    Stores normalized ``user:`` state without the prefix, keyed by app name and
+    user ID. Physical table creation is implemented by schema-parity-capable ADK
+    stores.
+    """
+
+    metadata_table: NotRequired[str]
+    """Name of the ADK internal metadata table. Default: 'adk_internal_metadata'
+
+    Reserved for schema-version and migration metadata used by ADK stores.
     """
 
     memory_table: NotRequired[str]

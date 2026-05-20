@@ -123,8 +123,8 @@ def test_split_scoped_state_separates_buckets() -> None:
     """app:, user:, and plain keys go into the correct buckets."""
     state = {"app:shared": "a", "user:profile": "u", "session_key": "s", "another": "v"}
     app, user, session = split_scoped_state(state)
-    assert app == {"app:shared": "a"}
-    assert user == {"user:profile": "u"}
+    assert app == {"shared": "a"}
+    assert user == {"profile": "u"}
     assert session == {"session_key": "s", "another": "v"}
 
 
@@ -140,7 +140,7 @@ def test_split_scoped_state_only_app_keys() -> None:
     """State with only app: keys puts everything in app bucket."""
     state = {"app:x": 1, "app:y": 2}
     app, user, session = split_scoped_state(state)
-    assert app == {"app:x": 1, "app:y": 2}
+    assert app == {"x": 1, "y": 2}
     assert user == {}
     assert session == {}
 
@@ -150,7 +150,7 @@ def test_split_scoped_state_only_user_keys() -> None:
     state = {"user:a": "one", "user:b": "two"}
     app, user, session = split_scoped_state(state)
     assert app == {}
-    assert user == {"user:a": "one", "user:b": "two"}
+    assert user == {"a": "one", "b": "two"}
     assert session == {}
 
 
@@ -163,12 +163,21 @@ def test_split_scoped_state_only_session_keys() -> None:
     assert session == {"key1": 1, "key2": 2}
 
 
-def test_split_scoped_state_preserves_full_key_names() -> None:
-    """Keys are not stripped of their prefix in the returned buckets."""
+def test_split_scoped_state_strips_storage_prefixes() -> None:
+    """Scoped storage buckets use unprefixed keys, matching upstream ADK."""
     state = {"app:my_key": "val", "user:my_key": "val2"}
     app, user, _ = split_scoped_state(state)
-    assert "app:my_key" in app
-    assert "user:my_key" in user
+    assert app == {"my_key": "val"}
+    assert user == {"my_key": "val2"}
+
+
+def test_split_scoped_state_ignores_temp_keys() -> None:
+    """temp: keys are runtime-only and never land in a storage bucket."""
+    state = {"app:x": 1, "user:y": 2, "temp:z": 3, "session": 4}
+    app, user, session = split_scoped_state(state)
+    assert app == {"x": 1}
+    assert user == {"y": 2}
+    assert session == {"session": 4}
 
 
 # ---------------------------------------------------------------------------
@@ -178,19 +187,19 @@ def test_split_scoped_state_preserves_full_key_names() -> None:
 
 def test_merge_scoped_state_combines_all_buckets() -> None:
     """All three buckets appear in the merged result."""
-    merged = merge_scoped_state(session_state={"key": "s"}, app_state={"app:x": "a"}, user_state={"user:y": "u"})
+    merged = merge_scoped_state(session_state={"key": "s"}, app_state={"x": "a"}, user_state={"y": "u"})
     assert merged == {"key": "s", "app:x": "a", "user:y": "u"}
 
 
 def test_merge_scoped_state_overlay_priority_app_over_session() -> None:
     """app_state overlays session_state for the same key."""
-    merged = merge_scoped_state(session_state={"app:x": "old"}, app_state={"app:x": "new"})
+    merged = merge_scoped_state(session_state={"app:x": "old"}, app_state={"x": "new"})
     assert merged["app:x"] == "new"
 
 
 def test_merge_scoped_state_overlay_priority_user_over_session() -> None:
     """user_state overlays session_state for the same key."""
-    merged = merge_scoped_state(session_state={"user:y": "session_val"}, user_state={"user:y": "user_val"})
+    merged = merge_scoped_state(session_state={"user:y": "session_val"}, user_state={"y": "user_val"})
     assert merged["user:y"] == "user_val"
 
 
@@ -203,7 +212,7 @@ def test_merge_scoped_state_no_app_no_user() -> None:
 
 def test_merge_scoped_state_empty_session_state() -> None:
     """Empty session_state with app/user state returns combined app+user keys."""
-    merged = merge_scoped_state(session_state={}, app_state={"app:a": 1}, user_state={"user:b": 2})
+    merged = merge_scoped_state(session_state={}, app_state={"a": 1}, user_state={"b": 2})
     assert merged == {"app:a": 1, "user:b": 2}
 
 
@@ -211,7 +220,7 @@ def test_merge_scoped_state_does_not_mutate_session_state() -> None:
     """Input session_state dict is not mutated."""
     session = {"key": "v"}
     original = dict(session)
-    merge_scoped_state(session_state=session, app_state={"app:x": 1})
+    merge_scoped_state(session_state=session, app_state={"x": 1})
     assert session == original
 
 

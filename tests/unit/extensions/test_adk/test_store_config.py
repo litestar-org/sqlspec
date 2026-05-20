@@ -156,6 +156,34 @@ def test_adk_base_stores_keep_original_config(store_cls: type[Any]) -> None:
     assert store.config is config
 
 
+def test_session_store_scoped_state_table_defaults() -> None:
+    store = _SyncSessionStore(_Config())
+
+    assert store.app_state_table == "adk_app_states"
+    assert store.user_state_table == "adk_user_states"
+    assert store.metadata_table == "adk_internal_metadata"
+
+
+def test_session_store_scoped_state_table_names_are_configurable() -> None:
+    store = _SyncSessionStore(
+        _Config({
+            "app_state_table": "tenant_app_states",
+            "user_state_table": "tenant_user_states",
+            "metadata_table": "tenant_adk_metadata",
+        })
+    )
+
+    assert store.app_state_table == "tenant_app_states"
+    assert store.user_state_table == "tenant_user_states"
+    assert store.metadata_table == "tenant_adk_metadata"
+
+
+@pytest.mark.parametrize("field", ["app_state_table", "user_state_table", "metadata_table"])
+def test_session_store_scoped_state_table_names_are_validated(field: str) -> None:
+    with pytest.raises(ValueError, match="Invalid table name"):
+        _SyncSessionStore(_Config({field: "invalid-name"}))
+
+
 def test_sync_memory_store_logs_ready_with_log_with_context(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 

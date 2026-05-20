@@ -15,6 +15,7 @@ from typing import Any
 
 from google.adk.events.event import Event
 from google.adk.sessions import Session
+from google.adk.sessions.state import State
 
 from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
@@ -164,23 +165,28 @@ def filter_temp_state(state: "dict[str, Any]") -> "dict[str, Any]":
 def split_scoped_state(state: "dict[str, Any]") -> "tuple[dict[str, Any], dict[str, Any], dict[str, Any]]":
     """Split state into app-scoped, user-scoped, and session-scoped buckets.
 
+    Matches upstream ADK storage semantics: app/user bucket keys are stored
+    without their ADK prefixes, and ``temp:`` keys are ignored.
+
     Args:
-        state: Full session state dict (temp: already stripped).
+        state: Full session state dict.
 
     Returns:
         Tuple of (app_state, user_state, session_state).
-        app_state: keys starting with "app:"
-        user_state: keys starting with "user:"
-        session_state: all other keys
+        app_state: keys that started with ``app:``, without the prefix.
+        user_state: keys that started with ``user:``, without the prefix.
+        session_state: all other non-``temp:`` keys.
     """
     app_state: dict[str, Any] = {}
     user_state: dict[str, Any] = {}
     session_state: dict[str, Any] = {}
     for k, v in state.items():
-        if k.startswith("app:"):
-            app_state[k] = v
-        elif k.startswith("user:"):
-            user_state[k] = v
+        if k.startswith(State.APP_PREFIX):
+            app_state[k.removeprefix(State.APP_PREFIX)] = v
+        elif k.startswith(State.USER_PREFIX):
+            user_state[k.removeprefix(State.USER_PREFIX)] = v
+        elif k.startswith(State.TEMP_PREFIX):
+            continue
         else:
             session_state[k] = v
     return app_state, user_state, session_state
@@ -193,8 +199,10 @@ def merge_scoped_state(
 ) -> "dict[str, Any]":
     """Merge scoped state buckets into a single state dict.
 
-    Priority: session_state is base, app_state and user_state overlay.
-    This matches ADK's documented merge semantics on session load.
+    The app/user buckets use storage keys without ``app:`` or ``user:``
+    prefixes. Prefixes are restored in the merged ADK-facing state. Priority:
+    session_state is the base, then app_state and user_state overlay their
+    prefixed keys.
 
     Args:
         session_state: Per-session state.
@@ -206,7 +214,9 @@ def merge_scoped_state(
     """
     merged = dict(session_state)
     if app_state:
-        merged.update(app_state)
+        for key, value in app_state.items():
+            merged[f"{State.APP_PREFIX}{key}"] = value
     if user_state:
-        merged.update(user_state)
+        for key, value in user_state.items():
+            merged[f"{State.USER_PREFIX}{key}"] = value
     return merged

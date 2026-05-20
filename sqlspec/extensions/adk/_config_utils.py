@@ -28,6 +28,9 @@ class _ADKSessionStoreConfig(TypedDict):
 
     session_table: str
     events_table: str
+    app_state_table: str
+    user_state_table: str
+    metadata_table: str
     owner_id_column: NotRequired[str]
 
 
@@ -68,9 +71,15 @@ def _get_adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreC
     adk_config = _get_adk_config_from_extension(config)
     session_table = adk_config.get("session_table")
     events_table = adk_config.get("events_table")
+    app_state_table = adk_config.get("app_state_table")
+    user_state_table = adk_config.get("user_state_table")
+    metadata_table = adk_config.get("metadata_table")
     result: _ADKSessionStoreConfig = {
         "session_table": str(session_table) if session_table is not None else "adk_sessions",
         "events_table": str(events_table) if events_table is not None else "adk_events",
+        "app_state_table": str(app_state_table) if app_state_table is not None else "adk_app_states",
+        "user_state_table": str(user_state_table) if user_state_table is not None else "adk_user_states",
+        "metadata_table": str(metadata_table) if metadata_table is not None else "adk_internal_metadata",
     }
     owner_id = adk_config.get("owner_id_column")
     if owner_id is not None:
