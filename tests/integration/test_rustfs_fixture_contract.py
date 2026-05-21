@@ -55,3 +55,11 @@ def test_live_tests_use_rustfs_fixture_instead_of_minio_client() -> None:
     assert "rustfs_default_bucket_name" in live_test_text
     for marker in STALE_MINIO_MARKERS:
         assert marker not in live_test_text
+
+
+def test_rustfs_fixture_uses_current_container_contract() -> None:
+    integration_conftest_text = INTEGRATION_CONFTEST.read_text(encoding="utf-8")
+
+    assert 'command="/data"' in integration_conftest_text
+    assert '"RUSTFS_ACCESS_KEY"' in integration_conftest_text
+    assert '"RUSTFS_SECRET_KEY"' in integration_conftest_text
