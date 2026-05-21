@@ -32,7 +32,16 @@ __all__ = ("AsyncpgListenerHub",)
 class AsyncpgListenerHub:
     """Per-channel persistent listener for asyncpg-based event backends."""
 
-    __slots__ = ("_callbacks", "_config", "_connection", "_connection_cm", "_lock", "_queues", "_shutting_down")
+    __slots__ = (
+        "_callbacks",
+        "_config",
+        "_connection",
+        "_connection_cm",
+        "_lock",
+        "_pool_destroying_registered",
+        "_queues",
+        "_shutting_down",
+    )
 
     def __init__(self, config: "AsyncpgConfig") -> None:
         self._config = config
@@ -42,6 +51,7 @@ class AsyncpgListenerHub:
         self._connection_cm: Any | None = None
         self._connection: Any | None = None
         self._shutting_down = False
+        self._pool_destroying_registered = False
 
     async def subscribe(self, channel: str) -> None:
         async with self._lock:
@@ -151,6 +161,17 @@ class AsyncpgListenerHub:
             raise EventChannelError(msg)
         self._connection_cm = connection_cm
         self._connection = connection
+        self._register_pool_destroying()
+
+    def _register_pool_destroying(self) -> None:
+        if self._pool_destroying_registered:
+            return
+        runtime = self._config.get_observability_runtime()
+        runtime.register_lifecycle_hook("on_pool_destroying", self._pool_destroying_hook)
+        self._pool_destroying_registered = True
+
+    def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
+        return self.shutdown()
 
     def _dispatch(self, channel: str, payload: str) -> None:
         queues = self._queues.get(channel)

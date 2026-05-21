@@ -117,9 +117,19 @@ def create_sync_pool(
 
 
 def close_sync_pool(
-    connection_instance: "PoolT | None", close_pool: "Callable[[], None]", emit_pool_destroy: "Callable[[PoolT], None]"
+    connection_instance: "PoolT | None",
+    close_pool: "Callable[[], None]",
+    emit_pool_destroy: "Callable[[PoolT], None]",
+    emit_pool_destroying_sync: "Callable[[PoolT], None] | None" = None,
 ) -> None:
-    """Close a sync pool and emit teardown hooks."""
+    """Close a sync pool and emit teardown hooks.
+
+    ``emit_pool_destroying_sync`` fires *before* ``close_pool`` so registered hooks
+    (e.g., persistent listener hubs releasing checked-out sessions) can clear
+    pool-checked-out resources that would otherwise block the close.
+    """
+    if connection_instance is not None and emit_pool_destroying_sync is not None:
+        emit_pool_destroying_sync(connection_instance)
     close_pool()
     if connection_instance is not None:
         emit_pool_destroy(connection_instance)
@@ -149,8 +159,16 @@ async def close_async_pool(
     connection_instance: "PoolT | None",
     close_pool: "Callable[[], Awaitable[None]]",
     emit_pool_destroy: "Callable[[PoolT], None]",
+    emit_pool_destroying_async: "Callable[[PoolT], Awaitable[None]] | None" = None,
 ) -> None:
-    """Close an async pool and emit teardown hooks."""
+    """Close an async pool and emit teardown hooks.
+
+    ``emit_pool_destroying_async`` fires *before* ``close_pool`` so async lifecycle
+    hooks (e.g., async listener hubs awaiting connection release) can complete
+    teardown before the pool drains its sessions.
+    """
+    if connection_instance is not None and emit_pool_destroying_async is not None:
+        await emit_pool_destroying_async(connection_instance)
     await close_pool()
     if connection_instance is not None:
         emit_pool_destroy(connection_instance)

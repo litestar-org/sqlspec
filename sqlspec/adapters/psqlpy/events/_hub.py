@@ -68,7 +68,16 @@ class _PsqlpyHubCallback:
 class PsqlpyListenerHub:
     """Per-channel persistent listener for psqlpy event backends."""
 
-    __slots__ = ("_callbacks", "_config", "_listener", "_listener_started", "_lock", "_queues", "_shutting_down")
+    __slots__ = (
+        "_callbacks",
+        "_config",
+        "_listener",
+        "_listener_started",
+        "_lock",
+        "_pool_destroying_registered",
+        "_queues",
+        "_shutting_down",
+    )
 
     def __init__(self, config: "PsqlpyConfig") -> None:
         self._config = config
@@ -78,6 +87,7 @@ class PsqlpyListenerHub:
         self._listener: Any | None = None
         self._listener_started = False
         self._shutting_down = False
+        self._pool_destroying_registered = False
 
     async def subscribe(self, channel: str) -> None:
         async with self._lock:
@@ -173,7 +183,18 @@ class PsqlpyListenerHub:
         listener = pool.listener()
         await listener.startup()
         self._listener = listener
+        self._register_pool_destroying()
         return listener
+
+    def _register_pool_destroying(self) -> None:
+        if self._pool_destroying_registered:
+            return
+        runtime = self._config.get_observability_runtime()
+        runtime.register_lifecycle_hook("on_pool_destroying", self._pool_destroying_hook)
+        self._pool_destroying_registered = True
+
+    def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
+        return self.shutdown()
 
     def _dispatch(self, channel: str, payload: str) -> None:
         queues = self._queues.get(channel)

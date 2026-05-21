@@ -98,6 +98,7 @@ class OracleSyncAQHub:
         "_config",
         "_default_visibility",
         "_lock",
+        "_pool_destroying_registered",
         "_queue_name_template",
         "_queues",
         "_session_cm",
@@ -126,6 +127,7 @@ class OracleSyncAQHub:
         self._session_cm: Any | None = None
         self._session_driver: Any | None = None
         self._shutting_down = False
+        self._pool_destroying_registered = False
 
     def subscribe(self, channel: str) -> None:
         with self._lock:
@@ -195,6 +197,7 @@ class OracleSyncAQHub:
             driver = session_cm.__enter__()
             self._session_cm = session_cm
             self._session_driver = driver
+            self._register_pool_destroying()
         connection = getattr(driver, "connection", None)
         if connection is None:
             msg = "Oracle driver does not expose a raw connection"
@@ -204,6 +207,16 @@ class OracleSyncAQHub:
         self._queues[channel] = queue
         return queue
 
+    def _register_pool_destroying(self) -> None:
+        if self._pool_destroying_registered:
+            return
+        runtime = self._config.get_observability_runtime()
+        runtime.register_lifecycle_hook("on_pool_destroying", self._pool_destroying_hook)
+        self._pool_destroying_registered = True
+
+    def _pool_destroying_hook(self, _context: "dict[str, Any]") -> None:
+        self.shutdown()
+
 
 class OracleAsyncAQHub:
     """Per-channel persistent queue-handle cache for async Oracle AQ."""
@@ -212,6 +225,7 @@ class OracleAsyncAQHub:
         "_config",
         "_default_visibility",
         "_lock",
+        "_pool_destroying_registered",
         "_queue_name_template",
         "_queues",
         "_session_cm",
@@ -240,6 +254,7 @@ class OracleAsyncAQHub:
         self._session_cm: Any | None = None
         self._session_driver: Any | None = None
         self._shutting_down = False
+        self._pool_destroying_registered = False
 
     async def subscribe(self, channel: str) -> None:
         async with self._lock:
@@ -309,6 +324,7 @@ class OracleAsyncAQHub:
             driver = await session_cm.__aenter__()
             self._session_cm = session_cm
             self._session_driver = driver
+            self._register_pool_destroying()
         connection = getattr(driver, "connection", None)
         if connection is None:
             msg = "Oracle driver does not expose a raw connection"
@@ -317,3 +333,13 @@ class OracleAsyncAQHub:
         queue = connection.queue(queue_name, payload_type=_resolve_payload_type())
         self._queues[channel] = queue
         return queue
+
+    def _register_pool_destroying(self) -> None:
+        if self._pool_destroying_registered:
+            return
+        runtime = self._config.get_observability_runtime()
+        runtime.register_lifecycle_hook("on_pool_destroying", self._pool_destroying_hook)
+        self._pool_destroying_registered = True
+
+    def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
+        return self.shutdown()

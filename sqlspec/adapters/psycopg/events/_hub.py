@@ -39,6 +39,7 @@ class PsycopgAsyncListenerHub:
         "_connection",
         "_connection_cm",
         "_lock",
+        "_pool_destroying_registered",
         "_pump_task",
         "_queues",
         "_shutting_down",
@@ -54,6 +55,7 @@ class PsycopgAsyncListenerHub:
         self._pump_task: asyncio.Task[None] | None = None
         self._shutting_down = False
         self._stopping = False
+        self._pool_destroying_registered = False
 
     async def subscribe(self, channel: str) -> None:
         async with self._lock:
@@ -157,6 +159,17 @@ class PsycopgAsyncListenerHub:
         self._connection_cm = connection_cm
         self._connection = connection
         self._pump_task = asyncio.create_task(self._pump())
+        self._register_pool_destroying()
+
+    def _register_pool_destroying(self) -> None:
+        if self._pool_destroying_registered:
+            return
+        runtime = self._config.get_observability_runtime()
+        runtime.register_lifecycle_hook("on_pool_destroying", self._pool_destroying_hook)
+        self._pool_destroying_registered = True
+
+    def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
+        return self.shutdown()
 
     async def _pump(self) -> None:
         try:
@@ -202,6 +215,7 @@ class PsycopgSyncListenerHub:
         "_connection",
         "_connection_cm",
         "_lock",
+        "_pool_destroying_registered",
         "_queues",
         "_shutting_down",
         "_stopping",
@@ -218,6 +232,7 @@ class PsycopgSyncListenerHub:
         self._shutting_down = False
         self._command_queue: stdlib_queue.Queue[tuple[str, str, threading.Event]] = stdlib_queue.Queue()
         self._worker_thread: threading.Thread | None = None
+        self._pool_destroying_registered = False
 
     def subscribe(self, channel: str) -> None:
         with self._lock:
@@ -308,6 +323,17 @@ class PsycopgSyncListenerHub:
         self._connection = connection
         self._worker_thread = threading.Thread(target=self._worker, name="psycopg-sync-event-worker", daemon=True)
         self._worker_thread.start()
+        self._register_pool_destroying()
+
+    def _register_pool_destroying(self) -> None:
+        if self._pool_destroying_registered:
+            return
+        runtime = self._config.get_observability_runtime()
+        runtime.register_lifecycle_hook("on_pool_destroying", self._pool_destroying_hook)
+        self._pool_destroying_registered = True
+
+    def _pool_destroying_hook(self, _context: "dict[str, Any]") -> None:
+        self.shutdown()
 
     def _submit(self, op: str, channel: str, *, timeout: "float | None" = None) -> None:
         done = threading.Event()

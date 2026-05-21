@@ -493,10 +493,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             await self._alloydb_connector.close()
             self._alloydb_connector = None
 
-    async def close_pool(self) -> None:
-        """Close the connection pool."""
-        await self._close_pool()
-
     async def create_connection(self) -> "AsyncpgConnection":
         """Create a single async connection from the pool.
 

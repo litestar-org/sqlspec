@@ -45,12 +45,27 @@ class _AsyncpgConnection:
         self.callbacks.pop(channel, None)
 
 
+class _StubRuntime:
+    def __init__(self) -> None:
+        self.registered: list[tuple[str, Any]] = []
+
+    def increment_metric(self, _metric: str) -> None:
+        return None
+
+    def register_lifecycle_hook(self, event: str, callback: Any) -> None:
+        self.registered.append((event, callback))
+
+
 class _AsyncpgConfig:
     def __init__(self, connection: _AsyncpgConnection) -> None:
         self.connection = connection
+        self._runtime = _StubRuntime()
 
     def provide_connection(self) -> _AsyncConnectionContext:
         return _AsyncConnectionContext(self.connection)
+
+    def get_observability_runtime(self) -> _StubRuntime:
+        return self._runtime
 
 
 class _PsqlpyListener:
@@ -84,9 +99,13 @@ class _PsqlpyPool:
 class _PsqlpyConfig:
     def __init__(self) -> None:
         self.pool = _PsqlpyPool()
+        self._runtime = _StubRuntime()
 
     async def provide_pool(self) -> _PsqlpyPool:
         return self.pool
+
+    def get_observability_runtime(self) -> _StubRuntime:
+        return self._runtime
 
 
 class _PsycopgAsyncConnection:
@@ -113,9 +132,13 @@ class _PsycopgAsyncConnection:
 class _PsycopgAsyncConfig:
     def __init__(self, connection: _PsycopgAsyncConnection) -> None:
         self.connection = connection
+        self._runtime = _StubRuntime()
 
     def provide_connection(self) -> _AsyncConnectionContext:
         return _AsyncConnectionContext(self.connection)
+
+    def get_observability_runtime(self) -> _StubRuntime:
+        return self._runtime
 
 
 class _Runtime:
@@ -305,3 +328,49 @@ def test_psycopg_sync_shutdown_submits_stop_before_setting_stop_flag(monkeypatch
 
     assert stop_states == [False]
     assert thread.join_timeout == 3.0
+
+
+async def test_asyncpg_hub_registers_pool_destroying_hook_after_subscribe() -> None:
+    """Hub registers shutdown for on_pool_destroying once it acquires its connection."""
+    connection = _AsyncpgConnection()
+    config = _AsyncpgConfig(connection)
+    hub = AsyncpgListenerHub(config)  # type: ignore[arg-type]
+
+    assert config.get_observability_runtime().registered == []
+
+    await hub.subscribe("alerts")
+    registered = config.get_observability_runtime().registered
+    assert len(registered) == 1
+    assert registered[0][0] == "on_pool_destroying"
+
+    # Second subscribe must not re-register the same hook.
+    await hub.subscribe("metrics")
+    assert len(config.get_observability_runtime().registered) == 1
+    await hub.shutdown()
+
+
+async def test_psqlpy_hub_registers_pool_destroying_hook_after_subscribe() -> None:
+    config = _PsqlpyConfig()
+    hub = PsqlpyListenerHub(config)  # type: ignore[arg-type]
+
+    assert config.get_observability_runtime().registered == []
+
+    await hub.subscribe("alerts")
+    registered = config.get_observability_runtime().registered
+    assert len(registered) == 1
+    assert registered[0][0] == "on_pool_destroying"
+    await hub.shutdown()
+
+
+async def test_psycopg_async_hub_registers_pool_destroying_hook_after_subscribe() -> None:
+    connection = _PsycopgAsyncConnection()
+    config = _PsycopgAsyncConfig(connection)
+    hub = PsycopgAsyncListenerHub(config)  # type: ignore[arg-type]
+
+    assert config.get_observability_runtime().registered == []
+
+    await hub.subscribe("alerts")
+    registered = config.get_observability_runtime().registered
+    assert len(registered) == 1
+    assert registered[0][0] == "on_pool_destroying"
+    await hub.shutdown()
