@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.46.3"
+version = "0.47.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -189,7 +189,6 @@ packages = ["sqlspec"]
 # Keep that smoke build from auto-discovering ignored scratch directories.
 packages = []
 
-
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
 enable-by-default = false
@@ -289,7 +288,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.46.3"
+current_version = "0.47.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
