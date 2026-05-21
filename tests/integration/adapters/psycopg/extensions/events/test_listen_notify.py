@@ -179,9 +179,15 @@ def test_psycopg_sync_multi_channel_listen_delivery(postgres_service: "Any") -> 
     received_a: list[Any] = []
     received_b: list[Any] = []
 
+    def _handler_a(message: Any) -> None:
+        received_a.append(message)
+
+    def _handler_b(message: Any) -> None:
+        received_b.append(message)
+
     try:
-        listener_a = channel.listen("psyc_sync_a", lambda m: received_a.append(m), poll_interval=0.2)
-        listener_b = channel.listen("psyc_sync_b", lambda m: received_b.append(m), poll_interval=0.2)
+        listener_a = channel.listen("psyc_sync_a", _handler_a, poll_interval=0.2)
+        listener_b = channel.listen("psyc_sync_b", _handler_b, poll_interval=0.2)
         time.sleep(0.5)
 
         channel.publish("psyc_sync_a", {"action": "to_a"})

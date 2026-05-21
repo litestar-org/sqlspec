@@ -94,8 +94,6 @@ def test_oracle_aq_dequeue_honors_caller_poll_interval(oracle_aq_poll_config: Or
     spec.add_config(oracle_aq_poll_config)
     channel = spec.event_channel(oracle_aq_poll_config)
 
-    iterator = channel.iter_events("aq_poll_chan", poll_interval=_POLL_INTERVAL)
-
     start = time.monotonic()
     # Pull one timeout cycle — there are no enqueued messages so dequeue should return None
     # promptly. We rely on the channel's internal poll loop returning to the caller within
@@ -104,7 +102,6 @@ def test_oracle_aq_dequeue_honors_caller_poll_interval(oracle_aq_poll_config: Or
     backend = channel._backend  # pyright: ignore[reportPrivateUsage]
     elapsed_first = _measure_single_dequeue(backend, "aq_poll_chan", _POLL_INTERVAL)
 
-    iterator.close()
     elapsed_total = time.monotonic() - start
     assert elapsed_first <= _LATENCY_TOLERANCE, (
         f"dequeue blocked for {elapsed_first:.2f}s with poll_interval={_POLL_INTERVAL}s "
