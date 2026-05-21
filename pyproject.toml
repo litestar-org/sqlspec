@@ -368,6 +368,7 @@ exclude_lines = [
 [tool.pytest.ini_options]
 addopts = ["-q", "-ra"]
 anyio_mode = "auto"
+faulthandler_timeout = 240
 filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
@@ -425,7 +426,7 @@ markers = [
 python_files = ["test_*.py", "quickstart_*.py", "usage_*.py"]
 testpaths = ["tests", "docs/examples"]
 timeout = 300
-timeout_method = "thread"
+timeout_method = "signal"
 
 [tool.mypy]
 allow_redefinition = false
