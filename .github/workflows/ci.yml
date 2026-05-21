@@ -109,29 +109,7 @@ jobs:
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
-        run: uv run pytest -n 2 --dist=loadgroup --ignore=tests/integration/adapters/bigquery --ignore=tests/integration/adapters/spanner
-
-  test-google-emulators:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Test BigQuery and Spanner
-        env:
-          PYTHONFAULTHANDLER: "1"
-          PYTEST_ADDOPTS: "--max-worker-restart=0"
-        run: uv run pytest tests/integration/adapters/bigquery tests/integration/adapters/spanner -n 2 --dist=loadgroup
+        run: timeout 900s uv run pytest -n 2 --dist=loadgroup
 
   # test-linux-freethreaded:
   #   # Disabled: cp314t ecosystem not mature enough yet (missing binary wheels, long build times)

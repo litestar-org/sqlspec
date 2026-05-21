@@ -48,19 +48,13 @@ def test_pytest_databases_test_extra_uses_rustfs_capable_release() -> None:
 def test_live_tests_use_rustfs_fixture_instead_of_minio_client() -> None:
     live_test_text = _read_live_test_text()
     root_conftest_text = ROOT_CONFTEST.read_text(encoding="utf-8")
+    integration_conftest_text = INTEGRATION_CONFTEST.read_text(encoding="utf-8")
 
     assert "rustfs" not in root_conftest_text.lower()
     assert "pytest_databases.docker.rustfs" in live_test_text
+    assert "from pytest_databases.docker.rustfs import rustfs_service as rustfs_service" in integration_conftest_text
+    assert "def rustfs_service(" not in integration_conftest_text
     assert "rustfs_service" in live_test_text
     assert "rustfs_default_bucket_name" in live_test_text
     for marker in STALE_MINIO_MARKERS:
         assert marker not in live_test_text
-
-
-def test_rustfs_fixture_uses_current_container_contract() -> None:
-    integration_conftest_text = INTEGRATION_CONFTEST.read_text(encoding="utf-8")
-
-    assert 'command="/data"' in integration_conftest_text
-    assert '"RUSTFS_ACCESS_KEY"' in integration_conftest_text
-    assert '"RUSTFS_SECRET_KEY"' in integration_conftest_text
-    assert '"RUSTFS_ALLOW_INSECURE_DEFAULT_CREDENTIALS"' in integration_conftest_text
