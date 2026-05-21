@@ -72,10 +72,7 @@ _FACTORIES: "dict[str, ConfigFactory]" = {
 
 def _import_or_skip(backend_key: str) -> ConfigFactory:
     try:
-        factory = _FACTORIES[backend_key]
-        # Touch the import to force ImportError when driver missing
-        factory.__call__
-        return factory
+        return _FACTORIES[backend_key]
     except KeyError:  # pragma: no cover - defensive
         pytest.skip(f"unknown backend {backend_key}")
         raise
@@ -125,8 +122,8 @@ async def test_native_concurrent_multi_channel_subscribe(postgres_service: Any, 
         await asyncio.sleep(_SUBSCRIBE_WAIT)
 
         for index in range(_EXPECTED_DELIVERIES):
-            await channel.publish(chan_a, {"i": index})
-            await channel.publish(chan_b, {"i": index})
+            await _publish(channel, chan_a, {"i": index})
+            await _publish(channel, chan_b, {"i": index})
             await asyncio.sleep(0.05)
 
         await _drain(received_a, _EXPECTED_DELIVERIES, watch_tasks=(listener_a.task, listener_b.task))
@@ -181,7 +178,7 @@ async def test_native_concurrent_same_channel_peers(postgres_service: Any, backe
         await asyncio.sleep(_SUBSCRIBE_WAIT)
 
         for index in range(_EXPECTED_DELIVERIES):
-            await channel.publish(chan, {"i": index})
+            await _publish(channel, chan, {"i": index})
             await asyncio.sleep(0.05)
 
         await _drain(received_a, 1, watch_tasks=(listener_a.task, listener_b.task))
@@ -200,6 +197,12 @@ async def _safe_stop(channel: Any, *listeners: Any) -> None:
             continue
         with contextlib.suppress(Exception):
             await asyncio.wait_for(channel.stop_listener(listener.id), timeout=2.0)
+
+
+async def _publish(channel: Any, name: str, payload: "dict[str, Any]") -> None:
+    result = channel.publish(name, payload)
+    if isinstance(result, Awaitable):
+        await result
 
 
 async def _cleanup(channel: Any, config: Any) -> None:
