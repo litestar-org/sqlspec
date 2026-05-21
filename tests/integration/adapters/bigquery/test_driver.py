@@ -10,6 +10,7 @@ from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
+from sqlspec.adapters.bigquery.core import detect_emulator
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -22,6 +23,12 @@ pytestmark = [
         reason="BigQuery emulator is optional locally; set SQLSPEC_ENABLE_BIGQUERY_TESTS=1 to enable",
     ),
 ]
+
+
+def _skip_native_bulk_load_on_emulator(bigquery_session: "BigQueryDriver") -> None:
+    """Skip native BigQuery bulk-load coverage when running against the emulator."""
+    if detect_emulator(bigquery_session.connection):
+        pytest.skip("BigQuery emulator does not support native load jobs used by execute_many bulk inserts")
 
 
 def test_connection(bigquery_config: "BigQueryConfig") -> None:
@@ -116,6 +123,7 @@ def test_bigquery_parameter_styles(bigquery_session: "BigQueryDriver", driver_te
 
 def test_bigquery_execute_many(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test execute_many functionality."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
     parameters_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
 
     result = bigquery_session.execute_many(
@@ -165,6 +173,7 @@ def test_bigquery_execute_script(bigquery_session: "BigQueryDriver", driver_test
 
 def test_bigquery_result_methods(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test SQLResult methods."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
 
     bigquery_session.execute_many(
         f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)",
@@ -190,6 +199,7 @@ def test_bigquery_result_methods(bigquery_session: "BigQueryDriver", driver_test
 
 def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test complex SQL queries."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
 
     test_data = [(1, "Alice", 25), (2, "Bob", 30), (3, "Charlie", 35), (4, "Diana", 28)]
 
@@ -326,6 +336,7 @@ def test_bigquery_column_names_and_metadata(bigquery_session: "BigQueryDriver", 
 
 def test_bigquery_performance_bulk_operations(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test performance with bulk operations."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
 
     bulk_data = [(i, f"bulk_user_{i}", i * 10) for i in range(1, 101)]
 
@@ -391,6 +402,7 @@ def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery
 
 def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test BigQuery analytical and window functions."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
 
     analytics_data = [
         (1, "Product A", 1000),
@@ -482,6 +494,7 @@ def test_bigquery_execute_many_qmark_with_dict_params(
     QMARK (?) placeholders with dict parameters. The parameter converter
     should properly align the dict keys with the converted @param_N style.
     """
+    _skip_native_bulk_load_on_emulator(bigquery_session)
     sql = f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)"
     params = [{"id": 1, "name": "qmark_dict_a", "value": 100}, {"id": 2, "name": "qmark_dict_b", "value": 200}]
 
@@ -502,6 +515,7 @@ def test_bigquery_execute_many_qmark_with_dict_params(
 
 def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test execute_many with named parameters (native @name style)."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
     sql = f"INSERT INTO {driver_test_table} (id, name, value) VALUES (@id, @name, @value)"
     params = [{"id": 1, "name": "named_a", "value": 10}, {"id": 2, "name": "named_b", "value": 20}]
 
@@ -519,6 +533,7 @@ def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", 
 
 def test_bigquery_execute_many_update_with_inlining(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
     """Test that UPDATE statements use literal inlining fallback."""
+    _skip_native_bulk_load_on_emulator(bigquery_session)
     bigquery_session.execute_many(
         f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)",
         [(1, "update_test_a", 10), (2, "update_test_b", 20)],
