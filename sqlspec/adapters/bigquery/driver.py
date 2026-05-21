@@ -209,7 +209,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         allow_parse = statement.statement_config.enable_parsing
-        if is_simple_insert(sql, parsed_expression, allow_parse=allow_parse):
+        if not self._using_emulator and is_simple_insert(sql, parsed_expression, allow_parse=allow_parse):
             rowcount = try_bulk_insert(
                 self.connection, sql, prepared_parameters, parsed_expression, allow_parse=allow_parse
             )
