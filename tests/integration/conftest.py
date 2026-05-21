@@ -85,6 +85,7 @@ def rustfs_service(
         "RUSTFS_ROOT_USER": rustfs_access_key,
         "RUSTFS_ROOT_PASSWORD": rustfs_secret_key,
         "RUSTFS_ADDRESS": ":9000",
+        "RUSTFS_ALLOW_INSECURE_DEFAULT_CREDENTIALS": "true",
     }
 
     with docker_service.run(

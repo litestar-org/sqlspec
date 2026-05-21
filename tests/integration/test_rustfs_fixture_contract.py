@@ -63,3 +63,4 @@ def test_rustfs_fixture_uses_current_container_contract() -> None:
     assert 'command="/data"' in integration_conftest_text
     assert '"RUSTFS_ACCESS_KEY"' in integration_conftest_text
     assert '"RUSTFS_SECRET_KEY"' in integration_conftest_text
+    assert '"RUSTFS_ALLOW_INSECURE_DEFAULT_CREDENTIALS"' in integration_conftest_text
