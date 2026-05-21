@@ -17,8 +17,11 @@ pytestmark = [pytest.mark.xdist_group("bigquery")]
 
 
 @pytest.fixture
-def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQueryDriver, None, None]:
+def bigquery_vector_session(
+    native_bigquery_service: object, bigquery_session: BigQueryDriver
+) -> Generator[BigQueryDriver, None, None]:
     """Create BigQuery session with test table containing array columns."""
+    del native_bigquery_service
     table_id = "vector_docs_bigquery"
 
     try:

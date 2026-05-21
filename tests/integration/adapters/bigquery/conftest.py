@@ -15,6 +15,19 @@ if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
 
 
+def _is_bigquery_emulator(service: "BigQueryService") -> bool:
+    """Return whether the pytest-databases service is a Docker-backed emulator."""
+    return getattr(service, "container", None) is not None
+
+
+@pytest.fixture
+def native_bigquery_service(bigquery_service: "BigQueryService") -> "BigQueryService":
+    """Require a native BigQuery service instead of the Docker emulator."""
+    if _is_bigquery_emulator(bigquery_service):
+        pytest.skip("BigQuery emulator does not support native BigQuery-only coverage")
+    return bigquery_service
+
+
 @pytest.fixture(scope="session")
 def table_schema_prefix(bigquery_service: "BigQueryService") -> str:
     """Create a table schema prefix."""
