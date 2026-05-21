@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.request import Request, urlopen
 
 import pytest
-from docker.errors import ImageNotFound
+from docker.errors import ImageNotFound  # type: ignore[import-untyped]
 from pytest_databases.docker.rustfs import RustfsService
 from pytest_databases.docker.rustfs import rustfs_access_key as rustfs_access_key
 from pytest_databases.docker.rustfs import rustfs_default_bucket_name as rustfs_default_bucket_name
@@ -67,7 +67,7 @@ def rustfs_service(
         url = f"{scheme}://{_service.host}:{_service.port}/health"
         try:
             with urlopen(url=Request(url, method="GET"), timeout=10) as response:
-                return response.status == 200
+                return bool(response.status == 200)
         except OSError:
             return False
 
