@@ -105,6 +105,23 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Pre-pull docker images
+        run: |
+          set -eu
+          images=(
+            postgres:18
+            pgvector/pgvector:pg15
+            paradedb/paradedb:0.21.5-pg16
+            cockroachdb/cockroach:latest
+            mysql:8.4
+            gvenzl/oracle-free:23-slim-faststart
+            ghcr.io/goccy/bigquery-emulator:latest
+            gcr.io/cloud-spanner-emulator/emulator:latest
+            rustfs/rustfs:latest
+            rustfs/rc:latest
+          )
+          printf '%s\n' "${images[@]}" | xargs -P 4 -I{} docker pull {}
+
       - name: Test
         env:
           PYTHONFAULTHANDLER: "1"
