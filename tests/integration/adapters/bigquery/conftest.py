@@ -1,6 +1,5 @@
 """BigQuery integration test fixtures."""
 
-import contextlib
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -53,36 +52,15 @@ def bigquery_config(bigquery_service: "BigQueryService", table_schema_prefix: st
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def bigquery_session(bigquery_config: "BigQueryConfig") -> "Generator[BigQueryDriver, Any, None]":
-    """Create a BigQuery sync session."""
+    """Create a session-scoped BigQuery sync session.
+
+    Shared across all BigQuery tests in the xdist_group so the underlying
+    HTTP client/transport is reused; emulator container teardown handles
+    final cleanup so we avoid DDL on shutdown (which can hang against the
+    goccy/bigquery-emulator).
+    """
 
     with bigquery_config.provide_session() as session:
         yield session
-
-
-@pytest.fixture
-def bigquery_test_table(
-    bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService"
-) -> "Generator[str, None, None]":
-    """Create and cleanup test table."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
-
-    with contextlib.suppress(Exception):
-        bigquery_session.execute_script(f"DROP TABLE {table_name}")
-
-    try:
-        bigquery_session.execute_script(f"""
-            CREATE TABLE {table_name} (
-                id INT64,
-                name STRING NOT NULL,
-                value INT64,
-                created_at TIMESTAMP
-            )
-        """)
-
-        yield table_name
-
-    finally:
-        with contextlib.suppress(Exception):
-            bigquery_session.execute_script(f"DROP TABLE {table_name}")

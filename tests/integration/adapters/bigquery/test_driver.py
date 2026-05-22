@@ -2,7 +2,6 @@
 
 import operator
 import os
-from collections.abc import Generator
 from typing import Literal
 
 import pytest
@@ -33,11 +32,9 @@ def test_connection(bigquery_config: "BigQueryConfig") -> None:
         assert result.get_data() == [{"one": 1}]
 
 
-@pytest.fixture
-def driver_test_table(
-    bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService"
-) -> "Generator[str, None, None]":
-    """Create and cleanup driver-specific test table."""
+@pytest.fixture(scope="session")
+def _driver_test_table_resource(bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService") -> str:
+    """Create the driver-specific test table once per session."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     bigquery_session.execute(f"""
@@ -48,19 +45,19 @@ def driver_test_table(
             created_at TIMESTAMP
         )
     """)
+    return table_name
 
-    yield table_name
 
-    # Cleanup
-    try:
-        bigquery_session.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except Exception:
-        pass
+@pytest.fixture
+def driver_test_table(bigquery_session: "BigQueryDriver", _driver_test_table_resource: str) -> str:
+    """Empty the shared driver_test_table before each test."""
+    bigquery_session.execute(f"DELETE FROM {_driver_test_table_resource} WHERE TRUE")
+    return _driver_test_table_resource
 
 
 @pytest.fixture
 def native_driver_test_table(native_bigquery_service: "BigQueryService", driver_test_table: str) -> str:
-    """Create the driver table only when native BigQuery features are available."""
+    """Empty the table only when native BigQuery features are available."""
     del native_bigquery_service
     return driver_test_table
 
