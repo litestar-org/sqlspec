@@ -88,7 +88,7 @@ jobs:
   test-linux:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     timeout-minutes: 30
@@ -123,10 +123,28 @@ jobs:
           printf '%s\n' "${images[@]}" | xargs -P 4 -I{} docker pull {}
 
       - name: Test
+        id: pytest
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
-        run: uv run pytest -n 2 --dist=loadgroup
+        # 22-min cap so we have time to dump stacks before the job's 30-min timeout
+        run: timeout --signal=ABRT --kill-after=30s 22m uv run pytest -n 2 --dist=loadgroup
+
+      - name: Dump python stacks on hang
+        if: failure() && steps.pytest.outcome == 'failure'
+        run: |
+          pip install --quiet py-spy || true
+          for pid in $(pgrep -f 'pytest|python' || true); do
+            echo "=== py-spy dump pid=$pid ==="
+            py-spy dump --pid "$pid" || true
+          done
+          echo "=== docker ps ==="
+          docker ps -a
+          echo "=== docker logs (last 100 lines each) ==="
+          for c in $(docker ps -aq); do
+            echo "--- container $c ---"
+            docker logs --tail 100 "$c" 2>&1 || true
+          done
 
   # test-linux-freethreaded:
   #   # Disabled: cp314t ecosystem not mature enough yet (missing binary wheels, long build times)
