@@ -11,9 +11,15 @@ if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    """Session-scoped anyio backend for session-scoped async fixtures."""
+    return "asyncio"
+
+
+@pytest.fixture(scope="session")
 async def psqlpy_config(postgres_service: "PostgresService") -> "AsyncGenerator[PsqlpyConfig, None]":
-    """Fixture for PsqlpyConfig using the postgres service."""
+    """Session-scoped PsqlpyConfig sharing a single pool across tests."""
     dsn = (
         f"postgres://{postgres_service.user}:{postgres_service.password}@"
         f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
@@ -22,9 +28,9 @@ async def psqlpy_config(postgres_service: "PostgresService") -> "AsyncGenerator[
     try:
         yield config
     finally:
-        if config.connection_instance:
+        if config.connection_instance is not None:
             config.connection_instance.close()
-        config.connection_instance = None
+            config.connection_instance = None
 
 
 @pytest.fixture

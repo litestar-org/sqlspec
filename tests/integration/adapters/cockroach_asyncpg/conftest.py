@@ -8,11 +8,17 @@ from pytest_databases.docker.cockroachdb import CockroachDBService
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, CockroachAsyncpgDriver
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    """Session-scoped anyio backend for session-scoped async fixtures."""
+    return "asyncio"
+
+
+@pytest.fixture(scope="session")
 async def cockroach_asyncpg_config(
     cockroachdb_service: "CockroachDBService",
 ) -> "AsyncGenerator[CockroachAsyncpgConfig, None]":
-    """Create Cockroach asyncpg config for testing."""
+    """Session-scoped Cockroach asyncpg config."""
     config = CockroachAsyncpgConfig(
         connection_config={
             "host": cockroachdb_service.host,
