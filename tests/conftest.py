@@ -67,6 +67,11 @@ def suppress_noisy_test_loggers() -> "Generator[None, None, None]":
         "mysql.connector": logging.WARNING,
         "asyncmy": logging.ERROR,
         "sqlspec.migrations.tracker": logging.WARNING,
+        # psycopg.pool's BgWorker thread tries to reconnect after pytest-databases
+        # tears down the postgres container at session end, logging "discarding
+        # closed connection" / "Connection refused" warnings. The pool gets closed
+        # cleanly in our atexit handler immediately after; the noise isn't actionable.
+        "psycopg.pool": logging.ERROR,
     }
     original_levels = {name: logging.getLogger(name).level for name in overrides}
     for name, level in overrides.items():
