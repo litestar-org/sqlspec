@@ -185,7 +185,7 @@ class PsycopgAsyncListenerHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # pragma: no cover - pump resilience path
-                    if self._stopping:
+                    if self._stopping or getattr(connection, "closed", False):
                         return
                     logger.warning("psycopg async notify pump error: %s", exc)
                     await asyncio.sleep(0.25)
@@ -354,7 +354,7 @@ class PsycopgSyncListenerHub:
                         return
                     self._dispatch(notify.channel, notify.payload)
             except Exception as exc:  # pragma: no cover - pump resilience path
-                if self._stopping.is_set():
+                if self._stopping.is_set() or getattr(connection, "closed", False):
                     return
                 logger.warning("psycopg sync notify worker error: %s", exc)
                 self._stopping.wait(timeout=0.25)

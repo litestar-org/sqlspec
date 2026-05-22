@@ -399,6 +399,7 @@ filterwarnings = [
   "ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
+  "xdist_group: pin tests sharing state to the same xdist worker (registered to silence PytestUnknownMarkWarning when xdist isn't actively loaded)",
   "integration: marks tests that require an external database",
   "postgres: marks tests specific to PostgreSQL",
   "duckdb: marks tests specific to DuckDB",

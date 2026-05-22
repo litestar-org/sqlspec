@@ -114,9 +114,8 @@ jobs:
       - name: Test
         env:
           PYTHONFAULTHANDLER: "1"
-          PYTEST_ADDOPTS: "--max-worker-restart=0"
           SUITE_PATHS: ${{ matrix.suite.paths }}
-        run: uv run pytest $SUITE_PATHS -n 2 --dist=loadgroup
+        run: uv run pytest $SUITE_PATHS -p no:xdist
 
   # test-linux-freethreaded:
   #   # Disabled: cp314t ecosystem not mature enough yet (missing binary wheels, long build times)
