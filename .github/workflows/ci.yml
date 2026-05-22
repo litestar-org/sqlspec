@@ -125,7 +125,8 @@ jobs:
       - name: Test
         env:
           PYTHONFAULTHANDLER: "1"
-        run: uv run pytest -p no:xdist
+          PYTEST_ADDOPTS: "--max-worker-restart=0"
+        run: uv run pytest -n 2 --dist=loadgroup
 
   # test-linux-freethreaded:
   #   # Disabled: cp314t ecosystem not mature enough yet (missing binary wheels, long build times)
