@@ -31,11 +31,9 @@ from sqlspec.core import (
 from sqlspec.utils.text import camelize
 
 try:
-    from litestar.params import QueryParameter
-
-    _HAS_QUERY_PARAMETER = True
+    from litestar.params import QueryParameter as _QueryParameter
 except ImportError:
-    _HAS_QUERY_PARAMETER = False
+    _QueryParameter = None  # type: ignore[assignment,misc]
 
 
 def _query_param_kwargs(
@@ -48,8 +46,8 @@ def _query_param_kwargs(
     exposes :class:`QueryParameter`; older releases only have
     :func:`Parameter`, which takes ``query=`` instead of ``name=``.
     """
-    if _HAS_QUERY_PARAMETER:
-        metadata: Any = QueryParameter(name=query, required=required, **constraints)
+    if _QueryParameter is not None:
+        metadata: Any = _QueryParameter(name=query, required=required, **constraints)
     else:
         metadata = Parameter(query=query, required=required, **constraints)
     return {"default": default, "annotation": Annotated[annotation, metadata]}
