@@ -231,7 +231,7 @@ def test_order_by_provider_uses_display_alias_as_query_default() -> None:
     provider = deps["order_by_filter"]
     field_param = inspect.signature(provider.dependency).parameters["field_name"]
 
-    assert field_param.default.default == "createdAt"
+    assert field_param.default == "createdAt"
 
 
 def test_order_by_provider_can_disable_camelized_sort_field_aliases() -> None:
@@ -242,7 +242,7 @@ def test_order_by_provider_can_disable_camelized_sort_field_aliases() -> None:
     provider = deps["order_by_filter"]
     field_param = inspect.signature(provider.dependency).parameters["field_name"]
 
-    assert field_param.default.default == "created_at"
+    assert field_param.default == "created_at"
     with pytest.raises(ValidationException) as exc_info:
         provider.dependency(field_name="uploadedCollections", sort_order="asc")
 
