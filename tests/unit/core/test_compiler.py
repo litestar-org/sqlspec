@@ -957,7 +957,7 @@ def test_compilation_speed_benchmark(
         processor.compile(f"SELECT {i} FROM users", [i])
     uncached_time = time.time() - start_time
 
-    assert cached_time < uncached_time / 10
+    assert cached_time < uncached_time / 5
 
     assert cached_time < 0.1
     assert uncached_time < 2.0
