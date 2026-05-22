@@ -128,6 +128,7 @@ lint = [
   "types-Pygments",
   "types-colorama",
   "types-cffi",
+  "types-docker",
   "types-protobuf",
   "asyncpg-stubs",
   "pyarrow-stubs",
