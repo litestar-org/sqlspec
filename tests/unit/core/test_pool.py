@@ -5,11 +5,7 @@ import threading
 from queue import Queue
 from typing import cast
 
-import pytest
-
 from sqlspec.core._pool import ObjectPool, get_processed_state_pool, get_sql_pool
-
-pytestmark = pytest.mark.xdist_group("core")
 
 
 class _Sentinel:

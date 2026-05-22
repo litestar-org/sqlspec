@@ -38,9 +38,6 @@ from sqlspec.core.query_modifiers import (
 )
 from sqlspec.exceptions import SQLSpecError
 
-pytestmark = pytest.mark.xdist_group("core")
-
-
 # =============================================================================
 # Expression Factory Tests
 # =============================================================================

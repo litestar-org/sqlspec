@@ -9,8 +9,6 @@ import pytest
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
 
-pytestmark = pytest.mark.xdist_group("builder")
-
 
 def test_or_where_basic_chaining() -> None:
     """Test basic OR chaining with or_where method."""

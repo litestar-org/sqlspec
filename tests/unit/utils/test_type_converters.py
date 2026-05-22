@@ -8,8 +8,6 @@ import pytest
 from sqlspec._typing import UUID_UTILS_INSTALLED
 from sqlspec.utils.type_converters import _uuid_to_string, build_nested_decimal_normalizer, build_uuid_coercions
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_nested_decimal_normalizer_preserves_identity_when_unchanged() -> None:
     """Unchanged nested payloads should keep their existing container identities."""

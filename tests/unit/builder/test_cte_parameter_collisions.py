@@ -4,11 +4,7 @@ This module tests that CTEs with duplicate parameter names are properly
 handled with unique parameter naming to prevent collisions.
 """
 
-import pytest
-
 from sqlspec import sql
-
-pytestmark = pytest.mark.xdist_group("builder")
 
 
 def test_cte_parameter_collision_resolution() -> None:

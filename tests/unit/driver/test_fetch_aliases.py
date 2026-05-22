@@ -11,13 +11,8 @@ import inspect
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
-import pytest
-
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
-
-pytestmark = pytest.mark.xdist_group("driver")
-
 
 # Test method existence and signature equivalence
 

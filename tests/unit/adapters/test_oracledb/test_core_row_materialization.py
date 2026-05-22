@@ -1,10 +1,6 @@
 """Unit tests for Oracle row materialization helpers."""
 
-import pytest
-
 from sqlspec.adapters.oracledb.core import collect_async_rows, collect_sync_rows, resolve_row_metadata
-
-pytestmark = pytest.mark.xdist_group("adapter_unit")
 
 
 class _TypeCode:

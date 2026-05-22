@@ -24,8 +24,6 @@ from sqlspec.utils.uuids import (
     uuid7,
 )
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def _is_uuid_like(obj: object) -> bool:
     """Check if object has UUID-like interface.

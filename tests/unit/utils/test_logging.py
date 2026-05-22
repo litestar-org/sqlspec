@@ -26,8 +26,6 @@ from sqlspec.utils.logging import (
     set_correlation_id,
 )
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def setup_function() -> None:
     """Clear correlation ID before each test."""

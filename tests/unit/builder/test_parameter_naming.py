@@ -15,12 +15,8 @@ Tests cover:
 
 import string
 
-import pytest
-
 from sqlspec import sql
 from sqlspec.builder import parse_condition_expression
-
-pytestmark = pytest.mark.xdist_group("builder")
 
 
 def test_where_eq_uses_column_name_as_parameter() -> None:

@@ -13,8 +13,6 @@ from sqlspec.utils import module_loader as dependencies
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow, import_string, module_to_os_path
 from sqlspec.utils.singleton import SingletonMeta
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_ensure_pyarrow_succeeds_when_installed() -> None:
     """Test ensure_pyarrow succeeds when pyarrow is available."""

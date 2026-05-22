@@ -41,8 +41,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core.statement import Statement
 
-pytestmark = pytest.mark.xdist_group("core")
-
 
 def test_public_canonicalize_filters_uses_statement_filter_implementation() -> None:
     """The public core export canonicalizes SQL statement filters."""

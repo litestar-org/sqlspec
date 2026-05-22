@@ -43,8 +43,6 @@ from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.typing import Empty
 from tests.conftest import requires_interpreted
 
-pytestmark = pytest.mark.xdist_group("core")
-
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
 )

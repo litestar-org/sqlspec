@@ -12,8 +12,6 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.exceptions import SQLFileNotFoundError
 
-pytestmark = pytest.mark.xdist_group("core")
-
 
 def test_data_dictionary_loader_lists_known_dialects() -> None:
     """Ensure loader lists bundled dialect directories."""

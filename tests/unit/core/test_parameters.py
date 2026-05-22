@@ -113,9 +113,6 @@ def _build_sql_for_style(style: ParameterStyle) -> str:
     return f"SELECT * FROM test_table WHERE col = {placeholder}"
 
 
-pytestmark = pytest.mark.xdist_group("core")
-
-
 @pytest.mark.parametrize(
     "style,expected_value",
     [

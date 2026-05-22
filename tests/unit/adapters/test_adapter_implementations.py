@@ -11,9 +11,6 @@ from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, S
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import SQLSpecError
 
-pytestmark = pytest.mark.xdist_group("unit")
-
-
 __all__ = ()
 
 

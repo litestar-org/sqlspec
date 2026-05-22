@@ -31,8 +31,6 @@ from sqlspec.utils.sync_tools import (
 
 _SYNC_TOOLS_COMPILED = (_sync_tools_module.__file__ or "").endswith((".so", ".pyd"))
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_capacity_limiter_basic() -> None:
     """Test CapacityLimiter basic functionality."""

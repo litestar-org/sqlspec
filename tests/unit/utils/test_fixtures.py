@@ -24,8 +24,6 @@ from sqlspec.utils.fixtures import (
     write_fixture_async,
 )
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_find_fixture_file_json(tmp_path: Path) -> None:
     """Test finding regular .json fixture file."""

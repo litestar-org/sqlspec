@@ -69,8 +69,6 @@ from sqlspec.utils.type_guards import (
     supports_arrow_results,
 )
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 _UNSET = object()
 
 

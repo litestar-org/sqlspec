@@ -9,9 +9,6 @@ import pytest
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError
 
-pytestmark = pytest.mark.xdist_group("core")
-
-
 # =============================================================================
 # WHERE Method Tests
 # =============================================================================

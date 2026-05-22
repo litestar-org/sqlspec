@@ -6,8 +6,6 @@ import pytest
 from sqlspec.driver import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.exceptions import SerializationConflictError
 
-pytestmark = pytest.mark.xdist_group("driver")
-
 
 def test_base_sync_exception_handler_defaults_to_passthrough() -> None:
     """Base sync handler should not suppress or map without an override."""

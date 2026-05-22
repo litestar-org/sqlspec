@@ -27,8 +27,6 @@ from sqlspec.utils.serializers._json import (
     encode_json,
 )
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_registry_is_public_dict() -> None:
     """DEFAULT_TYPE_ENCODERS is a public, non-empty dict mapping types to callables."""

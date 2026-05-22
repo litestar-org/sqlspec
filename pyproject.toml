@@ -394,6 +394,8 @@ filterwarnings = [
   "ignore:Table '.*' already exists:Warning",
   "ignore:Unknown table '.*':Warning",
   "ignore:PROCEDURE .* does not exist:Warning",
+  "ignore::Warning:aiomysql.cursors",
+  "ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
   "integration: marks tests that require an external database",

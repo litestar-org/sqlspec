@@ -45,8 +45,6 @@ from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipelin
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
 
-pytestmark = pytest.mark.xdist_group("core")
-
 
 @pytest.fixture
 def basic_statement_config() -> "StatementConfig":

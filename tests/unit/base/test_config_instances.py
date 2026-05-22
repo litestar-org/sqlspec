@@ -10,13 +10,9 @@ Key changes tested:
 4. Validation added - methods raise ValueError if config not registered
 """
 
-import pytest
-
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
-
-pytestmark = pytest.mark.xdist_group("base")
 
 
 def test_multiple_same_type_configs() -> None:

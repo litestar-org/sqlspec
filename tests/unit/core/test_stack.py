@@ -7,8 +7,6 @@ import pytest
 from sqlspec import ObservabilityRuntime, StackOperation, StatementConfig, StatementStack
 from sqlspec.core.metrics import StackExecutionMetrics
 
-pytestmark = pytest.mark.xdist_group("core")
-
 
 def test_push_execute_is_immutable() -> None:
     stack = StatementStack()

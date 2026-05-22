@@ -39,8 +39,6 @@ from sqlspec.core import (
     update_cache_config,
 )
 
-pytestmark = pytest.mark.xdist_group("core")
-
 
 def test_cache_key_creation_and_immutability() -> None:
     """Test CacheKey creation and immutable behavior."""

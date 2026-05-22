@@ -6,8 +6,6 @@ from sqlspec import sql
 from sqlspec.builder import Merge
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 
-pytestmark = pytest.mark.xdist_group("builder")
-
 
 def test_merge_basic_structure() -> None:
     """Test basic MERGE statement structure with all required clauses."""
