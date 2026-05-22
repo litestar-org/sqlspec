@@ -366,7 +366,7 @@ exclude_lines = [
 ]
 
 [tool.pytest.ini_options]
-addopts = ["-q", "-ra"]
+addopts = ["-q", "-ra", "--capture=sys"]
 anyio_mode = "auto"
 faulthandler_timeout = 240
 filterwarnings = [
