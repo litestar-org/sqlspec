@@ -11,8 +11,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class TestSyncMigrationCommandsSquash:
     """Tests for SyncMigrationCommands.squash() method."""

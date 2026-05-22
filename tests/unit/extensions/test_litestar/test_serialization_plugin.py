@@ -21,8 +21,6 @@ from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
 
-pytestmark = pytest.mark.xdist_group("extensions_litestar")
-
 
 def _build_plugin() -> SQLSpecPlugin:
     sqlspec = SQLSpec()

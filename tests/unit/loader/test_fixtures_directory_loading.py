@@ -29,7 +29,6 @@ except ImportError:
 
     console = MockConsole()
 
-pytestmark = pytest.mark.xdist_group("loader")
 
 MAX_LARGE_QUERY_LOOKUP_SECONDS = 0.75
 

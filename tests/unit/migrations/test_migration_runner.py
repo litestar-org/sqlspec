@@ -22,8 +22,6 @@ from sqlspec.migrations.base import BaseMigrationRunner
 from sqlspec.migrations.loaders import SQLFileLoader as MigrationSQLFileLoader
 from sqlspec.migrations.runner import SyncMigrationRunner
 
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 def create_test_migration_runner(migrations_path: Path = Path("/test")) -> BaseMigrationRunner:
     """Create a test migration runner implementation."""

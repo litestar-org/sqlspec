@@ -15,12 +15,11 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-async def duckdb_store(tmp_path: Path, worker_id: str) -> AsyncGenerator[DuckdbStore, None]:
+async def duckdb_store(tmp_path: Path) -> AsyncGenerator[DuckdbStore, None]:
     """Create DuckDB store with temporary file-based database.
 
     Args:
         tmp_path: Pytest fixture providing unique temporary directory per test.
-        worker_id: Pytest-xdist fixture providing unique worker identifier.
 
     Note:
         DuckDB in-memory databases are connection-local, not process-wide.
@@ -33,7 +32,7 @@ async def duckdb_store(tmp_path: Path, worker_id: str) -> AsyncGenerator[DuckdbS
         (DuckDB rejects ATTACH when any live connection already claims the
         same logical database name).
     """
-    db_path = tmp_path / f"test_sessions_{worker_id}_{uuid4().hex}.duckdb"
+    db_path = tmp_path / f"test_sessions_{uuid4().hex}.duckdb"
     config = DuckDBConfig(
         connection_config={"database": str(db_path)}, extension_config={"litestar": {"session_table": "test_sessions"}}
     )

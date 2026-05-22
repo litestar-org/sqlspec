@@ -7,8 +7,6 @@ Tests cover:
 - Connection config normalization
 """
 
-import pytest
-
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
     CockroachPsycopgDriverFeatures,
@@ -17,7 +15,6 @@ from sqlspec.adapters.cockroach_psycopg import (
 )
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCockroachPsycopgSyncConfig:
     """Tests for CockroachPsycopgSyncConfig class."""
 
@@ -93,7 +90,6 @@ class TestCockroachPsycopgSyncConfig:
         assert CockroachPsycopgSyncConfig.supports_native_arrow_import is True
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCockroachPsycopgAsyncConfig:
     """Tests for CockroachPsycopgAsyncConfig class."""
 
@@ -164,7 +160,6 @@ class TestCockroachPsycopgAsyncConfig:
         assert CockroachPsycopgAsyncConfig.supports_native_arrow_import is True
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCockroachPsycopgDriverFeatures:
     """Tests for CockroachPsycopgDriverFeatures TypedDict structure."""
 

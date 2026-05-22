@@ -15,21 +15,19 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-async def duckdb_adk_store(tmp_path: Path, worker_id: str) -> "AsyncGenerator[DuckdbADKStore, None]":
+async def duckdb_adk_store(tmp_path: Path) -> "AsyncGenerator[DuckdbADKStore, None]":
     """Create DuckDB ADK store with temporary file-based database.
 
     Args:
         tmp_path: Pytest fixture providing unique temporary directory per test.
-        worker_id: Pytest-xdist fixture providing unique worker identifier.
 
     Yields:
         Configured DuckDB ADK store instance.
 
     Notes:
         Uses file-based database for thread-safe testing.
-        Worker ID ensures parallel pytest-xdist workers use separate database files.
     """
-    db_path = tmp_path / f"test_adk_{worker_id}.duckdb"
+    db_path = tmp_path / "test_adk.duckdb"
     try:
         config = DuckDBConfig(
             connection_config={"database": str(db_path)},
@@ -359,9 +357,9 @@ async def test_empty_state(duckdb_adk_store: DuckdbADKStore) -> None:
     assert session["state"] == {}
 
 
-async def test_table_not_found_handling(tmp_path: Path, worker_id: str) -> None:
+async def test_table_not_found_handling(tmp_path: Path) -> None:
     """Test graceful handling when tables don't exist."""
-    db_path = tmp_path / f"test_no_tables_{worker_id}.duckdb"
+    db_path = tmp_path / "test_no_tables.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
         store = DuckdbADKStore(config)
@@ -417,9 +415,9 @@ async def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> N
     assert final_session["state"]["counter"] == 10
 
 
-async def test_owner_id_column_with_integer(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_with_integer(tmp_path: Path) -> None:
     """Test owner ID column with INTEGER type."""
-    db_path = tmp_path / f"test_owner_id_int_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_int.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 
@@ -460,9 +458,9 @@ async def test_owner_id_column_with_integer(tmp_path: Path, worker_id: str) -> N
             db_path.unlink()
 
 
-async def test_owner_id_column_with_ubigint(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_with_ubigint(tmp_path: Path) -> None:
     """Test owner ID column with DuckDB UBIGINT type."""
-    db_path = tmp_path / f"test_owner_id_ubigint_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_ubigint.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 
@@ -506,9 +504,9 @@ async def test_owner_id_column_with_ubigint(tmp_path: Path, worker_id: str) -> N
             db_path.unlink()
 
 
-async def test_owner_id_column_foreign_key_constraint(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_foreign_key_constraint(tmp_path: Path) -> None:
     """Test that FK constraint is enforced."""
-    db_path = tmp_path / f"test_owner_id_constraint_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_constraint.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 
@@ -549,9 +547,9 @@ async def test_owner_id_column_foreign_key_constraint(tmp_path: Path, worker_id:
             db_path.unlink()
 
 
-async def test_owner_id_column_without_value(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_without_value(tmp_path: Path) -> None:
     """Test creating session without owner_id when column is configured but nullable."""
-    db_path = tmp_path / f"test_owner_id_nullable_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_nullable.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 
@@ -585,9 +583,9 @@ async def test_owner_id_column_without_value(tmp_path: Path, worker_id: str) -> 
             db_path.unlink()
 
 
-async def test_owner_id_column_with_varchar(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_with_varchar(tmp_path: Path) -> None:
     """Test owner ID column with VARCHAR type."""
-    db_path = tmp_path / f"test_owner_id_varchar_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_varchar.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 
@@ -629,9 +627,9 @@ async def test_owner_id_column_with_varchar(tmp_path: Path, worker_id: str) -> N
             db_path.unlink()
 
 
-async def test_owner_id_column_multiple_sessions(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_multiple_sessions(tmp_path: Path) -> None:
     """Test multiple sessions with same FK value."""
-    db_path = tmp_path / f"test_owner_id_multiple_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_multiple.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 
@@ -672,9 +670,9 @@ async def test_owner_id_column_multiple_sessions(tmp_path: Path, worker_id: str)
             db_path.unlink()
 
 
-async def test_owner_id_column_query_by_fk(tmp_path: Path, worker_id: str) -> None:
+async def test_owner_id_column_query_by_fk(tmp_path: Path) -> None:
     """Test querying sessions by FK column value."""
-    db_path = tmp_path / f"test_owner_id_query_{worker_id}.duckdb"
+    db_path = tmp_path / "test_owner_id_query.duckdb"
     try:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
 

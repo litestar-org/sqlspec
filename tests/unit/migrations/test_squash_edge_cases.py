@@ -14,8 +14,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class TestSquashUnicodeContent:
     """Tests for Unicode content handling in squash operations."""

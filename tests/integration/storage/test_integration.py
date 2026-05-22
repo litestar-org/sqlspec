@@ -77,7 +77,6 @@ def obstore_s3_backend(rustfs_service: "RustfsService", rustfs_bucket_name: str)
 # Local storage tests
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_store_file_operations(local_test_setup: Path) -> None:
     """Test LocalStore basic file operations."""
     from sqlspec.storage.backends.local import LocalStore
@@ -96,7 +95,6 @@ def test_local_store_file_operations(local_test_setup: Path) -> None:
     assert binary_content == TEST_BINARY_CONTENT
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_store_write_operations(local_test_setup: Path) -> None:
     """Test LocalStore write operations."""
     from sqlspec.storage.backends.local import LocalStore
@@ -114,7 +112,6 @@ def test_local_store_write_operations(local_test_setup: Path) -> None:
     assert store.read_bytes_sync("new.bin") == new_bytes
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_store_listing_operations(local_test_setup: Path) -> None:
     """Test LocalStore listing operations."""
     from sqlspec.storage.backends.local import LocalStore
@@ -128,7 +125,6 @@ def test_local_store_listing_operations(local_test_setup: Path) -> None:
     assert "subdir/nested.txt" in objects
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_store_url_signing_not_supported(local_test_setup: Path) -> None:
     """Test LocalStore URL signing raises NotImplementedError."""
     from sqlspec.storage.backends.local import LocalStore
@@ -142,7 +138,6 @@ def test_local_store_url_signing_not_supported(local_test_setup: Path) -> None:
         store.sign_sync("test.txt", expires_in=3600)
 
 
-@pytest.mark.xdist_group("storage")
 async def test_local_store_async_operations(local_test_setup: Path) -> None:
     """Test LocalStore async operations."""
     from sqlspec.storage.backends.local import LocalStore
@@ -185,7 +180,6 @@ def test_storage_missing_logging_format(caplog) -> None:
 # FSSpec S3 backend tests
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_basic_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend basic operations."""
@@ -201,7 +195,6 @@ def test_fsspec_s3_basic_operations(fsspec_s3_backend: "ObjectStoreProtocol") ->
     assert not fsspec_s3_backend.exists_sync("nonexistent.txt")
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_binary_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend binary operations."""
@@ -212,7 +205,6 @@ def test_fsspec_s3_binary_operations(fsspec_s3_backend: "ObjectStoreProtocol") -
     assert content == TEST_BINARY_CONTENT
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 async def test_fsspec_s3_async_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend async operations."""
@@ -228,7 +220,6 @@ async def test_fsspec_s3_async_operations(fsspec_s3_backend: "ObjectStoreProtoco
     assert exists
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_listing_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend listing operations."""
@@ -245,7 +236,6 @@ def test_fsspec_s3_listing_operations(fsspec_s3_backend: "ObjectStoreProtocol") 
     assert any("file3.txt" in obj for obj in objects)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
     """Test FSSpec S3 backend copy and move operations."""
@@ -274,7 +264,6 @@ def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol"
 # ObStore S3 backend tests
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_basic_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend basic operations."""
@@ -289,7 +278,6 @@ def test_obstore_s3_basic_operations(obstore_s3_backend: "ObjectStoreProtocol") 
     assert obstore_s3_backend.exists_sync(test_path)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_binary_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend binary operations."""
@@ -300,7 +288,6 @@ def test_obstore_s3_binary_operations(obstore_s3_backend: "ObjectStoreProtocol")
     assert content == TEST_BINARY_CONTENT
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_async_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend async operations."""
@@ -315,7 +302,6 @@ async def test_obstore_s3_async_operations(obstore_s3_backend: "ObjectStoreProto
     assert exists
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_listing_operations(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test ObStore S3 backend listing operations."""
@@ -334,7 +320,6 @@ def test_obstore_s3_listing_operations(obstore_s3_backend: "ObjectStoreProtocol"
 # Storage registry tests
 
 
-@pytest.mark.xdist_group("storage")
 def test_registry_uri_resolution_local(tmp_path: "Path") -> None:
     """Test storage registry URI resolution for local files."""
     from sqlspec.storage.backends.local import LocalStore
@@ -354,7 +339,6 @@ def test_registry_uri_resolution_local(tmp_path: "Path") -> None:
     assert content == TEST_TEXT_CONTENT
 
 
-@pytest.mark.xdist_group("storage")
 def test_registry_path_resolution(tmp_path: "Path") -> None:
     """Test storage registry resolution for raw paths."""
     from sqlspec.storage.backends.local import LocalStore
@@ -372,7 +356,6 @@ def test_registry_path_resolution(tmp_path: "Path") -> None:
     assert content == TEST_TEXT_CONTENT
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_registry_s3_fsspec_resolution(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test storage registry S3 resolution with FSSpec backend."""
@@ -392,7 +375,6 @@ def test_registry_s3_fsspec_resolution(rustfs_service: "RustfsService", rustfs_b
     assert content == TEST_TEXT_CONTENT
 
 
-@pytest.mark.xdist_group("storage")
 def test_registry_alias_registration(
     rustfs_service: "RustfsService", rustfs_bucket_name: str, tmp_path: "Path"
 ) -> None:
@@ -476,7 +458,6 @@ def obstore_s3_backend_optional(rustfs_service: "RustfsService", rustfs_bucket_n
     return ObStoreBackend(s3_uri, **rustfs_obstore_kwargs(rustfs_service))
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.parametrize("backend_name", ["local_backend", "fsspec_s3_backend_optional", "obstore_s3_backend_optional"])
 def test_backend_consistency(request: pytest.FixtureRequest, backend_name: str) -> None:
     """Test that all backends provide consistent behavior."""
@@ -504,7 +485,6 @@ def test_backend_consistency(request: pytest.FixtureRequest, backend_name: str) 
             backend.sign_sync(test_path, expires_in=3600)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.parametrize("backend_name", ["local_backend", "fsspec_s3_backend_optional", "obstore_s3_backend_optional"])
 async def test_backend_async_consistency(request: pytest.FixtureRequest, backend_name: str) -> None:
     """Test that all backends provide consistent async behavior."""
@@ -527,7 +507,6 @@ async def test_backend_async_consistency(request: pytest.FixtureRequest, backend
 # Error handling tests
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_backend_error_handling(tmp_path: "Path") -> None:
     """Test LocalStore error handling for invalid operations."""
     from sqlspec.storage.backends.local import LocalStore
@@ -542,7 +521,6 @@ def test_local_backend_error_handling(tmp_path: "Path") -> None:
         backend.read_bytes_sync("nonexistent.txt")
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_error_handling(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test FSSpec S3 backend error handling."""
@@ -559,7 +537,6 @@ def test_fsspec_s3_error_handling(rustfs_service: "RustfsService", rustfs_bucket
         backend.read_text_sync("nonexistent.txt")
 
 
-@pytest.mark.xdist_group("storage")
 async def test_async_error_handling(tmp_path: "Path") -> None:
     """Test async error handling."""
     from sqlspec.storage.backends.local import LocalStore
@@ -577,7 +554,6 @@ async def test_async_error_handling(tmp_path: "Path") -> None:
 # Registry advanced tests
 
 
-@pytest.mark.xdist_group("storage")
 def test_registry_caching_behavior(tmp_path: "Path") -> None:
     """Test that storage registry properly caches backend instances."""
     storage_registry.clear()
@@ -603,7 +579,6 @@ def test_registry_caching_behavior(tmp_path: "Path") -> None:
         storage_registry.clear()
 
 
-@pytest.mark.xdist_group("storage")
 def test_registry_alias_management(tmp_path: "Path") -> None:
     """Test storage registry alias management features."""
     storage_registry.clear()
@@ -629,7 +604,6 @@ def test_registry_alias_management(tmp_path: "Path") -> None:
         storage_registry.clear()
 
 
-@pytest.mark.xdist_group("storage")
 def test_registry_backend_fallback_order(
     tmp_path: "Path", rustfs_service: "RustfsService", rustfs_bucket_name: str
 ) -> None:
@@ -673,7 +647,6 @@ def test_registry_backend_fallback_order(
 # Arrow integration tests
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")
 def test_local_arrow_operations(tmp_path: "Path") -> None:
     """Test LocalStore Arrow operations if pyarrow is available."""
@@ -698,7 +671,6 @@ def test_local_arrow_operations(tmp_path: "Path") -> None:
     assert backend.exists_sync(arrow_path)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow missing")
 def test_fsspec_s3_arrow_operations(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
@@ -733,7 +705,6 @@ def test_fsspec_s3_arrow_operations(rustfs_service: "RustfsService", rustfs_buck
 # Performance tests
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_backend_large_file_operations(tmp_path: "Path") -> None:
     """Test LocalStore with larger file operations."""
     from sqlspec.storage.backends.local import LocalStore
@@ -759,7 +730,6 @@ def test_local_backend_large_file_operations(tmp_path: "Path") -> None:
     assert len(read_binary) == len(large_binary)
 
 
-@pytest.mark.xdist_group("storage")
 async def test_concurrent_storage_operations(tmp_path: "Path") -> None:
     """Test concurrent storage operations."""
     import asyncio
@@ -790,7 +760,6 @@ async def test_concurrent_storage_operations(tmp_path: "Path") -> None:
 # Metadata tests
 
 
-@pytest.mark.xdist_group("storage")
 def test_local_metadata_operations(tmp_path: "Path") -> None:
     """Test LocalStore metadata retrieval."""
     from sqlspec.storage.backends.local import LocalStore
@@ -816,7 +785,6 @@ def test_local_metadata_operations(tmp_path: "Path") -> None:
     assert binary_metadata["size"] == len(TEST_BINARY_CONTENT)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_s3_metadata_operations(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Test FSSpec S3 backend metadata operations."""

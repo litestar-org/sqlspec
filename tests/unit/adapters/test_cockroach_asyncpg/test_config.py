@@ -8,8 +8,6 @@ Tests cover:
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,
     CockroachAsyncpgDriverFeatures,
@@ -17,7 +15,6 @@ from sqlspec.adapters.cockroach_asyncpg import (
 )
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCockroachAsyncpgConfig:
     """Tests for CockroachAsyncpgConfig class."""
 
@@ -128,7 +125,6 @@ class TestCockroachAsyncpgConfig:
         assert events == ["user"]
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCockroachAsyncpgDriverFeatures:
     """Tests for CockroachAsyncpgDriverFeatures TypedDict structure."""
 

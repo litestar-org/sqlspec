@@ -11,7 +11,6 @@ These tests pin SQLSpecPlugin to the in-place mutation contract.
 
 from __future__ import annotations
 
-import pytest
 from litestar import Litestar
 from litestar.config.app import AppConfig
 from litestar.plugins import InitPluginProtocol
@@ -19,8 +18,6 @@ from litestar.plugins import InitPluginProtocol
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
-
-pytestmark = pytest.mark.xdist_group("extensions_litestar")
 
 
 def _build_sqlspec_plugin() -> SQLSpecPlugin:

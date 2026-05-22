@@ -12,7 +12,6 @@ from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgRetryConfig
 from sqlspec.adapters.cockroach_psycopg.core import calculate_backoff_seconds, is_retryable_error
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCockroachPsycopgRetryConfig:
     """Tests for CockroachPsycopgRetryConfig dataclass."""
 
@@ -71,7 +70,6 @@ class TestCockroachPsycopgRetryConfig:
             config.max_retries = 5  # type: ignore[misc]
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestIsRetryableError:
     """Tests for is_retryable_error function."""
 
@@ -105,7 +103,6 @@ class TestIsRetryableError:
         assert is_retryable_error(MockErrorWithNone()) is False
 
 
-@pytest.mark.xdist_group("cockroachdb")
 class TestCalculateBackoffSeconds:
     """Tests for calculate_backoff_seconds function."""
 
