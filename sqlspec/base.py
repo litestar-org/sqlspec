@@ -1,8 +1,9 @@
 import asyncio
 import atexit
+import weakref
 from collections.abc import Awaitable, Coroutine
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, Generic, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeGuard, cast, overload
 
 from typing_extensions import Self, TypeVar
 
@@ -267,16 +268,28 @@ _CACHE_MANAGER = _CacheManager()
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_observability_config", "_sql_files")
+    __slots__ = ("__weakref__", "_configs", "_observability_config", "_sql_files")
+
+    _live_instances: "ClassVar[weakref.WeakSet[SQLSpec]]" = weakref.WeakSet()
+    _atexit_registered: ClassVar[bool] = False
 
     def __init__(
         self, *, loader: "SQLFileLoader | None" = None, observability_config: "ObservabilityConfig | None" = None
     ) -> None:
         self._configs: dict[int, DatabaseConfigProtocol[Any, Any, Any]] = {}
-        atexit.register(self._cleanup_sync_pools)
+        SQLSpec._live_instances.add(self)
+        if not SQLSpec._atexit_registered:
+            atexit.register(SQLSpec._cleanup_all_sync_pools)
+            SQLSpec._atexit_registered = True
         self._observability_config = observability_config
         loader_runtime = ObservabilityRuntime(observability_config, config_name="SQLFileLoader")
         self._sql_files = _SQLFileManager(loader, loader_runtime)
+
+    @classmethod
+    def _cleanup_all_sync_pools(cls) -> None:
+        """Walk every live SQLSpec and drain its sync pools at process exit."""
+        for instance in list(cls._live_instances):
+            instance._cleanup_sync_pools()  # pyright: ignore[reportPrivateUsage]
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
