@@ -19,9 +19,13 @@ def _is_bigquery_emulator(service: "BigQueryService") -> bool:
     return getattr(service, "container", None) is not None
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def native_bigquery_service(bigquery_service: "BigQueryService") -> "BigQueryService":
-    """Require a native BigQuery service instead of the Docker emulator."""
+    """Require a native BigQuery service instead of the Docker emulator.
+
+    Session-scoped so session-scoped table-setup fixtures can consume it.
+    Skipping here propagates to every dependent test.
+    """
     if _is_bigquery_emulator(bigquery_service):
         pytest.skip("BigQuery emulator does not support native BigQuery-only coverage")
     return bigquery_service
