@@ -9,12 +9,6 @@ from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, default_st
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 async def aiomysql_config(mysql_service: "MySQLService") -> "AsyncGenerator[AiomysqlConfig, None]":
     """Session-scoped AiomysqlConfig sharing a single pool across tests."""
     config = AiomysqlConfig(

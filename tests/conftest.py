@@ -124,12 +124,12 @@ def disable_spanner_builtin_metrics() -> "Generator[None, None, None]":
         yield
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def anyio_backend() -> str:
-    """Configure AnyIO to use asyncio backend only.
+    """Session-scoped asyncio-only anyio backend.
 
-    Disables trio backend to prevent duplicate test runs and compatibility issues
-    with pytest-xdist parallel execution.
+    Trio is not tested. Session scope is required so session-scoped
+    async fixtures (pool configs, etc.) share a single event loop.
     """
     return "asyncio"
 

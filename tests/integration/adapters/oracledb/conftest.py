@@ -35,12 +35,6 @@ def oracle_sync_config(oracle_connection_config: "OraclePoolParams") -> "OracleS
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 async def oracle_async_config(
     oracle_connection_config: "OraclePoolParams",
 ) -> "AsyncGenerator[OracleAsyncConfig, None]":

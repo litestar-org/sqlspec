@@ -9,12 +9,6 @@ from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_state
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 async def asyncmy_config(mysql_service: "MySQLService") -> "AsyncGenerator[AsyncmyConfig, None]":
     """Session-scoped AsyncmyConfig sharing a single pool across tests."""
     config = AsyncmyConfig(

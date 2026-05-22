@@ -12,12 +12,6 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 async def psqlpy_config(postgres_service: "PostgresService") -> "AsyncGenerator[PsqlpyConfig, None]":
     """Session-scoped PsqlpyConfig sharing a single pool across tests."""
     dsn = (

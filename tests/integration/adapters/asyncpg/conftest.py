@@ -8,12 +8,6 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 def asyncpg_connection_config(postgres_service: "PostgresService") -> "dict[str, Any]":
     """Base pool configuration for AsyncPG tests."""
 

@@ -9,12 +9,6 @@ from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, Cockroach
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 async def cockroach_asyncpg_config(
     cockroachdb_service: "CockroachDBService",
 ) -> "AsyncGenerator[CockroachAsyncpgConfig, None]":

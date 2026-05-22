@@ -14,12 +14,6 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.psycopg, pytest.m
 
 
 @pytest.fixture(scope="module")
-def anyio_backend() -> str:
-    """Module-scoped anyio backend for module-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="module")
 async def psycopg_async_store_config(postgres_service: "PostgresService") -> AsyncGenerator[PsycopgAsyncConfig, None]:
     """Module-scoped config so all async store tests share one pool."""
     config = PsycopgAsyncConfig(

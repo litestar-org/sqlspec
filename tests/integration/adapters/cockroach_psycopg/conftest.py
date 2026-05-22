@@ -18,12 +18,6 @@ def _conninfo(service: "CockroachDBService") -> str:
 
 
 @pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
-@pytest.fixture(scope="session")
 def cockroach_sync_config(
     cockroachdb_service: "CockroachDBService",
 ) -> "Generator[CockroachPsycopgSyncConfig, None, None]":
