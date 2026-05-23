@@ -8,6 +8,7 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.extensions.adk import EventRecord
+from tests.integration.adapters._adk_contract_helpers import assert_session_event_store_contract
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -30,6 +31,15 @@ async def test_sqlite_session_empty_state_round_trip(tmp_path: Path) -> None:
         assert created["state"] == {}
         assert fetched is not None
         assert fetched["state"] == {}
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_event_store_shared_contract(tmp_path: Path) -> None:
+    """SQLite satisfies the shared ADK session/event store acceptance contract."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_event_store_contract(store, marker="sqlite")
     finally:
         config.close_pool()
 

@@ -462,18 +462,19 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(
-                insert_sql,
-                (
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["author"],
-                    event_record["timestamp"],
-                    event_data_str,
-                ),
-            )
             cursor = conn.execute(update_sql, (state_json, now, session_id))
             row = cursor.fetchone()
+            if row is not None:
+                conn.execute(
+                    insert_sql,
+                    (
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["author"],
+                        event_record["timestamp"],
+                        event_data_str,
+                    ),
+                )
             conn.commit()
 
         if row is None:
