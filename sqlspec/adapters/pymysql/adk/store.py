@@ -437,6 +437,48 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         """Get events for a session."""
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
+    def _delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (before,))
+                    conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+        except pymysql.MySQLError as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (updated_before,))
+                    conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+        except pymysql.MySQLError as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)

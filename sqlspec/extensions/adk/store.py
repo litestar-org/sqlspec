@@ -282,6 +282,30 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
+    async def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than the given timestamp.
+
+        Args:
+            before: Timestamp threshold; events with timestamp earlier than this value are deleted.
+
+        Returns:
+            Number of event rows deleted.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions whose update_time predates the given threshold.
+
+        Args:
+            updated_before: Timestamp threshold; sessions updated earlier than this value are deleted.
+
+        Returns:
+            Number of session rows deleted.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError

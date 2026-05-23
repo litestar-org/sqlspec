@@ -800,6 +800,36 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return []
             raise
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, {"before": before})
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, {"updated_before": updated_before})
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
 
 class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     """Oracle synchronous ADK store using oracledb sync driver.
@@ -1528,6 +1558,44 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     ) -> "list[EventRecord]":
         """Get events for a session."""
         return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"before": before})
+                conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"updated_before": updated_before})
+                conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""

@@ -597,6 +597,34 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
+    def _delete_expired_events(self, before: datetime) -> int:
+        """Synchronous implementation of delete_expired_events."""
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            cursor = conn.execute(sql, (_datetime_to_julian(before),))
+            conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    def _delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Synchronous implementation of delete_idle_sessions."""
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            cursor = conn.execute(sql, (_datetime_to_julian(updated_before),))
+            conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
 
 class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
     """SQLite ADK memory store using synchronous SQLite driver.

@@ -76,6 +76,12 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     ) -> list[EventRecord]:
         return []
 
+    async def delete_expired_events(self, before: datetime) -> int:
+        return 0
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        return 0
+
     async def create_tables(self) -> None:
         return None
 
@@ -167,6 +173,11 @@ def test_memory_store_contract_exports_async_surface_only() -> None:
     assert "BaseSyncADKMemoryStore" not in memory_store_module.__all__
     assert not hasattr(adk_module, "BaseSyncADKMemoryStore")
     assert not hasattr(memory_store_module, "BaseSyncADKMemoryStore")
+
+
+def test_session_store_contract_declares_cleanup_hooks() -> None:
+    assert "delete_expired_events" in BaseAsyncADKStore.__abstractmethods__
+    assert "delete_idle_sessions" in BaseAsyncADKStore.__abstractmethods__
 
 
 @pytest.mark.parametrize("expires_in", [None, 0, timedelta(seconds=-5)])

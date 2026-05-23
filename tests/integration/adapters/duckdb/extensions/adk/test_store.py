@@ -10,7 +10,10 @@ import pytest
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import EventRecord
-from tests.integration.adapters._adk_contract_helpers import assert_session_event_store_contract
+from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_event_cleanup_contract,
+    assert_session_event_store_contract,
+)
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
@@ -51,6 +54,11 @@ async def test_create_tables(duckdb_adk_store: DuckdbADKStore) -> None:
 async def test_duckdb_session_event_store_shared_contract(duckdb_adk_store: DuckdbADKStore) -> None:
     """DuckDB satisfies the shared ADK session/event store acceptance contract."""
     await assert_session_event_store_contract(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_event_cleanup_contract(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB satisfies cleanup hooks while manually cascading event deletion."""
+    await assert_session_event_cleanup_contract(duckdb_adk_store, marker="duckdb")
 
 
 async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:

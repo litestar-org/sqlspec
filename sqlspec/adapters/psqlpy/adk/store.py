@@ -310,6 +310,40 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 return []
             raise
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        count_sql = f"SELECT COUNT(*) AS count FROM {self._events_table} WHERE timestamp < $1"
+        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+
+        try:
+            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+                count_result = await conn.fetch(count_sql, [before])
+                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
+                count = int(count_rows[0]["count"]) if count_rows else 0
+                await conn.execute(delete_sql, [before])
+                return count
+        except psqlpy.exceptions.DatabaseError as e:
+            error_msg = str(e).lower()
+            if "does not exist" in error_msg or "relation" in error_msg:
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        count_sql = f"SELECT COUNT(*) AS count FROM {self._session_table} WHERE update_time < $1"
+        delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+
+        try:
+            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+                count_result = await conn.fetch(count_sql, [updated_before])
+                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
+                count = int(count_rows[0]["count"]) if count_rows else 0
+                await conn.execute(delete_sql, [updated_before])
+                return count
+        except psqlpy.exceptions.DatabaseError as e:
+            error_msg = str(e).lower()
+            if "does not exist" in error_msg or "relation" in error_msg:
+                return 0
+            raise
+
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 

@@ -8,7 +8,10 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.extensions.adk import EventRecord
-from tests.integration.adapters._adk_contract_helpers import assert_session_event_store_contract
+from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_event_cleanup_contract,
+    assert_session_event_store_contract,
+)
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -60,6 +63,15 @@ async def test_aiosqlite_session_event_store_shared_contract(tmp_path: Path) -> 
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_event_store_contract(store, marker="aiosqlite")
+    finally:
+        await config.close_pool()
+
+
+async def test_aiosqlite_session_event_cleanup_contract(tmp_path: Path) -> None:
+    """AioSQLite satisfies the shared ADK cleanup hook contract."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_event_cleanup_contract(store, marker="aiosqlite")
     finally:
         await config.close_pool()
 

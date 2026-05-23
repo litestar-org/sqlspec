@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from sqlspec.extensions.adk import EventRecord, MemoryRecord, SessionRecord
 
-__all__ = ("assert_memory_store_contract", "assert_session_event_store_contract")
+__all__ = (
+    "assert_memory_store_contract",
+    "assert_session_event_cleanup_contract",
+    "assert_session_event_store_contract",
+)
 
 
 class SessionEventStore(Protocol):
@@ -33,6 +37,10 @@ class SessionEventStore(Protocol):
     async def get_events(
         self, session_id: str, after_timestamp: datetime | None = None, limit: int | None = None
     ) -> list[EventRecord]: ...
+
+    async def delete_expired_events(self, before: datetime) -> int: ...
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int: ...
 
 
 class MemoryStore(Protocol):
@@ -189,6 +197,47 @@ async def assert_session_event_store_contract(store: SessionEventStore, *, marke
     assert any(record["id"] == session_id for record in listed)
 
     await store.delete_session(session_id)
+    assert await store.get_session(session_id) is None
+    assert await store.get_events(session_id) == []
+
+
+async def assert_session_event_cleanup_contract(store: SessionEventStore, *, marker: str) -> None:
+    """Assert ADK session/event cleanup hooks remove only matching rows."""
+    app_name = _contract_key(marker, "cleanup-app")
+    user_id = _contract_key(marker, "cleanup-user")
+    session_id = _contract_key(marker, "cleanup-session")
+    old_time = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    new_time = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    await store.create_session(session_id, app_name, user_id, {"cleanup": True})
+    await store.append_event(
+        _event_record(
+            session_id=session_id,
+            event_id="cleanup-old-event",
+            invocation_id="cleanup-old",
+            author="user",
+            timestamp=old_time,
+            event_data={"content": {"parts": [{"text": "old"}]}},
+        )
+    )
+    await store.append_event(
+        _event_record(
+            session_id=session_id,
+            event_id="cleanup-new-event",
+            invocation_id="cleanup-new",
+            author="user",
+            timestamp=new_time,
+            event_data={"content": {"parts": [{"text": "new"}]}},
+        )
+    )
+
+    deleted_events = await store.delete_expired_events(datetime(2026, 5, 5, tzinfo=timezone.utc))
+    assert deleted_events == 1
+    remaining_events = await store.get_events(session_id)
+    assert [event["invocation_id"] for event in remaining_events] == ["cleanup-new"]
+
+    deleted_sessions = await store.delete_idle_sessions(datetime(2100, 1, 1, tzinfo=timezone.utc))
+    assert deleted_sessions == 1
     assert await store.get_session(session_id) is None
     assert await store.get_events(session_id) == []
 
