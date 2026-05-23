@@ -20,7 +20,7 @@ from sqlspec.utils.sync_tools import async_, run_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
     from sqlspec.extensions.adk import MemoryRecord
@@ -498,11 +498,14 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
 
         Returns:
             Session record or None if not found.
@@ -515,6 +518,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         try:
             async with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    await cursor.execute(
+                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE id = :id",
+                        {"id": session_id},
+                    )
+                    await conn.commit()
+
                 await cursor.execute(
                     f"""
                     SELECT id, app_name, user_id, state, create_time, update_time
@@ -1264,11 +1274,12 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         """Create a new session."""
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
 
         Returns:
             Session record or None if not found.
@@ -1287,6 +1298,13 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    cursor.execute(
+                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE id = :id",
+                        {"id": session_id},
+                    )
+                    conn.commit()
+
                 cursor.execute(sql, {"id": session_id})
                 row = cursor.fetchone()
 
@@ -1311,9 +1329,11 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 return None
             raise
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id)
+        return await async_(self._get_session)(session_id, renew_for)
 
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.

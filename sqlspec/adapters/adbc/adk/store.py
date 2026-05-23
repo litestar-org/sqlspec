@@ -520,11 +520,12 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """Create a new session."""
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
 
         Returns:
             Session record or None if not found.
@@ -542,6 +543,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
+                    if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                        update_sql = f"UPDATE {self._session_table} SET update_time = ? WHERE id = ?"
+                        cursor.execute(update_sql, (datetime.now(timezone.utc), session_id))
+                        conn.commit()
+
                     cursor.execute(sql, (session_id,))
                     row = cursor.fetchone()
 
@@ -564,9 +570,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 return None
             raise
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id)
+        return await async_(self._get_session)(session_id, renew_for)
 
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.

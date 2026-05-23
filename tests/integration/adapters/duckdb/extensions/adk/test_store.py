@@ -13,6 +13,7 @@ from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
+    assert_session_get_session_renewal_contract,
 )
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
@@ -59,6 +60,11 @@ async def test_duckdb_session_event_store_shared_contract(duckdb_adk_store: Duck
 async def test_duckdb_session_event_cleanup_contract(duckdb_adk_store: DuckdbADKStore) -> None:
     """DuckDB satisfies cleanup hooks while manually cascading event deletion."""
     await assert_session_event_cleanup_contract(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_get_session_renewal_contract(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB can touch session update_time while reading a session."""
+    await assert_session_get_session_renewal_contract(duckdb_adk_store, marker="duckdb")
 
 
 async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:

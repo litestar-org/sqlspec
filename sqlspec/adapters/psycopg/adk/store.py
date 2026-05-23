@@ -12,7 +12,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
     from sqlspec.extensions.adk import MemoryRecord
@@ -155,12 +155,22 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
-        query = pg_sql.SQL("""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {table}
-        WHERE id = %s
-        """).format(table=pg_sql.Identifier(self._session_table))
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            query = pg_sql.SQL("""
+            UPDATE {table}
+            SET update_time = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """).format(table=pg_sql.Identifier(self._session_table))
+        else:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE id = %s
+            """).format(table=pg_sql.Identifier(self._session_table))
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
@@ -488,12 +498,20 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         """Create a new session."""
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
-        query = pg_sql.SQL("""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {table}
-        WHERE id = %s
-        """).format(table=pg_sql.Identifier(self._session_table))
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            query = pg_sql.SQL("""
+            UPDATE {table}
+            SET update_time = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """).format(table=pg_sql.Identifier(self._session_table))
+        else:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE id = %s
+            """).format(table=pg_sql.Identifier(self._session_table))
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
@@ -514,9 +532,11 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id)
+        return await async_(self._get_session)(session_id, renew_for)
 
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         query = pg_sql.SQL("""

@@ -10,7 +10,7 @@ The store is mocked — no database required.
 """
 
 import importlib.util
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -41,6 +41,7 @@ class MockStore:
         self.append_event_and_update_state_calls: list[dict[str, Any]] = []
         self.append_event_and_update_state_called = False
         self.get_session_calls = 0
+        self.get_session_call_args: list[dict[str, Any]] = []
 
         # Track calls to create_session
         self.create_session_calls: list[dict[str, Any]] = []
@@ -71,8 +72,11 @@ class MockStore:
         self._session_record = updated
         return updated
 
-    async def get_session(self, session_id: str) -> "dict[str, Any] | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: int | timedelta | None = None
+    ) -> "dict[str, Any] | None":
         self.get_session_calls += 1
+        self.get_session_call_args.append({"session_id": session_id, "renew_for": renew_for})
         return self._session_record
 
     async def create_session(
@@ -135,6 +139,19 @@ def _make_event(
         timestamp=datetime.now(timezone.utc).timestamp(),
         partial=partial,
     )
+
+
+@pytest.mark.anyio
+async def test_get_session_forwards_renew_for_to_store() -> None:
+    """Session service exposes store-level read renewal for HTTP keep-alive callers."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    renew_for = timedelta(hours=1)
+
+    session = await service.get_session(app_name="app", user_id="u1", session_id="s1", renew_for=renew_for)
+
+    assert session is not None
+    assert store.get_session_call_args[0] == {"session_id": "s1", "renew_for": renew_for}
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +384,9 @@ class StaleDetectionStore(MockStore):
         self._stale_marker = stale_marker
         self._stale_timestamp = stale_timestamp
 
-    async def get_session(self, session_id: str) -> "dict[str, Any] | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: int | timedelta | None = None
+    ) -> "dict[str, Any] | None":
         record = dict(self._session_record)
         if self._stale_marker or self._stale_timestamp:
             # Simulate a storage-side update by advancing update_time
@@ -380,7 +399,9 @@ class StaleDetectionStore(MockStore):
 class MissingSessionStore(MockStore):
     """Mock store where the session disappears between load and append."""
 
-    async def get_session(self, session_id: str) -> "dict[str, Any] | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: int | timedelta | None = None
+    ) -> "dict[str, Any] | None":
         return None
 
 

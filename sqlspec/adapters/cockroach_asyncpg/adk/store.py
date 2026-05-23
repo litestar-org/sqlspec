@@ -9,7 +9,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig
     from sqlspec.extensions.adk import MemoryRecord
@@ -118,8 +118,18 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             raise RuntimeError(msg)
         return result
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
-        sql = f"""
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            sql = f"""
+            UPDATE {self._session_table}
+            SET update_time = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """
+        else:
+            sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
         WHERE id = $1

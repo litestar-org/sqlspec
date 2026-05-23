@@ -1,7 +1,7 @@
 """SQLite sync ADK store for Google Agent Development Kit session/event storage."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
@@ -271,7 +271,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         """Synchronous implementation of get_session."""
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -282,6 +282,11 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         try:
             with self._config.provide_connection() as conn:
                 self._apply_pragmas(conn)
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    update_sql = f"UPDATE {self._session_table} SET update_time = ? WHERE id = ?"
+                    conn.execute(update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), session_id))
+                    conn.commit()
+
                 cursor = conn.execute(sql, (session_id,))
                 row = cursor.fetchone()
 
@@ -301,11 +306,14 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return None
             raise
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
 
         Returns:
             Session record or None if not found.
@@ -314,7 +322,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             SQLite returns Julian Day (REAL) for timestamps.
             JSON is parsed from TEXT storage.
         """
-        return await async_(self._get_session)(session_id)
+        return await async_(self._get_session)(session_id, renew_for)
 
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Synchronous implementation of update_session_state."""

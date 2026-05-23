@@ -10,7 +10,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
     from sqlspec.extensions.adk import MemoryRecord
@@ -179,11 +179,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
 
         Returns:
             Session record or None if not found.
@@ -196,6 +199,11 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE id = %s"
+                    await cursor.execute(update_sql, (session_id,))
+                    await conn.commit()
+
                 await cursor.execute(sql, (session_id,))
                 row = await cursor.fetchone()
 

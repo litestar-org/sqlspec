@@ -187,11 +187,14 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get a session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch the session update timestamp while reading.
 
         Returns:
             Session record if found, None otherwise.

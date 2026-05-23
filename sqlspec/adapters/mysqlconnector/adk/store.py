@@ -11,7 +11,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
     from sqlspec.extensions.adk import MemoryRecord
@@ -146,7 +146,9 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
         return await self.get_session(session_id)  # type: ignore[return-value]
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -157,6 +159,11 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             async with self._config.provide_connection() as conn:
                 cursor = await conn.cursor()
                 try:
+                    if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                        update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE id = %s"
+                        await cursor.execute(update_sql, (session_id,))
+                        await conn.commit()
+
                     await cursor.execute(sql, (session_id,))
                     row = await cursor.fetchone()
                 finally:
@@ -523,7 +530,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
         """Create a new session."""
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
@@ -534,6 +541,11 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
+                    if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                        update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE id = %s"
+                        cursor.execute(update_sql, (session_id,))
+                        conn.commit()
+
                     cursor.execute(sql, (session_id,))
                     row = cursor.fetchone()
                 finally:
@@ -557,9 +569,11 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 return None
             raise
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id)
+        return await async_(self._get_session)(session_id, renew_for)
 
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         state_json = to_json(state)
