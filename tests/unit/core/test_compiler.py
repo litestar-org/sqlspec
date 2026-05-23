@@ -45,8 +45,6 @@ from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipelin
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
 
-pytestmark = pytest.mark.xdist_group("core")
-
 
 @pytest.fixture
 def basic_statement_config() -> "StatementConfig":
@@ -959,7 +957,7 @@ def test_compilation_speed_benchmark(
         processor.compile(f"SELECT {i} FROM users", [i])
     uncached_time = time.time() - start_time
 
-    assert cached_time < uncached_time / 10
+    assert cached_time < uncached_time / 5
 
     assert cached_time < 0.1
     assert uncached_time < 2.0

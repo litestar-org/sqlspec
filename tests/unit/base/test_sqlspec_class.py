@@ -25,8 +25,6 @@ from sqlspec.base import SQLSpec
 from sqlspec.core import CacheConfig
 from tests.conftest import requires_interpreted
 
-pytestmark = pytest.mark.xdist_group("base")
-
 
 def test_get_cache_config_returns_default_configuration() -> None:
     """Test that get_cache_config returns default cache configuration."""

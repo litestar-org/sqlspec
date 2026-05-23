@@ -22,8 +22,6 @@ from sqlspec.utils.schema import (
     _is_list_type_target,
 )
 
-pytestmark = pytest.mark.xdist_group("driver")
-
 
 # Test helper classes
 class SampleMsgspecStruct(msgspec.Struct):

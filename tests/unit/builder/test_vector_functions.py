@@ -11,8 +11,6 @@ from sqlspec import sql
 from sqlspec.builder import Column, VectorDistance
 from sqlspec.builder._vector_distance import is_vector_distance_expression, vector_distance_metric
 
-pytestmark = pytest.mark.xdist_group("builder")
-
 
 def test_vector_distance_expression_creation() -> None:
     """Test VectorDistance expression can be created directly."""

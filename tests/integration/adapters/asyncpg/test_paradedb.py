@@ -22,22 +22,21 @@ def paradedb_asyncpg_connection_config(paradedb_service: "PostgresService") -> "
     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def paradedb_asyncpg_config(
     paradedb_asyncpg_connection_config: "AsyncpgPoolConfig",
 ) -> "AsyncGenerator[AsyncpgConfig, None]":
-    """Provide an AsyncpgConfig instance connected to ParadeDB."""
+    """Provide a session-scoped AsyncpgConfig connected to ParadeDB."""
     config = AsyncpgConfig(connection_config=AsyncpgPoolConfig(**paradedb_asyncpg_connection_config))
     try:
         yield config
     finally:
-        pool = config.connection_instance
-        if pool is not None:
-            await pool.close()
+        if config.connection_instance is not None:
+            await config.close_pool()
             config.connection_instance = None
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 async def paradedb_asyncpg_driver(paradedb_asyncpg_config: "AsyncpgConfig") -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG driver connected to ParadeDB."""
     async with paradedb_asyncpg_config.provide_session() as session:

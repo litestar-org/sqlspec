@@ -1,11 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for execute_script behavior in driver base classes."""
 
-import pytest
-
 from tests.conftest import requires_interpreted
-
-pytestmark = pytest.mark.xdist_group("driver")
 
 
 @requires_interpreted

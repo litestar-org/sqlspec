@@ -26,8 +26,7 @@ from sqlspec.loader import NamedStatement, SQLFile, SQLFileCacheEntry, SQLFileLo
 LOADER_COMPILED = loader_module.__file__.endswith((".so", ".pyd"))
 
 pytestmark = [
-    pytest.mark.xdist_group("loader"),
-    pytest.mark.skipif(LOADER_COMPILED, reason="cache integration unit tests rely on patching in interpreted mode"),
+    pytest.mark.skipif(LOADER_COMPILED, reason="cache integration unit tests rely on patching in interpreted mode")
 ]
 
 

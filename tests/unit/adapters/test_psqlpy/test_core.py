@@ -4,8 +4,6 @@ from collections.abc import Sequence
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
-
 from sqlspec.adapters.psqlpy.core import (
     build_statement_config,
     coerce_numeric_for_write,
@@ -15,8 +13,6 @@ from sqlspec.adapters.psqlpy.core import (
     format_execute_many_parameters,
     prepare_parameters_with_casts,
 )
-
-pytestmark = pytest.mark.xdist_group("adapter_unit")
 
 
 def test_format_execute_many_parameters_no_coercion_reuses_list_rows() -> None:

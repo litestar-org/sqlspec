@@ -34,11 +34,11 @@ def oracle_sync_config(oracle_connection_config: "OraclePoolParams") -> "OracleS
     return OracleSyncConfig(connection_config=OraclePoolParams(**oracle_connection_config))
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def oracle_async_config(
     oracle_connection_config: "OraclePoolParams",
 ) -> "AsyncGenerator[OracleAsyncConfig, None]":
-    """Create Oracle async configuration."""
+    """Session-scoped Oracle async configuration."""
     connection_config = OraclePoolParams(**oracle_connection_config)
     connection_config.setdefault("min", 1)
     connection_config.setdefault("max", 5)
@@ -46,9 +46,9 @@ async def oracle_async_config(
     try:
         yield config
     finally:
-        if config.connection_instance:
+        if config.connection_instance is not None:
             await config.close_pool()
-        config.connection_instance = None
+            config.connection_instance = None
 
 
 @pytest.fixture

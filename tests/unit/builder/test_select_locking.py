@@ -5,8 +5,6 @@ import pytest
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
 
-pytestmark = pytest.mark.xdist_group("builder")
-
 
 def test_for_update_basic() -> None:
     """Test basic FOR UPDATE clause."""

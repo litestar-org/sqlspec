@@ -11,8 +11,6 @@ import pytest
 
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
-pytestmark = pytest.mark.xdist_group("extensions")
-
 
 @pytest.mark.parametrize(
     "module_name",

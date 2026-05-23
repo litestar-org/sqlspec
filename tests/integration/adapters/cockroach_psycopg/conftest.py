@@ -17,28 +17,30 @@ def _conninfo(service: "CockroachDBService") -> str:
     return f"host={service.host} port={service.port} user=root dbname={service.database} sslmode=disable"
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def cockroach_sync_config(
     cockroachdb_service: "CockroachDBService",
 ) -> "Generator[CockroachPsycopgSyncConfig, None, None]":
-    """Create Cockroach sync config for testing."""
+    """Session-scoped Cockroach sync config."""
     config = CockroachPsycopgSyncConfig(connection_config={"conninfo": _conninfo(cockroachdb_service)})
     try:
         yield config
     finally:
-        config.close_pool()
+        if config.connection_instance is not None:
+            config.close_pool()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def cockroach_async_config(
     cockroachdb_service: "CockroachDBService",
 ) -> "AsyncGenerator[CockroachPsycopgAsyncConfig, None]":
-    """Create Cockroach async config for testing."""
+    """Session-scoped Cockroach async config."""
     config = CockroachPsycopgAsyncConfig(connection_config={"conninfo": _conninfo(cockroachdb_service)})
     try:
         yield config
     finally:
-        await config.close_pool()
+        if config.connection_instance is not None:
+            await config.close_pool()
 
 
 @pytest.fixture

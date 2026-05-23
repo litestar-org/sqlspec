@@ -16,8 +16,6 @@ from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.observability import ObservabilityRuntime
 from sqlspec.typing import Empty
 
-pytestmark = pytest.mark.xdist_group("adapter_unit")
-
 __all__ = ()
 
 

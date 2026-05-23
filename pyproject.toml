@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.46.3"
+version = "0.47.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -48,7 +48,7 @@ duckdb = ["duckdb", "pytz"]
 fastapi = ["fastapi"]
 flask = ["flask"]
 fsspec = ["fsspec"]
-litestar = ["litestar"]
+litestar = ["litestar>=2.22.0"]
 msgspec = ["msgspec"]
 mypyc = ["sqlglot[c]>=30.0.0"]
 mysql-connector = [
@@ -128,6 +128,7 @@ lint = [
   "types-Pygments",
   "types-colorama",
   "types-cffi",
+  "types-docker",
   "types-protobuf",
   "asyncpg-stubs",
   "pyarrow-stubs",
@@ -188,7 +189,6 @@ packages = ["sqlspec"]
 # Standalone `uv run mypyc ...` generates a setuptools setup.py in the repo root.
 # Keep that smoke build from auto-discovering ignored scratch directories.
 packages = []
-
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
@@ -289,7 +289,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.46.3"
+current_version = "0.47.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
@@ -367,8 +367,9 @@ exclude_lines = [
 ]
 
 [tool.pytest.ini_options]
-addopts = ["-q", "-ra"]
+addopts = ["-q", "-ra", "--capture=sys"]
 anyio_mode = "auto"
+faulthandler_timeout = 240
 filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
@@ -394,8 +395,11 @@ filterwarnings = [
   "ignore:Table '.*' already exists:Warning",
   "ignore:Unknown table '.*':Warning",
   "ignore:PROCEDURE .* does not exist:Warning",
+  "ignore::Warning:aiomysql.cursors",
+  "ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
+  "xdist_group: pin tests sharing state to the same xdist worker (registered to silence PytestUnknownMarkWarning when xdist isn't actively loaded)",
   "integration: marks tests that require an external database",
   "postgres: marks tests specific to PostgreSQL",
   "duckdb: marks tests specific to DuckDB",
@@ -426,7 +430,7 @@ markers = [
 python_files = ["test_*.py", "quickstart_*.py", "usage_*.py"]
 testpaths = ["tests", "docs/examples"]
 timeout = 300
-timeout_method = "thread"
+timeout_method = "signal"
 
 [tool.mypy]
 allow_redefinition = false

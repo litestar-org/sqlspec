@@ -17,8 +17,6 @@ from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.loader import SQLFileLoader
 
-pytestmark = pytest.mark.xdist_group("base")
-
 
 def test_init_without_loader() -> None:
     """Test SQLSpec initialization without a loader."""

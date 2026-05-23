@@ -89,6 +89,7 @@ DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
     "on_connection_create": "connection",
     "on_connection_destroy": "connection",
     "on_pool_create": "pool",
+    "on_pool_destroying": "pool",
     "on_pool_destroy": "pool",
     "on_session_start": "session",
     "on_session_end": "session",
@@ -122,6 +123,7 @@ class LifecycleConfig(TypedDict):
     on_connection_create: NotRequired[list[Callable[[Any], None]]]
     on_connection_destroy: NotRequired[list[Callable[[Any], None]]]
     on_pool_create: NotRequired[list[Callable[[Any], None]]]
+    on_pool_destroying: NotRequired[list[Callable[[Any], Any]]]
     on_pool_destroy: NotRequired[list[Callable[[Any], None]]]
     on_session_start: NotRequired[list[Callable[[Any], None]]]
     on_session_end: NotRequired[list[Callable[[Any], None]]]
@@ -2021,7 +2023,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def close_pool(self) -> None:
         """Close the connection pool."""
         pool = self.connection_instance
-        close_sync_pool(pool, self._close_pool, self.get_observability_runtime().emit_pool_destroy)
+        runtime = self.get_observability_runtime()
+        close_sync_pool(pool, self._close_pool, runtime.emit_pool_destroy, runtime.emit_pool_destroying_sync)
         self.connection_instance = None
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -2232,7 +2235,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     async def close_pool(self) -> None:
         """Close the connection pool."""
         pool = self.connection_instance
-        await close_async_pool(pool, self._close_pool, self.get_observability_runtime().emit_pool_destroy)
+        runtime = self.get_observability_runtime()
+        await close_async_pool(pool, self._close_pool, runtime.emit_pool_destroy, runtime.emit_pool_destroying_async)
         self.connection_instance = None
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:

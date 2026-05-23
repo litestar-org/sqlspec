@@ -20,9 +20,6 @@ def _mock_result(**kwargs: Any) -> Mock:
     return m
 
 
-pytestmark = pytest.mark.xdist_group("migrations")
-
-
 class TestTrackerSchemaSquash:
     """Tests for tracking table schema with replaces column."""
 

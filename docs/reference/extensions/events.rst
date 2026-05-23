@@ -6,6 +6,30 @@ Pub/sub event channel system with database-backed queue support. Provides
 both sync and async channels with listener management and native backend
 integration for databases that support LISTEN/NOTIFY.
 
+Native LISTEN/NOTIFY model
+==========================
+
+Native PG event backends (``asyncpg``, ``psycopg`` async/sync, ``psqlpy``)
+hold a **single persistent LISTEN connection per backend instance**. Each
+backend owns its own listener hub that:
+
+* Acquires the dedicated LISTEN connection lazily on first subscribe.
+* Emits ``LISTEN <channel>`` exactly once per channel and ``UNLISTEN`` on
+  unsubscribe / shutdown.
+* Dispatches incoming notifications into per-channel ``asyncio.Queue``
+  instances (or ``queue.Queue`` for the sync psycopg variant).
+* Serializes subscribe / unsubscribe under a lock so concurrent callers
+  cannot race on driver-level statements that share the connection.
+
+The Oracle Advanced Queuing backend uses an analogous pattern: a
+per-channel queue-handle cache backed by a single dedicated session per
+backend instance. ``dequeue`` honors ``min(poll_interval, aq_wait_seconds)``
+as its wait bound so the caller's polling cadence is respected.
+
+``ack`` / ``nack`` semantics are unchanged. Native backends remain
+fire-and-forget; hybrid (``listen_notify_durable``) backends acknowledge
+through the durable table queue.
+
 Channels
 ========
 

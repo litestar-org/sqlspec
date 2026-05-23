@@ -4,7 +4,6 @@ Tests actual execution of vector distance queries using BigQuery's native
 distance functions (EUCLIDEAN_DISTANCE, COSINE_DISTANCE, DOT_PRODUCT).
 """
 
-import contextlib
 from collections.abc import Generator
 
 import pytest
@@ -15,36 +14,46 @@ from sqlspec.builder import Column
 
 pytestmark = [pytest.mark.xdist_group("bigquery")]
 
+_VECTOR_TABLE = "vector_docs_bigquery"
+
+
+@pytest.fixture(scope="session")
+def _bigquery_vector_table(native_bigquery_service: object, bigquery_session: BigQueryDriver) -> str:
+    """Create the vector_docs_bigquery table once for the session."""
+    del native_bigquery_service
+    try:
+        bigquery_session.execute("SELECT EUCLIDEAN_DISTANCE([0.1, 0.2], [0.1, 0.2]) AS ok")
+    except Exception:
+        pytest.skip("BigQuery vector functions unavailable")
+
+    bigquery_session.execute_script(
+        f"""
+        CREATE OR REPLACE TABLE {_VECTOR_TABLE} (
+            id INT64,
+            content STRING,
+            embedding ARRAY<FLOAT64>
+        )
+        """
+    )
+    return _VECTOR_TABLE
+
 
 @pytest.fixture
-def bigquery_vector_session(bigquery_session: BigQueryDriver) -> Generator[BigQueryDriver, None, None]:
-    """Create BigQuery session with test table containing array columns."""
-    table_id = "vector_docs_bigquery"
-
-    try:
-        try:
-            bigquery_session.execute("SELECT EUCLIDEAN_DISTANCE([0.1, 0.2], [0.1, 0.2]) AS ok")
-        except Exception:  # pragma: no cover - guard for emulator limitations
-            pytest.skip("BigQuery vector functions unavailable")
-
-        bigquery_session.execute_script(
-            f"""
-            CREATE OR REPLACE TABLE {table_id} (
-                id INT64,
-                content STRING,
-                embedding ARRAY<FLOAT64>
-            )
-            """
-        )
-
-        bigquery_session.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (1, 'doc1', [0.1, 0.2, 0.3])")
-        bigquery_session.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (2, 'doc2', [0.4, 0.5, 0.6])")
-        bigquery_session.execute(f"INSERT INTO {table_id} (id, content, embedding) VALUES (3, 'doc3', [0.7, 0.8, 0.9])")
-
-        yield bigquery_session
-    finally:
-        with contextlib.suppress(Exception):
-            bigquery_session.execute_script(f"DROP TABLE IF EXISTS {table_id}")
+def bigquery_vector_session(
+    bigquery_session: BigQueryDriver, _bigquery_vector_table: str
+) -> Generator[BigQueryDriver, None, None]:
+    """Reset table contents to a known 3-row state before each test."""
+    bigquery_session.execute(f"DELETE FROM {_bigquery_vector_table} WHERE TRUE")
+    bigquery_session.execute(
+        f"INSERT INTO {_bigquery_vector_table} (id, content, embedding) VALUES (1, 'doc1', [0.1, 0.2, 0.3])"
+    )
+    bigquery_session.execute(
+        f"INSERT INTO {_bigquery_vector_table} (id, content, embedding) VALUES (2, 'doc2', [0.4, 0.5, 0.6])"
+    )
+    bigquery_session.execute(
+        f"INSERT INTO {_bigquery_vector_table} (id, content, embedding) VALUES (3, 'doc3', [0.7, 0.8, 0.9])"
+    )
+    yield bigquery_session
 
 
 def test_bigquery_euclidean_distance_execution(bigquery_vector_session: BigQueryDriver) -> None:

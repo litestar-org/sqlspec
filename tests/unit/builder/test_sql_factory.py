@@ -24,8 +24,6 @@ from sqlspec.builder import (
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 
-pytestmark = pytest.mark.xdist_group("builder")
-
 
 def test_sql_factory_instance() -> None:
     """Test that sql is an instance of SQLFactory."""

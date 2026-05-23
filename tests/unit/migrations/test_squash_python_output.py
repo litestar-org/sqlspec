@@ -9,10 +9,6 @@ Tests for:
 
 from pathlib import Path
 
-import pytest
-
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class TestGeneratePythonSquash:
     """Tests for MigrationSquasher.generate_python_squash() method."""

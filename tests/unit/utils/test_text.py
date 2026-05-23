@@ -8,8 +8,6 @@ import pytest
 
 from sqlspec.utils.text import camelize, slugify, snake_case
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_slugify_basic() -> None:
     """Test basic slugify functionality."""

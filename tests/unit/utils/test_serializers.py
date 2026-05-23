@@ -23,8 +23,6 @@ from sqlspec.utils.serializers import (
 )
 from sqlspec.utils.serializers._schema import reset_serializer_cache
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_to_json_basic_types() -> None:
     """Test serialization of basic Python types."""

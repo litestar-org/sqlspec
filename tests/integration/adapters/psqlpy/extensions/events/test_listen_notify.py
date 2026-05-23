@@ -55,6 +55,59 @@ async def test_psqlpy_listen_notify_native(postgres_service: "Any") -> None:
             await config.close_pool()
 
 
+async def test_psqlpy_concurrent_same_channel_subscribers(postgres_service: "Any") -> None:
+    """Two listeners on the same channel must both receive each NOTIFY.
+
+    Reproduces the latent clear_channel_callbacks race: each dequeue() iteration wipes ALL
+    callbacks for the channel, so a concurrent peer's callback gets erased while it is still
+    waiting on its asyncio.Event.
+    """
+
+    config = PsqlpyConfig(
+        connection_config=PsqlpyPoolParams(dsn=_dsn(postgres_service)),
+        extension_config={"events": {"backend": "listen_notify"}},
+    )
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+
+    received_a: list[Any] = []
+    received_b: list[Any] = []
+
+    async def _handler_a(message: Any) -> None:
+        received_a.append(message)
+
+    async def _handler_b(message: Any) -> None:
+        received_b.append(message)
+
+    try:
+        listener_a = channel.listen("psqlpy_shared", _handler_a, poll_interval=0.05)
+        listener_b = channel.listen("psqlpy_shared", _handler_b, poll_interval=0.05)
+        await asyncio.sleep(0.5)
+
+        for index in range(3):
+            await channel.publish("psqlpy_shared", {"i": index})
+            await asyncio.sleep(0.1)
+
+        for _ in range(200):
+            if received_a and received_b:
+                break
+            await asyncio.sleep(0.05)
+
+        await channel.stop_listener(listener_a.id)
+        await channel.stop_listener(listener_b.id)
+
+        assert received_a, "listener_a never received (clear_channel_callbacks race)"
+        assert received_b, "listener_b never received (clear_channel_callbacks race)"
+    finally:
+        backend = getattr(channel, "_backend", None)
+        if backend and hasattr(backend, "shutdown"):
+            await backend.shutdown()
+        if config.connection_instance:
+            await config.close_pool()
+
+
 async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) -> None:
     """Hybrid backend persists then signals via NOTIFY."""
 

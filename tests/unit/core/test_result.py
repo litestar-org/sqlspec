@@ -11,8 +11,6 @@ import sqlspec.core.result._base as result_base
 from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, create_sql_result
 from sqlspec.typing import PYARROW_INSTALLED
 
-pytestmark = pytest.mark.xdist_group("core")
-
 _RESULT_BASE_COMPILED = (result_base.__file__ or "").endswith((".so", ".pyd"))
 
 

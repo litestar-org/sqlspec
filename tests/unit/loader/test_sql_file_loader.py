@@ -29,8 +29,6 @@ from sqlspec.loader import (
 from sqlspec.storage.registry import StorageRegistry
 from tests.conftest import requires_interpreted
 
-pytestmark = pytest.mark.xdist_group("loader")
-
 
 def test_named_statement_creation() -> None:
     """Test basic NamedStatement creation."""

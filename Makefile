@@ -203,7 +203,7 @@ clean:                                              ## Cleanup temporary build a
 .PHONY: test
 test:                                               ## Run the tests
 	@echo "${INFO} Running test cases... 🧪"
-	@uv run pytest -n 2 --dist=loadgroup tests
+	@uv run pytest -n 2 --dist=loadgroup tests docs/examples
 	@echo "${OK} Tests complete ✨"
 
 .PHONY: test-all
@@ -213,7 +213,7 @@ test-all: tests				                        ## Run all tests
 .PHONY: coverage
 coverage:                                           ## Run tests with coverage report
 	@echo "${INFO} Running tests with coverage... 📊"
-	@uv run pytest --cov -n 2 --dist=loadgroup --quiet
+	@uv run pytest --cov -n 2 --dist=loadgroup --quiet tests docs/examples
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1
 	@echo "${OK} Coverage report generated ✨"

@@ -14,11 +14,11 @@ from sqlspec.adapters.mysqlconnector import (
 )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def mysqlconnector_async_config(
     mysql_service: "MySQLService",
 ) -> "AsyncGenerator[MysqlConnectorAsyncConfig, None]":
-    """Create MysqlConnector async configuration for testing."""
+    """Session-scoped MysqlConnector async configuration."""
     config = MysqlConnectorAsyncConfig(
         connection_config={
             "host": mysql_service.host,

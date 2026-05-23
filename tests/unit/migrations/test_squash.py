@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class TestSquashPlan:
     """Tests for SquashPlan dataclass."""

@@ -14,8 +14,6 @@ import pytest
 from sqlspec import sql
 from sqlspec.utils.serializers import reset_serializer_cache
 
-pytestmark = pytest.mark.xdist_group("builder")
-
 
 @pytest.fixture(autouse=True)
 def _reset_serializer_cache() -> "Any":

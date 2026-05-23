@@ -88,7 +88,7 @@ jobs:
   test-linux:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     timeout-minutes: 30
@@ -105,11 +105,61 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Pre-pull docker images
+        run: |
+          set -eu
+          images=(
+            postgres:18
+            pgvector/pgvector:pg15
+            paradedb/paradedb:0.21.5-pg16
+            cockroachdb/cockroach:latest
+            mysql:8.4
+            gvenzl/oracle-free:23-slim-faststart
+            ghcr.io/goccy/bigquery-emulator:latest
+            gcr.io/cloud-spanner-emulator/emulator:latest
+            rustfs/rustfs:latest
+            rustfs/rc:latest
+          )
+          printf '%s\n' "${images[@]}" | xargs -P 4 -I{} docker pull {}
+
       - name: Test
+        id: pytest
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
-        run: timeout 900s uv run pytest -n 2 --dist=loadgroup
+        # At 22min, broadcast SIGABRT to ALL python processes (controller + xdist
+        # workers). Faulthandler in each process dumps every thread to stderr
+        # before exit, so the test step log captures the actual hang site.
+        run: |
+          set -m
+          (
+            sleep 1320
+            echo "::group::Hang detected - SIGABRT to all python"
+            pkill -ABRT -f python || true
+            sleep 10
+            echo "::endgroup::"
+          ) &
+          aborter_pid=$!
+          uv run pytest -n 2 --dist=loadgroup
+          rc=$?
+          kill "$aborter_pid" 2>/dev/null || true
+          exit $rc
+
+      - name: Dump python stacks on hang
+        if: failure() && steps.pytest.outcome == 'failure'
+        run: |
+          pip install --quiet py-spy || true
+          for pid in $(pgrep -f 'pytest|python' || true); do
+            echo "=== py-spy dump pid=$pid ==="
+            sudo env "PATH=$PATH" py-spy dump --pid "$pid" || true
+          done
+          echo "=== docker ps ==="
+          docker ps -a
+          echo "=== docker logs (last 100 lines each) ==="
+          for c in $(docker ps -aq); do
+            echo "--- container $c ---"
+            docker logs --tail 100 "$c" 2>&1 || true
+          done
 
   # test-linux-freethreaded:
   #   # Disabled: cp314t ecosystem not mature enough yet (missing binary wheels, long build times)

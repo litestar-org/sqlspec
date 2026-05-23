@@ -49,9 +49,6 @@ from sqlspec.exceptions import SQLBuilderError
 # mypy: disable-error-code="comparison-overlap,arg-type"
 
 
-pytestmark = pytest.mark.xdist_group("explain")
-
-
 # -----------------------------------------------------------------------------
 # ExplainFormat Tests
 # -----------------------------------------------------------------------------

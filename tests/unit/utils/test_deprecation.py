@@ -9,8 +9,6 @@ import pytest
 
 from sqlspec.utils.deprecation import deprecated, warn_deprecation
 
-pytestmark = pytest.mark.xdist_group("utils")
-
 
 def test_warn_deprecation_basic() -> None:
     """Test basic deprecation warning."""

@@ -12,15 +12,11 @@ BigQuery Parameter Conversion Requirements:
 BigQuery uses @param style for named parameters.
 """
 
-import contextlib
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 import pytest
-from google.api_core.client_options import ClientOptions
-from google.auth.credentials import AnonymousCredentials, Credentials
 
-from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.core import SQL, SQLResult
 
@@ -30,60 +26,43 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.xdist_group("bigquery")
 
 
-def _anonymous_credentials() -> "Credentials":
-    """Create anonymous credentials for the emulator."""
-    factory = cast("Any", AnonymousCredentials)
-    return cast("Credentials", factory())
-
-
-@pytest.fixture
+@pytest.fixture(scope="session")
 def bigquery_parameter_session(
-    bigquery_service: "BigQueryService",
+    bigquery_session: BigQueryDriver, bigquery_service: "BigQueryService"
 ) -> Generator[tuple[BigQueryDriver, str], None, None]:
-    """Create a BigQuery session for parameter conversion testing."""
-    table_schema_prefix = f"`{bigquery_service.project}`.`{bigquery_service.dataset}`"
-    config = BigQueryConfig(
-        connection_config={
-            "project": bigquery_service.project,
-            "dataset_id": table_schema_prefix,
-            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": _anonymous_credentials(),
-        }
-    )
+    """Session-scoped BigQuery fixture for parameter conversion testing.
 
+    Uses CREATE OR REPLACE TABLE to create the table once and lets the
+    emulator container handle cleanup at session end. Test cases are
+    read-only against this dataset (test_special_characters_in_parameters
+    appends an extra "special" row but other tests filter on test1/2/3 or
+    tolerate extra rows).
+    """
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_parameter_conversion`"
 
-    with config.provide_session() as session:
-        with contextlib.suppress(Exception):
-            session.execute_script(f"DROP TABLE {table_name}")
-
-        session.execute_script(f"""
-            CREATE TABLE {table_name} (
-                id INT64,
-                name STRING NOT NULL,
-                value INT64,
-                description STRING
-            )
-        """)
-
-        # Insert test data
-        session.execute(
-            f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
-            {"id": 1, "name": "test1", "value": 100, "desc": "First test"},
+    bigquery_session.execute_script(f"""
+        CREATE OR REPLACE TABLE {table_name} (
+            id INT64,
+            name STRING NOT NULL,
+            value INT64,
+            description STRING
         )
-        session.execute(
-            f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
-            {"id": 2, "name": "test2", "value": 200, "desc": "Second test"},
-        )
-        session.execute(
-            f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
-            {"id": 3, "name": "test3", "value": 300, "desc": None},
-        )
+    """)
 
-        yield session, table_name
+    bigquery_session.execute(
+        f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
+        {"id": 1, "name": "test1", "value": 100, "desc": "First test"},
+    )
+    bigquery_session.execute(
+        f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
+        {"id": 2, "name": "test2", "value": 200, "desc": "Second test"},
+    )
+    bigquery_session.execute(
+        f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
+        {"id": 3, "name": "test3", "value": 300, "desc": None},
+    )
 
-        with contextlib.suppress(Exception):
-            session.execute_script(f"DROP TABLE {table_name}")
+    yield bigquery_session, table_name
 
 
 class TestNamedAtParameterStyle:

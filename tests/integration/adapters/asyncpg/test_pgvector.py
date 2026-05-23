@@ -22,14 +22,13 @@ def pgvector_asyncpg_connection_config(pgvector_service: "PostgresService") -> "
     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 async def pgvector_asyncpg_config(
     pgvector_asyncpg_connection_config: "AsyncpgPoolConfig",
 ) -> "AsyncGenerator[AsyncpgConfig, None]":
-    """Provide an AsyncpgConfig instance connected to pgvector postgres."""
+    """Provide a session-scoped AsyncpgConfig connected to pgvector postgres."""
     import asyncpg
 
-    # Use individual params for the one-off setup connection
     conn = await asyncpg.connect(
         host=pgvector_asyncpg_connection_config.get("host"),
         port=pgvector_asyncpg_connection_config.get("port"),
@@ -46,7 +45,6 @@ async def pgvector_asyncpg_config(
     try:
         yield config
     finally:
-        pool = config.connection_instance
-        if pool is not None:
-            await pool.close()
+        if config.connection_instance is not None:
+            await config.close_pool()
             config.connection_instance = None

@@ -29,8 +29,7 @@ def test_psycopg_sync_listen_notify(postgres_service: "Any") -> None:
     spec = SQLSpec()
     spec.add_config(config)
     channel = spec.event_channel(config)
-    backend = channel._backend
-    assert "_ensure_listener" in dir(backend)
+    assert channel._backend_name == "listen_notify"
 
     received: list[Any] = []
     listener = channel.listen("alerts", lambda message: received.append(message), poll_interval=0.2)
@@ -115,6 +114,97 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
 
     assert message.event_id == event_id
     assert message.payload["action"] == "hybrid"
+
+
+async def test_psycopg_async_multi_channel_listen_delivery(postgres_service: "Any") -> None:
+    """Subscribing to two channels on the same backend must emit LISTEN for both.
+
+    Reproduces the latent bug: PsycopgAsyncEventsBackend._ensure_listener emits LISTEN only
+    when self._listen_connection is None — the second channel never gets LISTEN, so its
+    notifications are silently dropped.
+    """
+
+    config = PsycopgAsyncConfig(
+        connection_config={"conninfo": _conninfo(postgres_service)},
+        extension_config={"events": {"backend": "listen_notify"}},
+    )
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+
+    received_a: list[Any] = []
+    received_b: list[Any] = []
+
+    async def _handler_a(message: Any) -> None:
+        received_a.append(message)
+
+    async def _handler_b(message: Any) -> None:
+        received_b.append(message)
+
+    try:
+        listener_a = channel.listen("psyc_chan_a", _handler_a, poll_interval=0.2)
+        listener_b = channel.listen("psyc_chan_b", _handler_b, poll_interval=0.2)
+        await asyncio.sleep(0.5)
+
+        await channel.publish("psyc_chan_a", {"action": "to_a"})
+        await channel.publish("psyc_chan_b", {"action": "to_b"})
+
+        for _ in range(200):
+            if received_a and received_b:
+                break
+            await asyncio.sleep(0.05)
+
+        await channel.stop_listener(listener_a.id)
+        await channel.stop_listener(listener_b.id)
+
+        assert received_a, "channel A delivery failed"
+        assert received_b, "channel B delivery failed (multi-channel LISTEN drop bug)"
+    finally:
+        await channel.shutdown()
+
+
+def test_psycopg_sync_multi_channel_listen_delivery(postgres_service: "Any") -> None:
+    """Sync psycopg: same multi-channel LISTEN drop bug as the async variant."""
+
+    config = PsycopgSyncConfig(
+        connection_config={"conninfo": _conninfo(postgres_service)},
+        extension_config={"events": {"backend": "listen_notify"}},
+    )
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+
+    received_a: list[Any] = []
+    received_b: list[Any] = []
+
+    def _handler_a(message: Any) -> None:
+        received_a.append(message)
+
+    def _handler_b(message: Any) -> None:
+        received_b.append(message)
+
+    try:
+        listener_a = channel.listen("psyc_sync_a", _handler_a, poll_interval=0.2)
+        listener_b = channel.listen("psyc_sync_b", _handler_b, poll_interval=0.2)
+        time.sleep(0.5)
+
+        channel.publish("psyc_sync_a", {"action": "to_a"})
+        channel.publish("psyc_sync_b", {"action": "to_b"})
+
+        for _ in range(200):
+            if received_a and received_b:
+                break
+            time.sleep(0.05)
+
+        channel.stop_listener(listener_a.id)
+        channel.stop_listener(listener_b.id)
+
+        assert received_a, "channel A delivery failed"
+        assert received_b, "channel B delivery failed (multi-channel LISTEN drop bug)"
+    finally:
+        channel.shutdown()
 
 
 async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any", tmp_path) -> None:

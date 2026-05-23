@@ -30,14 +30,12 @@ def obstore_s3_backend(rustfs_service: "RustfsService", rustfs_bucket_name: str)
     return ObStoreBackend(s3_uri, **rustfs_obstore_kwargs(rustfs_service))
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_supports_signing(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test that ObStore S3 backend supports signing."""
     assert obstore_s3_backend.supports_signing is True
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_sync_single_path_returns_string(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with single path returns a string URL."""
@@ -51,7 +49,6 @@ def test_obstore_s3_sign_sync_single_path_returns_string(obstore_s3_backend: "Ob
     assert "http" in signed_url.lower()
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_sync_list_paths_returns_list(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with list of paths returns list of URLs."""
@@ -68,7 +65,6 @@ def test_obstore_s3_sign_sync_list_paths_returns_list(obstore_s3_backend: "Objec
         assert len(url) > 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_sync_empty_list_returns_empty_list(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with empty list returns empty list."""
@@ -78,7 +74,6 @@ def test_obstore_s3_sign_sync_empty_list_returns_empty_list(obstore_s3_backend: 
     assert len(signed_urls) == 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_sync_with_custom_expires_in(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with custom expiration time."""
@@ -91,7 +86,6 @@ def test_obstore_s3_sign_sync_with_custom_expires_in(obstore_s3_backend: "Object
     assert len(signed_url) > 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_sync_for_upload(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync with for_upload=True for PUT operations."""
@@ -103,7 +97,6 @@ def test_obstore_s3_sign_sync_for_upload(obstore_s3_backend: "ObjectStoreProtoco
     assert len(signed_url) > 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_sync_max_expires_validation(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_sync raises ValueError when expires_in exceeds maximum."""
@@ -115,7 +108,6 @@ def test_obstore_s3_sign_sync_max_expires_validation(obstore_s3_backend: "Object
         obstore_s3_backend.sign_sync(test_path, expires_in=max_expires + 1)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_sign_async_single_path_returns_string(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_async with single path returns a string URL."""
@@ -128,7 +120,6 @@ async def test_obstore_s3_sign_async_single_path_returns_string(obstore_s3_backe
     assert len(signed_url) > 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_sign_async_list_paths_returns_list(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_async with list of paths returns list of URLs."""
@@ -142,7 +133,6 @@ async def test_obstore_s3_sign_async_list_paths_returns_list(obstore_s3_backend:
     assert len(signed_urls) == len(test_paths)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_sign_async_empty_list_returns_empty_list(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_async with empty list returns empty list."""
@@ -152,7 +142,6 @@ async def test_obstore_s3_sign_async_empty_list_returns_empty_list(obstore_s3_ba
     assert len(signed_urls) == 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_sign_async_for_upload(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_async with for_upload=True for PUT operations."""
@@ -164,7 +153,6 @@ async def test_obstore_s3_sign_async_for_upload(obstore_s3_backend: "ObjectStore
     assert len(signed_url) > 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_obstore_s3_sign_async_max_expires_validation(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test sign_async raises ValueError when expires_in exceeds maximum."""
@@ -176,7 +164,6 @@ async def test_obstore_s3_sign_async_max_expires_validation(obstore_s3_backend: 
         await obstore_s3_backend.sign_async(test_path, expires_in=max_expires + 1)
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_signed_url_contains_signature_params(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test that signed URL contains AWS signature parameters."""
@@ -188,7 +175,6 @@ def test_obstore_s3_signed_url_contains_signature_params(obstore_s3_backend: "Ob
     assert "X-Amz-" in signed_url or "x-amz-" in signed_url.lower()
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_different_paths_produce_different_urls(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test that different paths produce different signed URLs."""
@@ -204,7 +190,6 @@ def test_obstore_s3_different_paths_produce_different_urls(obstore_s3_backend: "
     assert "path_b" in url_b
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_preserves_path_order_in_list(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test that signed URLs preserve order of input paths."""
@@ -218,7 +203,6 @@ def test_obstore_s3_sign_preserves_path_order_in_list(obstore_s3_backend: "Objec
         assert f"order_{i}" in url
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_with_special_characters_in_path(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test signing paths with special characters."""
@@ -231,7 +215,6 @@ def test_obstore_s3_sign_with_special_characters_in_path(obstore_s3_backend: "Ob
     assert len(signed_url) > 0
 
 
-@pytest.mark.xdist_group("storage")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_obstore_s3_sign_with_nested_path(obstore_s3_backend: "ObjectStoreProtocol") -> None:
     """Test signing deeply nested paths."""

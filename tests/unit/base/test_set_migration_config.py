@@ -1,11 +1,7 @@
 """Tests for set_migration_config() method on database config classes."""
 
-import pytest
-
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-
-pytestmark = pytest.mark.xdist_group("base")
 
 
 def test_set_migration_config_after_construction() -> None:

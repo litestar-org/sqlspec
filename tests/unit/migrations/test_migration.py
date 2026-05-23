@@ -18,8 +18,6 @@ import pytest
 
 from sqlspec.migrations.base import BaseMigrationRunner
 
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class MockMigrationRunner(BaseMigrationRunner):
     """Mock migration runner implementation for unit tests."""

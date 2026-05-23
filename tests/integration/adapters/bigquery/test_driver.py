@@ -2,7 +2,6 @@
 
 import operator
 import os
-from collections.abc import Generator
 from typing import Literal
 
 import pytest
@@ -33,11 +32,9 @@ def test_connection(bigquery_config: "BigQueryConfig") -> None:
         assert result.get_data() == [{"one": 1}]
 
 
-@pytest.fixture
-def driver_test_table(
-    bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService"
-) -> "Generator[str, None, None]":
-    """Create and cleanup driver-specific test table."""
+@pytest.fixture(scope="session")
+def _driver_test_table_resource(bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService") -> str:
+    """Create the driver-specific test table once per session."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     bigquery_session.execute(f"""
@@ -48,14 +45,21 @@ def driver_test_table(
             created_at TIMESTAMP
         )
     """)
+    return table_name
 
-    yield table_name
 
-    # Cleanup
-    try:
-        bigquery_session.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except Exception:
-        pass
+@pytest.fixture
+def driver_test_table(bigquery_session: "BigQueryDriver", _driver_test_table_resource: str) -> str:
+    """Empty the shared driver_test_table before each test."""
+    bigquery_session.execute(f"DELETE FROM {_driver_test_table_resource} WHERE TRUE")
+    return _driver_test_table_resource
+
+
+@pytest.fixture
+def native_driver_test_table(native_bigquery_service: "BigQueryService", driver_test_table: str) -> str:
+    """Empty the table only when native BigQuery features are available."""
+    del native_bigquery_service
+    return driver_test_table
 
 
 def test_bigquery_basic_crud(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
@@ -114,23 +118,23 @@ def test_bigquery_parameter_styles(bigquery_session: "BigQueryDriver", driver_te
     assert result.get_data()[0]["name"] == "test_value"
 
 
-def test_bigquery_execute_many(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_execute_many(bigquery_session: "BigQueryDriver", native_driver_test_table: str) -> None:
     """Test execute_many functionality."""
     parameters_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
 
     result = bigquery_session.execute_many(
-        f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", parameters_list
+        f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)", parameters_list
     )
     assert isinstance(result, SQLResult)
 
     assert result.rows_affected >= 0
 
-    select_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {driver_test_table}")
+    select_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {native_driver_test_table}")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.get_data()[0]["count"] == len(parameters_list)
 
-    ordered_result = bigquery_session.execute(f"SELECT name, value FROM {driver_test_table} ORDER BY name")
+    ordered_result = bigquery_session.execute(f"SELECT name, value FROM {native_driver_test_table} ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
@@ -163,15 +167,14 @@ def test_bigquery_execute_script(bigquery_session: "BigQueryDriver", driver_test
     assert select_result.get_data()[1]["value"] == 888
 
 
-def test_bigquery_result_methods(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_result_methods(bigquery_session: "BigQueryDriver", native_driver_test_table: str) -> None:
     """Test SQLResult methods."""
-
     bigquery_session.execute_many(
-        f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)",
+        f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)",
         [(1, "result1", 10), (2, "result2", 20), (3, "result3", 30)],
     )
 
-    result = bigquery_session.execute(f"SELECT * FROM {driver_test_table} ORDER BY name")
+    result = bigquery_session.execute(f"SELECT * FROM {native_driver_test_table} ORDER BY name")
     assert isinstance(result, SQLResult)
 
     first_row = result.get_first()
@@ -182,23 +185,26 @@ def test_bigquery_result_methods(bigquery_session: "BigQueryDriver", driver_test
 
     assert not result.is_empty()
 
-    empty_result = bigquery_session.execute(f"SELECT * FROM {driver_test_table} WHERE name = ?", ("nonexistent",))
+    empty_result = bigquery_session.execute(
+        f"SELECT * FROM {native_driver_test_table} WHERE name = ?", ("nonexistent",)
+    )
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
 
 
-def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", native_driver_test_table: str) -> None:
     """Test complex SQL queries."""
-
     test_data = [(1, "Alice", 25), (2, "Bob", 30), (3, "Charlie", 35), (4, "Diana", 28)]
 
-    bigquery_session.execute_many(f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", test_data)
+    bigquery_session.execute_many(
+        f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)", test_data
+    )
 
     join_result = bigquery_session.execute(f"""
         SELECT t1.name as name1, t2.name as name2, t1.value as value1, t2.value as value2
-        FROM {driver_test_table} t1
-        CROSS JOIN {driver_test_table} t2
+        FROM {native_driver_test_table} t1
+        CROSS JOIN {native_driver_test_table} t2
         WHERE t1.value < t2.value
         ORDER BY t1.name, t2.name
         LIMIT 3
@@ -213,7 +219,7 @@ def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", driver_tes
             AVG(value) as avg_value,
             MIN(value) as min_value,
             MAX(value) as max_value
-        FROM {driver_test_table}
+        FROM {native_driver_test_table}
     """)
     assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
@@ -224,8 +230,8 @@ def test_bigquery_complex_queries(bigquery_session: "BigQueryDriver", driver_tes
 
     subquery_result = bigquery_session.execute(f"""
         SELECT name, value
-        FROM {driver_test_table}
-        WHERE value > (SELECT AVG(value) FROM {driver_test_table})
+        FROM {native_driver_test_table}
+        WHERE value > (SELECT AVG(value) FROM {native_driver_test_table})
         ORDER BY value
     """)
     assert isinstance(subquery_result, SQLResult)
@@ -324,26 +330,27 @@ def test_bigquery_column_names_and_metadata(bigquery_session: "BigQueryDriver", 
     assert "created_at" in row
 
 
-def test_bigquery_performance_bulk_operations(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_performance_bulk_operations(
+    bigquery_session: "BigQueryDriver", native_driver_test_table: str
+) -> None:
     """Test performance with bulk operations."""
-
     bulk_data = [(i, f"bulk_user_{i}", i * 10) for i in range(1, 101)]
 
     result = bigquery_session.execute_many(
-        f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", bulk_data
+        f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)", bulk_data
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected in (100, 0)
 
     select_result = bigquery_session.execute(
-        f"SELECT COUNT(*) as count FROM {driver_test_table} WHERE name LIKE 'bulk_user_%'"
+        f"SELECT COUNT(*) as count FROM {native_driver_test_table} WHERE name LIKE 'bulk_user_%'"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.get_data()[0]["count"] == 100
 
     page_result = bigquery_session.execute(f"""
-        SELECT name, value FROM {driver_test_table}
+        SELECT name, value FROM {native_driver_test_table}
         WHERE name LIKE 'bulk_user_%'
         ORDER BY value
         LIMIT 10 OFFSET 20
@@ -389,9 +396,8 @@ def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery
     assert struct_result.get_data()[0]["person_name"] == "Alice"
 
 
-def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", native_driver_test_table: str) -> None:
     """Test BigQuery analytical and window functions."""
-
     analytics_data = [
         (1, "Product A", 1000),
         (2, "Product B", 1500),
@@ -400,7 +406,9 @@ def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", drive
         (5, "Product B", 1800),
     ]
 
-    bigquery_session.execute_many(f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)", analytics_data)
+    bigquery_session.execute_many(
+        f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)", analytics_data
+    )
 
     window_result = bigquery_session.execute(f"""
         SELECT
@@ -410,7 +418,7 @@ def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", drive
             RANK() OVER (PARTITION BY name ORDER BY value DESC) as rank_val,
             SUM(value) OVER (PARTITION BY name) as total_by_product,
             LAG(value) OVER (ORDER BY id) as previous_value
-        FROM {driver_test_table}
+        FROM {native_driver_test_table}
         ORDER BY id
     """)
     assert isinstance(window_result, SQLResult)
@@ -474,7 +482,7 @@ def test_bigquery_for_update_skip_locked_generates_sql_but_unsupported(
 
 
 def test_bigquery_execute_many_qmark_with_dict_params(
-    bigquery_session: "BigQueryDriver", driver_test_table: str
+    bigquery_session: "BigQueryDriver", native_driver_test_table: str
 ) -> None:
     """Test execute_many with QMARK placeholders and dict parameters.
 
@@ -482,7 +490,7 @@ def test_bigquery_execute_many_qmark_with_dict_params(
     QMARK (?) placeholders with dict parameters. The parameter converter
     should properly align the dict keys with the converted @param_N style.
     """
-    sql = f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)"
+    sql = f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)"
     params = [{"id": 1, "name": "qmark_dict_a", "value": 100}, {"id": 2, "name": "qmark_dict_b", "value": 200}]
 
     result = bigquery_session.execute_many(sql, params)
@@ -490,7 +498,7 @@ def test_bigquery_execute_many_qmark_with_dict_params(
     assert result.rows_affected >= 0
 
     verify = bigquery_session.execute(
-        f"SELECT name, value FROM {driver_test_table} WHERE name LIKE 'qmark_dict%' ORDER BY name"
+        f"SELECT name, value FROM {native_driver_test_table} WHERE name LIKE 'qmark_dict%' ORDER BY name"
     )
     assert verify.data is not None
     assert len(verify.data) == 2
@@ -500,16 +508,16 @@ def test_bigquery_execute_many_qmark_with_dict_params(
     assert verify.get_data()[1]["value"] == 200
 
 
-def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", native_driver_test_table: str) -> None:
     """Test execute_many with named parameters (native @name style)."""
-    sql = f"INSERT INTO {driver_test_table} (id, name, value) VALUES (@id, @name, @value)"
+    sql = f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (@id, @name, @value)"
     params = [{"id": 1, "name": "named_a", "value": 10}, {"id": 2, "name": "named_b", "value": 20}]
 
     result = bigquery_session.execute_many(sql, params)
     assert isinstance(result, SQLResult)
 
     verify = bigquery_session.execute(
-        f"SELECT name, value FROM {driver_test_table} WHERE name LIKE 'named_%' ORDER BY name"
+        f"SELECT name, value FROM {native_driver_test_table} WHERE name LIKE 'named_%' ORDER BY name"
     )
     assert verify.data is not None
     assert len(verify.data) == 2
@@ -517,14 +525,16 @@ def test_bigquery_execute_many_named_params(bigquery_session: "BigQueryDriver", 
     assert verify.get_data()[1]["name"] == "named_b"
 
 
-def test_bigquery_execute_many_update_with_inlining(bigquery_session: "BigQueryDriver", driver_test_table: str) -> None:
+def test_bigquery_execute_many_update_with_inlining(
+    bigquery_session: "BigQueryDriver", native_driver_test_table: str
+) -> None:
     """Test that UPDATE statements use literal inlining fallback."""
     bigquery_session.execute_many(
-        f"INSERT INTO {driver_test_table} (id, name, value) VALUES (?, ?, ?)",
+        f"INSERT INTO {native_driver_test_table} (id, name, value) VALUES (?, ?, ?)",
         [(1, "update_test_a", 10), (2, "update_test_b", 20)],
     )
 
-    sql = f"UPDATE {driver_test_table} SET value = @new_val WHERE name = @key"
+    sql = f"UPDATE {native_driver_test_table} SET value = @new_val WHERE name = @key"
     params = [{"key": "update_test_a", "new_val": 100}, {"key": "update_test_b", "new_val": 200}]
 
     result = bigquery_session.execute_many(sql, params)
@@ -532,7 +542,7 @@ def test_bigquery_execute_many_update_with_inlining(bigquery_session: "BigQueryD
     assert result.rows_affected >= 0
 
     verify = bigquery_session.execute(
-        f"SELECT name, value FROM {driver_test_table} WHERE name LIKE 'update_test%' ORDER BY name"
+        f"SELECT name, value FROM {native_driver_test_table} WHERE name LIKE 'update_test%' ORDER BY name"
     )
     assert verify.data is not None
     assert len(verify.data) == 2

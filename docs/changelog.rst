@@ -2,547 +2,583 @@
 Changelog
 =========
 
-All commits to this project will be documented in this file.
-
-SQLSpec Changelog
-==================
+All notable SQLSpec changes are summarized here. Entries are grouped by release
+and focus on user-visible behavior, public API changes, compatibility notes, and
+important operational fixes.
 
 Recent Updates
 ==============
 
-v0.46.2 - Framework Filter ``orderBy`` Aliases (Unreleased)
------------------------------------------------------------
+v0.47.0 - Persistent listeners, schema builders, and performance polish
+------------------------------------------------------------------------------
 
-**Changed (breaking default):**
+**Breaking changes:**
 
-* ``sqlspec.utils.serializers.schema_dump`` (and its helpers
-  ``serialize_collection`` / ``get_collection_serializer``) now default
-  ``wire_format=False``. Calling ``schema_dump(struct)`` on a ``msgspec.Struct``
-  declared with ``rename=`` now returns Python attribute names by default
-  (matching Pydantic, dataclass, and attrs output) instead of wire-aligned
-  ``field.encode_name`` keys. Pass ``wire_format=True`` explicitly to restore
-  the prior wire-aligned output for JSON / API payloads. This default flip
-  closes the silent footgun where ``sql.update(t).set(**schema_dump(struct))``
-  emitted camelCase column names for snake_case database tables. The kwarg
-  remains a no-op for non-msgspec inputs.
+* ``schema_dump()``, ``serialize_collection()``, and
+  ``get_collection_serializer()`` now default ``wire_format=False``. Msgspec
+  structs with ``rename=`` now emit Python attribute names by default, matching
+  Pydantic, dataclasses, and attrs. Pass ``wire_format=True`` to keep
+  wire-aligned names.
+* Third-party ADK stores implementing ``append_event_and_update_state()`` must
+  return the updated ``SessionRecord``.
+* Performance cleanup tightened several compatibility-sensitive contracts:
+  storage ``backend_type`` is a class attribute, parameter builders expose
+  ``generate_unique_parameter_name()``, statement observers are protocol based,
+  and legacy aliases such as ``BackendNotRegisteredError`` were removed.
 
 **Added:**
 
-* ``Insert.values_from(data, *, exclude_unset=True)``,
-  ``Insert.values_from_many(items, *, exclude_unset=True)``, and
-  ``Update.set_from(data, *, exclude_unset=True)`` builder methods. Each accepts
-  any schema kind (dict, dataclass, ``msgspec.Struct``, ``pydantic.BaseModel``,
-  attrs class) and dispatches through ``schema_dump(wire_format=False)`` so SQL
-  column names are always Python attribute names regardless of any wire-rename
-  meta on the source schema.
+* Added ``Insert.values_from()``, ``Insert.values_from_many()``, and
+  ``Update.set_from()`` for schema-aware SQL builders. These helpers accept
+  dicts, dataclasses, msgspec structs, Pydantic models, and attrs classes while
+  preserving Python attribute names for SQL columns.
+* Added ``on_pool_destroying`` lifecycle hooks so components can release
+  checked-out resources before pools close.
+* Added runtime lifecycle hook registration through
+  ``ObservabilityRuntime.register_lifecycle_hook()``.
 
 **Deprecated:**
 
-* ``Insert.values_from_dict`` and ``Insert.values_from_dicts`` now emit a
-  ``DeprecationWarning`` pointing at ``Insert.values_from`` /
-  ``Insert.values_from_many`` respectively. The dict-shaped methods continue to
-  work; they are scheduled for removal in 0.48.0.
+* Deprecated ``Insert.values_from_dict()`` and ``Insert.values_from_dicts()`` in
+  favor of ``values_from()`` and ``values_from_many()``. Removal is planned for
+  ``0.48.0``.
 
 **Fixed:**
 
-* AsyncPG and CockroachDB AsyncPG connections now register binary ``json`` and
-  ``jsonb`` codecs by default. ``load_from_arrow()`` can bulk load Arrow tables
-  into PostgreSQL ``JSON`` / ``JSONB`` columns without asyncpg rejecting binary
-  ``jsonb`` payloads. (`#452
-  <https://github.com/litestar-org/sqlspec/issues/452>`_)
-
-* Missing named SQL statements now raise ``SQLStatementNotFoundError``, a
-  ``SQLFileNotFoundError`` subclass with structured lookup context and bounded
-  messages that report the loaded statement count instead of dumping available
-  statement names. (`#437
-  <https://github.com/litestar-org/sqlspec/issues/437>`_)
-
-* Litestar ``create_filter_dependencies()`` and FastAPI ``provide_filters()``
-  now accept camel-case API-facing sort aliases for configured ``orderBy``
-  fields by default. Endpoints can accept values such as
-  ``orderBy=uploadedCollections`` while producing an ``OrderByFilter`` for the
-  SQL-facing field ``uploaded_collections``. Raw configured values remain
-  accepted for compatibility, explicit aliases can still be added with
-  ``sort_field_aliases``, and ``sort_field_camelize=False`` restores
-  snake_case-only validation. (`#438
-  <https://github.com/litestar-org/sqlspec/issues/438>`_)
-
-**Safety:**
-
-* Alias normalization is closed over the configured ``sort_field`` allowlist.
-  Unknown aliases and aliases targeting fields outside ``sort_field`` are
-  rejected before SQL construction, preserving the existing identifier
-  allowlist.
+* Reworked native event listener backends for ``asyncpg``, ``psycopg``,
+  ``psqlpy``, and Oracle AQ to use persistent per-channel listeners, avoiding
+  connection races, callback churn, dropped secondary subscriptions, and
+  ignored Oracle ``poll_interval`` settings.
+* Routed async pool teardown through the base config lifecycle path so
+  ``on_pool_destroy`` and ``on_pool_destroying`` fire consistently across async
+  adapters.
+* Registered binary ``json`` and ``jsonb`` codecs for AsyncPG and CockroachDB
+  AsyncPG connections, allowing Arrow bulk loads into PostgreSQL JSON columns.
+* Restored Litestar request decoding for handlers annotated with
+  ``np.ndarray``.
+* Bounded missing named-SQL error messages and added structured lookup context
+  through ``SQLStatementNotFoundError``.
+* Normalized framework ``orderBy`` aliases so camel-case API values can map to
+  SQL-facing snake-case fields while preserving the configured field allowlist.
+* Hardened BigQuery emulator handling for simple inserts and unsupported bulk
+  load paths.
 
 **Performance:**
 
-* Performance builds now compile SQLSpec's custom sqlglot dialect helper
-  modules alongside ``sqlglot[c]``: generator transforms, operator registries,
-  and compatibility helpers. Selected extension helper modules are also
-  compiled: shared filter alias resolution, event payload codecs/runtime hints,
-  and ADK record type modules. SQLGlot
-  subclass/registration modules, dynamic framework provider modules, and
-  adapter-local data-dictionary classes remain interpreted by design. Event
-  dataclass and table-queue modules also stay interpreted to preserve runtime
-  slot/class-attribute behavior. The ``performance`` extra now includes
-  ``librt`` for measured string-assembly wins in the compiled splitter and
-  ``psqlpy`` copy-encoding hot paths.
+* Expanded mypyc coverage to sqlglot dialect helpers, data-dictionary dialects,
+  selected extension helpers, ADK record types, and measured hot-path helpers.
+* Added ``librt`` to the ``performance`` extra for compiled string assembly in
+  SQL splitting and psqlpy copy encoding.
 
-v0.46.1 - Litestar Filter Provider Binding Fix
-----------------------------------------------
+v0.46.3 - Plugin initialization and loader diagnostics
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* ``SQLSpecPlugin.on_app_init()`` now mutates ``app_config.plugins`` in place,
+  preserving Litestar plugin discovery for plugins registered later in the
+  startup sequence.
+* Missing named SQL statements now report bounded diagnostics instead of
+  dumping every loaded statement name.
+
+v0.46.2 - Framework filter wire-name normalization
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Framework filter providers now normalize configured sort fields against
+  wire-facing names, fixing camel-case frontend values such as
+  ``orderBy=uploadedCollections`` when the SQL field is snake_case.
+
+v0.46.1 - Litestar filter provider binding
+------------------------------------------------------------------------------
 
 **Fixed:**
 
 * Litestar generated filter providers now use unique dependency parameter names
-  for sibling ``IN``, ``NOT IN``, null, not-null, and range filters. This stops
-  sibling providers in the same filter family from cross-binding values while
-  preserving the existing query parameter aliases. (`#435
-  <https://github.com/litestar-org/sqlspec/issues/435>`_, `#436
-  <https://github.com/litestar-org/sqlspec/pull/436>`_)
+  for sibling ``IN``, ``NOT IN``, null, not-null, and range filters, preventing
+  values from one filter from binding to another.
 
-v0.46.0 - ``schema_dump`` Wire-Format Opt-Out
----------------------------------------------
-
-**Added:**
-
-* ``sqlspec.utils.serializers.schema_dump`` (and its helpers
-  ``serialize_collection`` / ``get_collection_serializer``) now accept a
-  ``wire_format: bool = True`` keyword. The default preserves existing output:
-  ``msgspec.Struct`` instances continue to emit wire-aligned names (honouring
-  ``rename=`` via ``field.encode_name``); Pydantic, dataclass, and attrs
-  branches continue to emit Python attribute names. Pass ``wire_format=False``
-  to opt the msgspec branch into Python attribute names (``field.name``) for
-  cross-library consistency. The kwarg is a no-op for non-msgspec inputs.
-
-* The internal serializer cache key now includes ``wire_format`` so that
-  ``True`` and ``False`` calls for the same Struct type cannot collide.
-
-v0.44.0 - Schema Wire Correctness
----------------------------------
+v0.46.0 - Service typing and serializer registry
+------------------------------------------------------------------------------
 
 **Fixed:**
 
-* ``sqlspec.utils.serializers.schema_dump`` now honors ``msgspec.Struct``
-  ``rename=`` meta. Structs declared with ``rename="camel"`` / ``"kebab"`` /
-  ``"pascal"`` / callable now emit the renamed wire names instead of the
-  Python attribute names. (`#418
-  <https://github.com/litestar-org/sqlspec/issues/418>`_)
+* Restored async and sync service overload narrowing for ``paginate()`` and
+  ``get_one()`` when ``schema_type`` is provided.
+* Extracted ``DEFAULT_TYPE_ENCODERS`` and applied them through the Litestar
+  plugin while preserving user encoder precedence.
+* Added Litestar decoders for NumPy arrays and ``uuid_utils.UUID`` values.
 
-* ``sqlspec.core.filters.OffsetPagination`` is now a stdlib
-  :func:`~dataclasses.dataclass`, living in ``sqlspec.core._pagination``
-  (excluded from mypyc because the ``@dataclass`` decorator mutates the class
-  at definition time, and mypyc-compiled classes forbid that). The public
-  import path ``from sqlspec.core.filters import OffsetPagination`` is
-  unchanged. This restores runtime ``__annotations__`` under mypyc-compiled
-  wheels, fixing empty OpenAPI response schemas and missing component types
-  when Litestar handlers return ``OffsetPagination[T]``. The Litestar
-  extension additionally registers an ``OpenAPISchemaPlugin`` as a
-  defensive fallback. ``msgspec`` is no longer required to import the
-  pagination container. (`#419
-  <https://github.com/litestar-org/sqlspec/issues/419>`_)
+v0.45.0 - Services, filters, Oracle types, and Sanic
+------------------------------------------------------------------------------
 
-**Behavior changes from the OffsetPagination conversion:**
+**Added:**
 
-* ``__eq__`` is now field-wise (was identity). Two pagination objects with
-  identical contents now compare equal.
-* ``__hash__`` is now ``None`` (dataclass default without ``frozen=True``).
-  Instances can no longer be used as ``dict`` keys or ``set`` members.
-  ``Sequence[T]``-valued ``items`` already made this impractical, but the
-  change is noted for completeness.
-* ``__repr__`` now prints
-  ``OffsetPagination(items=..., limit=..., offset=..., total=...)``.
+* Added first-party ``SQLSpecAsyncService`` and ``SQLSpecSyncService`` helpers
+  with pagination, lookup, existence, and transaction convenience methods.
+* Added Sanic framework integration.
+* Added Oracle native JSON, VECTOR ergonomics, UUID/LOB handling, and smarter
+  type coercion for Oracle workloads.
 
-Logging Improvements
---------------------
+**Fixed:**
 
-**Cache Namespace Context:**
+* Qualified statement filters correctly for joined queries and count queries.
+* Tightened ``SearchFilter`` and ``NotInSearchFilter`` validation so unsupported
+  field names fail instead of silently dropping predicates.
+* Fixed raw ``ORDER BY`` handling and widened computed-column support for
+  search and sort filters.
+* Exposed LIKE-pattern escaping helpers for callers that bypass the standard
+  filter pipeline.
 
-Cache debug logs now include a ``cache_namespace`` field that identifies which
-cache type (statement, expression, builder, file, optimized) generated the log.
-This makes cache performance debugging significantly easier.
+v0.44.0 - Aiomysql, schema wire names, and pagination introspection
+------------------------------------------------------------------------------
 
-**Example:**
+**Added:**
 
-.. code-block:: text
+* Added the ``aiomysql`` adapter with driver, config, Arrow, migrations, ADK,
+  event queue, Litestar store, data-dictionary, and integration coverage.
 
-    # Before
-    cache.miss extra_fields={'cache_size': 0}
+**Changed:**
 
-    # After
-    cache.miss extra_fields={'cache_namespace': 'statement', 'cache_size': 0}
+* Removed the mock adapter and updated the testing docs around real adapter
+  fixtures.
+* Converted ``OffsetPagination`` to a stdlib dataclass while keeping the public
+  import path intact.
 
-**SQL Logger Namespace (BREAKING CHANGE):**
+**Fixed:**
 
-SQL execution logs now use a dedicated ``sqlspec.sql`` logger (previously used
-``sqlspec.observability``). This allows independent configuration of SQL log
-levels from other operational logs.
+* ``schema_dump()`` now honors msgspec ``rename=`` metadata for wire-format
+  output.
+* ``OffsetPagination`` preserves runtime annotations for mypyc wheels and
+  Litestar OpenAPI generation.
 
-**Migration:**
+v0.43.0 - SQLCommenter, ADK stale sessions, and docs build fixes
+------------------------------------------------------------------------------
 
-.. code-block:: python
+**Added:**
 
-    # Before
-    logging.getLogger("sqlspec.observability").setLevel(logging.INFO)
+* Added Google SQLCommenter support.
+* Added ADK stale-session detection.
 
-    # After
-    logging.getLogger("sqlspec.sql").setLevel(logging.INFO)
+**Fixed:**
 
-**SQL Log Message Format (BREAKING CHANGE):**
+* Added ParadeDB and pgvector dialect configuration to the SQL splitter.
+* Fixed mypyc compilation issues, exception handling, filter providers, and
+  vector-distance SQL generation.
+* Removed the Sphinx Toolbox dependency to keep documentation building on
+  Sphinx 9.x.
 
-SQL execution log messages now use the operation type (SELECT, INSERT, etc.)
-as the message instead of the generic ``"db.query"``.
+v0.42.0 - ADK store alignment
+------------------------------------------------------------------------------
 
-**Example:**
+**Changed:**
 
-.. code-block:: text
+* Overhauled the ADK backend to align with the ADK 1.0 store contract.
 
-    # Before
-    db.query driver=AsyncpgDriver duration_ms=3.5 rows=5 sql='SELECT ...'
+**Fixed:**
 
-    # After
-    SELECT  driver=AsyncpgDriver bind_key=primary duration_ms=3.5 rows=5 sql='SELECT ...'
+* Addressed serializer follow-ups found by mypyc builds.
 
-If you have log parsers matching ``"db.query"``, update them to match operation types.
+v0.41.1 - Path and documentation fixes
+------------------------------------------------------------------------------
 
-**See:** :doc:`/usage/observability` for the full logger hierarchy and configuration examples.
+**Fixed:**
 
-ADK Memory Store
-----------------
+* Resolved root paths to the parent directory for file-based paths.
+* Fixed documentation references for vector distance and Flask examples.
 
-- Added ``SQLSpecMemoryService`` and ``SQLSpecSyncMemoryService`` for SQLSpec-backed ADK memory storage.
-- Implemented adapter-specific memory stores with optional full-text search (`memory_use_fts`) and simple fallback search.
-- Extended ADK migrations to include memory tables with configurable ``include_memory_migration`` toggles.
-- Added CLI commands for memory cleanup and verification (`sqlspec adk memory cleanup/verify`).
+v0.41.0 - Documentation, PostgreSQL dialects, and storage polish
+------------------------------------------------------------------------------
 
-Driver Layer Compilation
-------------------------
+**Added:**
 
-- Compiled driver base classes and mixins with mypyc to reduce dispatch overhead in the execution pipeline.
-- Replaced dynamic ``getattr`` patterns with protocol-driven access for mypyc compatibility.
-- Added driver protocols and updated mypyc build configuration to include driver modules.
+* Added PostgreSQL extension dialect support.
+* Added CSV format support for Arrow table export and import.
 
-Database Event Channels
------------------------
+**Changed:**
 
-- Added ``sqlspec.extensions.events.EventChannel`` with queue-backed publish/listen APIs that work uniformly across sync and async adapters.
-- Exposed ``SQLSpec.event_channel(config)`` so applications and agents can build channels directly from registered configs.
-- Introduced the ``events`` extension migrations (``ext_events_0001``) which create the durable queue table plus composite index.
-- Added the first native backend (AsyncPG LISTEN/NOTIFY) enabled via ``driver_features["events_backend"] = "listen_notify"``; the API automatically falls back to the queue backend for other adapters.
-- Introduced experimental Oracle Advanced Queuing support (sync adapters) via ``driver_features["events_backend"] = "advanced_queue"`` with automatic fallback when AQ is unavailable.
-- Documented configuration patterns (queue table naming, lease/retention windows, Oracle ``INMEMORY`` toggle, Postgres native mode) for database event channels.
-- Event telemetry now tracks ``events.publish``, ``events.publish.native``, ``events.deliver``, ``events.ack``, ``events.nack``, ``events.shutdown`` and listener lifecycle, so Prometheus/Otel exporters see event workloads alongside query metrics.
-- Added adapter-specific runtime hints (asyncmy, duckdb, bigquery/adbc) plus a ``poll_interval`` extension option so operators can tune leases and cadence per database.
-- Publishing, dequeue, ack, nack, and shutdown operations now emit ``sqlspec.events.*`` spans whenever ``extension_config["otel"]`` is enabled, giving full trace coverage without extra plumbing.
-- Documented adapter-specific guidance (asyncpg, psycopg, psqlpy, asyncmy, duckdb, oracle) and added a DuckDB integration test to cover the queue fallback path.
+* Overhauled the documentation structure and content.
+* Moved sqlglot dialect modules into the top-level ``sqlspec.dialects``
+  package.
+* Improved mypyc configuration and CI validation paths.
 
-v0.33.0 - Configuration Parameter Standardization (BREAKING CHANGE)
---------------------------------------------------------------------
+**Fixed:**
 
-**Breaking Change:** All adapter configuration parameter names have been standardized for consistency across the entire library.
+* Supported set operations in pagination and count queries.
+* Isolated AioSQLite in-memory databases with unique URIs per config instance.
+* Added Oracle BLOB support and byte-length thresholds for LOB coercion.
+* Used the portal fallback when ``await_()`` is called from an async task.
+* Deduplicated named parameters and fixed ``SearchFilter`` placeholder reuse.
 
-**What Changed:**
+v0.40.0 - SQLGlot refresh
+------------------------------------------------------------------------------
 
-All database adapter configurations now use consistent parameter names:
+**Changed:**
 
-- ``pool_config`` → ``connection_config`` (configuration dictionary)
-- ``pool_instance`` → ``connection_instance`` (pre-created pool/connection instance)
+* Updated the sqlglot dependency pin to the latest supported version.
 
-This affects **all 11 database adapters**: AsyncPG, Psycopg, Asyncmy, Psqlpy, OracleDB, SQLite, AioSQLite, DuckDB, BigQuery, ADBC, and Spanner.
+v0.39.0 - Migration squash and hot-path performance
+------------------------------------------------------------------------------
 
-**Migration:**
+**Breaking changes:**
 
-Simple search and replace in your codebase:
+* Renamed storage sync methods to the ``*_sync`` pattern.
+* Reworked the parsing pipeline around parse-once AST preservation and
+  structural parameter fingerprinting.
 
-.. code-block:: bash
+**Added:**
 
-   # Replace pool_config with connection_config
-   find . -name "*.py" -exec sed -i 's/pool_config=/connection_config=/g' {} +
+* Added the migration squash engine.
+* Added benchmark scripts and hot-path performance optimizations for parsing,
+  parameter processing, serialization, and Arrow conversion.
 
-   # Replace pool_instance with connection_instance
-   find . -name "*.py" -exec sed -i 's/pool_instance=/connection_instance=/g' {} +
+**Fixed:**
 
-**Before:**
+* Fixed in-memory Arrow streaming with an async sentinel pattern.
+* Improved AioSQLite pool shutdown and thread handling.
+* Restored documentation search and hardened hot-path optimizations.
 
-.. code-block:: python
+v0.38.4 - Pool and storage race fixes
+------------------------------------------------------------------------------
 
-   config = AsyncpgConfig(
-       pool_config={"dsn": "postgresql://localhost/db"},
-       pool_instance=my_pool
-   )
+**Fixed:**
 
-**After:**
+* Fixed a race condition during connection pool initialization.
+* Buffered storage streams consistently.
 
-.. code-block:: python
+v0.38.3 - Connection lifecycle hooks and migration tracking
+------------------------------------------------------------------------------
 
-   config = AsyncpgConfig(
-       connection_config={"dsn": "postgresql://localhost/db"},
-       connection_instance=my_pool
-   )
+**Added:**
 
-**Why This Change:**
+* Added ``on_connection_create`` lifecycle hooks.
+* Improved migration logging and tracking.
 
-- Eliminates inconsistency between pooled and non-pooled adapters
-- More intuitive naming (``connection_instance`` works semantically for both pools and single connections)
-- Reduces cognitive load when switching between adapters
-- Clearer API for new users
+**Fixed:**
 
-**See** the connection configuration section in :doc:`usage/configuration` for detailed migration guidance with before/after examples for all adapters.
+* Fixed DuckDB variable persistence across connections.
 
-Query Stack Documentation Suite
---------------------------------
+v0.38.2 - Storage paths and logging options
+------------------------------------------------------------------------------
 
-- Expanded the :doc:`/reference/query-stack` API reference (``StatementStack``, ``StackResult``, driver hooks, and ``StackExecutionError``) with the high-level workflow, execution modes, telemetry, and troubleshooting tips.
-- Captured the detailed architecture and performance guidance inside the internal specs workspace for future agent runs.
-- Updated every adapter reference with a **Query Stack Support** section so behavior is documented per database.
+**Added:**
 
-Migration Convenience Methods on Config Classes
-------------------------------------------------
+* Added migration ``use_logger`` support and SQL logging
+  ``include_driver_name`` controls.
 
-Added migration methods directly to database configuration classes, eliminating the need to instantiate separate command objects.
+**Fixed:**
 
-**What's New:**
+* Fixed storage backend path handling.
+* Avoided blocking behavior in async storage streaming.
 
-All database configs (both sync and async) now provide migration methods:
+v0.38.1 - Python 3.14 and compiled-wheel readiness
+------------------------------------------------------------------------------
 
-- ``migrate_up()`` / ``upgrade()`` - Apply migrations up to a revision
-- ``migrate_down()`` / ``downgrade()`` - Rollback migrations
-- ``get_current_migration()`` - Check current version
-- ``create_migration()`` - Create new migration file
-- ``init_migrations()`` - Initialize migrations directory
-- ``stamp_migration()`` - Stamp database to specific revision
-- ``fix_migrations()`` - Convert timestamp to sequential migrations
+**Added:**
 
-**Before (verbose):**
+* Added Python 3.14 CI coverage and mypyc wheel builds.
 
-.. code-block:: python
+**Fixed:**
 
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
-   from sqlspec.migrations.commands import AsyncMigrationCommands
+* Fixed driver parameter normalization.
+* Fixed Litestar plugin session-provider behavior.
+* Fixed MySQL build issues.
 
-   config = AsyncpgConfig(
-       connection_config={"dsn": "postgresql://..."},
-       migration_config={"script_location": "migrations"}
-   )
+v0.38.0 - Structured logging and exception mapping
+------------------------------------------------------------------------------
 
-   commands = AsyncMigrationCommands(config)
-   await commands.upgrade("head")
+**Added:**
 
-**After (recommended):**
+* Added ``value_type`` support to ``select_value`` methods.
+* Added structured SQL logging context and ``COMMAND`` operation logging.
 
-.. code-block:: python
+**Changed:**
 
-   from sqlspec.adapters.asyncpg import AsyncpgConfig
+* Added more granular database exception mapping.
 
-   config = AsyncpgConfig(
-       connection_config={"dsn": "postgresql://..."},
-       migration_config={"script_location": "migrations"}
-   )
+v0.37.1 - Column pruning and pagination filters
+------------------------------------------------------------------------------
 
-   await config.upgrade("head")
+**Added:**
 
-**Key Benefits:**
+* Added column-pruning optimization.
 
-- Simpler API - no need to import and instantiate command classes
-- Works with both sync and async adapters
-- Full backward compatibility - command classes still available
-- Cleaner test fixtures and deployment scripts
+**Fixed:**
 
-**Async Adapters** (AsyncPG, Asyncmy, Aiosqlite, Psqlpy):
+* Fixed pagination parameter filtering.
 
-.. code-block:: python
+v0.37.0 - Builder and count-query improvements
+------------------------------------------------------------------------------
 
-   await config.migrate_up("head")
-   await config.create_migration("add users")
+**Added:**
 
-**Sync Adapters** (SQLite, DuckDB):
+* Enhanced query-builder support for count queries.
 
-.. code-block:: python
+v0.36.3 - Select helper corrections
+------------------------------------------------------------------------------
 
-   config.migrate_up("head")  # No await needed
-   config.create_migration("add users")
+**Fixed:**
 
-SQL Loader Graceful Error Handling
------------------------------------
+* Corrected ``select_with_count`` and ``select_only`` behavior.
 
-**Breaking Change**: Files without named statements (``-- name:``) are now gracefully skipped instead of raising ``SQLFileParseError``.
+v0.36.2 - Exception handler edge cases
+------------------------------------------------------------------------------
 
-This allows loading directories containing named SQL queries and raw DDL/DML scripts without errors.
+**Fixed:**
 
-**What Changed:**
+* Handled additional exception-handler edge cases.
 
-- Files without ``-- name:`` markers return empty dict instead of raising exception
-- Directory loading continues when encountering such files
-- Skipped files are logged at DEBUG level
-- Malformed named statements (duplicate names, etc.) still raise exceptions
+v0.36.1 - DuckDB connection close behavior
+------------------------------------------------------------------------------
 
-**Migration Guide:**
+**Fixed:**
 
-Code explicitly catching ``SQLFileParseError`` for files without named statements will need updating:
+* Closed DuckDB file-based connections on context-manager exit.
 
-.. code-block:: python
+v0.36.0 - Documentation restructure and adapter exceptions
+------------------------------------------------------------------------------
 
-   # OLD (breaks):
-   try:
-       loader.load_sql("directory/")
-   except SQLFileParseError as e:
-       if "No named SQL statements found" in str(e):
-           pass
+**Changed:**
 
-   # NEW (recommended):
-   loader.load_sql("directory/")  # Just works - DDL files skipped
-   if not loader.list_queries():
-       # No queries loaded
-       pass
+* Restructured the documentation.
 
-**Example Use Case:**
+**Fixed:**
 
-.. code-block:: python
+* Improved exception handling across adapters.
 
-   # Directory structure:
-   # migrations/
-   # ├── schema.sql              # Raw DDL (no -- name:) → SKIP
-   # ├── queries.sql             # Named queries → LOAD
-   # └── seed-data.sql          # Raw DML (no -- name:) → SKIP
+v0.35.0 - SQL class unification, ADK enhancements, and EXPLAIN
+------------------------------------------------------------------------------
 
-   loader = SQLFileLoader()
-   loader.load_sql("migrations/")  # Loads only named queries, skips DDL
+**Added:**
 
-Hybrid Versioning with Fix Command
------------------------------------
+* Added dialect-aware ``EXPLAIN`` plan support.
+* Added ADK enhancements and EXPLAIN-plan integration.
+* Added type narrowing for parameter-conversion helpers.
 
-Added comprehensive hybrid versioning support for database migrations:
+**Changed:**
 
-- **Fix Command** - Convert timestamp migrations to sequential format
-- **Hybrid Workflow** - Use timestamps in development, sequential in production
-- **Automatic Conversion** - CI integration for seamless workflow
-- **Safety Features** - Automatic backup, rollback on errors, dry-run preview
+* Unified SQL class query modifications and expanded observability support.
+* Simplified the event backend.
+* Reorganized unit and integration tests.
 
-Key Features:
+v0.34.0 - Database event channels and utility IDs
+------------------------------------------------------------------------------
 
-- **Zero merge conflicts**: Developers use timestamps (``20251011120000``) during development
-- **Deterministic ordering**: Production uses sequential format (``0001``, ``0002``, etc.)
-- **Database synchronization**: Automatically updates version tracking table
-- **File operations**: Renames files and updates SQL query names
-- **CI-ready**: ``--yes`` flag for automated workflows
+**Added:**
 
-.. code-block:: bash
+* Added the database event channels extension with queue-backed publish/listen
+  APIs and native backend support.
+* Added UUID and ID generation utilities.
 
-   # Preview changes
-   sqlspec --config myapp.config fix --dry-run
+**Fixed:**
 
-   # Apply conversion
-   sqlspec --config myapp.config fix
+* Moved event configuration to the ``extension_config`` pattern.
+* Fixed mypyc signature generation for portal helpers.
 
-   # CI/CD mode
-   sqlspec --config myapp.config fix --yes --no-database
+v0.33.0 - Config naming, multi-config resolution, and filter additions
+------------------------------------------------------------------------------
 
-Example conversion:
+**Breaking changes:**
 
-.. code-block:: text
+* Standardized adapter config names from ``pool_config`` to
+  ``connection_config`` and from ``pool_instance`` to ``connection_instance``
+  across all adapters.
 
-   Before:                              After:
-   migrations/                          migrations/
-   ├── 0001_initial.sql                ├── 0001_initial.sql
-   ├── 0002_add_users.sql              ├── 0002_add_users.sql
-   ├── 20251011120000_products.sql →   ├── 0003_add_products.sql
-   └── 20251012130000_orders.sql   →   └── 0004_add_orders.sql
+**Added:**
 
-**Documentation:**
+* Added environment-variable and ``pyproject.toml`` multi-config resolution for
+  the CLI.
+* Added ``NullFilter`` and ``NotNullFilter``.
+* Added URL signing methods to storage object protocols and backends.
+* Simplified ``add_config()`` return typing.
 
-- Complete CLI reference: :doc:`usage/cli`
-- Workflow guide for hybrid versioning
-- CI integration examples for GitHub Actions and GitLab CI
+**Fixed:**
 
-Shell Completion Support
--------------------------
+* Fixed AioSQLite 0.22 compatibility after ``Connection`` stopped inheriting
+  from ``Thread``.
+* Fixed builder edge cases, ``SearchFilter`` empty/``None`` handling, and
+  ``Update.set()`` edge cases.
 
-Added comprehensive shell completion support for the SQLSpec CLI:
+v0.32.0 - Spanner, vector search, and result conversion
+------------------------------------------------------------------------------
 
-- **Bash, Zsh, and Fish support** - Tab completion for commands and options
-- **Easy setup** - One-time eval command in your shell rc file
-- **Comprehensive documentation** - Setup instructions in :doc:`usage/cli`
+**Added:**
 
-.. code-block:: bash
+* Added the Google Spanner driver.
+* Added vector search support in the query builder.
+* Added result conversion helpers for Arrow, Pandas, and Polars.
+* Added driver ``fetch*`` compatibility aliases.
 
-   # Bash - add to ~/.bashrc
-   eval "$(_SQLSPEC_COMPLETE=bash_source sqlspec)"
+**Fixed:**
 
-   # Zsh - add to ~/.zshrc
-   eval "$(_SQLSPEC_COMPLETE=zsh_source sqlspec)"
+* Improved BigQuery ``execute_many`` bulk inserts.
+* Improved Spanner write handling.
+* Improved async handling for migration commands.
 
-   # Fish - add to ~/.config/fish/completions/sqlspec.fish
-   eval (env _SQLSPEC_COMPLETE=fish_source sqlspec)
+v0.31.0 - Data dictionary and execution correctness
+------------------------------------------------------------------------------
 
-After setup, tab completion works for all commands and options:
+**Added:**
 
-.. code-block:: bash
+* Added topological sorting and foreign-key retrieval enhancements.
 
-   sqlspec <TAB>              # Shows: create-migration, downgrade, init, ...
-   sqlspec create-migration --<TAB>  # Shows: --bind-key, --help, --message, ...
+**Fixed:**
 
-Extension Migration Configuration
-----------------------------------
+* Correctly mapped ``execute_many`` parameters for all drivers.
+* Fixed ``returns_row`` false negatives.
+* Corrected query-builder edge cases and typing.
+* Avoided DuckDB locks in testing documentation examples.
 
-Extension migrations now receive automatic version prefixes and configuration has been simplified:
+v0.30.2 - Compiled migration path fix
+------------------------------------------------------------------------------
 
-1. **Version Prefixing** (Automatic)
+**Fixed:**
 
-   Extension migrations are automatically prefixed to prevent version collisions:
+* Temporarily removed the migration path that was unsafe for compiled builds.
 
-   .. code-block:: text
+v0.30.1 - Mypyc and count-query fixes
+------------------------------------------------------------------------------
 
-      # User migrations
-      0001_initial.py       → version: 0001
+**Fixed:**
 
-      # Extension migrations (automatic prefix)
-      0001_create_tables.py → version: ext_adk_0001
-      0001_create_session.py → version: ext_litestar_0001
+* Fixed mypyc compatibility around dynamic imports and lifecycle dispatcher
+  guard attributes.
+* Validated ``FROM`` clauses during count-query generation.
 
-2. **Configuration Format** (Important)
+v0.30.0 - Query stack, telemetry, and migration templates
+------------------------------------------------------------------------------
 
-   Extension settings must be in ``extension_config`` only:
+**Added:**
 
-   .. code-block:: python
+* Added pipelined stack execution.
+* Added telemetry integrations.
+* Added DuckDB community-extension flags.
+* Added improved migration template customization.
 
-      # Incorrect format
-      migration_config={
-          "include_extensions": [
-              {"name": "adk", "session_table": "custom"}
-          ]
-      }
+**Fixed:**
 
-      # Correct format
-      extension_config={
-          "adk": {"session_table": "custom"}
-      },
-      migration_config={
-          "include_extensions": ["adk"]  # Simple string list
-      }
+* Fixed Litestar sync context-manager handling.
+* Corrected Oracle JSON support-version lookup.
 
-**Configuration Guide**: See :doc:`usage/migrations` for extension configuration details.
+v0.29.0 - Storage pipelines, connectors, and migration convenience
+------------------------------------------------------------------------------
 
-Features
---------
+**Added:**
 
-- Extension migrations now automatically prefixed (``ext_adk_0001``, ``ext_litestar_0001``)
-- Eliminated version collision between extension and user migrations
-- Simplified extension configuration API
-- Single source of truth for extension settings (``extension_config``)
+* Added sync and async storage capabilities and pipelines.
+* Added Google Cloud SQL and AlloyDB connector support.
+* Added Oracle RAW(16) UUID conversion and handlers.
+* Added migration convenience methods to config classes.
+* Added ``disable_di`` controls for framework integrations.
 
-Bug Fixes
----------
+**Fixed:**
 
-- Fixed version collision when extension and user migrations had the same version number
-- Fixed duplicate key violation in ``ddl_migrations`` table when using extensions
-- Improved migration tracking with clear extension identification
+* Fixed migration crashes with null values and malformed regex patterns.
+* Added Decimal JSON encoding support.
+* Improved ``COPY`` detection, MERGE behavior, parameter profiles, and config
+  consistency.
 
-Technical Changes
------------------
+v0.28.1 - Empty SQL files and project commands
+------------------------------------------------------------------------------
 
-- ``_load_migration_metadata()`` now accepts optional ``version`` parameter
-- ``_parse_extension_configs()`` rewritten to read from ``extension_config`` only
-- Extension migration version prefixing handled in ``_get_migration_files_sync()``
-- Removed dict format support from ``include_extensions``
+**Added:**
 
-**Previous Versions**
-=====================
+* Added SQLSpec project agent commands.
+
+**Fixed:**
+
+* Improved handling of empty SQL files.
+
+v0.28.0 - Arrow support and additional framework extensions
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added FastAPI, Starlette, and Flask extensions.
+* Added the Arrow type-system foundation and ``select_to_arrow()`` support.
+* Added native Arrow support for ADBC, DuckDB, BigQuery, PostgreSQL adapters,
+  SQLite, MySQL, and Oracle.
+* Added NumPy array serialization through the SQLSpec plugin.
+
+**Fixed:**
+
+* Updated ADK store signatures and session-key consistency.
+* Made ADK store SQL table creation asynchronous.
+
+v0.27.0 - ADK sessions, migrations, and Python 3.10 baseline
+------------------------------------------------------------------------------
+
+**Breaking changes:**
+
+* Dropped Python 3.9 support and moved to Python 3.10+ type-hint syntax.
+* Refactored the Litestar extension to remove wrapper classes and unify
+  handlers.
+
+**Added:**
+
+* Added SQLSpec documentation, Litestar session backend support, and the Google
+  ADK session backend.
+* Added optional NumPy serialization and Oracle NumPy integration.
+* Added ``schema_type`` support to ``SQLResult`` helper methods.
+* Added hybrid timestamp/sequential migration versioning, transactional
+  migrations, shell completion docs/tests, and migration author defaults from
+  git config.
+
+**Fixed:**
+
+* Improved granular database exception handling and schema conversion caching.
+* Fixed duplicate SQL file loading, migration dry-run handling, CLI path
+  handling, and pgvector registration logging.
+* Added automatic Oracle CLOB hydration for msgspec integration.
+
+v0.26.0 - Data dictionary and async migrations
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added data-dictionary support for database metadata.
+* Added async migrations and callable config support.
+* Added query-builder ``FOR UPDATE`` locking.
+* Added ``bind_key`` support to all adapter configs.
+
+**Changed:**
+
+* Enhanced serialization, type conversion, sync tooling, and migration
+  infrastructure.
+
+v0.25.0 - Public API and NumPy decoder polish
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added NumPy decoder support.
+
+**Fixed:**
+
+* Correctly handled duplicate use of the same bind parameter.
+* Removed private-variable usage from public APIs.
+
+v0.24.1 - RETURNING clause detection
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Correctly detected SQL ``RETURNING`` clauses.
+
+v0.24.0 - Builder consolidation
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added builder support for merged parameter names and ``OR`` composition.
+
+**Changed:**
+
+* Refactored builder code to reduce duplication.
+
+Previous Versions
+=================
+
+For releases before ``v0.24.0``, see the repository tag history and GitHub
+release records.

@@ -1,5 +1,6 @@
 """Lifecycle dispatcher used by drivers and registry hooks."""
 
+import asyncio
 from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
@@ -11,10 +12,11 @@ __all__ = ("LifecycleContext", "LifecycleDispatcher", "LifecycleHook")
 logger = get_logger("sqlspec.observability.lifecycle")
 
 LifecycleContext = dict[str, Any]
-LifecycleHook = Callable[[LifecycleContext], None]
+LifecycleHook = Callable[[LifecycleContext], Any]
 
 LifecycleEvent = Literal[
     "on_pool_create",
+    "on_pool_destroying",
     "on_pool_destroy",
     "on_connection_create",
     "on_connection_destroy",
@@ -26,6 +28,7 @@ LifecycleEvent = Literal[
 ]
 EVENT_ATTRS: tuple[LifecycleEvent, ...] = (
     "on_pool_create",
+    "on_pool_destroying",
     "on_pool_destroy",
     "on_connection_create",
     "on_connection_destroy",
@@ -50,6 +53,7 @@ class LifecycleDispatcher:
         "has_error",
         "has_pool_create",
         "has_pool_destroy",
+        "has_pool_destroying",
         "has_query_complete",
         "has_query_start",
         "has_session_end",
@@ -58,6 +62,7 @@ class LifecycleDispatcher:
 
     def __init__(self, hooks: "dict[str, Iterable[LifecycleHook]] | None" = None) -> None:
         self.has_pool_create = False
+        self.has_pool_destroying = False
         self.has_pool_destroy = False
         self.has_connection_create = False
         self.has_connection_destroy = False
@@ -67,12 +72,12 @@ class LifecycleDispatcher:
         self.has_query_complete = False
         self.has_error = False
 
-        normalized: dict[LifecycleEvent, tuple[LifecycleHook, ...]] = {}
+        normalized: dict[LifecycleEvent, list[LifecycleHook]] = {}
         for event_name, guard_attr in zip(EVENT_ATTRS, GUARD_ATTRS, strict=False):
             callables = hooks.get(event_name) if hooks else None
-            normalized[event_name] = tuple(callables) if callables else ()
+            normalized[event_name] = list(callables) if callables else []
             setattr(self, guard_attr, bool(normalized[event_name]))
-        self._hooks: dict[LifecycleEvent, tuple[LifecycleHook, ...]] = normalized
+        self._hooks: dict[LifecycleEvent, list[LifecycleHook]] = normalized
         self._counters: dict[LifecycleEvent, int] = dict.fromkeys(EVENT_ATTRS, 0)
         self._is_enabled = any(self._hooks.values())
 
@@ -86,6 +91,47 @@ class LifecycleDispatcher:
         """Fire pool creation hooks."""
 
         self._emit("on_pool_create", context)
+
+    def emit_pool_destroying_sync(self, context: "LifecycleContext") -> None:
+        """Fire pre-destruction hooks synchronously (sync close path).
+
+        Returned awaitables are discarded; callers in the async path must use
+        ``emit_pool_destroying_async`` to await async teardown work.
+        """
+
+        self._emit("on_pool_destroying", context)
+
+    async def emit_pool_destroying_async(self, context: "LifecycleContext") -> None:
+        """Fire pre-destruction hooks, awaiting any awaitable return values."""
+
+        callbacks = self._hooks.get("on_pool_destroying")
+        if not callbacks:
+            return
+        self._counters["on_pool_destroying"] += 1
+        for callback in list(callbacks):
+            try:
+                result = callback(context)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Lifecycle hook failed: event=on_pool_destroying error=%s", exc)
+                continue
+            if asyncio.iscoroutine(result):
+                try:
+                    await result
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.warning("Lifecycle hook failed: event=on_pool_destroying error=%s", exc)
+
+    def register_hook(self, event: LifecycleEvent, callback: LifecycleHook) -> None:
+        """Append a hook at runtime.
+
+        Used by components (e.g., persistent event listener hubs) that must register
+        teardown work after the config has already been constructed.
+        """
+
+        callbacks = self._hooks.setdefault(event, [])
+        callbacks.append(callback)
+        guard_attr = f"has_{event[3:]}"
+        setattr(self, guard_attr, True)
+        self._is_enabled = True
 
     def emit_pool_destroy(self, context: "LifecycleContext") -> None:
         """Fire pool destruction hooks."""

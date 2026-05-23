@@ -7,10 +7,6 @@ Tests for:
 
 from pathlib import Path
 
-import pytest
-
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class TestGroupMigrationsByType:
     """Tests for group_migrations_by_type() function."""

@@ -1,12 +1,12 @@
 """Psqlpy LISTEN/NOTIFY and hybrid event backends."""
 
-# pyright: ignore=reportPrivateUsage
-import asyncio
-import contextlib
+# pyright: reportPrivateUsage=false
+
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.adapters.psqlpy.events._hub import PsqlpyListenerHub
 from sqlspec.core import SQL
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import (
@@ -16,14 +16,11 @@ from sqlspec.extensions.events import (
     decode_notify_payload,
     encode_notify_payload,
 )
-from sqlspec.extensions.events import normalize_event_channel_name as _normalize_channel
-from sqlspec.protocols import NotificationProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.psqlpy._typing import PsqlpyListener
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 
@@ -31,82 +28,21 @@ logger = get_logger("sqlspec.events.psqlpy")
 
 __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
-_PSQLPY_CALLBACK_MIN_ARGS = 3
 
-
-class _PsqlpyNotifyCapture:
-    __slots__ = ("_channel", "_event", "payload")
-
-    def __init__(self, channel: str, event: asyncio.Event) -> None:
-        self._channel = channel
-        self._event = event
-        self.payload: str | None = None
-
-    async def __call__(self, *args: Any) -> None:
-        if not args:
-            return
-
-        notified_channel: str | None = None
-        payload: str | None = None
-
-        if len(args) == 1:
-            message = args[0]
-            if isinstance(message, NotificationProtocol):
-                notified_channel = message.channel
-                payload = message.payload
-        elif len(args) >= _PSQLPY_CALLBACK_MIN_ARGS:
-            value1 = cast("str", args[1])
-            value2 = cast("str", args[2])
-            if value1 == self._channel:
-                notified_channel = value1
-                payload = value2
-            elif value2 == self._channel:
-                notified_channel = value2
-                payload = value1
-            else:
-                return
-
-        if notified_channel == self._channel and payload is not None and self.payload is None:
-            self.payload = payload
-            self._event.set()
-
-
-class _PsqlpyNotifySignal:
-    __slots__ = ("_channel", "_event")
-
-    def __init__(self, channel: str, event: asyncio.Event) -> None:
-        self._channel = channel
-        self._event = event
-
-    async def __call__(self, *args: Any) -> None:
-        if not args:
-            return
-
-        notified_channel: str | None = None
-        if len(args) == 1:
-            message = args[0]
-            if isinstance(message, NotificationProtocol):
-                notified_channel = message.channel
-        elif len(args) >= _PSQLPY_CALLBACK_MIN_ARGS:
-            value1 = cast("str", args[1])
-            value2 = cast("str", args[2])
-            if value1 == self._channel:
-                notified_channel = value1
-            elif value2 == self._channel:
-                notified_channel = value2
-
-        if notified_channel == self._channel:
-            self._event.set()
+def _extract_event_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None
 
 
 class PsqlpyEventsBackend:
-    """Native LISTEN/NOTIFY backend for psqlpy adapters.
+    """Native LISTEN/NOTIFY backend for psqlpy adapters."""
 
-    Uses psqlpy's Listener API which provides a dedicated connection for
-    receiving PostgreSQL NOTIFY messages via callbacks or async iteration.
-    """
-
-    __slots__ = ("_config", "_listener", "_listener_started", "_runtime")
+    __slots__ = ("_config", "_hub", "_runtime")
 
     supports_sync = False
     supports_async = True
@@ -118,8 +54,7 @@ class PsqlpyEventsBackend:
             raise ImproperConfigurationError(msg)
         self._config = config
         self._runtime = config.get_observability_runtime()
-        self._listener: Any | None = None
-        self._listener_started: bool = False
+        self._hub: PsqlpyListenerHub | None = None
         log_with_context(
             logger,
             logging.DEBUG,
@@ -141,21 +76,11 @@ class PsqlpyEventsBackend:
         return event_id
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
-        listener = await self._ensure_listener(channel)
-        event = asyncio.Event()
-        callback = _PsqlpyNotifyCapture(channel, event)
-        await listener.add_callback(channel=channel, callback=callback.__call__)
-
-        if not self._listener_started:
-            listener.listen()
-            self._listener_started = True
-            await asyncio.sleep(0.05)
-
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=poll_interval)
-
-        await listener.clear_channel_callbacks(channel=channel)
-        return decode_notify_payload(channel, callback.payload) if callback.payload is not None else None
+        hub = self._ensure_hub()
+        payload = await hub.dequeue(channel, poll_interval)
+        if payload is None:
+            return None
+        return decode_notify_payload(channel, payload)
 
     async def ack(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
@@ -164,32 +89,21 @@ class PsqlpyEventsBackend:
         """Return an event to the queue (no-op for native LISTEN/NOTIFY)."""
 
     async def shutdown(self) -> None:
-        """Shutdown the listener and release resources."""
-        if self._listener is not None:
-            if self._listener_started:
-                self._listener.abort_listen()
-                self._listener_started = False
-            await self._listener.shutdown()
-            self._listener = None
+        hub = self._hub
+        if hub is not None:
+            self._hub = None
+            await hub.shutdown()
 
-    async def _ensure_listener(self, channel: str) -> "PsqlpyListener":
-        """Ensure a listener is created for receiving notifications."""
-        _normalize_channel(channel)
-        if self._listener is None:
-            pool = await self._config.provide_pool()
-            self._listener = pool.listener()
-            await self._listener.startup()
-        return self._listener
+    def _ensure_hub(self) -> PsqlpyListenerHub:
+        if self._hub is None:
+            self._hub = PsqlpyListenerHub(self._config)
+        return self._hub
 
 
 class PsqlpyHybridEventsBackend:
-    """Durable hybrid backend combining queue storage with LISTEN/NOTIFY wakeups.
+    """Durable hybrid backend combining queue storage with LISTEN/NOTIFY wakeups."""
 
-    Uses psqlpy's Listener API for real-time notifications while persisting
-    events to a durable queue table.
-    """
-
-    __slots__ = ("_config", "_listener", "_listener_started", "_queue", "_runtime")
+    __slots__ = ("_config", "_hub", "_queue", "_runtime")
 
     supports_sync = False
     supports_async = True
@@ -202,8 +116,7 @@ class PsqlpyHybridEventsBackend:
         self._config = config
         self._queue = queue
         self._runtime = config.get_observability_runtime()
-        self._listener: Any | None = None
-        self._listener_started: bool = False
+        self._hub: PsqlpyListenerHub | None = None
         log_with_context(
             logger,
             logging.DEBUG,
@@ -221,21 +134,16 @@ class PsqlpyHybridEventsBackend:
         return event_id
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
-        listener = await self._ensure_listener(channel)
-        event = asyncio.Event()
-        callback = _PsqlpyNotifySignal(channel, event)
-        await listener.add_callback(channel=channel, callback=callback.__call__)
-
-        if not self._listener_started:
-            listener.listen()
-            self._listener_started = True
-            await asyncio.sleep(0.05)
-
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=poll_interval)
-
-        await listener.clear_channel_callbacks(channel=channel)
-        return await self._queue.dequeue(channel, poll_interval)
+        hub = self._ensure_hub()
+        payload = await hub.dequeue(channel, poll_interval)
+        if payload is None:
+            return await self._queue.dequeue(channel)
+        event_id = _extract_event_id(payload)
+        if event_id is not None:
+            event = await self._queue.dequeue_by_event_id(event_id)
+            if event is not None:
+                return event
+        return await self._queue.dequeue(channel)
 
     async def ack(self, event_id: str) -> None:
         await self._queue.ack(event_id)
@@ -246,22 +154,15 @@ class PsqlpyHybridEventsBackend:
         self._runtime.increment_metric("events.nack")
 
     async def shutdown(self) -> None:
-        """Shutdown the listener and release resources."""
-        if self._listener is not None:
-            if self._listener_started:
-                self._listener.abort_listen()
-                self._listener_started = False
-            await self._listener.shutdown()
-            self._listener = None
+        hub = self._hub
+        if hub is not None:
+            self._hub = None
+            await hub.shutdown()
 
-    async def _ensure_listener(self, channel: str) -> "PsqlpyListener":
-        """Ensure a listener is created for receiving notifications."""
-        _normalize_channel(channel)
-        if self._listener is None:
-            pool = await self._config.provide_pool()
-            self._listener = pool.listener()
-            await self._listener.startup()
-        return self._listener
+    def _ensure_hub(self) -> PsqlpyListenerHub:
+        if self._hub is None:
+            self._hub = PsqlpyListenerHub(self._config)
+        return self._hub
 
     async def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"

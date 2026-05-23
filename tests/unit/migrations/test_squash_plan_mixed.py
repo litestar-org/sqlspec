@@ -11,10 +11,6 @@ Tests for:
 from pathlib import Path
 from unittest.mock import Mock
 
-import pytest
-
-pytestmark = pytest.mark.xdist_group("migrations")
-
 
 class TestPlanSquashMixedTypes:
     """Tests for plan_squash() with mixed migration types."""

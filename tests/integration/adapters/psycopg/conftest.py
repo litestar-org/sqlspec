@@ -12,12 +12,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
 
-@pytest.fixture(scope="session")
-def anyio_backend() -> str:
-    """Session-scoped anyio backend for session-scoped async fixtures."""
-    return "asyncio"
-
-
 @pytest.fixture(autouse=True)
 def _cleanup_portal() -> "Generator[None, None, None]":
     """Clean up the portal manager after each test.

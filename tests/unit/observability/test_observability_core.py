@@ -263,6 +263,7 @@ def test_lifecycle_dispatcher_guard_attributes_always_accessible() -> None:
 
     dispatcher = LifecycleDispatcher(None)
     assert dispatcher.has_pool_create is False
+    assert dispatcher.has_pool_destroying is False
     assert dispatcher.has_pool_destroy is False
     assert dispatcher.has_connection_create is False
     assert dispatcher.has_connection_destroy is False
@@ -275,6 +276,44 @@ def test_lifecycle_dispatcher_guard_attributes_always_accessible() -> None:
     dispatcher_with_hooks = LifecycleDispatcher(cast("dict[str, Iterable[Any]]", {"on_query_start": [lambda ctx: ctx]}))
     assert dispatcher_with_hooks.has_query_start is True
     assert dispatcher_with_hooks.has_pool_create is False
+
+
+def test_lifecycle_dispatcher_register_hook_flips_guard_and_runs() -> None:
+    """register_hook adds a callback at runtime and flips its guard flag."""
+
+    dispatcher = LifecycleDispatcher(None)
+    assert dispatcher.has_pool_destroying is False
+
+    invoked: list[dict[str, Any]] = []
+
+    def _hook(ctx: dict[str, Any]) -> None:
+        invoked.append(ctx)
+
+    dispatcher.register_hook("on_pool_destroying", _hook)
+    assert dispatcher.has_pool_destroying is True
+    dispatcher.emit_pool_destroying_sync({"pool": "x"})
+    assert invoked == [{"pool": "x"}]
+
+
+def test_lifecycle_dispatcher_async_emit_awaits_coroutines() -> None:
+    """emit_pool_destroying_async awaits coroutine returns from hooks."""
+    import asyncio as _asyncio
+
+    dispatcher = LifecycleDispatcher(None)
+    seen: list[str] = []
+
+    async def _async_hook(ctx: dict[str, Any]) -> None:
+        await _asyncio.sleep(0)
+        seen.append(cast(str, ctx.get("pool")))
+
+    def _sync_hook(ctx: dict[str, Any]) -> None:
+        seen.append("sync:" + cast(str, ctx.get("pool")))
+
+    dispatcher.register_hook("on_pool_destroying", _async_hook)
+    dispatcher.register_hook("on_pool_destroying", _sync_hook)
+
+    _asyncio.run(dispatcher.emit_pool_destroying_async({"pool": "p"}))
+    assert seen == ["p", "sync:p"]
 
 
 def test_lifecycle_dispatcher_counts_events() -> None:

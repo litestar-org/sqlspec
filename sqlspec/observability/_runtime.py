@@ -169,6 +169,18 @@ class ObservabilityRuntime:
         finally:
             self.span_manager.end_span(span)
 
+    def emit_pool_destroying_sync(self, pool: Any) -> None:
+        """Fire pre-destruction lifecycle hooks synchronously."""
+        if not self.lifecycle.has_pool_destroying:
+            return
+        self.lifecycle.emit_pool_destroying_sync(self._build_context(pool=pool))
+
+    async def emit_pool_destroying_async(self, pool: Any) -> None:
+        """Fire pre-destruction lifecycle hooks, awaiting any awaitables."""
+        if not self.lifecycle.has_pool_destroying:
+            return
+        await self.lifecycle.emit_pool_destroying_async(self._build_context(pool=pool))
+
     def emit_pool_destroy(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.destroy", subject=pool)
         try:
@@ -176,6 +188,16 @@ class ObservabilityRuntime:
                 self.lifecycle.emit_pool_destroy(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
+
+    def register_lifecycle_hook(self, event: str, callback: "LifecycleHook") -> None:
+        """Append a lifecycle hook at runtime.
+
+        Intended for components that acquire long-lived resources after config
+        construction (e.g., persistent LISTEN/NOTIFY hubs) and need to plug into
+        teardown. Currently used with ``on_pool_destroying``; other events accept
+        registrations too but most lifecycle hooks are wired declaratively.
+        """
+        self.lifecycle.register_hook(event, callback)  # type: ignore[arg-type]
 
     def emit_connection_create(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)
