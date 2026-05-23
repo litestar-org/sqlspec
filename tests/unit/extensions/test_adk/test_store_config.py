@@ -181,6 +181,28 @@ def test_session_store_contract_declares_cleanup_hooks() -> None:
     assert "delete_idle_sessions" in BaseAsyncADKStore.__abstractmethods__
 
 
+def test_session_store_resolves_schema_parity_table_names() -> None:
+    store = _AsyncSessionStore(
+        _Config({
+            "schema": {
+                "app_state_table": "agent_app_states",
+                "user_state_table": "agent_user_states",
+                "metadata_table": "agent_metadata",
+            }
+        })
+    )
+
+    assert store.app_state_table == "agent_app_states"
+    assert store.user_state_table == "agent_user_states"
+    assert store.metadata_table == "agent_metadata"
+
+
+@pytest.mark.parametrize("field", ["app_state_table", "user_state_table", "metadata_table"])
+def test_session_store_validates_schema_parity_table_names(field: str) -> None:
+    with pytest.raises(ValueError, match="Invalid table name"):
+        _AsyncSessionStore(_Config({"schema": {field: "invalid-name"}}))
+
+
 def test_session_store_contract_get_session_accepts_renew_for_kwarg() -> None:
     signature = inspect.signature(BaseAsyncADKStore.get_session)
 
