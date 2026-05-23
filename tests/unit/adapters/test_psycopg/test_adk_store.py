@@ -76,7 +76,7 @@ def test_sync_append_event_inserts_without_session_update() -> None:
         "invocation_id": "",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-1"},
+        "event_data": {"id": "event-1"},
     }
 
     store._append_event(event_record)  # type: ignore[arg-type]
@@ -97,7 +97,7 @@ def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
             "invocation_id": "",
             "author": "assistant",
             "timestamp": base_time,
-            "event_json": {"id": "event-2"},
+            "event_data": {"id": "event-2"},
         }
     ]
     store, cursor, _ = _build_store(rows)
@@ -107,4 +107,4 @@ def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
     assert params == ("session-1", base_time, 1)
-    assert result[0]["event_json"]["id"] == "event-2"
+    assert result[0]["event_data"]["id"] == "event-2"

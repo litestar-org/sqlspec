@@ -29,12 +29,12 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     Implements session and event storage for Google Agent Development Kit
     using PostgreSQL via the high-performance Rust-based psqlpy driver.
-    Events are stored as a single JSONB blob (``event_json``) alongside
+    Events are stored as a single JSONB blob (``event_data``) alongside
     indexed scalar columns for efficient querying.
 
     Provides:
     - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
+    - Full-fidelity event storage via ``event_data`` JSONB column
     - Atomic ``append_event_and_update_state`` for durable session mutations
     - Microsecond-precision timestamps with TIMESTAMPTZ
     - Foreign key constraints with cascade delete
@@ -83,7 +83,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
@@ -208,7 +208,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES ($1, $2, $3, $4, $5)
         """
 
@@ -220,7 +220,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     event_record["invocation_id"],
                     event_record["author"],
                     event_record["timestamp"],
-                    event_record["event_json"],
+                    event_record["event_data"],
                 ],
             )
 
@@ -229,7 +229,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES ($1, $2, $3, $4, $5)
         """
         update_sql = f"""
@@ -247,7 +247,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     event_record["invocation_id"],
                     event_record["author"],
                     event_record["timestamp"],
-                    event_record["event_json"],
+                    event_record["event_data"],
                 ],
             )
             result = await conn.fetch(update_sql, [state, session_id])
@@ -283,7 +283,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             params.append(limit)
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -300,7 +300,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                         invocation_id=row["invocation_id"],
                         author=row["author"],
                         timestamp=row["timestamp"],
-                        event_json=row["event_json"],
+                        event_data=row["event_data"],
                     )
                     for row in rows
                 ]

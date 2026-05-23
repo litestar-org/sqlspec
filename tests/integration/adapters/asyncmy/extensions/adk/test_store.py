@@ -54,12 +54,12 @@ async def test_storage_types_verification(asyncmy_adk_store: AsyncmyADKStore) ->
         event_columns = await cursor.fetchall()
         event_col_names = [col[0] for col in event_columns]
 
-        # New 5-column schema: session_id, invocation_id, author, timestamp, event_json
+        # New 5-column schema: session_id, invocation_id, author, timestamp, event_data
         assert "session_id" in event_col_names
         assert "invocation_id" in event_col_names
         assert "author" in event_col_names
         assert "timestamp" in event_col_names
-        assert "event_json" in event_col_names
+        assert "event_data" in event_col_names
 
         timestamp_col = next(col for col in event_columns if col[0] == "timestamp")
         assert "timestamp(6)" in timestamp_col[2].lower(), "timestamp must be TIMESTAMP(6) for microseconds"
@@ -148,7 +148,7 @@ async def test_delete_session_cascade(asyncmy_adk_store: AsyncmyADKStore) -> Non
         "invocation_id": "inv-001",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id},
+        "event_data": {"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id},
     }
     await asyncmy_adk_store.append_event(event_record)
 
@@ -177,7 +177,7 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
         "invocation_id": "inv-001",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hello", "role": "user"}, "app_name": app_name},
+        "event_data": {"content": {"text": "Hello", "role": "user"}, "app_name": app_name},
     }
 
     event2: EventRecord = {
@@ -185,7 +185,7 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
         "invocation_id": "inv-002",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name},
+        "event_data": {"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name},
     }
 
     await asyncmy_adk_store.append_event(event1)
@@ -196,12 +196,12 @@ async def test_append_and_get_events(asyncmy_adk_store: AsyncmyADKStore) -> None
     assert len(events) == 2
     assert events[0]["author"] == "user"
     assert events[1]["author"] == "assistant"
-    # Content is inside event_json
+    # Content is inside event_data
     event0_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     event1_data = (
-        json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+        json.loads(events[1]["event_data"]) if isinstance(events[1]["event_data"], str) else events[1]["event_data"]
     )
     assert event0_data["content"]["text"] == "Hello"
     assert event1_data["content"]["text"] == "Hi there"
@@ -224,7 +224,7 @@ async def test_timestamp_precision(asyncmy_adk_store: AsyncmyADKStore) -> None:
         "invocation_id": "inv-micro",
         "author": "system",
         "timestamp": event_time,
-        "event_json": {"app_name": app_name},
+        "event_data": {"app_name": app_name},
     }
     await asyncmy_adk_store.append_event(event)
 

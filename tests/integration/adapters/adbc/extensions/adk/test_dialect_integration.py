@@ -86,14 +86,14 @@ async def test_sqlite_dialect_event_operations(sqlite_store: Any) -> None:
         "invocation_id": "",
         "author": "",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-1", "content": content, "app_name": app_name, "user_id": user_id},
+        "event_data": {"id": "event-1", "content": content, "app_name": app_name, "user_id": user_id},
     }
     await sqlite_store.append_event(event_record)
 
     events = await sqlite_store.get_events(session_id)
     assert len(events) == 1
     retrieved_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert retrieved_data["content"] == content
 

@@ -117,7 +117,7 @@ async def test_unicode_in_fields(adbc_store: Any) -> None:
         "invocation_id": "",
         "author": "\u30a2\u30b7\u30b9\u30bf\u30f3\u30c8",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {
+        "event_data": {
             "id": "unicode-event",
             "content": {"text": "\u3053\u3093\u306b\u3061\u306f"},
             "app_name": app_name,
@@ -130,7 +130,7 @@ async def test_unicode_in_fields(adbc_store: Any) -> None:
     assert len(events) == 1
     assert events[0]["author"] == "\u30a2\u30b7\u30b9\u30bf\u30f3\u30c8"
     event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert event_data["content"]["text"] == "\u3053\u3093\u306b\u3061\u306f"
 
@@ -203,14 +203,14 @@ async def test_event_with_none_values(adbc_store: Any) -> None:
         "invocation_id": "",
         "author": "",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "none-event", "app_name": "app", "user_id": "user"},
+        "event_data": {"id": "none-event", "app_name": "app", "user_id": "user"},
     }
     await adbc_store.append_event(event_record)
 
     events = await adbc_store.get_events(session_id)
     assert len(events) == 1
     assert events[0]["session_id"] == session_id
-    assert "event_json" in events[0]
+    assert "event_data" in events[0]
 
 
 async def test_list_sessions_with_same_user_different_apps(adbc_store: Any) -> None:

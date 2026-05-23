@@ -25,7 +25,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
     Implements session and event storage for Google Agent Development Kit
     using CockroachDB via asyncpg in PostgreSQL compatibility mode.
-    Events are stored as a single JSONB blob (``event_json``) alongside
+    Events are stored as a single JSONB blob (``event_data``) alongside
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
@@ -73,15 +73,15 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_json
-            ON {self._events_table} USING GIN (event_json);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
+            ON {self._events_table} USING GIN (event_data);
         """
 
     def _get_drop_tables_sql(self) -> "list[str]":
@@ -197,7 +197,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES ($1, $2, $3, $4, $5)
         """
 
@@ -208,7 +208,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["invocation_id"],
                 event_record["author"],
                 event_record["timestamp"],
-                event_record["event_json"],
+                event_record["event_data"],
             )
 
     async def append_event_and_update_state(
@@ -216,7 +216,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
     ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES ($1, $2, $3, $4, $5)
         """
         update_sql = f"""
@@ -233,7 +233,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["invocation_id"],
                 event_record["author"],
                 event_record["timestamp"],
-                event_record["event_json"],
+                event_record["event_data"],
             )
             row = await conn.fetchrow(update_sql, state, session_id)
 
@@ -266,7 +266,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             params.append(limit)
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -284,7 +284,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 invocation_id=row["invocation_id"],
                 author=row["author"],
                 timestamp=row["timestamp"],
-                event_json=row["event_json"],
+                event_data=row["event_data"],
             )
             for row in rows
         ]

@@ -61,12 +61,12 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
     Implements session and event storage for Google Agent Development Kit
     using PostgreSQL via psycopg3 with native async/await support.
-    Events are stored as a single JSONB blob (``event_json``) alongside
+    Events are stored as a single JSONB blob (``event_data``) alongside
     indexed scalar columns for efficient querying.
 
     Provides:
     - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
+    - Full-fidelity event storage via ``event_data`` JSONB column
     - Atomic ``append_event_and_update_state`` for durable session mutations
     - Microsecond-precision timestamps with TIMESTAMPTZ
     - Foreign key constraints with cascade delete
@@ -115,7 +115,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
@@ -237,12 +237,12 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(
@@ -261,7 +261,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
@@ -272,8 +272,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(
@@ -319,7 +319,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
         query = pg_sql.SQL(
             """
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -341,7 +341,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                         invocation_id=row["invocation_id"],
                         author=row["author"],
                         timestamp=row["timestamp"],
-                        event_json=row["event_json"],
+                        event_data=row["event_data"],
                     )
                     for row in rows
                 ]
@@ -354,12 +354,12 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
     Implements session and event storage for Google Agent Development Kit
     using PostgreSQL via psycopg3 with synchronous execution.
-    Events are stored as a single JSONB blob (``event_json``) alongside
+    Events are stored as a single JSONB blob (``event_data``) alongside
     indexed scalar columns for efficient querying.
 
     Provides:
     - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
+    - Full-fidelity event storage via ``event_data`` JSONB column
     - Atomic ``create_event_and_update_state`` for durable session mutations
     - Microsecond-precision timestamps with TIMESTAMPTZ
     - Foreign key constraints with cascade delete
@@ -408,7 +408,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
@@ -560,12 +560,12 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     def _insert_event(self, event_record: EventRecord) -> None:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -585,7 +585,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
@@ -596,8 +596,8 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -649,7 +649,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
         query = pg_sql.SQL(
             """
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -671,7 +671,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
                         invocation_id=row["invocation_id"],
                         author=row["author"],
                         timestamp=row["timestamp"],
-                        event_json=row["event_json"],
+                        event_data=row["event_data"],
                     )
                     for row in rows
                 ]

@@ -66,7 +66,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
     Implements session and event storage for Google Agent Development Kit
     using CockroachDB via psycopg in PostgreSQL compatibility mode.
-    Events are stored as a single JSONB blob (``event_json``) alongside
+    Events are stored as a single JSONB blob (``event_data``) alongside
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
@@ -114,15 +114,15 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_json
-            ON {self._events_table} USING GIN (event_json);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
+            ON {self._events_table} USING GIN (event_data);
         """
 
     def _get_drop_tables_sql(self) -> "list[str]":
@@ -246,12 +246,12 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     async def append_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(
@@ -271,7 +271,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
         update_sql = f"""
@@ -281,8 +281,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(
@@ -328,7 +328,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             params.append(limit)
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -345,7 +345,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                     invocation_id=row["invocation_id"],
                     author=row["author"],
                     timestamp=row["timestamp"],
-                    event_json=row["event_json"],
+                    event_data=row["event_data"],
                 )
                 for row in rows
             ]
@@ -358,7 +358,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
 
     Implements session and event storage for Google Agent Development Kit
     using CockroachDB via psycopg in PostgreSQL compatibility mode (sync).
-    Events are stored as a single JSONB blob (``event_json``) alongside
+    Events are stored as a single JSONB blob (``event_data``) alongside
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
@@ -405,15 +405,15 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_json
-            ON {self._events_table} USING GIN (event_json);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
+            ON {self._events_table} USING GIN (event_data);
         """
 
     def _get_drop_tables_sql(self) -> "list[str]":
@@ -565,7 +565,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
     ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
         update_sql = f"""
@@ -575,8 +575,8 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -615,12 +615,12 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
     def _insert_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
-        event_json_value = event_record["event_json"]
-        jsonb_value = Jsonb(event_json_value) if isinstance(event_json_value, dict) else event_json_value
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -648,7 +648,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         where_clause = " AND ".join(where_clauses)
         limit_clause = " LIMIT %s" if limit else ""
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -667,7 +667,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
                     invocation_id=row["invocation_id"],
                     author=row["author"],
                     timestamp=row["timestamp"],
-                    event_json=row["event_json"],
+                    event_data=row["event_data"],
                 )
                 for row in rows
             ]

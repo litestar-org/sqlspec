@@ -272,7 +272,7 @@ async def test_append_event_event_record_has_5_keys() -> None:
 
     last_call = store.append_event_and_update_state_calls[-1]
     event_record = last_call["event_record"]
-    assert set(event_record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_json"}
+    assert set(event_record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_data"}
 
 
 @pytest.mark.anyio
