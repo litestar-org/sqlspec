@@ -3,6 +3,7 @@
 import logging
 import re
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
 from sqlspec.extensions.adk._config_utils import _get_adk_session_store_config
@@ -11,8 +12,6 @@ from sqlspec.utils.identifiers import validate_identifier
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
@@ -136,6 +135,38 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     def owner_id_column_name(self) -> "str | None":
         """Return the owner ID column name only (or None if not configured)."""
         return self._owner_id_column_name
+
+    def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
+        """Calculate expiration timestamp from expires_in.
+
+        Args:
+            expires_in: Seconds or timedelta until expiration.
+
+        Returns:
+            UTC datetime of expiration, or None if no expiration.
+        """
+        if expires_in is None:
+            return None
+
+        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
+
+        if expires_in_seconds <= 0:
+            return None
+
+        return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+
+    def _value_to_bytes(self, value: "str | bytes") -> bytes:
+        """Convert value to bytes if needed.
+
+        Args:
+            value: String or bytes value.
+
+        Returns:
+            Value as bytes.
+        """
+        if isinstance(value, str):
+            return value.encode("utf-8")
+        return value
 
     @abstractmethod
     async def create_session(
