@@ -12,6 +12,7 @@ __all__ = (
     "assert_session_event_cleanup_contract",
     "assert_session_event_store_contract",
     "assert_session_get_session_renewal_contract",
+    "assert_session_table_lifecycle_contract",
 )
 
 
@@ -45,6 +46,10 @@ class SessionEventStore(Protocol):
     async def delete_expired_events(self, before: datetime) -> int: ...
 
     async def delete_idle_sessions(self, updated_before: datetime) -> int: ...
+
+    async def drop_tables(self) -> None: ...
+
+    async def recreate_tables(self) -> None: ...
 
 
 class MemoryStore(Protocol):
@@ -232,6 +237,26 @@ async def assert_session_get_session_renewal_contract(store: SessionEventStore, 
     assert renewed_update_time > original_update_time
     assert before_renewal <= renewed_update_time <= after_renewal
     assert renewed["state"] == {"renew": True}
+
+
+async def assert_session_table_lifecycle_contract(store: SessionEventStore, *, marker: str) -> None:
+    """Assert ADK stores can drop and recreate their managed session tables."""
+    app_name = _contract_key(marker, "lifecycle-app")
+    user_id = _contract_key(marker, "lifecycle-user")
+    session_id = _contract_key(marker, "lifecycle-session")
+
+    await store.create_session(session_id, app_name, user_id, {"phase": "before"})
+    assert await store.get_session(session_id) is not None
+
+    await store.recreate_tables()
+
+    assert await store.get_session(session_id) is None
+    recreated = await store.create_session(session_id, app_name, user_id, {"phase": "after"})
+    assert recreated["state"] == {"phase": "after"}
+
+    await store.drop_tables()
+    assert await store.get_session(session_id) is None
+    await store.drop_tables()
 
 
 async def assert_session_event_cleanup_contract(store: SessionEventStore, *, marker: str) -> None:

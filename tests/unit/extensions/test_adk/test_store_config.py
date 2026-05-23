@@ -189,6 +189,13 @@ def test_session_store_contract_get_session_accepts_renew_for_kwarg() -> None:
     assert parameter.default is None
 
 
+def test_session_store_contract_exposes_concrete_table_lifecycle_methods() -> None:
+    assert "drop_tables" not in BaseAsyncADKStore.__abstractmethods__
+    assert "recreate_tables" not in BaseAsyncADKStore.__abstractmethods__
+    assert inspect.iscoroutinefunction(BaseAsyncADKStore.drop_tables)
+    assert inspect.iscoroutinefunction(BaseAsyncADKStore.recreate_tables)
+
+
 @pytest.mark.parametrize("expires_in", [None, 0, timedelta(seconds=-5)])
 def test_async_session_store_calculate_expires_at_returns_none_for_non_positive_values(
     expires_in: int | timedelta | None,
