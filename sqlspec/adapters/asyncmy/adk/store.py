@@ -441,6 +441,32 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 return []
             raise
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (before,))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (updated_before,))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
 
 def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
     """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.

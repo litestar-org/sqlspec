@@ -348,6 +348,32 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         except errors.UndefinedTable:
             return []
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+            table=pg_sql.Identifier(self._events_table)
+        )
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(query, (before,))
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(query, (updated_before,))
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
 
 class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     """PostgreSQL synchronous ADK store using Psycopg3 driver.
@@ -683,6 +709,40 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     ) -> "list[EventRecord]":
         """Get events for a session."""
         return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _delete_expired_events(self, before: "datetime") -> int:
+        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+            table=pg_sql.Identifier(self._events_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(query, (before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(query, (updated_before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""

@@ -352,6 +352,28 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         except errors.UndefinedTable:
             return []
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(sql.encode(), (before,))
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(sql.encode(), (updated_before,))
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
 
 class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig"]):
     """CockroachDB ADK store using psycopg sync driver.
@@ -679,6 +701,36 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
     ) -> "list[EventRecord]":
         """Get events for a session."""
         return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    def _delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql.encode(), (before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql.encode(), (updated_before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""

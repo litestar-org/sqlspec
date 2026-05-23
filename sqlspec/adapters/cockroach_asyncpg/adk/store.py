@@ -289,6 +289,26 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             for row in rows
         ]
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                result = await conn.execute(sql, before)
+                return int(result.split()[-1]) if result else 0
+        except asyncpg.exceptions.UndefinedTableError:
+            return 0
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                result = await conn.execute(sql, updated_before)
+                return int(result.split()[-1]) if result else 0
+        except asyncpg.exceptions.UndefinedTableError:
+            return 0
+
 
 class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgConfig"]):
     """CockroachDB ADK memory store using asyncpg driver."""

@@ -326,6 +326,14 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         """Get events for a session."""
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Return 0 because Spanner row deletion policies own TTL cleanup."""
+        return 0
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Return 0 because Spanner row deletion policies own TTL cleanup."""
+        return 0
+
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)

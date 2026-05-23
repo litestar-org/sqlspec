@@ -545,6 +545,26 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return []
             raise
 
+    async def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than the given timestamp."""
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+
+        async with self._config.provide_connection() as conn:
+            await self._apply_pragmas(conn)
+            cursor = await conn.execute(sql, (_datetime_to_julian(before),))
+            await conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+
+        async with self._config.provide_connection() as conn:
+            await self._apply_pragmas(conn)
+            cursor = await conn.execute(sql, (_datetime_to_julian(updated_before),))
+            await conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
 
 class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
     """Aiosqlite ADK memory store using asynchronous SQLite driver.

@@ -564,6 +564,51 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         """
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
+    def _delete_expired_events(self, before: "datetime") -> int:
+        count_sql = f"SELECT COUNT(*) FROM {self._events_table} WHERE timestamp < ?"
+        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                row = conn.execute(count_sql, (before,)).fetchone()
+                count = int(row[0]) if row else 0
+                conn.execute(delete_sql, (before,))
+                conn.commit()
+                return count
+        except Exception as e:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(e):
+                return 0
+            raise
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+        count_sql = f"SELECT COUNT(*) FROM {self._session_table} WHERE update_time < ?"
+        delete_events_sql = f"""
+        DELETE FROM {self._events_table}
+        WHERE session_id IN (SELECT id FROM {self._session_table} WHERE update_time < ?)
+        """
+        delete_sessions_sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                row = conn.execute(count_sql, (updated_before,)).fetchone()
+                count = int(row[0]) if row else 0
+                conn.execute(delete_events_sql, (updated_before,))
+                conn.execute(delete_sessions_sql, (updated_before,))
+                conn.commit()
+                return count
+        except Exception as e:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(e):
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
 
 class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
     """DuckDB ADK memory store using synchronous DuckDB driver with async wrappers.
