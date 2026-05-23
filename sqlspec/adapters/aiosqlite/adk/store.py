@@ -1,7 +1,7 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
@@ -251,11 +251,14 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
             session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
 
         Returns:
             Session record or None if not found.
@@ -273,6 +276,11 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         try:
             async with self._config.provide_connection() as conn:
                 await self._apply_pragmas(conn)
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    update_sql = f"UPDATE {self._session_table} SET update_time = ? WHERE id = ?"
+                    await conn.execute(update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), session_id))
+                    await conn.commit()
+
                 cursor = await conn.execute(sql, (session_id,))
                 row = await cursor.fetchone()
 

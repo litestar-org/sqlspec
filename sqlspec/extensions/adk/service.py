@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
@@ -97,7 +97,13 @@ class SQLSpecSessionService(BaseSessionService):
         return record_to_session(record, events=[])
 
     async def get_session(
-        self, *, app_name: str, user_id: str, session_id: str, config: "GetSessionConfig | None" = None
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        config: "GetSessionConfig | None" = None,
+        renew_for: int | timedelta | None = None,
     ) -> "Session | None":
         """Get a session by ID.
 
@@ -106,11 +112,12 @@ class SQLSpecSessionService(BaseSessionService):
             user_id: ID of the user.
             session_id: Session identifier.
             config: Configuration for retrieving events.
+            renew_for: If positive, touch the session update timestamp while reading.
 
         Returns:
             Session object if found, None otherwise.
         """
-        record = await self._store.get_session(session_id)
+        record = await self._store.get_session(session_id, renew_for=renew_for)
 
         if not record:
             log_with_context(

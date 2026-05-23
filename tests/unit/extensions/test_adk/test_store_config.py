@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Tests for shared ADK store configuration behavior."""
 
+import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -44,7 +45,7 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
             update_time=datetime.now(),
         )
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
+    async def get_session(self, session_id: str, *, renew_for: int | timedelta | None = None) -> SessionRecord | None:
         return None
 
     async def update_session_state(self, session_id: str, state: dict[str, Any]) -> None:
@@ -178,6 +179,14 @@ def test_memory_store_contract_exports_async_surface_only() -> None:
 def test_session_store_contract_declares_cleanup_hooks() -> None:
     assert "delete_expired_events" in BaseAsyncADKStore.__abstractmethods__
     assert "delete_idle_sessions" in BaseAsyncADKStore.__abstractmethods__
+
+
+def test_session_store_contract_get_session_accepts_renew_for_kwarg() -> None:
+    signature = inspect.signature(BaseAsyncADKStore.get_session)
+
+    parameter = signature.parameters["renew_for"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is None
 
 
 @pytest.mark.parametrize("expires_in", [None, 0, timedelta(seconds=-5)])

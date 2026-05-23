@@ -11,6 +11,7 @@ from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
+    assert_session_get_session_renewal_contract,
 )
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -52,6 +53,15 @@ async def test_sqlite_session_event_cleanup_contract(tmp_path: Path) -> None:
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_event_cleanup_contract(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_get_session_renewal_contract(tmp_path: Path) -> None:
+    """SQLite can touch session update_time while reading a session."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_get_session_renewal_contract(store, marker="sqlite")
     finally:
         config.close_pool()
 

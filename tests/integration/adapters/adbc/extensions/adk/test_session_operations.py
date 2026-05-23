@@ -7,7 +7,10 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKStore
-from tests.integration.adapters._adk_contract_helpers import assert_session_event_cleanup_contract
+from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_event_cleanup_contract,
+    assert_session_get_session_renewal_contract,
+)
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -95,6 +98,11 @@ async def test_delete_session(adbc_store: Any) -> None:
 async def test_session_event_cleanup_contract(adbc_store: Any) -> None:
     """ADBC satisfies the shared ADK cleanup hook contract on SQLite."""
     await assert_session_event_cleanup_contract(adbc_store, marker="adbc")
+
+
+async def test_session_get_session_renewal_contract(adbc_store: Any) -> None:
+    """ADBC can touch session update_time while reading a session."""
+    await assert_session_get_session_renewal_contract(adbc_store, marker="adbc")
 
 
 async def test_list_sessions(adbc_store: Any) -> None:

@@ -1,5 +1,6 @@
 """Shared acceptance helpers for ADK adapter integration tests."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import uuid4
@@ -10,6 +11,7 @@ __all__ = (
     "assert_memory_store_contract",
     "assert_session_event_cleanup_contract",
     "assert_session_event_store_contract",
+    "assert_session_get_session_renewal_contract",
 )
 
 
@@ -20,7 +22,9 @@ class SessionEventStore(Protocol):
         self, session_id: str, app_name: str, user_id: str, state: dict[str, object], owner_id: object | None = None
     ) -> SessionRecord: ...
 
-    async def get_session(self, session_id: str) -> SessionRecord | None: ...
+    async def get_session(
+        self, session_id: str, *, renew_for: int | timedelta | None = None
+    ) -> SessionRecord | None: ...
 
     async def update_session_state(self, session_id: str, state: dict[str, object]) -> None: ...
 
@@ -113,6 +117,14 @@ def _event_data(record: EventRecord) -> dict[str, object]:
     return value
 
 
+def _as_utc(value: datetime | str) -> datetime:
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 async def assert_session_event_store_contract(store: SessionEventStore, *, marker: str) -> None:
     """Assert the shared ADK session/event store acceptance contract.
 
@@ -199,6 +211,27 @@ async def assert_session_event_store_contract(store: SessionEventStore, *, marke
     await store.delete_session(session_id)
     assert await store.get_session(session_id) is None
     assert await store.get_events(session_id) == []
+
+
+async def assert_session_get_session_renewal_contract(store: SessionEventStore, *, marker: str) -> None:
+    """Assert get_session can renew/touch update_time while reading."""
+    app_name = _contract_key(marker, "renew-app")
+    user_id = _contract_key(marker, "renew-user")
+    session_id = _contract_key(marker, "renew-session")
+
+    created = await store.create_session(session_id, app_name, user_id, {"renew": True})
+    original_update_time = _as_utc(created["update_time"])
+    await asyncio.sleep(0.02)
+
+    before_renewal = datetime.now(timezone.utc) - timedelta(seconds=2)
+    renewed = await store.get_session(session_id, renew_for=timedelta(hours=1))
+    after_renewal = datetime.now(timezone.utc) + timedelta(seconds=2)
+
+    assert renewed is not None
+    renewed_update_time = _as_utc(renewed["update_time"])
+    assert renewed_update_time > original_update_time
+    assert before_renewal <= renewed_update_time <= after_renewal
+    assert renewed["state"] == {"renew": True}
 
 
 async def assert_session_event_cleanup_contract(store: SessionEventStore, *, marker: str) -> None:

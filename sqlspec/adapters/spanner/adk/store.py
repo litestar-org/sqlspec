@@ -123,7 +123,17 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         """Create a new session."""
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            update_sql = f"""
+                UPDATE {self._session_table}
+                SET update_time = PENDING_COMMIT_TIMESTAMP()
+                WHERE id = @id
+            """
+            if self._shard_count > 1:
+                update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
+            self._run_write([(update_sql, {"id": session_id}, {"id": SPANNER_PARAM_TYPES.STRING})])
+
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
@@ -149,9 +159,11 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         }
         return record
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id)
+        return await async_(self._get_session)(session_id, renew_for)
 
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         params = {"id": session_id, "state": to_json(state)}
