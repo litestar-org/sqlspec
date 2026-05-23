@@ -66,14 +66,14 @@ async def test_create_and_list_events(spanner_adk_store: Any) -> None:
         "invocation_id": "event-1",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-1", "content": {"msg": "hi"}, "app_name": "app", "user_id": "user"},
+        "event_data": {"id": "event-1", "content": {"msg": "hi"}, "app_name": "app", "user_id": "user"},
     }
     event_two: EventRecord = {
         "session_id": session_id,
         "invocation_id": "event-2",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-2", "content": {"msg": "ok"}, "app_name": "app", "user_id": "user"},
+        "event_data": {"id": "event-2", "content": {"msg": "ok"}, "app_name": "app", "user_id": "user"},
     }
 
     await spanner_adk_store.append_event(event_one)
@@ -84,12 +84,12 @@ async def test_create_and_list_events(spanner_adk_store: Any) -> None:
     assert events[0]["author"] == "user"
     assert events[1]["author"] == "assistant"
 
-    # Content is inside event_json in the new 5-column schema
+    # Content is inside event_data in the new 5-column schema
     event0_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     event1_data = (
-        json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+        json.loads(events[1]["event_data"]) if isinstance(events[1]["event_data"], str) else events[1]["event_data"]
     )
     assert event0_data["content"] == {"msg": "hi"}
     assert event1_data["content"] == {"msg": "ok"}

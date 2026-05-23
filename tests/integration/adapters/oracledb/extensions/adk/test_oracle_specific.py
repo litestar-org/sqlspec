@@ -222,8 +222,8 @@ async def test_state_lob_deserialization(oracle_async_store: "OracleAsyncADKStor
     assert retrieved["state"]["large_field"] == "x" * 10000
 
 
-async def test_event_json_lob_deserialization(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test event_json LOB data is correctly deserialized."""
+async def test_event_data_lob_deserialization(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Test event_data LOB data is correctly deserialized."""
     session_id = _unique_session_id("event-lob")
     app_name = "test-app"
     user_id = "user-123"
@@ -244,24 +244,24 @@ async def test_event_json_lob_deserialization(oracle_async_store: "OracleAsyncAD
         "invocation_id": "",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": event_data,
+        "event_data": event_data,
     }
 
     await oracle_async_store.append_event(event_record)
 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
-    # event_json contains all the data
+    # event_data contains all the data
     retrieved_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert retrieved_data["content"] == content
     assert retrieved_data["grounding_metadata"] == {"sources": ["a" * 1000, "b" * 1000]}
     assert retrieved_data["custom_metadata"] == {"tags": ["tag1", "tag2"], "priority": "high"}
 
 
-async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test event_json blob is correctly stored and retrieved."""
+async def test_event_data_storage(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Test event_data blob is correctly stored and retrieved."""
     session_id = _unique_session_id("event-json")
     app_name = "test-app"
     user_id = "user-123"
@@ -275,7 +275,7 @@ async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> 
         "invocation_id": "",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": event_data,
+        "event_data": event_data,
     }
 
     await oracle_async_store.append_event(event_record)
@@ -283,7 +283,7 @@ async def test_event_json_storage(oracle_async_store: "OracleAsyncADKStore") -> 
     events = await oracle_async_store.get_events(session_id)
     assert len(events) == 1
     retrieved_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert retrieved_data == event_data
 
@@ -316,7 +316,7 @@ async def test_event_record_5_column_contract(oracle_async_store: "OracleAsyncAD
         "invocation_id": "inv-001",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hello"}, "partial": True, "turn_complete": False, "interrupted": True},
+        "event_data": {"content": {"text": "Hello"}, "partial": True, "turn_complete": False, "interrupted": True},
     }
 
     await oracle_async_store.append_event(event_record)
@@ -328,7 +328,7 @@ async def test_event_record_5_column_contract(oracle_async_store: "OracleAsyncAD
     assert events[0]["author"] == "assistant"
 
     retrieved_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert retrieved_data["partial"] is True
     assert retrieved_data["turn_complete"] is False
@@ -336,7 +336,7 @@ async def test_event_record_5_column_contract(oracle_async_store: "OracleAsyncAD
 
 
 async def test_event_with_none_values(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test event with minimal event_json content."""
+    """Test event with minimal event_data content."""
     session_id = _unique_session_id("none-session")
     app_name = "test-app"
     user_id = "user-123"
@@ -348,7 +348,7 @@ async def test_event_with_none_values(oracle_async_store: "OracleAsyncADKStore")
         "invocation_id": "",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"app_name": app_name},
+        "event_data": {"app_name": app_name},
     }
 
     await oracle_async_store.append_event(event_record)

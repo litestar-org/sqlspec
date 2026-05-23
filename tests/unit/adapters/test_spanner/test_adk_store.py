@@ -23,7 +23,7 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
         "invocation_id": "inv-1",
         "author": "user",
         "timestamp": timestamp,
-        "event_json": {"id": "event-1"},
+        "event_data": {"id": "event-1"},
     }
 
     with patch.object(store, "_run_write") as run_write:
@@ -45,7 +45,7 @@ async def test_append_event_and_update_state_preserves_event_record_timestamp() 
         "invocation_id": "inv-1",
         "author": "user",
         "timestamp": timestamp,
-        "event_json": {"id": "event-1"},
+        "event_data": {"id": "event-1"},
     }
     # Stub the post-write SELECT — the contract requires returning the refreshed record.
     fake_record = {

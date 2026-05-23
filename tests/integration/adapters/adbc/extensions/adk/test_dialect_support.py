@@ -90,12 +90,12 @@ def test_generic_sessions_ddl_contains_text() -> None:
 
 
 def test_postgresql_events_ddl_uses_jsonb() -> None:
-    """Test PostgreSQL events DDL uses JSONB for event_json."""
+    """Test PostgreSQL events DDL uses JSONB for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
     store = AdbcADKStore(config)
     ddl = store._get_events_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in ddl
-    assert "event_json" in ddl
+    assert "event_data" in ddl
     assert "session_id" in ddl
     assert "invocation_id" in ddl
     assert "author" in ddl
@@ -103,32 +103,32 @@ def test_postgresql_events_ddl_uses_jsonb() -> None:
 
 
 def test_sqlite_events_ddl_uses_text() -> None:
-    """Test SQLite events DDL uses TEXT for event_json."""
+    """Test SQLite events DDL uses TEXT for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
     store = AdbcADKStore(config)
     ddl = store._get_events_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
     assert "TEXT" in ddl
-    assert "event_json" in ddl
+    assert "event_data" in ddl
     assert "session_id" in ddl
     assert "REAL" in ddl  # SQLite uses REAL for timestamps
 
 
 def test_duckdb_events_ddl_uses_json() -> None:
-    """Test DuckDB events DDL uses JSON type for event_json."""
+    """Test DuckDB events DDL uses JSON type for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "duckdb", "uri": ":memory:"})
     store = AdbcADKStore(config)
     ddl = store._get_events_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
     assert "JSON" in ddl
-    assert "event_json" in ddl
+    assert "event_data" in ddl
 
 
 def test_snowflake_events_ddl_uses_variant() -> None:
-    """Test Snowflake events DDL uses VARIANT for event_json."""
+    """Test Snowflake events DDL uses VARIANT for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "snowflake", "uri": "snowflake://test"})
     store = AdbcADKStore(config)
     ddl = store._get_events_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "VARIANT" in ddl
-    assert "event_json" in ddl
+    assert "event_data" in ddl
 
 
 async def test_ddl_dispatch_uses_correct_dialect() -> None:
@@ -141,7 +141,7 @@ async def test_ddl_dispatch_uses_correct_dialect() -> None:
 
     events_ddl = await store._get_create_events_table_sql()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in events_ddl
-    assert "event_json" in events_ddl
+    assert "event_data" in events_ddl
 
 
 def test_owner_id_column_included_in_sessions_ddl() -> None:

@@ -12,7 +12,7 @@ from sqlspec.adapters.oracledb.adk import (
     OracleSyncADKMemoryStore,
     OracleSyncADKStore,
 )
-from sqlspec.adapters.oracledb.adk.store import _event_json_column_ddl
+from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
@@ -61,27 +61,27 @@ def test_oracle_sync_adk_store_deserialize_state_dict_coerces_decimal() -> None:
     assert result == {"state": 5.0}
 
 
-def test_oracle_event_json_column_ddl_prefers_blob_over_clob() -> None:
-    assert _event_json_column_ddl(JSONStorageType.JSON_NATIVE) == "event_json JSON NOT NULL"
-    assert _event_json_column_ddl(JSONStorageType.BLOB_JSON) == "event_json BLOB CHECK (event_json IS JSON) NOT NULL"
-    assert _event_json_column_ddl(JSONStorageType.BLOB_PLAIN) == "event_json BLOB NOT NULL"
+def test_oracle_event_data_column_ddl_prefers_blob_over_clob() -> None:
+    assert _event_data_column_ddl(JSONStorageType.JSON_NATIVE) == "event_data JSON NOT NULL"
+    assert _event_data_column_ddl(JSONStorageType.BLOB_JSON) == "event_data BLOB CHECK (event_data IS JSON) NOT NULL"
+    assert _event_data_column_ddl(JSONStorageType.BLOB_PLAIN) == "event_data BLOB NOT NULL"
 
 
-async def test_oracle_async_adk_store_serialize_event_json_uses_blob_for_non_native() -> None:
+async def test_oracle_async_adk_store_serialize_event_data_uses_blob_for_non_native() -> None:
     store = OracleAsyncADKStore.__new__(OracleAsyncADKStore)  # type: ignore[call-arg]
     store._json_storage_type = JSONStorageType.BLOB_JSON  # type: ignore[attr-defined]
 
-    result = await store._serialize_event_json({"value": 1})  # type: ignore[attr-defined]
+    result = await store._serialize_event_data({"value": 1})  # type: ignore[attr-defined]
 
     assert isinstance(result, bytes)
     assert b'"value":1' in result
 
 
-def test_oracle_sync_adk_store_serialize_event_json_uses_blob_for_non_native() -> None:
+def test_oracle_sync_adk_store_serialize_event_data_uses_blob_for_non_native() -> None:
     store = OracleSyncADKStore.__new__(OracleSyncADKStore)  # type: ignore[call-arg]
     store._json_storage_type = JSONStorageType.BLOB_JSON  # type: ignore[attr-defined]
 
-    result = store._serialize_event_json({"value": 1})  # type: ignore[attr-defined]
+    result = store._serialize_event_data({"value": 1})  # type: ignore[attr-defined]
 
     assert isinstance(result, bytes)
     assert b'"value":1' in result

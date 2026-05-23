@@ -70,7 +70,7 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
             invocation_id=event_id,
             author=author or user_id,
             timestamp=datetime.now(),
-            event_json=content or {},
+            event_data=content or {},
         )
 
     def create_event_and_update_state(self, event_record: EventRecord, session_id: str, state: dict[str, Any]) -> None:

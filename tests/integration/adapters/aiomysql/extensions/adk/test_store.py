@@ -59,7 +59,7 @@ async def test_storage_types_verification(aiomysql_adk_store: AiomysqlADKStore) 
         assert "invocation_id" in event_col_names
         assert "author" in event_col_names
         assert "timestamp" in event_col_names
-        assert "event_json" in event_col_names
+        assert "event_data" in event_col_names
 
         timestamp_col = next(col for col in event_columns if col[0] == "timestamp")
         assert "timestamp(6)" in timestamp_col[2].lower(), "timestamp must be TIMESTAMP(6) for microseconds"
@@ -148,7 +148,7 @@ async def test_delete_session_cascade(aiomysql_adk_store: AiomysqlADKStore) -> N
         "invocation_id": "inv-001",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id},
+        "event_data": {"content": {"text": "Hello"}, "app_name": app_name, "user_id": user_id},
     }
     await aiomysql_adk_store.append_event(event_record)
 
@@ -177,7 +177,7 @@ async def test_append_and_get_events(aiomysql_adk_store: AiomysqlADKStore) -> No
         "invocation_id": "inv-001",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hello", "role": "user"}, "app_name": app_name},
+        "event_data": {"content": {"text": "Hello", "role": "user"}, "app_name": app_name},
     }
 
     event2: EventRecord = {
@@ -185,7 +185,7 @@ async def test_append_and_get_events(aiomysql_adk_store: AiomysqlADKStore) -> No
         "invocation_id": "inv-002",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name},
+        "event_data": {"content": {"text": "Hi there", "role": "assistant"}, "app_name": app_name},
     }
 
     await aiomysql_adk_store.append_event(event1)
@@ -197,10 +197,10 @@ async def test_append_and_get_events(aiomysql_adk_store: AiomysqlADKStore) -> No
     assert events[0]["author"] == "user"
     assert events[1]["author"] == "assistant"
     event0_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     event1_data = (
-        json.loads(events[1]["event_json"]) if isinstance(events[1]["event_json"], str) else events[1]["event_json"]
+        json.loads(events[1]["event_data"]) if isinstance(events[1]["event_data"], str) else events[1]["event_data"]
     )
     assert event0_data["content"]["text"] == "Hello"
     assert event1_data["content"]["text"] == "Hi there"
@@ -223,7 +223,7 @@ async def test_timestamp_precision(aiomysql_adk_store: AiomysqlADKStore) -> None
         "invocation_id": "inv-micro",
         "author": "system",
         "timestamp": event_time,
-        "event_json": {"app_name": app_name},
+        "event_data": {"app_name": app_name},
     }
     await aiomysql_adk_store.append_event(event)
 

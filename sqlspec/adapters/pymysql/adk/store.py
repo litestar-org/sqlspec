@@ -40,7 +40,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
     Implements session and event storage for Google Agent Development Kit
     using MySQL/MariaDB via the PyMySQL sync driver. Provides:
     - Session state management with JSON storage
-    - Full-event JSON storage (single ``event_json`` column)
+    - Full-event JSON storage (single ``event_data`` column)
     - Atomic event-create + state-update in one transaction
     - Microsecond-precision timestamps
     - Foreign key constraints with cascade delete
@@ -95,7 +95,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(128) NOT NULL,
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            event_json JSON NOT NULL,
+            event_data JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
             INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -287,13 +287,13 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
             session_id: Session identifier whose state should be updated.
             state: Post-append durable state snapshot.
         """
-        event_json = event_record["event_json"]
-        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        event_data = event_record["event_data"]
+        event_data_str = to_json(event_data) if not isinstance(event_data, str) else event_data
         state_json = to_json(state)
 
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
@@ -319,7 +319,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                         event_record["invocation_id"],
                         event_record["author"],
                         event_record["timestamp"],
-                        event_json_str,
+                        event_data_str,
                     ),
                 )
                 cursor.execute(update_sql, (state_json, session_id))
@@ -350,12 +350,12 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _insert_event(self, event_record: EventRecord) -> None:
-        event_json = event_record["event_json"]
-        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
+        event_data = event_record["event_data"]
+        event_data_str = to_json(event_data) if not isinstance(event_data, str) else event_data
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
@@ -369,7 +369,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                         event_record["invocation_id"],
                         event_record["author"],
                         event_record["timestamp"],
-                        event_json_str,
+                        event_data_str,
                     ),
                 )
             finally:
@@ -399,7 +399,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         where_clause = " AND ".join(where_clauses)
         limit_clause = " LIMIT %s" if limit else ""
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -422,7 +422,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                         invocation_id=row[1],
                         author=row[2],
                         timestamp=row[3],
-                        event_json=from_json(row[4]) if isinstance(row[4], str) else row[4],
+                        event_data=from_json(row[4]) if isinstance(row[4], str) else row[4],
                     )
                     for row in rows
                 ]

@@ -1,7 +1,7 @@
 """Unit tests for ADK session/event converters and scoped state helpers.
 
 Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
-- EventRecord has exactly 5 keys (session_id, invocation_id, author, timestamp, event_json)
+- EventRecord has exactly 5 keys (session_id, invocation_id, author, timestamp, event_data)
 - event_to_record takes only (event, session_id), not (event, session_id, app_name, user_id)
 - record_to_event uses Event.model_validate for full round-trip fidelity
 - filter_temp_state, split_scoped_state, merge_scoped_state for scoped state handling
@@ -221,10 +221,10 @@ def test_merge_scoped_state_does_not_mutate_session_state() -> None:
 
 
 def test_event_to_record_only_5_keys() -> None:
-    """EventRecord has exactly session_id, invocation_id, author, timestamp, event_json."""
+    """EventRecord has exactly session_id, invocation_id, author, timestamp, event_data."""
     event = _make_event()
     record = event_to_record(event, "session-1")
-    assert set(record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_json"}
+    assert set(record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_data"}
 
 
 def test_event_to_record_signature_two_args_only() -> None:
@@ -250,29 +250,29 @@ def test_event_to_record_indexed_fields_match_event() -> None:
     assert isinstance(record["timestamp"], datetime)
 
 
-def test_event_to_record_event_json_matches_model_dump() -> None:
-    """event_json in the record equals event.model_dump(exclude_none=True, mode='json')."""
+def test_event_to_record_event_data_matches_model_dump() -> None:
+    """event_data in the record equals event.model_dump(exclude_none=True, mode='json')."""
     event = _make_event(text="hello", state_delta={"key": "val"}, custom_metadata={"foo": "bar"})
     record = event_to_record(event, "s1")
     expected_json = event.model_dump(exclude_none=True, mode="json")
-    assert record["event_json"] == expected_json
+    assert record["event_data"] == expected_json
 
 
-def test_event_to_record_event_json_is_dict() -> None:
-    """event_json field is a plain dict (not bytes, not string)."""
+def test_event_to_record_event_data_is_dict() -> None:
+    """event_data field is a plain dict (not bytes, not string)."""
     event = _make_event()
     record = event_to_record(event, "s1")
-    assert isinstance(record["event_json"], dict)
+    assert isinstance(record["event_data"], dict)
 
 
-def test_event_to_record_actions_in_event_json_is_structured() -> None:
-    """Actions are stored as structured JSON dict in event_json, not as raw bytes."""
+def test_event_to_record_actions_in_event_data_is_structured() -> None:
+    """Actions are stored as structured JSON dict in event_data, not as raw bytes."""
     event = _make_event(state_delta={"x": "y"})
     record = event_to_record(event, "s1")
-    event_json = record["event_json"]
+    event_data = record["event_data"]
     # actions should be a dict in the JSON blob
-    if "actions" in event_json:
-        assert isinstance(event_json["actions"], dict)
+    if "actions" in event_data:
+        assert isinstance(event_data["actions"], dict)
 
 
 def test_event_to_record_timestamp_is_datetime() -> None:
@@ -366,13 +366,13 @@ def test_record_to_event_roundtrip_preserves_timestamp() -> None:
     assert abs(restored.timestamp - fixed_ts) < 1.0  # within 1 second
 
 
-def test_record_to_event_ignores_unknown_fields_in_event_json() -> None:
-    """Unknown event_json fields are ignored by the current ADK Event model."""
+def test_record_to_event_ignores_unknown_fields_in_event_data() -> None:
+    """Unknown event_data fields are ignored by the current ADK Event model."""
     event = _make_event(event_id="extra-fields-evt", author="tool")
     record = event_to_record(event, "s1")
 
-    # Inject hypothetical future ADK field into event_json
-    record["event_json"]["hypothetical_v3_field"] = "some_value"  # type: ignore[index]
+    # Inject hypothetical future ADK field into event_data
+    record["event_data"]["hypothetical_v3_field"] = "some_value"  # type: ignore[index]
 
     restored = record_to_event(record)
     assert restored.id == "extra-fields-evt"

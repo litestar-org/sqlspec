@@ -1,7 +1,7 @@
 """Conversion functions between ADK models and database records.
 
 Implements full-event JSON storage: the entire Event is serialized via
-``Event.model_dump_json(exclude_none=True)`` into a single ``event_json``
+``Event.model_dump_json(exclude_none=True)`` into a single ``event_data``
 column, with a small set of indexed scalar columns extracted alongside for
 query performance.  Reconstruction uses ``Event.model_validate_json()``.
 
@@ -106,7 +106,7 @@ def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Se
 def event_to_record(event: "Event", session_id: str) -> EventRecord:
     """Convert ADK Event to database record using full-event JSON storage.
 
-    The entire Event is serialized into ``event_json`` via Pydantic's
+    The entire Event is serialized into ``event_data`` via Pydantic's
     ``model_dump_json(exclude_none=True)``.  A small number of indexed scalar
     columns are extracted alongside for query performance.
 
@@ -122,7 +122,7 @@ def event_to_record(event: "Event", session_id: str) -> EventRecord:
         invocation_id=event.invocation_id,
         author=event.author,
         timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
-        event_json=event.model_dump(exclude_none=True, mode="json"),
+        event_data=event.model_dump(exclude_none=True, mode="json"),
     )
 
 
@@ -130,7 +130,7 @@ def record_to_event(record: "EventRecord") -> "Event":
     """Convert database record to ADK Event.
 
     Reconstruction is lossless: the full Event is restored from
-    ``event_json`` via ``Event.model_validate_json()``.
+    ``event_data`` via ``Event.model_validate_json()``.
 
     Args:
         record: Event database record.
@@ -138,7 +138,7 @@ def record_to_event(record: "EventRecord") -> "Event":
     Returns:
         ADK Event object.
     """
-    return Event.model_validate(record["event_json"])
+    return Event.model_validate(record["event_data"])
 
 
 # ---------------------------------------------------------------------------

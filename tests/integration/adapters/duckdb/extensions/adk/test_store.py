@@ -146,7 +146,7 @@ async def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -
         "invocation_id": "",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {
+        "event_data": {
             "id": "event-001",
             "content": {"message": "Hello"},
             "app_name": "test-app",
@@ -178,7 +178,7 @@ async def test_create_event(duckdb_adk_store: DuckdbADKStore) -> None:
         "invocation_id": "",
         "author": "user",
         "timestamp": timestamp,
-        "event_json": {"id": "event-002", "content": content, "app_name": "test-app", "user_id": "user-006"},
+        "event_data": {"id": "event-002", "content": content, "app_name": "test-app", "user_id": "user-006"},
     }
     await duckdb_adk_store.append_event(event_record)
 
@@ -187,9 +187,9 @@ async def test_create_event(duckdb_adk_store: DuckdbADKStore) -> None:
     assert events[0]["session_id"] == session_id
     assert events[0]["author"] == "user"
 
-    # Content is stored inside event_json
+    # Content is stored inside event_data
     event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert event_data["content"] == content
 
@@ -204,14 +204,14 @@ async def test_list_events(duckdb_adk_store: DuckdbADKStore) -> None:
         "invocation_id": "",
         "author": "user",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-1", "content": {"message": "First"}, "app_name": "test-app", "user_id": "user-007"},
+        "event_data": {"id": "event-1", "content": {"message": "First"}, "app_name": "test-app", "user_id": "user-007"},
     }
     event2: EventRecord = {
         "session_id": session_id,
         "invocation_id": "",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {
+        "event_data": {
             "id": "event-2",
             "content": {"message": "Second"},
             "app_name": "test-app",
@@ -239,7 +239,7 @@ async def test_list_events_empty(duckdb_adk_store: DuckdbADKStore) -> None:
 
 
 async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating events with optional fields stored in event_json."""
+    """Test creating events with optional fields stored in event_data."""
     session_id = "session-008"
     await duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
 
@@ -248,7 +248,7 @@ async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> N
         "invocation_id": "inv-123",
         "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {
+        "event_data": {
             "id": "event-full",
             "content": {"text": "Response"},
             "app_name": "test-app",
@@ -269,9 +269,9 @@ async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> N
     # The 5-key record has invocation_id as a top-level indexed column
     assert events[0]["invocation_id"] == "inv-123"
 
-    # Other fields are inside event_json
+    # Other fields are inside event_data
     event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert event_data["branch"] == "main"
     assert event_data["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
@@ -293,21 +293,21 @@ async def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> 
         "invocation_id": "",
         "author": "",
         "timestamp": t2,
-        "event_json": {"id": "event-middle", "app_name": "test-app", "user_id": "user-009"},
+        "event_data": {"id": "event-middle", "app_name": "test-app", "user_id": "user-009"},
     }
     ev_last: EventRecord = {
         "session_id": session_id,
         "invocation_id": "",
         "author": "",
         "timestamp": t3,
-        "event_json": {"id": "event-last", "app_name": "test-app", "user_id": "user-009"},
+        "event_data": {"id": "event-last", "app_name": "test-app", "user_id": "user-009"},
     }
     ev_first: EventRecord = {
         "session_id": session_id,
         "invocation_id": "",
         "author": "",
         "timestamp": t1,
-        "event_json": {"id": "event-first", "app_name": "test-app", "user_id": "user-009"},
+        "event_data": {"id": "event-first", "app_name": "test-app", "user_id": "user-009"},
     }
 
     await duckdb_adk_store.append_event(ev_middle)
@@ -320,7 +320,7 @@ async def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> 
     # Events should be ordered by timestamp ASC
     event_ids = []
     for e in events:
-        data = json.loads(e["event_json"]) if isinstance(e["event_json"], str) else e["event_json"]
+        data = json.loads(e["event_data"]) if isinstance(e["event_data"], str) else e["event_data"]
         event_ids.append(data["id"])
     assert event_ids == ["event-first", "event-middle", "event-last"]
 
@@ -377,8 +377,8 @@ async def test_table_not_found_handling(tmp_path: Path) -> None:
             db_path.unlink()
 
 
-async def test_event_json_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test storing and retrieving event data via event_json."""
+async def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
+    """Test storing and retrieving event data via event_data."""
     session_id = "session-json-rt"
     await duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
 
@@ -387,14 +387,14 @@ async def test_event_json_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
         "invocation_id": "",
         "author": "system",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-json", "content": {"data": "value"}, "app_name": "test-app", "user_id": "user-012"},
+        "event_data": {"id": "event-json", "content": {"data": "value"}, "app_name": "test-app", "user_id": "user-012"},
     }
     await duckdb_adk_store.append_event(event_record)
 
     events = await duckdb_adk_store.get_events(session_id)
     assert len(events) == 1
     event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
+        json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
     )
     assert event_data["content"] == {"data": "value"}
 

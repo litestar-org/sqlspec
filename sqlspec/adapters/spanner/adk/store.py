@@ -73,7 +73,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "invocation_id": SPANNER_PARAM_TYPES.STRING,
             "author": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
-            "event_json": json_type,
+            "event_data": json_type,
         }
 
     def _decode_state(self, raw: Any) -> Any:
@@ -239,11 +239,11 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "invocation_id": event_record["invocation_id"],
             "author": event_record["author"],
             "timestamp": event_record["timestamp"],
-            "event_json": to_json(event_record["event_json"]),
+            "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
-            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_json)
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_data)
+            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_data)
         """
 
         json_type = _json_param_type()
@@ -279,11 +279,11 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "invocation_id": event_record["invocation_id"],
             "author": event_record["author"],
             "timestamp": event_record["timestamp"],
-            "event_json": to_json(event_record["event_json"]),
+            "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
-            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_json)
+            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_data)
+            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_data)
         """
         self._run_write([(insert_sql, event_params, self._event_param_types())])
 
@@ -291,7 +291,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
         sql = f"""
-            SELECT session_id, invocation_id, author, timestamp, event_json
+            SELECT session_id, invocation_id, author, timestamp, event_data
             FROM {self._events_table}
             WHERE session_id = @session_id
         """
@@ -315,7 +315,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
                 "invocation_id": row[1] or "",
                 "author": row[2] or "",
                 "timestamp": row[3],
-                "event_json": row[4],
+                "event_data": row[4],
             }
             for row in rows
         ]
@@ -389,7 +389,7 @@ CREATE TABLE {self._events_table} (
   invocation_id STRING(256) NOT NULL,
   author STRING(128) NOT NULL,
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
-  event_json JSON NOT NULL{shard_column}
+  event_data JSON NOT NULL{shard_column}
 ) {pk}{options}{self._events_row_deletion_policy}
 """
 

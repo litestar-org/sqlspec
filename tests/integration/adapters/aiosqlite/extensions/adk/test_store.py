@@ -66,7 +66,7 @@ async def test_aiosqlite_append_event_and_update_state_is_atomic_contract(tmp_pa
             "invocation_id": "inv-1",
             "author": "user",
             "timestamp": datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc),
-            "event_json": {"id": "event-1", "content": {"parts": [{"text": "hello"}]}},
+            "event_data": {"id": "event-1", "content": {"parts": [{"text": "hello"}]}},
         }
         await store.append_event_and_update_state(event, session_id, {"turn": 1})
 
@@ -77,7 +77,7 @@ async def test_aiosqlite_append_event_and_update_state_is_atomic_contract(tmp_pa
         assert session["state"] == {"turn": 1}
         assert len(events) == 1
         assert events[0]["invocation_id"] == "inv-1"
-        assert events[0]["event_json"] == {"id": "event-1", "content": {"parts": [{"text": "hello"}]}}
+        assert events[0]["event_data"] == {"id": "event-1", "content": {"parts": [{"text": "hello"}]}}
     finally:
         await config.close_pool()
 
@@ -110,7 +110,7 @@ async def test_aiosqlite_get_events_filters_by_timestamp_and_limit(tmp_path: Pat
                 "invocation_id": f"inv-{index}",
                 "author": "user",
                 "timestamp": base + timedelta(seconds=index),
-                "event_json": {"id": f"event-{index}"},
+                "event_data": {"id": f"event-{index}"},
             }
             await store.append_event(event)
 
@@ -118,6 +118,6 @@ async def test_aiosqlite_get_events_filters_by_timestamp_and_limit(tmp_path: Pat
 
         assert len(events) == 1
         assert events[0]["invocation_id"] == "inv-1"
-        assert events[0]["event_json"] == {"id": "event-1"}
+        assert events[0]["event_data"] == {"id": "event-1"}
     finally:
         await config.close_pool()

@@ -391,16 +391,16 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Args:
             event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_json.
+                author, timestamp, event_data.
 
         Notes:
             Uses Julian Day for timestamp.
-            event_json dict is serialized to TEXT as event_data column.
+            event_data dict is serialized to TEXT as event_data column.
         """
         import uuid
 
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-        event_data_json = to_json(event_record["event_json"])
+        event_data_json = to_json(event_record["event_data"])
         event_id = str(uuid.uuid4())
 
         sql = f"""
@@ -442,7 +442,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         import uuid
 
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-        event_data_json = to_json(event_record["event_json"])
+        event_data_json = to_json(event_record["event_data"])
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
         event_id = str(uuid.uuid4())
@@ -505,7 +505,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Notes:
             Uses index on (session_id, timestamp ASC).
-            Parses event_data TEXT back to dict for event_json field.
+            Parses event_data TEXT back to dict for event_data field.
         """
         where_clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
@@ -536,7 +536,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                         invocation_id=row[2],
                         author=row[3],
                         timestamp=_julian_to_datetime(row[4]),
-                        event_json=from_json(row[5]) if row[5] else {},
+                        event_data=from_json(row[5]) if row[5] else {},
                     )
                     for row in rows
                 ]

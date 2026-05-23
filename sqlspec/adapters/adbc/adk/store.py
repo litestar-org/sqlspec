@@ -35,14 +35,14 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
     transfer across multiple databases (PostgreSQL, SQLite, DuckDB, etc.).
 
     Events use the new 5-column contract: session_id, invocation_id, author,
-    timestamp, and event_json.  The full ADK Event payload is stored as a
-    single JSON blob in event_json using a dialect-appropriate column type
+    timestamp, and event_data.  The full ADK Event payload is stored as a
+    single JSON blob in event_data using a dialect-appropriate column type
     (JSONB for PostgreSQL, JSON for DuckDB, VARIANT for Snowflake, TEXT for
     SQLite and generic fallback).
 
     Provides:
     - Session state management with JSON serialization
-    - Event history tracking via single event_json blob
+    - Event history tracking via single event_data blob
     - Atomic event insert + session state update
     - Timezone-aware timestamps
     - Foreign key constraints with cascade delete
@@ -69,7 +69,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         store.ensure_tables()
 
     Notes:
-        - Dialect-appropriate JSON type for event_json storage
+        - Dialect-appropriate JSON type for event_data storage
         - TIMESTAMP for timezone-aware timestamps (driver-dependent precision)
         - Parameter style: ``?`` universally across ADBC backends
         - State and JSON fields use to_json/from_json for serialization
@@ -306,7 +306,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             SQL to create events table optimized for PostgreSQL.
 
         Notes:
-            Uses JSONB for event_json to enable indexing and query support.
+            Uses JSONB for event_data to enable indexing and query support.
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -314,7 +314,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
@@ -326,7 +326,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             SQL to create events table optimized for SQLite.
 
         Notes:
-            Uses TEXT for event_json (SQLite has no native JSON column type).
+            Uses TEXT for event_data (SQLite has no native JSON column type).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -334,7 +334,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             invocation_id TEXT NOT NULL,
             author TEXT NOT NULL,
             timestamp REAL NOT NULL,
-            event_json TEXT NOT NULL,
+            event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
@@ -346,7 +346,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             SQL to create events table optimized for DuckDB.
 
         Notes:
-            Uses JSON for event_json (DuckDB native JSON type).
+            Uses JSON for event_data (DuckDB native JSON type).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -354,7 +354,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSON NOT NULL,
+            event_data JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
@@ -366,7 +366,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             SQL to create events table optimized for Snowflake.
 
         Notes:
-            Uses VARIANT for event_json (Snowflake semi-structured type).
+            Uses VARIANT for event_data (Snowflake semi-structured type).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -374,7 +374,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             invocation_id VARCHAR NOT NULL,
             author VARCHAR NOT NULL,
             timestamp TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
-            event_json VARIANT NOT NULL,
+            event_data VARIANT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         )
         """
@@ -386,7 +386,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             SQL to create events table using generic types.
 
         Notes:
-            Uses TEXT for event_json (maximum portability).
+            Uses TEXT for event_data (maximum portability).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -394,7 +394,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             invocation_id VARCHAR(256) NOT NULL,
             author VARCHAR(256) NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json TEXT NOT NULL,
+            event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
@@ -688,10 +688,10 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Args:
             event_record: Event record to store.
         """
-        event_json = self._serialize_json_field(event_record["event_json"])
+        event_data = self._serialize_json_field(event_record["event_data"])
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (?, ?, ?, ?, ?)
         """
 
@@ -705,7 +705,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         event_record["invocation_id"],
                         event_record["author"],
                         event_record["timestamp"],
-                        event_json,
+                        event_data,
                     ),
                 )
                 conn.commit()
@@ -731,7 +731,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
+            session_id, invocation_id, author, timestamp, event_data
         ) VALUES (?, ?, ?, ?, ?)
         """
         update_sql = f"""
@@ -745,7 +745,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         WHERE id = ?
         """
         state_json = self._serialize_state(state)
-        event_json = self._serialize_json_field(event_record["event_json"])
+        event_data = self._serialize_json_field(event_record["event_data"])
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -757,7 +757,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                         event_record["invocation_id"],
                         event_record["author"],
                         event_record["timestamp"],
-                        event_json,
+                        event_data,
                     ),
                 )
                 cursor.execute(update_sql, (state_json, session_id))
@@ -806,7 +806,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Notes:
             Uses index on (session_id, timestamp ASC).
             Returns the 5-column EventRecord (session_id, invocation_id,
-            author, timestamp, event_json).
+            author, timestamp, event_data).
         """
         where_clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
@@ -818,7 +818,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         where_clause = " AND ".join(where_clauses)
         limit_clause = f" LIMIT {limit}" if limit else ""
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -837,7 +837,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                             invocation_id=row[1],
                             author=row[2],
                             timestamp=row[3],
-                            event_json=self._deserialize_json_field(row[4]) or {},
+                            event_data=self._deserialize_json_field(row[4]) or {},
                         )
                         for row in rows
                     ]

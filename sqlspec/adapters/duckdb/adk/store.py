@@ -41,7 +41,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
     using DuckDB's synchronous driver with async wrappers via ``async_()``.
     Provides:
     - Session state management with native JSON type
-    - Event history with single JSON blob (event_json) plus indexed scalars
+    - Event history with single JSON blob (event_data) plus indexed scalars
     - Native TIMESTAMPTZ type support
     - Manual cascade delete (DuckDB has no FK CASCADE)
     - Columnar storage for analytical queries
@@ -67,9 +67,9 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         await store.ensure_tables()
 
     Notes:
-        - Uses DuckDB native JSON type for event_json and state
+        - Uses DuckDB native JSON type for event_data and state
         - TIMESTAMPTZ for date/time storage with microsecond precision
-        - event_json stores the full ADK Event as a single JSON blob
+        - event_data stores the full ADK Event as a single JSON blob
         - Columnar storage provides excellent analytical query performance
         - DuckDB doesn't support CASCADE in foreign keys (manual cascade required)
         - Optimized for OLAP workloads; for high-concurrency writes use PostgreSQL
@@ -131,8 +131,8 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
             SQL statement to create adk_events table with indexes.
 
         Notes:
-            - 5-column schema: session_id, invocation_id, author, timestamp, event_json
-            - event_json stores the full ADK Event as a single JSON blob
+            - 5-column schema: session_id, invocation_id, author, timestamp, event_data
+            - event_data stores the full ADK Event as a single JSON blob
             - No decomposed columns -- eliminates column drift with upstream ADK
             - Foreign key constraint (DuckDB doesn't support CASCADE)
             - Index on (session_id, timestamp ASC) for ordered event retrieval
@@ -144,7 +144,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
             invocation_id VARCHAR NOT NULL,
             author VARCHAR NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSON NOT NULL,
+            event_data JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
@@ -195,7 +195,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
             invocation_id VARCHAR NOT NULL,
             author VARCHAR NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSON NOT NULL,
+            event_data JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
@@ -410,11 +410,11 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
-        event_json_str = to_json(event_record["event_json"])
+        event_data_str = to_json(event_record["event_data"])
 
         sql = f"""
         INSERT INTO {self._events_table}
-        (session_id, invocation_id, author, timestamp, event_json)
+        (session_id, invocation_id, author, timestamp, event_data)
         VALUES (?, ?, ?, ?, ?)
         """
 
@@ -426,7 +426,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                     event_record["invocation_id"],
                     event_record["author"],
                     event_record["timestamp"],
-                    event_json_str,
+                    event_data_str,
                 ),
             )
             conn.commit()
@@ -436,7 +436,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Args:
             event_record: Event record with 5 keys (session_id, invocation_id,
-                author, timestamp, event_json).
+                author, timestamp, event_data).
         """
         await async_(self._append_event)(event_record)
 
@@ -446,11 +446,11 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         """Synchronous implementation of append_event_and_update_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
-        event_json_str = to_json(event_record["event_json"])
+        event_data_str = to_json(event_record["event_data"])
 
         insert_sql = f"""
         INSERT INTO {self._events_table}
-        (session_id, invocation_id, author, timestamp, event_json)
+        (session_id, invocation_id, author, timestamp, event_data)
         VALUES (?, ?, ?, ?, ?)
         """
 
@@ -469,7 +469,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                     event_record["invocation_id"],
                     event_record["author"],
                     event_record["timestamp"],
-                    event_json_str,
+                    event_data_str,
                 ),
             )
             cursor = conn.execute(update_sql, (state_json, now, session_id))
@@ -522,7 +522,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT session_id, invocation_id, author, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -539,7 +539,7 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
                         invocation_id=row[1],
                         author=row[2],
                         timestamp=row[3],
-                        event_json=from_json(row[4]) if isinstance(row[4], str) else row[4],
+                        event_data=from_json(row[4]) if isinstance(row[4], str) else row[4],
                     )
                     for row in rows
                 ]
