@@ -9,6 +9,7 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKMemoryStore
 from sqlspec.extensions.adk import MemoryRecord
+from tests.integration.adapters._adk_contract_helpers import assert_memory_store_contract
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -52,6 +53,19 @@ async def test_aiosqlite_memory_store_insert_search_dedup() -> None:
         assert deduped == 0
 
         await config.close_pool()
+
+
+async def test_aiosqlite_memory_store_shared_contract() -> None:
+    """AioSQLite satisfies the shared ADK memory store acceptance contract."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        store = AiosqliteADKMemoryStore(config)
+        await store.create_tables()
+
+        try:
+            await assert_memory_store_contract(store, marker="aiosqlite")
+        finally:
+            await config.close_pool()
 
 
 async def test_aiosqlite_memory_store_fts_search() -> None:

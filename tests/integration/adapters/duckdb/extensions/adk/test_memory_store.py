@@ -10,6 +10,7 @@ import pytest
 from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import MemoryRecord
+from tests.integration.adapters._adk_contract_helpers import assert_memory_store_contract
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
@@ -69,6 +70,12 @@ async def test_duckdb_memory_store_insert_search_dedup(tmp_path: Path) -> None:
 
     deduped = await store.insert_memory_entries([record1])
     assert deduped == 0
+
+
+async def test_duckdb_memory_store_shared_contract(tmp_path: Path) -> None:
+    """DuckDB satisfies the shared ADK memory store acceptance contract."""
+    store = await _build_store(tmp_path)
+    await assert_memory_store_contract(store, marker="duckdb")
 
 
 async def test_duckdb_memory_store_delete_by_session(tmp_path: Path) -> None:
