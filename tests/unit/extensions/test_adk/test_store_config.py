@@ -2,7 +2,7 @@
 """Tests for shared ADK store configuration behavior."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -167,6 +167,41 @@ def test_memory_store_contract_exports_async_surface_only() -> None:
     assert "BaseSyncADKMemoryStore" not in memory_store_module.__all__
     assert not hasattr(adk_module, "BaseSyncADKMemoryStore")
     assert not hasattr(memory_store_module, "BaseSyncADKMemoryStore")
+
+
+@pytest.mark.parametrize("expires_in", [None, 0, timedelta(seconds=-5)])
+def test_async_session_store_calculate_expires_at_returns_none_for_non_positive_values(
+    expires_in: int | timedelta | None,
+) -> None:
+    store = _AsyncSessionStore(_Config())
+
+    assert store._calculate_expires_at(expires_in) is None
+
+
+@pytest.mark.parametrize("expires_in", [3600, timedelta(hours=1)])
+def test_async_session_store_calculate_expires_at_returns_utc_expiration(expires_in: int | timedelta) -> None:
+    store = _AsyncSessionStore(_Config())
+    before = datetime.now(timezone.utc) + timedelta(seconds=3598)
+
+    expires_at = store._calculate_expires_at(expires_in)
+
+    after = datetime.now(timezone.utc) + timedelta(seconds=3602)
+    assert expires_at is not None
+    assert expires_at.tzinfo is timezone.utc
+    assert before <= expires_at <= after
+
+
+def test_async_session_store_value_to_bytes_encodes_strings() -> None:
+    store = _AsyncSessionStore(_Config())
+
+    assert store._value_to_bytes("abc") == b"abc"
+
+
+def test_async_session_store_value_to_bytes_returns_existing_bytes() -> None:
+    store = _AsyncSessionStore(_Config())
+    value = b"abc"
+
+    assert store._value_to_bytes(value) is value
 
 
 async def test_async_memory_store_logs_ready_with_log_with_context(monkeypatch: pytest.MonkeyPatch) -> None:
