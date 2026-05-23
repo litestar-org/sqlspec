@@ -1,11 +1,11 @@
 """Base session store classes for Litestar integration."""
 
-import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sqlspec.observability import resolve_db_system
+from sqlspec.utils.identifiers import validate_identifier
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_extension_config
 
@@ -21,9 +21,6 @@ ConfigT = TypeVar("ConfigT")
 logger = get_logger("sqlspec.extensions.litestar.store")
 
 __all__ = ("BaseSQLSpecStore",)
-
-VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-MAX_TABLE_NAME_LENGTH: Final = 63
 
 
 class BaseSQLSpecStore(ABC, Generic[ConfigT]):
@@ -73,7 +70,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         """
         self._config = config
         self._table_name = self._get_table_name_from_config()
-        self._validate_table_name(self._table_name)
+        validate_identifier(self._table_name, label="table name")
 
     def _get_table_name_from_config(self) -> str:
         """Extract table name from config.extension_config.
@@ -268,31 +265,3 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         if isinstance(value, str):
             return value.encode("utf-8")
         return value
-
-    @staticmethod
-    def _validate_table_name(table_name: str) -> None:
-        """Validate table name for SQL safety.
-
-        Args:
-            table_name: Table name to validate.
-
-        Raises:
-            ValueError: If table name is invalid.
-
-        Notes:
-            - Must start with letter or underscore
-            - Can only contain letters, numbers, and underscores
-            - Maximum length is 63 characters (PostgreSQL limit)
-            - Prevents SQL injection in table names
-        """
-        if not table_name:
-            msg = "Table name cannot be empty"
-            raise ValueError(msg)
-
-        if len(table_name) > MAX_TABLE_NAME_LENGTH:
-            msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-            raise ValueError(msg)
-
-        if not VALID_TABLE_NAME_PATTERN.match(table_name):
-            msg = f"Invalid table name: {table_name!r}. Must start with letter/underscore and contain only alphanumeric characters and underscores"
-            raise ValueError(msg)

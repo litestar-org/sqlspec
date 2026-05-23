@@ -1,10 +1,10 @@
 """Base classes for adapter-specific event queue stores."""
 
-import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sqlspec.exceptions import EventChannelError
+from sqlspec.utils.identifiers import validate_identifier
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -13,25 +13,23 @@ ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 __all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
 
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
 
 def normalize_queue_table_name(name: str) -> str:
     """Validate schema-qualified identifiers and return normalized name."""
-    segments = name.split(".")
-    for segment in segments:
-        if not _IDENTIFIER_PATTERN.match(segment):
-            msg = f"Invalid events table name: {name}"
-            raise EventChannelError(msg)
-    return name
+    try:
+        return validate_identifier(name, allow_schema_qualifier=True, error_cls=EventChannelError)
+    except EventChannelError as exc:
+        msg = f"Invalid events table name: {name}"
+        raise EventChannelError(msg) from exc
 
 
 def normalize_event_channel_name(name: str) -> str:
     """Validate event channel identifiers and return normalized name."""
-    if not _IDENTIFIER_PATTERN.match(name):
+    try:
+        return validate_identifier(name, error_cls=EventChannelError)
+    except EventChannelError as exc:
         msg = f"Invalid events channel name: {name}"
-        raise EventChannelError(msg)
-    return name
+        raise EventChannelError(msg) from exc
 
 
 class BaseEventQueueStore(ABC, Generic[ConfigT]):

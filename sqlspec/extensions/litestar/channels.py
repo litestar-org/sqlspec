@@ -3,11 +3,11 @@
 import asyncio
 import base64
 import hashlib
-import re
 from typing import TYPE_CHECKING, Any
 
 from litestar.channels.backends.base import ChannelsBackend
 
+from sqlspec.utils.identifiers import validate_identifier
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -16,8 +16,6 @@ if TYPE_CHECKING:
     from sqlspec.extensions.events import AsyncEventChannel
 
 logger = get_logger("sqlspec.extensions.litestar.channels")
-
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class SQLSpecChannelsBackend(ChannelsBackend):
@@ -36,9 +34,11 @@ class SQLSpecChannelsBackend(ChannelsBackend):
     def __init__(
         self, event_channel: "AsyncEventChannel", *, channel_prefix: str = "litestar", poll_interval: float = 0.2
     ) -> None:
-        if not _IDENTIFIER_PATTERN.match(channel_prefix):
+        try:
+            validate_identifier(channel_prefix, label="channel_prefix")
+        except ValueError as exc:
             msg = f"channel_prefix must be a valid identifier, got: {channel_prefix!r}"
-            raise ValueError(msg)
+            raise ValueError(msg) from exc
         if poll_interval <= 0:
             msg = "poll_interval must be greater than zero"
             raise ValueError(msg)
