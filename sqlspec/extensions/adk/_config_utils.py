@@ -28,6 +28,9 @@ class _ADKSessionStoreConfig(TypedDict):
 
     session_table: str
     events_table: str
+    app_state_table: str
+    user_state_table: str
+    metadata_table: str
     owner_id_column: NotRequired[str]
 
 
@@ -45,6 +48,7 @@ class _ADKArtifactStoreConfig(TypedDict):
     """Normalized ADK artifact store configuration."""
 
     artifact_table: str
+    storage_uri: NotRequired[str]
 
 
 class _ADKConfigSource(Protocol):
@@ -62,17 +66,40 @@ def _get_adk_config_from_extension(config: _ADKConfigSource) -> dict[str, Any]:
     return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
 
 
+def _get_adk_config_section(adk_config: dict[str, Any], name: str) -> dict[str, Any]:
+    """Return a mutable nested ADK config section."""
+
+    value = adk_config.get(name)
+    return dict(cast("dict[str, Any]", value)) if isinstance(value, dict) else {}
+
+
+def _get_first_value(*values: Any, default: Any = None) -> Any:
+    """Return the first non-None value."""
+
+    for value in values:
+        if value is not None:
+            return value
+    return default
+
+
 def _get_adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfig:
     """Return normalized session store table settings."""
 
     adk_config = _get_adk_config_from_extension(config)
-    session_table = adk_config.get("session_table")
-    events_table = adk_config.get("events_table")
+    schema_config = _get_adk_config_section(adk_config, "schema")
+    session_table = _get_first_value(schema_config.get("session_table"), adk_config.get("session_table"))
+    events_table = _get_first_value(schema_config.get("events_table"), adk_config.get("events_table"))
+    app_state_table = _get_first_value(schema_config.get("app_state_table"), adk_config.get("app_state_table"))
+    user_state_table = _get_first_value(schema_config.get("user_state_table"), adk_config.get("user_state_table"))
+    metadata_table = _get_first_value(schema_config.get("metadata_table"), adk_config.get("metadata_table"))
     result: _ADKSessionStoreConfig = {
         "session_table": str(session_table) if session_table is not None else "adk_sessions",
         "events_table": str(events_table) if events_table is not None else "adk_events",
+        "app_state_table": str(app_state_table) if app_state_table is not None else "adk_app_states",
+        "user_state_table": str(user_state_table) if user_state_table is not None else "adk_user_states",
+        "metadata_table": str(metadata_table) if metadata_table is not None else "adk_internal_metadata",
     }
-    owner_id = adk_config.get("owner_id_column")
+    owner_id = _get_first_value(schema_config.get("owner_id_column"), adk_config.get("owner_id_column"))
     if owner_id is not None:
         result["owner_id_column"] = cast("str", owner_id)
     return result
@@ -82,18 +109,34 @@ def _get_adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreCon
     """Return normalized memory store settings."""
 
     adk_config = _get_adk_config_from_extension(config)
-    enable_memory = adk_config.get("enable_memory")
-    memory_table = adk_config.get("memory_table")
-    use_fts = adk_config.get("memory_use_fts")
-    max_results = adk_config.get("memory_max_results")
+    schema_config = _get_adk_config_section(adk_config, "schema")
+    memory_config = _get_adk_config_section(adk_config, "memory")
+    search_config = _get_adk_config_section(adk_config, "search")
+    nested_memory_search_config = _get_adk_config_section(memory_config, "search")
+    enable_memory = _get_first_value(memory_config.get("enabled"), adk_config.get("enable_memory"))
+    memory_table = _get_first_value(
+        memory_config.get("table"), schema_config.get("memory_table"), adk_config.get("memory_table")
+    )
+    use_fts = _get_first_value(
+        nested_memory_search_config.get("use_fts"),
+        search_config.get("use_fts"),
+        memory_config.get("use_fts"),
+        adk_config.get("memory_use_fts"),
+    )
+    max_results = _get_first_value(
+        memory_config.get("max_results"),
+        nested_memory_search_config.get("max_results"),
+        search_config.get("max_results"),
+        adk_config.get("memory_max_results"),
+    )
 
     result: _ADKMemoryStoreConfig = {
         "enable_memory": bool(enable_memory) if enable_memory is not None else True,
         "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
         "use_fts": bool(use_fts) if use_fts is not None else False,
-        "max_results": int(max_results) if isinstance(max_results, int) else 20,
+        "max_results": int(max_results) if type(max_results) is int else 20,
     }
-    owner_id = adk_config.get("owner_id_column")
+    owner_id = _get_first_value(schema_config.get("owner_id_column"), adk_config.get("owner_id_column"))
     if owner_id is not None:
         result["owner_id_column"] = cast("str", owner_id)
     return result
@@ -103,8 +146,18 @@ def _get_adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStor
     """Return normalized artifact store settings."""
 
     adk_config = _get_adk_config_from_extension(config)
-    artifact_table = adk_config.get("artifact_table")
-    return {"artifact_table": str(artifact_table) if artifact_table is not None else "adk_artifact_versions"}
+    schema_config = _get_adk_config_section(adk_config, "schema")
+    artifact_config = _get_adk_config_section(adk_config, "artifact")
+    artifact_table = _get_first_value(
+        artifact_config.get("table"), schema_config.get("artifact_table"), adk_config.get("artifact_table")
+    )
+    result: _ADKArtifactStoreConfig = {
+        "artifact_table": str(artifact_table) if artifact_table is not None else "adk_artifact_versions"
+    }
+    storage_uri = _get_first_value(artifact_config.get("storage_uri"), adk_config.get("artifact_storage_uri"))
+    if storage_uri is not None:
+        result["storage_uri"] = str(storage_uri)
+    return result
 
 
 def _resolve_adk_store_path(config: Any, store_suffix: str) -> str:
@@ -175,10 +228,16 @@ def _is_adk_memory_migration_enabled(config: Any) -> bool:
     """Return whether ADK memory DDL should be included for this config."""
 
     adk_config = _get_adk_config_from_extension(cast("_ADKConfigSource", config))
-    include_memory = adk_config.get("include_memory_migration")
+    schema_config = _get_adk_config_section(adk_config, "schema")
+    memory_config = _get_adk_config_section(adk_config, "memory")
+    include_memory = _get_first_value(
+        schema_config.get("include_memory_migration"),
+        memory_config.get("include_migration"),
+        adk_config.get("include_memory_migration"),
+    )
     if include_memory is not None:
         return bool(include_memory)
-    return bool(adk_config.get("enable_memory", True))
+    return bool(_get_first_value(memory_config.get("enabled"), adk_config.get("enable_memory"), default=True))
 
 
 def _validate_adk_store_registration(config: Any) -> None:
