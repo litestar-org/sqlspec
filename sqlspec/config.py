@@ -719,6 +719,39 @@ class ADKPayloadVersionsConfig(TypedDict):
     artifact: NotRequired[int]
 
 
+class ADKIndexingConfig(TypedDict):
+    """Shared ADK index lifecycle controls."""
+
+    generated_columns: NotRequired[ADKOptimizationMode]
+    covering_indexes: NotRequired[ADKOptimizationMode]
+    search_indexes: NotRequired[ADKOptimizationMode]
+    json_indexes: NotRequired[ADKOptimizationMode]
+    vector_indexes: NotRequired[ADKOptimizationMode]
+
+
+class ADKTableOptionsConfig(TypedDict):
+    """Shared ADK table and index option attachment points."""
+
+    sessions: NotRequired[str]
+    events: NotRequired[str]
+    memory: NotRequired[str]
+    artifacts: NotRequired[str]
+    app_states: NotRequired[str]
+    user_states: NotRequired[str]
+    metadata: NotRequired[str]
+    expires_index: NotRequired[str]
+
+
+class ADKLifecycleConfig(TypedDict):
+    """Shared ADK lifecycle controls for backend DDL chapters."""
+
+    partitioning: NotRequired[ADKPartitionConfig]
+    retention: NotRequired[ADKRetentionConfig]
+    indexing: NotRequired[ADKIndexingConfig]
+    compression: NotRequired[ADKCompressionConfig]
+    table_options: NotRequired[ADKTableOptionsConfig]
+
+
 class ADKMemoryConfig(TypedDict):
     """Shared ADK memory configuration."""
 
@@ -827,6 +860,9 @@ class ADKConfig(TypedDict):
 
     payloads: NotRequired[ADKPayloadVersionsConfig]
     """Shared payload version pins."""
+
+    lifecycle: NotRequired[ADKLifecycleConfig]
+    """Shared lifecycle controls for partitioning, retention, indexing, compression, and table options."""
 
     artifact: NotRequired[ADKArtifactConfig]
     """Shared artifact metadata and storage URI controls."""
