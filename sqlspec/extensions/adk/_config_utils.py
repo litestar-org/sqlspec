@@ -6,6 +6,7 @@ from typing import Any, NoReturn, Protocol, cast
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.extensions.adk._versioning import ADKVersionPlan, resolve_adk_version_plan
 from sqlspec.utils.module_loader import import_string
 
 __all__ = (
@@ -18,6 +19,7 @@ __all__ = (
     "_get_adk_memory_migration_store_class",
     "_get_adk_memory_store_config",
     "_get_adk_session_store_config",
+    "_get_adk_version_plan",
     "_is_adk_memory_migration_enabled",
     "_validate_adk_store_registration",
 )
@@ -158,6 +160,12 @@ def _get_adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStor
     if storage_uri is not None:
         result["storage_uri"] = str(storage_uri)
     return result
+
+
+def _get_adk_version_plan(config: _ADKConfigSource) -> ADKVersionPlan:
+    """Return normalized ADK schema and payload version settings."""
+
+    return resolve_adk_version_plan(_get_adk_config_from_extension(config))
 
 
 def _resolve_adk_store_path(config: Any, store_suffix: str) -> str:

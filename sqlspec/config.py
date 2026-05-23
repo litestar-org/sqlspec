@@ -695,6 +695,7 @@ class ADKSchemaConfig(TypedDict):
     metadata_table: NotRequired[str]
     owner_id_column: NotRequired[str]
     schema_version: NotRequired[int]
+    payload_versions: NotRequired["ADKPayloadVersionsConfig"]
     include_sessions_migration: NotRequired[bool]
     include_memory_migration: NotRequired[bool]
     include_artifact_migration: NotRequired[bool]
@@ -707,6 +708,15 @@ class ADKSearchConfig(TypedDict):
     use_fts: NotRequired[bool]
     language: NotRequired[str]
     max_results: NotRequired[int]
+
+
+class ADKPayloadVersionsConfig(TypedDict):
+    """Shared ADK payload version pinning."""
+
+    event: NotRequired[int]
+    state: NotRequired[int]
+    memory: NotRequired[int]
+    artifact: NotRequired[int]
 
 
 class ADKMemoryConfig(TypedDict):
@@ -814,6 +824,9 @@ class ADKConfig(TypedDict):
 
     search: NotRequired[ADKSearchConfig]
     """Shared search strategy and language controls."""
+
+    payloads: NotRequired[ADKPayloadVersionsConfig]
+    """Shared payload version pins."""
 
     artifact: NotRequired[ADKArtifactConfig]
     """Shared artifact metadata and storage URI controls."""
