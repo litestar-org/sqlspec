@@ -34,22 +34,10 @@ Session Stores
    :show-inheritance:
    :no-index:
 
-.. autoclass:: BaseSyncADKStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
 Memory Stores
 =============
 
 .. autoclass:: BaseAsyncADKMemoryStore
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
-.. autoclass:: BaseSyncADKMemoryStore
    :members:
    :undoc-members:
    :show-inheritance:

@@ -33,18 +33,10 @@ Store Base Classes
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.extensions.adk.BaseSyncADKStore
-   :members:
-   :show-inheritance:
-
 Memory Store Base Classes
 =========================
 
 .. autoclass:: sqlspec.extensions.adk.BaseAsyncADKMemoryStore
-   :members:
-   :show-inheritance:
-
-.. autoclass:: sqlspec.extensions.adk.BaseSyncADKMemoryStore
    :members:
    :show-inheritance:
 

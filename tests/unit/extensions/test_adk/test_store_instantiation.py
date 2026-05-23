@@ -16,8 +16,8 @@ from typing import cast
 import pytest
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
-from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore
 
 SESSION_STORE_CLASSES = [
     "sqlspec.adapters.asyncpg.adk.AsyncpgADKStore",
@@ -96,12 +96,11 @@ def test_store_method_signatures_match_base_contract(class_path: str) -> None:
 
     if issubclass(cls, BaseAsyncADKStore):
         base: type = BaseAsyncADKStore
-    elif issubclass(cls, BaseSyncADKStore):
-        base = BaseSyncADKStore
     elif issubclass(cls, BaseAsyncADKMemoryStore):
         base = BaseAsyncADKMemoryStore
     else:
-        base = BaseSyncADKMemoryStore
+        msg = f"{class_path} must inherit from the async ADK store contract"
+        raise AssertionError(msg)
 
     for method_name in base.__abstractmethods__:
         base_signature = inspect.signature(getattr(base, method_name))

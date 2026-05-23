@@ -1,6 +1,5 @@
 """Create ADK session, events, and memory tables migration using store DDL definitions."""
 
-import inspect
 import logging
 from typing import TYPE_CHECKING, NoReturn, cast
 
@@ -13,7 +12,7 @@ from sqlspec.extensions.adk._config_utils import (
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+    from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
     from sqlspec.extensions.adk.store import BaseAsyncADKStore
     from sqlspec.migrations.context import MigrationContext
 
@@ -42,9 +41,7 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKSt
     return cast("type[BaseAsyncADKStore]", _get_adk_adapter_store_class(context.config, "ADKStore"))
 
 
-def _get_memory_store_class(
-    context: "MigrationContext | None",
-) -> "type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore] | None":
+def _get_memory_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKMemoryStore] | None":
     """Get the appropriate memory store class based on the config's module path.
 
     Args:
@@ -65,7 +62,7 @@ def _get_memory_store_class(
     if store_class is None:
         log_with_context(logger, logging.DEBUG, "adk.migration.memory_store.missing")
         return None
-    return cast("type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore]", store_class)
+    return cast("type[BaseAsyncADKMemoryStore]", store_class)
 
 
 def _is_memory_enabled(context: "MigrationContext | None") -> bool:
@@ -131,9 +128,7 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
         memory_store_class = _get_memory_store_class(context)
         if memory_store_class is not None:
             memory_store = memory_store_class(config=context.config)
-            memory_sql = memory_store._get_create_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
-            if inspect.isawaitable(memory_sql):
-                memory_sql = await memory_sql
+            memory_sql = await memory_store._get_create_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
             if isinstance(memory_sql, list):
                 statements.extend(memory_sql)
             else:

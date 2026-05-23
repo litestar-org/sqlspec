@@ -19,7 +19,7 @@ from sqlspec.utils.sync_tools import run_
 if TYPE_CHECKING:
     from rich_click import Group
 
-    from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+    from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 __all__ = ("add_migration_commands", "get_sqlspec_group")
@@ -247,7 +247,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
     def _get_memory_store_class(
         config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
-    ) -> "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None":
+    ) -> "type[BaseAsyncADKMemoryStore[Any]] | None":
         config_module = type(config).__module__
         config_name = type(config).__name__
 
@@ -259,7 +259,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
 
         try:
-            return cast("type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]]", import_string(store_path))
+            return cast("type[BaseAsyncADKMemoryStore[Any]]", import_string(store_path))
         except ImportError:
             return None
 
@@ -1045,13 +1045,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[yellow]No memory store found for {config_name}; skipping.[/]")
                 continue
 
-            if isinstance(cfg, AsyncDatabaseConfig):
-                async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(cfg))
-                deleted = run_(_cleanup_memory_entries_async)(async_store, days)
-                console.print(f"[green]✓[/] {config_name}: deleted {deleted} memory entries older than {days} days")
-                continue
-            sync_store = cast("BaseSyncADKMemoryStore[Any]", store_class(cfg))
-            deleted = sync_store.delete_entries_older_than(days)
+            store = store_class(cfg)
+            deleted = run_(_cleanup_memory_entries_async)(store, days)
             console.print(f"[green]✓[/] {config_name}: deleted {deleted} memory entries older than {days} days")
 
     @adk_memory_group.command(name="verify", help="Verify memory table exists and is reachable")
@@ -1077,15 +1072,13 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 continue
 
             try:
+                store = store_class(cfg)
+                sql = f"SELECT 1 FROM {store.memory_table} WHERE 1 = 0"
                 if isinstance(cfg, AsyncDatabaseConfig):
                     async_cfg: AsyncDatabaseConfig[Any, Any, Any] = cfg
-                    async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(async_cfg))
-                    sql = f"SELECT 1 FROM {async_store.memory_table} WHERE 1 = 0"
                     run_(_verify_memory_table_async)(async_cfg, sql)
                     console.print(f"[green]✓[/] {config_name}: memory table reachable")
                     continue
-                sync_store = cast("BaseSyncADKMemoryStore[Any]", store_class(cfg))
-                sql = f"SELECT 1 FROM {sync_store.memory_table} WHERE 1 = 0"
                 with cfg.provide_session() as driver:
                     driver.execute(sql)
                 console.print(f"[green]✓[/] {config_name}: memory table reachable")
