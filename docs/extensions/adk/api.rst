@@ -19,12 +19,6 @@ Services
    :show-inheritance:
    :no-index:
 
-.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecSyncMemoryService
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-
 .. autoclass:: SQLSpecArtifactService
    :members:
    :undoc-members:

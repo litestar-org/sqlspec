@@ -6,9 +6,8 @@ context across agent sessions for long-term recall.
 
 Public API exports:
     - SQLSpecMemoryService: Main async service class implementing BaseMemoryService
-    - SQLSpecSyncMemoryService: Sync service for sync adapters
     - BaseAsyncADKMemoryStore: Base class for async database store implementations
-    - BaseSyncADKMemoryStore: Base class for sync database store implementations
+    - BaseSyncADKMemoryStore: Internal base for sync stores wrapped behind async APIs
     - MemoryRecord: TypedDict for memory database records
     - extract_content_text: Helper to extract searchable text from Content
     - session_to_memory_records: Convert Session to memory records
@@ -54,7 +53,7 @@ from sqlspec.extensions.adk.memory.converters import (
     record_to_memory_entry,
     session_to_memory_records,
 )
-from sqlspec.extensions.adk.memory.service import SQLSpecMemoryService, SQLSpecSyncMemoryService
+from sqlspec.extensions.adk.memory.service import SQLSpecMemoryService
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 
 __all__ = (
@@ -62,7 +61,6 @@ __all__ = (
     "BaseSyncADKMemoryStore",
     "MemoryRecord",
     "SQLSpecMemoryService",
-    "SQLSpecSyncMemoryService",
     "extract_content_text",
     "record_to_memory_entry",
     "session_to_memory_records",

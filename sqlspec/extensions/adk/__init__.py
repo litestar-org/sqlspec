@@ -7,7 +7,6 @@ Public API exports:
     - ADKConfig: TypedDict for extension config (type-safe configuration)
     - SQLSpecSessionService: Main service class implementing BaseSessionService
     - SQLSpecMemoryService: Main async service class implementing BaseMemoryService
-    - SQLSpecSyncMemoryService: Sync memory service for sync adapters
     - SQLSpecArtifactService: Artifact service implementing BaseArtifactService
     - BaseAsyncADKStore: Base class for async database store implementations
     - BaseSyncADKStore: Base class for sync database store implementations
@@ -60,7 +59,6 @@ from sqlspec.extensions.adk.memory import (
     BaseSyncADKMemoryStore,
     MemoryRecord,
     SQLSpecMemoryService,
-    SQLSpecSyncMemoryService,
 )
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
@@ -79,6 +77,5 @@ __all__ = (
     "SQLSpecArtifactService",
     "SQLSpecMemoryService",
     "SQLSpecSessionService",
-    "SQLSpecSyncMemoryService",
     "SessionRecord",
 )

@@ -10,12 +10,14 @@ if importlib.util.find_spec("google.genai") is None or importlib.util.find_spec(
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
+from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions.session import Session
 from google.genai import types
 
 from sqlspec.extensions.adk.memory.converters import (
     event_to_memory_record,
     extract_content_text,
+    memory_entry_to_record,
     record_to_memory_entry,
     session_to_memory_records,
 )
@@ -39,14 +41,16 @@ def test_extract_content_text_combines_parts() -> None:
     content = types.Content(
         parts=[
             types.Part(text="hello"),
-            types.Part(function_call=types.FunctionCall(name="lookup")),
+            types.Part(function_call=types.FunctionCall(name="lookup", args={"sku": "espresso"})),
             types.Part(function_response=types.FunctionResponse(name="lookup", response={"output": "ok"})),
         ]
     )
     text = extract_content_text(content)
     assert "hello" in text
     assert "function:lookup" in text
+    assert "espresso" in text
     assert "response:lookup" in text
+    assert "ok" in text
 
 
 def test_event_to_memory_record_skips_empty_content() -> None:
@@ -67,3 +71,28 @@ def test_session_to_memory_records_roundtrip() -> None:
     assert entry.content is not None
     assert entry.content.parts is not None
     assert entry.content.parts[0].text == "Hello memory"
+
+
+def test_memory_entry_to_record_preserves_identity_and_metadata() -> None:
+    entry = MemoryEntry(
+        id="memory-1",
+        author="agent",
+        timestamp="2026-05-23T12:00:00+00:00",
+        content=types.Content(parts=[types.Part(text="Remember espresso roast")]),
+        custom_metadata={"source": "entry", "priority": 2},
+    )
+
+    record = memory_entry_to_record(
+        entry=entry, app_name="app", user_id="user", extra_metadata={"source": "call", "ttl": 3600}
+    )
+
+    assert record is not None
+    assert record["id"] == "memory-1"
+    assert record["author"] == "agent"
+    assert record["content_text"] == "Remember espresso roast"
+    assert record["metadata_json"] == {"source": "entry", "ttl": 3600, "priority": 2}
+
+    round_tripped = record_to_memory_entry(record)
+    assert round_tripped.id == "memory-1"
+    assert round_tripped.author == "agent"
+    assert round_tripped.custom_metadata == {"source": "entry", "ttl": 3600, "priority": 2}

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk.memory._types import MemoryRecord
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from google.adk.events.event import Event
@@ -27,6 +28,15 @@ __all__ = (
     "records_to_memory_entries",
     "session_to_memory_records",
 )
+
+
+def _payload_to_search_text(payload: object | None) -> str:
+    """Serialize structured ADK part payloads into deterministic search text."""
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    return to_json(payload)
 
 
 def extract_content_text(content: "types.Content") -> str:
@@ -51,9 +61,11 @@ def extract_content_text(content: "types.Content") -> str:
         if part.text:
             parts_text.append(part.text)
         elif part.function_call is not None:
-            parts_text.append(f"function:{part.function_call.name}")
+            payload_text = _payload_to_search_text(part.function_call.args)
+            parts_text.append(f"function:{part.function_call.name} {payload_text}".strip())
         elif part.function_response is not None:
-            parts_text.append(f"response:{part.function_response.name}")
+            payload_text = _payload_to_search_text(part.function_response.response)
+            parts_text.append(f"response:{part.function_response.name} {payload_text}".strip())
 
     return " ".join(parts_text)
 
