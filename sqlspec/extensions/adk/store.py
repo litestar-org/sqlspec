@@ -1,15 +1,17 @@
 """Base store class for ADK session backends."""
 
+import inspect
 import logging
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _get_adk_session_store_config
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.identifiers import validate_identifier
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -319,6 +321,43 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         await self.create_tables()
         self._log_tables_created()
 
+    async def drop_tables(self) -> None:
+        """Drop all ADK tables managed by this store in FK-safe order."""
+        await self._execute_lifecycle_scripts(self._get_drop_tables_sql())
+        self._log_tables_dropped()
+
+    async def recreate_tables(self) -> None:
+        """Drop and recreate all ADK tables managed by this store."""
+        await self.drop_tables()
+        await self.ensure_tables()
+        self._log_tables_recreated()
+
+    async def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
+        """Execute lifecycle DDL scripts for async and sync-backed configs."""
+        session_context = self._config.provide_session()
+        if hasattr(session_context, "__aenter__"):
+            async with cast("Any", session_context) as driver:
+                for statement in statements:
+                    result = driver.execute_script(statement)
+                    if inspect.isawaitable(result):
+                        await result
+                commit = getattr(driver, "commit", None)
+                if callable(commit):
+                    result = commit()
+                    if inspect.isawaitable(result):
+                        await result
+            return
+
+        def _execute_sync() -> None:
+            with cast("Any", self._config.provide_session()) as driver:
+                for statement in statements:
+                    driver.execute_script(statement)
+                commit = getattr(driver, "commit", None)
+                if callable(commit):
+                    commit()
+
+        await async_(_execute_sync)()
+
     @abstractmethod
     async def _get_create_sessions_table_sql(self) -> str:
         """Get the CREATE TABLE SQL for the sessions table.
@@ -356,6 +395,26 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             logger,
             logging.DEBUG,
             "adk.tables.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
+
+    def _log_tables_dropped(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.dropped",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
+
+    def _log_tables_recreated(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.recreated",
             db_system=resolve_db_system(type(self).__name__),
             session_table=self._session_table,
             events_table=self._events_table,
