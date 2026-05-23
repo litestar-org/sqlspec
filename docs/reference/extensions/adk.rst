@@ -19,10 +19,6 @@ Memory Services
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.extensions.adk.SQLSpecSyncMemoryService
-   :members:
-   :show-inheritance:
-
 Artifact Service
 ================
 
