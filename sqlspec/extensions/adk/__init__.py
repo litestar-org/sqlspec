@@ -8,10 +8,8 @@ Public API exports:
     - SQLSpecSessionService: Main service class implementing BaseSessionService
     - SQLSpecMemoryService: Main async service class implementing BaseMemoryService
     - SQLSpecArtifactService: Artifact service implementing BaseArtifactService
-    - BaseAsyncADKStore: Base class for async database store implementations
-    - BaseSyncADKStore: Base class for sync database store implementations
-    - BaseAsyncADKMemoryStore: Base class for async memory store implementations
-    - BaseSyncADKMemoryStore: Base class for sync memory store implementations
+    - BaseAsyncADKStore: Base class for ADK session store implementations
+    - BaseAsyncADKMemoryStore: Base class for ADK memory store implementations
     - BaseAsyncADKArtifactStore: Base class for async artifact metadata stores
     - BaseSyncADKArtifactStore: Base class for sync artifact metadata stores
     - SessionRecord: TypedDict for session database records
@@ -54,14 +52,9 @@ from sqlspec.extensions.adk.artifact import (
     BaseSyncADKArtifactStore,
     SQLSpecArtifactService,
 )
-from sqlspec.extensions.adk.memory import (
-    BaseAsyncADKMemoryStore,
-    BaseSyncADKMemoryStore,
-    MemoryRecord,
-    SQLSpecMemoryService,
-)
+from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, MemoryRecord, SQLSpecMemoryService
 from sqlspec.extensions.adk.service import SQLSpecSessionService
-from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore
 
 __all__ = (
     "ADKConfig",
@@ -70,8 +63,6 @@ __all__ = (
     "BaseAsyncADKMemoryStore",
     "BaseAsyncADKStore",
     "BaseSyncADKArtifactStore",
-    "BaseSyncADKMemoryStore",
-    "BaseSyncADKStore",
     "EventRecord",
     "MemoryRecord",
     "SQLSpecArtifactService",
