@@ -48,7 +48,7 @@ duckdb = ["duckdb", "pytz"]
 fastapi = ["fastapi"]
 flask = ["flask"]
 fsspec = ["fsspec"]
-litestar = ["litestar"]
+litestar = ["litestar>=2.22.0"]
 msgspec = ["msgspec"]
 mypyc = ["sqlglot[c]>=30.0.0"]
 mysql-connector = [

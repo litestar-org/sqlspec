@@ -13,7 +13,7 @@ from uuid import UUID
 
 from litestar.di import Provide
 from litestar.exceptions import ValidationException
-from litestar.params import Dependency, Parameter
+from litestar.params import Dependency, QueryParameter
 from litestar.utils.signature import ParsedSignature
 from typing_extensions import NotRequired
 
@@ -29,29 +29,6 @@ from sqlspec.core import (
     SearchFilter,
 )
 from sqlspec.utils.text import camelize
-
-try:
-    from litestar.params import QueryParameter as _QueryParameter
-except ImportError:
-    _QueryParameter = None  # type: ignore[assignment,misc]
-
-
-def _query_param_kwargs(
-    annotation: Any, *, query: str, default: Any = None, required: bool = False, **constraints: Any
-) -> "dict[str, Any]":
-    """Return ``inspect.Parameter`` kwargs binding a parameter to a query string.
-
-    Metadata is wrapped in ``Annotated`` so Litestar reads it from the
-    annotation instead of the deprecated default-arg style. Newer Litestar
-    exposes :class:`QueryParameter`; older releases only have
-    :func:`Parameter`, which takes ``query=`` instead of ``name=``.
-    """
-    if _QueryParameter is not None:
-        metadata: Any = _QueryParameter(name=query, required=required, **constraints)
-    else:
-        metadata = Parameter(query=query, required=required, **constraints)
-    return {"default": default, "annotation": Annotated[annotation, metadata]}
-
 
 __all__ = (
     "DEPENDENCY_DEFAULTS",
@@ -480,19 +457,20 @@ class _CollectionFilterProvider:
         self.field_name = field.name
         self.param_name = f"{field.name}_values"
         self.filter_cls: Any = NotInCollectionFilter if negated else InCollectionFilter
-        parameter_annotation = _collection_value_annotation(list, field.type_hint)
         self.return_annotation = self.filter_cls[field.type_hint] | None
-        param_kwargs = _query_param_kwargs(
-            parameter_annotation,
-            query=camelize(f"{field.name}_{'not_in' if negated else 'in'}"),
-            default=None,
-            required=False,
-        )
+        annotation = Annotated[  # type: ignore[valid-type]
+            _collection_value_annotation(list, field.type_hint),
+            QueryParameter(name=camelize(f"{field.name}_{'not_in' if negated else 'in'}"), required=False),
+        ]
         self.signature = inspect.Signature(
-            parameters=[inspect.Parameter(self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, **param_kwargs)],
+            parameters=[
+                inspect.Parameter(
+                    self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation
+                )
+            ],
             return_annotation=self.return_annotation,
         )
-        self.annotations = {self.param_name: param_kwargs["annotation"], "return": self.return_annotation}
+        self.annotations = {self.param_name: annotation, "return": self.return_annotation}
 
     def __call__(self, **kwargs: Any) -> Any:
         values = kwargs.get(self.param_name)
@@ -506,12 +484,16 @@ class _NullFilterProvider:
         self.param_name = f"{field_name}_{suffix}"
         self.filter_cls: type[Any] = NotNullFilter if negated else NullFilter
         self.return_annotation = self.filter_cls | None
-        param_kwargs = _query_param_kwargs(bool | None, query=camelize(self.param_name), default=None, required=False)
+        annotation = Annotated[bool | None, QueryParameter(name=camelize(self.param_name), required=False)]
         self.signature = inspect.Signature(
-            parameters=[inspect.Parameter(self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, **param_kwargs)],
+            parameters=[
+                inspect.Parameter(
+                    self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation
+                )
+            ],
             return_annotation=self.return_annotation,
         )
-        self.annotations = {self.param_name: param_kwargs["annotation"], "return": self.return_annotation}
+        self.annotations = {self.param_name: annotation, "return": self.return_annotation}
 
     def __call__(self, **kwargs: Any) -> Any:
         return self.filter_cls(field_name=self.field_name) if kwargs.get(self.param_name) else None
@@ -524,18 +506,22 @@ class _BeforeAfterFilterProvider:
         self.field_name = field_name
         self.before_param = f"{field_name}_before"
         self.after_param = f"{field_name}_after"
-        before_kwargs = _query_param_kwargs(DTorNone, query=before_alias, default=None, required=False)
-        after_kwargs = _query_param_kwargs(DTorNone, query=after_alias, default=None, required=False)
+        before_annotation = Annotated[DTorNone, QueryParameter(name=before_alias, required=False)]
+        after_annotation = Annotated[DTorNone, QueryParameter(name=after_alias, required=False)]
         self.signature = inspect.Signature(
             parameters=[
-                inspect.Parameter(self.before_param, kind=inspect.Parameter.KEYWORD_ONLY, **before_kwargs),
-                inspect.Parameter(self.after_param, kind=inspect.Parameter.KEYWORD_ONLY, **after_kwargs),
+                inspect.Parameter(
+                    self.before_param, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=before_annotation
+                ),
+                inspect.Parameter(
+                    self.after_param, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=after_annotation
+                ),
             ],
             return_annotation=BeforeAfterFilter,
         )
         self.annotations = {
-            self.before_param: before_kwargs["annotation"],
-            self.after_param: after_kwargs["annotation"],
+            self.before_param: before_annotation,
+            self.after_param: after_annotation,
             "return": BeforeAfterFilter,
         }
 
@@ -546,14 +532,15 @@ class _BeforeAfterFilterProvider:
 class _IdFilterProvider:
     def __init__(self, field_name: str, id_type: type[Any]) -> None:
         self.field_name = field_name
-        parameter_annotation = _collection_value_annotation(list, id_type)
         self.return_annotation = InCollectionFilter[id_type]  # type: ignore[valid-type]
-        param_kwargs = _query_param_kwargs(parameter_annotation, query="ids", default=None, required=False)
+        annotation = Annotated[_collection_value_annotation(list, id_type), QueryParameter(name="ids", required=False)]  # type: ignore[valid-type]
         self.signature = inspect.Signature(
-            parameters=[inspect.Parameter("ids", kind=inspect.Parameter.KEYWORD_ONLY, **param_kwargs)],
+            parameters=[
+                inspect.Parameter("ids", kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation)
+            ],
             return_annotation=self.return_annotation,
         )
-        self.annotations = {"ids": param_kwargs["annotation"], "return": self.return_annotation}
+        self.annotations = {"ids": annotation, "return": self.return_annotation}
 
     def __call__(self, ids: list[Any] | None = None) -> InCollectionFilter[Any]:
         return InCollectionFilter(field_name=self.field_name, values=ids)
@@ -563,18 +550,25 @@ class _LimitOffsetFilterProvider:
     def __init__(self, default_page_size: int) -> None:
         self.default_page_size = default_page_size
         self.return_annotation = LimitOffsetFilter
-        current_kwargs = _query_param_kwargs(int, query="currentPage", default=1, required=False, ge=1)
-        size_kwargs = _query_param_kwargs(int, query="pageSize", default=default_page_size, required=False, ge=1)
+        current_annotation = Annotated[int, QueryParameter(name="currentPage", required=False, ge=1)]
+        size_annotation = Annotated[int, QueryParameter(name="pageSize", required=False, ge=1)]
         self.signature = inspect.Signature(
             parameters=[
-                inspect.Parameter("current_page", kind=inspect.Parameter.KEYWORD_ONLY, **current_kwargs),
-                inspect.Parameter("page_size", kind=inspect.Parameter.KEYWORD_ONLY, **size_kwargs),
+                inspect.Parameter(
+                    "current_page", kind=inspect.Parameter.KEYWORD_ONLY, default=1, annotation=current_annotation
+                ),
+                inspect.Parameter(
+                    "page_size",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=default_page_size,
+                    annotation=size_annotation,
+                ),
             ],
             return_annotation=self.return_annotation,
         )
         self.annotations = {
-            "current_page": current_kwargs["annotation"],
-            "page_size": size_kwargs["annotation"],
+            "current_page": current_annotation,
+            "page_size": size_annotation,
             "return": self.return_annotation,
         }
 
@@ -588,26 +582,30 @@ class _SearchFilterProvider:
         self.search_fields = search_fields
         self.ignore_case_default = ignore_case_default
         self.return_annotation = SearchFilter
-        search_kwargs = _query_param_kwargs(
-            StringOrNone, query="searchString", default=None, required=False, title="Field to search"
-        )
-        ignore_kwargs = _query_param_kwargs(
+        search_annotation = Annotated[
+            StringOrNone, QueryParameter(name="searchString", required=False, title="Field to search")
+        ]
+        ignore_annotation = Annotated[
             BooleanOrNone,
-            query="searchIgnoreCase",
-            default=ignore_case_default,
-            required=False,
-            title="Search should be case sensitive",
-        )
+            QueryParameter(name="searchIgnoreCase", required=False, title="Search should be case sensitive"),
+        ]
         self.signature = inspect.Signature(
             parameters=[
-                inspect.Parameter("search_string", kind=inspect.Parameter.KEYWORD_ONLY, **search_kwargs),
-                inspect.Parameter("ignore_case", kind=inspect.Parameter.KEYWORD_ONLY, **ignore_kwargs),
+                inspect.Parameter(
+                    "search_string", kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=search_annotation
+                ),
+                inspect.Parameter(
+                    "ignore_case",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=ignore_case_default,
+                    annotation=ignore_annotation,
+                ),
             ],
             return_annotation=self.return_annotation,
         )
         self.annotations = {
-            "search_string": search_kwargs["annotation"],
-            "ignore_case": ignore_kwargs["annotation"],
+            "search_string": search_annotation,
+            "ignore_case": ignore_annotation,
             "return": SearchFilter,
         }
 
@@ -632,28 +630,30 @@ class _OrderByProvider:
         self.allowed_field_names = ", ".join(self.sort_resolution.allowed_display_names)
         self.sort_order_default: SortOrder = config.get("sort_order", "desc")
         self.return_annotation = OrderByFilter
-        field_kwargs = _query_param_kwargs(
-            StringOrNone,
-            query="orderBy",
-            default=self.sort_resolution.default_query_value,
-            required=False,
-            title="Order by field",
-        )
-        order_kwargs = _query_param_kwargs(
-            SortOrderOrNone, query="sortOrder", default=self.sort_order_default, required=False, title="Field to search"
-        )
+        field_annotation = Annotated[
+            StringOrNone, QueryParameter(name="orderBy", required=False, title="Order by field")
+        ]
+        order_annotation = Annotated[
+            SortOrderOrNone, QueryParameter(name="sortOrder", required=False, title="Field to search")
+        ]
         self.signature = inspect.Signature(
             parameters=[
-                inspect.Parameter("field_name", kind=inspect.Parameter.KEYWORD_ONLY, **field_kwargs),
-                inspect.Parameter("sort_order", kind=inspect.Parameter.KEYWORD_ONLY, **order_kwargs),
+                inspect.Parameter(
+                    "field_name",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=self.sort_resolution.default_query_value,
+                    annotation=field_annotation,
+                ),
+                inspect.Parameter(
+                    "sort_order",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=self.sort_order_default,
+                    annotation=order_annotation,
+                ),
             ],
             return_annotation=self.return_annotation,
         )
-        self.annotations = {
-            "field_name": field_kwargs["annotation"],
-            "sort_order": order_kwargs["annotation"],
-            "return": OrderByFilter,
-        }
+        self.annotations = {"field_name": field_annotation, "sort_order": order_annotation, "return": OrderByFilter}
 
     def __call__(self, field_name: StringOrNone = None, sort_order: SortOrderOrNone = None) -> OrderByFilter:
         resolved_field = (
