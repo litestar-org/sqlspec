@@ -80,7 +80,16 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
-    __slots__ = ("_config", "_events_table", "_owner_id_column_ddl", "_owner_id_column_name", "_session_table")
+    __slots__ = (
+        "_app_state_table",
+        "_config",
+        "_events_table",
+        "_metadata_table",
+        "_owner_id_column_ddl",
+        "_owner_id_column_name",
+        "_session_table",
+        "_user_state_table",
+    )
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize the ADK store.
@@ -98,12 +107,18 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         store_config = self._get_store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
+        self._app_state_table: str = str(store_config["app_state_table"])
+        self._user_state_table: str = str(store_config["user_state_table"])
+        self._metadata_table: str = str(store_config["metadata_table"])
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
             _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
         validate_identifier(self._session_table, label="table name")
         validate_identifier(self._events_table, label="table name")
+        validate_identifier(self._app_state_table, label="table name")
+        validate_identifier(self._user_state_table, label="table name")
+        validate_identifier(self._metadata_table, label="table name")
 
     def _get_store_config_from_extension(self) -> "dict[str, Any]":
         """Extract ADK store configuration from config.extension_config.
@@ -127,6 +142,21 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     def events_table(self) -> str:
         """Return the events table name."""
         return self._events_table
+
+    @property
+    def app_state_table(self) -> str:
+        """Return the app-scoped state table name."""
+        return self._app_state_table
+
+    @property
+    def user_state_table(self) -> str:
+        """Return the user-scoped state table name."""
+        return self._user_state_table
+
+    @property
+    def metadata_table(self) -> str:
+        """Return the ADK metadata table name."""
+        return self._metadata_table
 
     @property
     def owner_id_column_ddl(self) -> "str | None":
