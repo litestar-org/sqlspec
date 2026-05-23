@@ -45,11 +45,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "ADKCompressionConfig",
     "ADKConfig",
-    "ADKPartitionConfig",
-    "ADKRetentionConfig",
-    "ADKSqliteOptimizationConfig",
     "AsyncConfigT",
     "AsyncDatabaseConfig",
     "ConfigT",
@@ -683,6 +679,102 @@ class ADKSqliteOptimizationConfig(TypedDict):
     """
 
 
+ADKOptimizationMode: TypeAlias = Literal["auto", "enable", "disable"]
+"""Tri-state optimization control used by ADK capability negotiation."""
+
+
+class ADKSchemaConfig(TypedDict):
+    """Shared ADK schema naming and migration controls."""
+
+    session_table: NotRequired[str]
+    events_table: NotRequired[str]
+    memory_table: NotRequired[str]
+    artifact_table: NotRequired[str]
+    app_state_table: NotRequired[str]
+    user_state_table: NotRequired[str]
+    metadata_table: NotRequired[str]
+    owner_id_column: NotRequired[str]
+    schema_version: NotRequired[int]
+    include_sessions_migration: NotRequired[bool]
+    include_memory_migration: NotRequired[bool]
+    include_artifact_migration: NotRequired[bool]
+
+
+class ADKSearchConfig(TypedDict):
+    """Shared ADK search configuration."""
+
+    strategy: NotRequired[Literal["auto", "like", "fts", "vector"]]
+    use_fts: NotRequired[bool]
+    language: NotRequired[str]
+    max_results: NotRequired[int]
+
+
+class ADKMemoryConfig(TypedDict):
+    """Shared ADK memory configuration."""
+
+    enabled: NotRequired[bool]
+    table: NotRequired[str]
+    max_results: NotRequired[int]
+    search: NotRequired[ADKSearchConfig]
+
+
+class ADKArtifactConfig(TypedDict):
+    """Shared ADK artifact configuration."""
+
+    table: NotRequired[str]
+    storage_uri: NotRequired[str]
+
+
+class ADKOptimizationConfig(TypedDict):
+    """Shared ADK data-model optimization controls."""
+
+    generated_columns: NotRequired[ADKOptimizationMode]
+    null_encoded_empty_state: NotRequired[ADKOptimizationMode]
+    skip_noop_session_update: NotRequired[ADKOptimizationMode]
+    append_only_event_partitioning: NotRequired[ADKOptimizationMode]
+    covering_indexes: NotRequired[ADKOptimizationMode]
+    duckdb_struct_events: NotRequired[ADKOptimizationMode]
+    spanner_commit_timestamp_pk_suffix: NotRequired[ADKOptimizationMode]
+    alloydb_columnar_autopromote: NotRequired[ADKOptimizationMode]
+
+
+class ADKOracleConfig(TypedDict):
+    """Oracle-specific ADK capability settings."""
+
+    in_memory: NotRequired[bool]
+    session_table_options: NotRequired[str]
+    events_table_options: NotRequired[str]
+    memory_table_options: NotRequired[str]
+    compression: NotRequired[ADKCompressionConfig]
+    partitioning: NotRequired[ADKPartitionConfig]
+
+
+class ADKSpannerConfig(TypedDict):
+    """Spanner-specific ADK capability settings."""
+
+    shard_count: NotRequired[int]
+    interleave_events_in_sessions: NotRequired[bool]
+    session_table_options: NotRequired[str]
+    events_table_options: NotRequired[str]
+    memory_table_options: NotRequired[str]
+
+
+class ADKADBCConfig(TypedDict):
+    """ADBC-specific ADK capability settings."""
+
+    dialect: NotRequired[str]
+    table_options: NotRequired[str]
+
+
+class ADKBigQueryConfig(TypedDict):
+    """BigQuery-specific ADK capability settings."""
+
+    dataset: NotRequired[str]
+    partition_expiration_days: NotRequired[int]
+    clustering_fields: NotRequired[tuple[str, ...] | list[str]]
+    table_options: NotRequired[str]
+
+
 class ADKConfig(TypedDict):
     """Configuration options for ADK session and memory store extension.
 
@@ -713,6 +805,33 @@ class ADKConfig(TypedDict):
         This TypedDict provides type safety for extension config but is not required.
         You can use plain dicts as well.
     """
+
+    schema: NotRequired[ADKSchemaConfig]
+    """Shared schema naming, owner binding, and migration controls."""
+
+    memory: NotRequired[ADKMemoryConfig]
+    """Shared memory enablement and result-limit controls."""
+
+    search: NotRequired[ADKSearchConfig]
+    """Shared search strategy and language controls."""
+
+    artifact: NotRequired[ADKArtifactConfig]
+    """Shared artifact metadata and storage URI controls."""
+
+    optimizations: NotRequired[ADKOptimizationConfig]
+    """Shared optimization negotiation controls."""
+
+    oracle: NotRequired[ADKOracleConfig]
+    """Oracle-specific ADK capability settings."""
+
+    spanner: NotRequired[ADKSpannerConfig]
+    """Spanner-specific ADK capability settings."""
+
+    adbc: NotRequired[ADKADBCConfig]
+    """ADBC-specific ADK capability settings."""
+
+    bigquery: NotRequired[ADKBigQueryConfig]
+    """BigQuery-specific ADK capability settings."""
 
     enable_sessions: NotRequired[bool]
     """Enable session store at runtime. Default: True.
