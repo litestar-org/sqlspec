@@ -758,6 +758,12 @@ class ADKLifecycleConfig(TypedDict):
     table_options: NotRequired[ADKTableOptionsConfig]
 
 
+class ADKCapabilityConfig(TypedDict):
+    """Shared ADK capability detection overrides."""
+
+    overrides: NotRequired[dict[str, ADKOptimizationMode]]
+
+
 class ADKMemoryConfig(TypedDict):
     """Shared ADK memory configuration."""
 
@@ -869,6 +875,9 @@ class ADKConfig(TypedDict):
 
     lifecycle: NotRequired[ADKLifecycleConfig]
     """Shared lifecycle controls for partitioning, retention, indexing, compression, and table options."""
+
+    capabilities: NotRequired[ADKCapabilityConfig]
+    """Shared detected capability overrides."""
 
     artifact: NotRequired[ADKArtifactConfig]
     """Shared artifact metadata and storage URI controls."""
