@@ -803,16 +803,23 @@ class ArrowResult(StatementResult):
         """
         return self.data is not None
 
-    def get_data(self) -> "ArrowTable":
-        """Get the Apache Arrow Table from the result.
+    def get_data(self) -> "Any":
+        """Get the Arrow payload from the result.
 
-        Returns:
-            The Arrow table containing the result data.
+        Returns the value shaped by ``arrow_table_to_return_format``: a
+        ``pa.Table`` for ``return_format='table'``, a ``pa.RecordBatchReader``
+        for ``'reader'``, a single ``pa.RecordBatch`` for ``'batch'``, or a
+        ``list[pa.RecordBatch]`` for ``'batches'``.
 
         Raises:
-            ValueError: If no Arrow table is available.
-            TypeError: If data is not an Arrow Table.
+            ValueError: If no Arrow data is available.
         """
+        if self.data is None:
+            msg = "No Arrow data available for this result"
+            raise ValueError(msg)
+        return self.data
+
+    def _as_table(self) -> "ArrowTable":
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
@@ -829,7 +836,7 @@ class ArrowResult(StatementResult):
             ValueError: If no Arrow table is available.
             TypeError: If data is not an Arrow Table.
         """
-        return arrow_table_column_names(self.get_data())
+        return arrow_table_column_names(self._as_table())
 
     @property
     def num_rows(self) -> int:
@@ -842,7 +849,7 @@ class ArrowResult(StatementResult):
             ValueError: If no Arrow table is available.
             TypeError: If data is not an Arrow Table.
         """
-        return arrow_table_num_rows(self.get_data())
+        return arrow_table_num_rows(self._as_table())
 
     @property
     def num_columns(self) -> int:
@@ -855,7 +862,7 @@ class ArrowResult(StatementResult):
             ValueError: If no Arrow table is available.
             TypeError: If data is not an Arrow Table.
         """
-        return arrow_table_num_columns(self.get_data())
+        return arrow_table_num_columns(self._as_table())
 
     def to_pandas(self) -> "PandasDataFrame":
         """Convert Arrow data to pandas DataFrame.
@@ -871,7 +878,7 @@ class ArrowResult(StatementResult):
             >>> df = result.to_pandas()
             >>> print(df.head())
         """
-        return arrow_table_to_pandas(self.get_data())
+        return arrow_table_to_pandas(self._as_table())
 
     def to_polars(self) -> "PolarsDataFrame":
         """Convert Arrow data to Polars DataFrame.
@@ -887,7 +894,7 @@ class ArrowResult(StatementResult):
             >>> df = result.to_polars()
             >>> print(df.head())
         """
-        return arrow_table_to_polars(self.get_data())
+        return arrow_table_to_polars(self._as_table())
 
     def to_dict(self) -> "list[dict[str, Any]]":
         """Convert Arrow data to list of dictionaries.
@@ -907,7 +914,7 @@ class ArrowResult(StatementResult):
             >>> print(rows[0])
             {'id': 1, 'name': 'Alice'}
         """
-        return arrow_table_to_pylist(self.get_data())
+        return arrow_table_to_pylist(self._as_table())
 
     def write_to_storage_sync(
         self,
@@ -918,7 +925,7 @@ class ArrowResult(StatementResult):
         compression: str | None = None,
         pipeline: "SyncStoragePipeline | None" = None,
     ) -> "StorageTelemetry":
-        table = self.get_data()
+        table = self._as_table()
         active_pipeline = pipeline or SyncStoragePipeline()
         return active_pipeline.write_arrow(
             table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
@@ -933,7 +940,7 @@ class ArrowResult(StatementResult):
         compression: str | None = None,
         pipeline: "AsyncStoragePipeline | None" = None,
     ) -> "StorageTelemetry":
-        table = self.get_data()
+        table = self._as_table()
         active_pipeline = pipeline or AsyncStoragePipeline()
         return await active_pipeline.write_arrow(
             table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
@@ -954,7 +961,7 @@ class ArrowResult(StatementResult):
             >>> print(len(result))
             100
         """
-        return arrow_table_num_rows(self.get_data())
+        return arrow_table_num_rows(self._as_table())
 
     def __iter__(self) -> "Iterator[dict[str, Any]]":
         """Iterate over rows as dictionaries.
@@ -972,7 +979,7 @@ class ArrowResult(StatementResult):
             >>> for row in result:
             ...     print(row["name"])
         """
-        yield from arrow_table_to_pylist(self.get_data())
+        yield from arrow_table_to_pylist(self._as_table())
 
 
 class EmptyResult(StatementResult):

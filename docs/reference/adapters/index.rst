@@ -103,6 +103,12 @@ exports a typed config class and a driver implementation.
 
       Arrow Database Connectivity.
 
+   .. grid-item-card:: arrow-odbc
+      :link: arrow_odbc
+      :link-type: doc
+
+      Sync Arrow-over-ODBC for any ODBC-compliant database.
+
 Feature Comparison
 ==================
 
@@ -211,6 +217,12 @@ Feature Comparison
      -
      - Yes
      -
+   * - arrow_odbc
+     - Yes
+     -
+     -
+     - Yes
+     -
 
 .. toctree::
    :hidden:
@@ -231,3 +243,4 @@ Feature Comparison
    cockroach_asyncpg
    cockroach_psycopg
    adbc
+   arrow_odbc
