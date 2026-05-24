@@ -76,6 +76,12 @@ Choose a guide
 
       Apply schema changes safely over time.
 
+   .. grid-item-card:: Optimizations
+      :link: optimizations
+      :link-type: doc
+
+      Latency-oriented variation catalog and memory embedding presets.
+
 .. toctree::
    :hidden:
 
@@ -87,3 +93,4 @@ Choose a guide
    scoped_state
    api
    migrations
+   optimizations
