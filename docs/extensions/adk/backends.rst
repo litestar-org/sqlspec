@@ -98,6 +98,12 @@ The table below classifies every backend by its ADK support level.
      - Full
      - Full
      - Google Cloud Spanner (cloud-managed).
+   * - bigquery
+     - Analytics-replica
+     - Full (sync-wrapped)
+     - n/a
+     - BigQuery is seconds-latency. Use as the analytics-replica path only; pair
+       with an OLTP-grade ADK adapter for live sessions.
 
 Status Definitions
 ------------------
@@ -120,19 +126,39 @@ Current scoped-state boundary
    buckets across sessions. This is a shared store-contract boundary, not a
    SQLite-specific limitation.
 
+**Analytics-replica**
+   Implemented as a write-mostly mirror for downstream analytics, replay, and
+   audit. Not suitable for synchronous agent inner loops. Use alongside an
+   OLTP-grade ADK adapter (Spanner, PostgreSQL family) for live state.
+
 **Removed**
    Previously available but no longer supported. See the removal notice for
    migration guidance.
 
-Removed Backends
-----------------
+BigQuery (Analytics-Replica)
+----------------------------
 
-**BigQuery** was removed from the ADK backend surface. BigQuery's batch-oriented
-architecture is incompatible with the low-latency, transactional write patterns
-that ADK session and event storage require. If you were using BigQuery for ADK
-storage, migrate to Spanner for a Google-managed operational backend, or to a
-transactional OLTP backend such as PostgreSQL, MySQL, Oracle, SQLite, or
-CockroachDB.
+The BigQuery ADK store is positioned as the **analytics-replica** path. BigQuery
+query jobs are seconds-latency and BigQuery DML is not transactional across
+separate jobs, so do not use this store for synchronous agent inner loops. Use
+it for analytics, replay, and audit workloads, paired with an OLTP-grade ADK
+adapter (Spanner, PostgreSQL family) for live state.
+
+Schema layout:
+
+- ``adk_session`` — ``PARTITION BY DATE(create_time)``, ``CLUSTER BY app_name, user_id, id``
+- ``adk_event`` — ``PARTITION BY DATE(timestamp)``, ``CLUSTER BY session_id``
+- ``adk_app_state`` — ``CLUSTER BY app_name``
+- ``adk_user_state`` — ``CLUSTER BY app_name, user_id``
+
+Configuration knobs (``extension_config["adk"]["bigquery"]``):
+
+- ``session_lookup_window_days`` — bounds ``list_sessions`` scans (default 30)
+- ``require_partition_filter`` — adds ``OPTIONS(require_partition_filter = TRUE)``
+  on partitioned tables (default ``True``)
+
+``ADKConfig.retention.event_ttl_seconds`` is converted to
+``partition_expiration_days`` on the events table when set.
 
 Artifact Storage
 ----------------

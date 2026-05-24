@@ -46,7 +46,7 @@ def test_no_event_json_references() -> None:
             offenders.append(str(path))
     assert not offenders, (
         "event_json column name reintroduced in ADK sources — rename to event_data.\n"
-        f"Offending files:\n  - " + "\n  - ".join(offenders)
+        "Offending files:\n  - " + "\n  - ".join(offenders)
     )
 
 
@@ -67,5 +67,5 @@ def test_no_compat_shim_markers() -> None:
                 break
     assert not offenders, (
         "Compat shim markers detected in ADK sources — PRD Global Constraint #1 forbids them.\n"
-        f"Offending files:\n  - " + "\n  - ".join(offenders)
+        "Offending files:\n  - " + "\n  - ".join(offenders)
     )
