@@ -33,6 +33,13 @@ on:
       - 'sqlspec/**'
       - 'tools/scripts/mypyc_smoke.py'
 
+# Cancel in-flight runs of this workflow on the same ref when a newer
+# commit lands. Saves runner minutes during a churn of PR pushes. Not
+# applied to publish.yml — releases must never be cancelled mid-upload.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   detect-mode:
     name: Detect matrix mode
