@@ -23,6 +23,47 @@ on:
       - 'tools/scripts/mypyc_smoke.py'
 
 jobs:
+  detect-mode:
+    name: Detect matrix mode
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_mode: ${{ steps.detect.outputs.matrix_mode }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # workflow_dispatch with test_matrix=full always wins. Otherwise,
+      # promote a PR to the full per-OS x per-py matrix when its diff
+      # touches anything that could affect wheel-build correctness
+      # (workflow yaml, packaging metadata, PGO training, smoke script).
+      # Non-infra PRs stay in subset mode (linux x py3.12) for fast feedback.
+      - name: Detect matrix mode
+        id: detect
+        env:
+          DISPATCH_MODE: ${{ github.event.inputs.test_matrix }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          if [ "$DISPATCH_MODE" = "full" ]; then
+            mode=full
+            reason="workflow_dispatch input"
+          else
+            mode=subset
+            reason="default"
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+              changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)
+              if printf '%s\n' "$changed" | grep -qE '^(\.github/workflows/.*\.yml|pyproject\.toml|uv\.lock|tools/scripts/(pgo_training|mypyc_smoke)\.py)$'; then
+                mode=full
+                reason="PR touches build-matrix infra"
+              fi
+            fi
+          fi
+          echo "matrix_mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Resolved matrix_mode=$mode ($reason)"
+
   build-source:
     name: Build source distribution
     runs-on: ubuntu-latest
@@ -82,17 +123,18 @@ jobs:
   build-wheels-mypyc:
     name: Build MyPyC wheels (${{ matrix.os }} py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    needs: [detect-mode]
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]') || fromJSON('["3.12"]') }}
+        os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]') || fromJSON('["3.12"]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
       - name: Set up QEMU
-        if: matrix.os == 'ubuntu-latest' && github.event.inputs.test_matrix == 'full'
+        if: matrix.os == 'ubuntu-latest' && needs.detect-mode.outputs.matrix_mode == 'full'
         uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
@@ -141,8 +183,8 @@ jobs:
           CIBW_BUILD_VERBOSITY: 1
 
           # Conditional aarch64 cross-build only in 'full' mode (QEMU enabled).
-          CIBW_ARCHS_LINUX: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 aarch64' || 'x86_64' }}
-          CIBW_ARCHS_MACOS: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 arm64' || 'x86_64' }}
+          CIBW_ARCHS_LINUX: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && 'x86_64 aarch64' || 'x86_64' }}
+          CIBW_ARCHS_MACOS: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && 'x86_64 arm64' || 'x86_64' }}
           CIBW_ARCHS_WINDOWS: "AMD64"
 
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
@@ -210,12 +252,12 @@ jobs:
 
   test-wheels:
     name: Test ${{ matrix.os }} py${{ matrix.python-version }}
-    needs: [build-wheels-standard, build-wheels-mypyc]
+    needs: [build-wheels-standard, build-wheels-mypyc, detect-mode]
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.10", "3.12", "3.14"]') || fromJSON('["3.12"]') }}
+        os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["3.10", "3.12", "3.14"]') || fromJSON('["3.12"]') }}
 
     runs-on: ${{ matrix.os }}
     steps:
