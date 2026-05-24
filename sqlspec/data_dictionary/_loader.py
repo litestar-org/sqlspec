@@ -7,7 +7,12 @@ from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.loader import SQLFileLoader
 
 if TYPE_CHECKING:
-    from importlib.abc import Traversable
+    import sys
+
+    if sys.version_info >= (3, 11):
+        from importlib.resources.abc import Traversable
+    else:
+        from importlib.abc import Traversable
 
     from sqlspec.core.statement import SQL
     from sqlspec.data_dictionary._types import DialectConfig
