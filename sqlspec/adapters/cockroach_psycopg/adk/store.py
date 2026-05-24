@@ -81,57 +81,14 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
 
-    async def _get_create_sessions_table_sql(self) -> str:
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
-
-    async def _get_create_events_table_sql(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
-            ON {self._events_table} USING GIN (event_data);
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     async def create_tables(self) -> None:
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
+            await driver.execute_script(await self._get_create_app_states_table_sql())
+            await driver.execute_script(await self._get_create_user_states_table_sql())
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -384,25 +341,68 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         except errors.UndefinedTable:
             return 0
 
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
-class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig"]):
-    """CockroachDB ADK store using psycopg sync driver.
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(sql.encode(), (app_name,))
+                row = await cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
-    Implements session and event storage for Google Agent Development Kit
-    using CockroachDB via psycopg in PostgreSQL compatibility mode (sync).
-    Events are stored as a single JSONB blob (``event_data``) alongside
-    indexed scalar columns for efficient querying.
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
 
-    CockroachDB-specific differences from native PostgreSQL:
-    - No FILLFACTOR (CockroachDB uses different storage engine)
-    - SQL strings require ``.encode()`` for cockroach-psycopg driver
-    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
-    """
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(sql.encode(), (app_name, user_id))
+                row = await cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
-    __slots__ = ()
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        """
 
-    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        super().__init__(config)
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql.encode(), (app_name, Jsonb(state)))
+            await conn.commit()
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        """
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
+            await conn.commit()
+
+    async def get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+                await cur.execute(sql.encode(), (key,))
+                row = await cur.fetchone()
+                return row["value"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        sql = f"""
+        UPSERT INTO {self._metadata_table} (key, value)
+        VALUES (%s, %s)
+        """
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql.encode(), (key, value))
+            await conn.commit()
 
     async def _get_create_sessions_table_sql(self) -> str:
         owner_id_line = ""
@@ -448,17 +448,260 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             ON {self._events_table} USING GIN (event_data);
         """
 
+    async def _get_create_app_states_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name VARCHAR(128) PRIMARY KEY,
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (app_name, user_id)
+        );
+        """
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key VARCHAR(128) PRIMARY KEY,
+            value VARCHAR(512) NOT NULL
+        );
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT (key) DO NOTHING
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
     def _get_drop_tables_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
+
+
+class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig"]):
+    """CockroachDB ADK store using psycopg sync driver.
+
+    Implements session and event storage for Google Agent Development Kit
+    using CockroachDB via psycopg in PostgreSQL compatibility mode (sync).
+    Events are stored as a single JSONB blob (``event_data``) alongside
+    indexed scalar columns for efficient querying.
+
+    CockroachDB-specific differences from native PostgreSQL:
+    - No FILLFACTOR (CockroachDB uses different storage engine)
+    - SQL strings require ``.encode()`` for cockroach-psycopg driver
+    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
+    """
+
+    __slots__ = ()
+
+    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
+        super().__init__(config)
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id, renew_for)
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state."""
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        return await async_(self._get_app_state)(app_name)
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        return await async_(self._get_user_state)(app_name, user_id)
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        await async_(self._upsert_app_state)(app_name, state)
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        await async_(self._upsert_user_state)(app_name, user_id, state)
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        return await async_(self._get_metadata)(key)
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        await async_(self._set_metadata)(key, value)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{owner_id_line},
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
+            ON {self._session_table}(app_name, user_id);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
+            ON {self._session_table}(update_time DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
+            ON {self._session_table} USING GIN (state)
+            WHERE state != '{{}}'::jsonb;
+        """
+
+    async def _get_create_events_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            session_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256) NOT NULL,
+            author VARCHAR(256) NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            event_data JSONB NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
+            ON {self._events_table}(session_id, timestamp ASC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
+            ON {self._events_table} USING GIN (event_data);
+        """
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name VARCHAR(128) PRIMARY KEY,
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (app_name, user_id)
+        );
+        """
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key VARCHAR(128) PRIMARY KEY,
+            value VARCHAR(512) NOT NULL
+        );
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT (key) DO NOTHING
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
     def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_sessions_table_sql)())
             driver.execute_script(run_(self._get_create_events_table_sql)())
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
+            driver.execute_script(run_(self._get_create_app_states_table_sql)())
+            driver.execute_script(run_(self._get_create_user_states_table_sql)())
+            driver.execute_script(run_(self._get_create_metadata_table_sql)())
+            driver.execute_script(run_(self._get_seed_metadata_sql)())
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -488,12 +731,6 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             msg = "Session creation failed"
             raise RuntimeError(msg)
         return result
-
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -529,12 +766,6 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         except errors.UndefinedTable:
             return None
 
-    async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
-
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
         UPDATE {self._session_table}
@@ -546,20 +777,12 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             cur.execute(sql.encode(), (Jsonb(state), session_id))
             conn.commit()
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
-
     def _delete_session(self, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE id = %s"
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(sql.encode(), (session_id,))
             conn.commit()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
@@ -597,10 +820,6 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             ]
         except errors.UndefinedTable:
             return []
-
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return await async_(self._list_sessions)(app_name, user_id)
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
@@ -647,12 +866,6 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
-
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _insert_event(self, event_record: EventRecord) -> None:
         sql = f"""
@@ -716,12 +929,6 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         except errors.UndefinedTable:
             return []
 
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
-
     def _delete_expired_events(self, before: "datetime") -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
 
@@ -732,10 +939,6 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
-
-    async def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
-        return await async_(self._delete_expired_events)(before)
 
     def _delete_idle_sessions(self, updated_before: "datetime") -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
@@ -748,17 +951,72 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         except errors.UndefinedTable:
             return 0
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        return await async_(self._delete_idle_sessions)(updated_before)
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql.encode(), (app_name,))
+                row = cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql.encode(), (app_name, user_id))
+                row = cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql.encode(), (app_name, Jsonb(state)))
+            conn.commit()
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
+            conn.commit()
+
+    def _get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql.encode(), (key,))
+                row = cur.fetchone()
+                return row["value"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        sql = f"""
+        UPSERT INTO {self._metadata_table} (key, value)
+        VALUES (%s, %s)
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql.encode(), (key, value))
+            conn.commit()
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
-
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        await async_(self._append_event)(event_record)
 
 
 class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsycopgAsyncConfig"]):
@@ -768,44 +1026,6 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
 
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
-
-    async def _get_create_memory_table_sql(self) -> str:
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
-
-    def _get_drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     async def create_tables(self) -> None:
         if not self._enabled:
@@ -925,6 +1145,44 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
+    async def _get_create_memory_table_sql(self) -> str:
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
 
 class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsycopgSyncConfig"]):
     """CockroachDB ADK memory store using psycopg sync driver."""
@@ -933,6 +1191,28 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
         super().__init__(config)
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     async def _get_create_memory_table_sql(self) -> str:
         owner_id_line = ""
@@ -979,10 +1259,6 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_memory_table_sql)())
 
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
-
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1026,10 +1302,6 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
                     inserted_count += cur.rowcount
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -1071,12 +1343,6 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
 
         return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
 
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
-
     def _delete_entries_by_session(self, session_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1087,10 +1353,6 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
             cur.execute(sql.encode(), (session_id,))
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
 
     def _delete_entries_older_than(self, days: int) -> int:
         if not self._enabled:
@@ -1105,7 +1367,3 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
             cur.execute(sql.encode())
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)

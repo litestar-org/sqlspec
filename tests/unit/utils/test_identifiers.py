@@ -7,7 +7,7 @@ from sqlspec.utils.identifiers import DEFAULT_MAX_IDENTIFIER_LENGTH, validate_id
 
 def test_validate_identifier_returns_valid_name_unchanged() -> None:
     """Valid identifiers are returned unchanged."""
-    assert validate_identifier("adk_sessions") == "adk_sessions"
+    assert validate_identifier("adk_session") == "adk_session"
 
 
 @pytest.mark.parametrize("name", ["", "1_table", "table-name", "table name", "foo; DROP TABLE x"])
@@ -28,22 +28,22 @@ def test_validate_identifier_rejects_names_longer_than_default_limit() -> None:
 def test_validate_identifier_rejects_schema_qualifier_by_default() -> None:
     """Schema-qualified names are rejected unless explicitly enabled."""
     with pytest.raises(ValueError, match="Schema qualifier not allowed"):
-        validate_identifier("public.adk_sessions")
+        validate_identifier("public.adk_session")
 
 
 def test_validate_identifier_accepts_schema_qualified_name_when_enabled() -> None:
     """Schema-qualified names are validated segment by segment when enabled."""
-    assert validate_identifier("public.adk_sessions", allow_schema_qualifier=True) == "public.adk_sessions"
+    assert validate_identifier("public.adk_session", allow_schema_qualifier=True) == "public.adk_session"
 
 
 def test_validate_identifier_accepts_multi_segment_qualified_name_when_enabled() -> None:
     """Existing event queue behavior accepts multi-segment qualified names."""
-    name = "catalog.public.adk_events"
+    name = "catalog.public.adk_event"
 
     assert validate_identifier(name, allow_schema_qualifier=True) == name
 
 
-@pytest.mark.parametrize("name", [".adk_sessions", "public.", "public..adk_sessions", "public.1_sessions"])
+@pytest.mark.parametrize("name", [".adk_session", "public.", "public..adk_session", "public.1_sessions"])
 def test_validate_identifier_rejects_invalid_schema_qualified_segments(name: str) -> None:
     """Every schema-qualified segment must be a valid identifier."""
     with pytest.raises(ValueError, match="Invalid identifier"):

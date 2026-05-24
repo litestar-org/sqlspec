@@ -83,6 +83,24 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def delete_idle_sessions(self, updated_before: datetime) -> int:
         return 0
 
+    async def get_app_state(self, app_name: str) -> dict[str, Any] | None:
+        return None
+
+    async def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    async def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
+        return None
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
+        return None
+
+    async def get_metadata(self, key: str) -> str | None:
+        return None
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        return None
+
     async def create_tables(self) -> None:
         return None
 
@@ -92,8 +110,49 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def _get_create_events_table_sql(self) -> str:
         return ""
 
+    async def _get_create_app_states_table_sql(self) -> str:
+        return ""
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return ""
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return ""
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return ""
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return ""
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return ""
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return ""
+
     def _get_drop_tables_sql(self) -> list[str]:
         return []
+
+
+class _MigrationSessionStore(_AsyncSessionStore):
+    async def _get_create_sessions_table_sql(self) -> str:
+        return "create sessions"
+
+    async def _get_create_events_table_sql(self) -> str:
+        return "create events"
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        return "create app states"
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return "create user states"
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return "create metadata"
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return "seed metadata"
 
 
 class _AsyncMemoryStore(BaseAsyncADKMemoryStore[Any]):
@@ -181,6 +240,28 @@ def test_session_store_contract_declares_cleanup_hooks() -> None:
     assert "delete_idle_sessions" in BaseAsyncADKStore.__abstractmethods__
 
 
+def test_session_store_contract_declares_schema_parity_hooks() -> None:
+    expected_methods = {
+        "_get_create_app_states_table_sql",
+        "_get_create_user_states_table_sql",
+        "_get_create_metadata_table_sql",
+        "_get_drop_app_states_table_sql",
+        "_get_drop_user_states_table_sql",
+        "_get_drop_metadata_table_sql",
+        "_get_seed_metadata_sql",
+        "get_app_state",
+        "get_user_state",
+        "upsert_app_state",
+        "upsert_user_state",
+        "get_metadata",
+        "set_metadata",
+    }
+
+    assert expected_methods <= BaseAsyncADKStore.__abstractmethods__
+    for method_name in expected_methods:
+        assert inspect.getdoc(getattr(BaseAsyncADKStore, method_name))
+
+
 def test_session_store_resolves_schema_parity_table_names() -> None:
     store = _AsyncSessionStore(
         _Config({
@@ -195,6 +276,36 @@ def test_session_store_resolves_schema_parity_table_names() -> None:
     assert store.app_state_table == "agent_app_states"
     assert store.user_state_table == "agent_user_states"
     assert store.metadata_table == "agent_metadata"
+
+
+def test_session_store_uses_singular_default_table_names() -> None:
+    store = _AsyncSessionStore(_Config())
+
+    assert store.session_table == "adk_session"
+    assert store.events_table == "adk_event"
+    assert store.app_state_table == "adk_app_state"
+    assert store.user_state_table == "adk_user_state"
+    assert store.metadata_table == "adk_internal_metadata"
+
+
+@pytest.mark.anyio
+async def test_adk_migration_up_includes_schema_parity_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    migration = __import__("sqlspec.extensions.adk.migrations.0001_create_adk_tables", fromlist=["up"])
+    context = type("MigrationContext", (), {"config": _Config()})()
+
+    monkeypatch.setattr(migration, "_get_store_class", lambda _context: _MigrationSessionStore)
+    monkeypatch.setattr(migration, "_is_memory_enabled", lambda _context: False)
+
+    statements = await migration.up(context)
+
+    assert statements == [
+        "create sessions",
+        "create events",
+        "create app states",
+        "create user states",
+        "create metadata",
+        "seed metadata",
+    ]
 
 
 @pytest.mark.parametrize("field", ["app_state_table", "user_state_table", "metadata_table"])

@@ -90,7 +90,7 @@ def test_adk_extension_auto_includes_migrations(tmp_path) -> None:
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "adk.db")},
         migration_config={"script_location": "migrations"},
-        extension_config={"adk": {"session_table": "adk_sessions"}},
+        extension_config={"adk": {"session_table": "adk_session"}},
     )
 
     include_extensions = config.migration_config.get("include_extensions")

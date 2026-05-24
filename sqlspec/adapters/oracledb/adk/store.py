@@ -112,8 +112,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Notes:
             Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
+            - session_table: Sessions table name (default: "adk_session")
+            - events_table: Events table name (default: "adk_event")
             - owner_id_column: Optional owner FK column DDL (default: None)
             - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
@@ -123,317 +123,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         adk_config = config.extension_config.get("adk", {})
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
-
-    async def _get_create_sessions_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for sessions table.
-
-        Auto-detects optimal JSON storage type based on Oracle version.
-        Result is cached to minimize database queries.
-        """
-        storage_type = await self._detect_json_storage_type()
-        return self._get_create_sessions_table_sql_for_type(storage_type)
-
-    async def _get_create_events_table_sql(self) -> str:
-        """Get Oracle CREATE TABLE SQL for events table.
-
-        Auto-detects optimal JSON storage type based on Oracle version.
-        Result is cached to minimize database queries.
-        """
-        storage_type = await self._detect_json_storage_type()
-        return self._get_create_events_table_sql_for_type(storage_type)
-
-    async def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
-
-        Returns:
-            Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
-        """
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = await self._get_version_info()
-        self._json_storage_type = _storage_type_from_version(version_info)
-        return self._json_storage_type
-
-    async def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using Oracle data dictionary."""
-
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
-
-        async with self._config.provide_session() as driver:
-            dictionary = OracledbAsyncDataDictionary()
-            self._oracle_version_info = await dictionary.get_version(driver)
-
-        if self._oracle_version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-        return self._oracle_version_info
-
-    async def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
-        """Serialize state dictionary to appropriate format based on storage type.
-
-        Args:
-            state: State dictionary to serialize.
-
-        Returns:
-            JSON string for JSON_NATIVE, bytes for BLOB types.
-        """
-        storage_type = await self._detect_json_storage_type()
-
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            return to_json(state)
-
-        return to_json(state, as_bytes=True)
-
-    async def _deserialize_state(self, data: Any) -> "dict[str, Any]":
-        """Deserialize state data from database format.
-
-        Args:
-            data: Data from database (may be LOB, str, bytes, or dict).
-
-        Returns:
-            Deserialized state dictionary.
-
-        Notes:
-            Handles LOB reading if data has read() method.
-            Oracle JSON type may return dict directly.
-        """
-        if is_async_readable(data):
-            data = await data.read()
-        elif is_readable(data):
-            data = data.read()
-
-        if isinstance(data, dict):
-            return cast("dict[str, Any]", _coerce_decimal_values(data))
-
-        if isinstance(data, bytes):
-            return from_json(data)  # type: ignore[no-any-return]
-
-        if isinstance(data, str):
-            return from_json(data)  # type: ignore[no-any-return]
-
-        return from_json(str(data))  # type: ignore[no-any-return]
-
-    async def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
-        """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
-        if data is None:
-            return None
-        return await self._deserialize_state(data)
-
-    async def _serialize_event_data(self, event_data: Any) -> "str | bytes":
-        """Serialize event_data to the configured Oracle JSON storage format."""
-        storage_type = await self._detect_json_storage_type()
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            return to_json(event_data)
-        return to_json(event_data, as_bytes=True)
-
-    async def _read_event_data(self, data: Any) -> str:
-        """Read event_data from database, handling LOB types.
-
-        Args:
-            data: Data from database (may be LOB, str, or dict).
-
-        Returns:
-            JSON string.
-        """
-        if is_async_readable(data):
-            data = await data.read()
-        elif is_readable(data):
-            data = data.read()
-
-        if isinstance(data, dict):
-            return to_json(data)
-
-        if isinstance(data, bytes):
-            return data.decode("utf-8")
-
-        return str(data)
-
-    def _get_create_sessions_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
-        """Get Oracle CREATE TABLE SQL for sessions with specified storage type.
-
-        Args:
-            storage_type: JSON storage type to use.
-
-        Returns:
-            SQL statement to create adk_sessions table.
-        """
-        if storage_type == JSONStorageType.JSON_NATIVE:
-            state_column = "state JSON NOT NULL"
-        elif storage_type == JSONStorageType.BLOB_JSON:
-            state_column = "state BLOB CHECK (state IS JSON) NOT NULL"
-        else:
-            state_column = "state BLOB NOT NULL"
-
-        owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        table_clauses = _oracle_table_feature_clauses(
-            self._config,
-            "session",
-            in_memory=self._in_memory,
-            hash_partition_key="id",
-            range_partition_key="create_time",
-        )
-
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                {state_column},
-                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
-                ON {self._session_table}(app_name, user_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
-                ON {self._session_table}(update_time DESC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
-        """Get Oracle CREATE TABLE SQL for events with specified storage type.
-
-        The events table uses the new 5-column contract: session_id, invocation_id,
-        author, timestamp, and event_data. The event_data column stores the full
-        ADK Event as JSON (21c+) or BLOB (older versions).
-
-        Args:
-            storage_type: JSON storage type to use.
-
-        Returns:
-            SQL statement to create adk_events table.
-        """
-        event_data_col = _event_data_column_ddl(storage_type)
-        table_clauses = _oracle_table_feature_clauses(
-            self._config,
-            "events",
-            in_memory=self._in_memory,
-            hash_partition_key="session_id",
-            range_partition_key="timestamp",
-        )
-
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                session_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256),
-                author VARCHAR2(256),
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                {event_data_col},
-                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
-                    REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
-                ON {self._events_table}(session_id, timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        """Get Oracle DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            Oracle automatically drops indexes when dropping tables.
-        """
-        return [
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -1418 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_update_time';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -1418 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_app_user';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -1418 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE {self._events_table}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE {self._session_table}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-        ]
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist.
@@ -449,6 +138,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await driver.execute_script(self._get_create_sessions_table_sql_for_type(storage_type))
 
             await driver.execute_script(self._get_create_events_table_sql_for_type(storage_type))
+            await driver.execute_script(self._get_create_app_states_table_sql_for_type(storage_type))
+            await driver.execute_script(self._get_create_user_states_table_sql_for_type(storage_type))
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -840,6 +533,543 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return 0
             raise
 
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, {"app_name": app_name})
+                row = await cursor.fetchone()
+                return await self._deserialize_state(row[0]) if row is not None else None
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        sql = f"""
+        SELECT state
+        FROM {self._user_state_table}
+        WHERE app_name = :app_name AND user_id = :user_id
+        """
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
+                row = await cursor.fetchone()
+                return await self._deserialize_state(row[0]) if row is not None else None
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        sql = f"""
+        MERGE INTO {self._app_state_table} target
+        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, state, update_time)
+            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            await cursor.execute(sql, {"app_name": app_name, "state": await self._serialize_state(state)})
+            await conn.commit()
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        sql = f"""
+        MERGE INTO {self._user_state_table} target
+        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, user_id, state, update_time)
+            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            await cursor.execute(
+                sql, {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(state)}
+            )
+            await conn.commit()
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = :key"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, {"key": key})
+                row = await cursor.fetchone()
+                return str(row[0]) if row is not None else None
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        sql = f"""
+        MERGE INTO {self._metadata_table} target
+        USING (SELECT :key AS key, :value AS value FROM DUAL) source
+        ON (target.key = source.key)
+        WHEN MATCHED THEN
+            UPDATE SET target.value = source.value
+        WHEN NOT MATCHED THEN
+            INSERT (key, value)
+            VALUES (source.key, source.value)
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            await cursor.execute(sql, {"key": key, "value": value})
+            await conn.commit()
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for sessions table.
+
+        Auto-detects optimal JSON storage type based on Oracle version.
+        Result is cached to minimize database queries.
+        """
+        storage_type = await self._detect_json_storage_type()
+        return self._get_create_sessions_table_sql_for_type(storage_type)
+
+    async def _get_create_events_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for events table.
+
+        Auto-detects optimal JSON storage type based on Oracle version.
+        Result is cached to minimize database queries.
+        """
+        storage_type = await self._detect_json_storage_type()
+        return self._get_create_events_table_sql_for_type(storage_type)
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for app-scoped state."""
+        storage_type = await self._detect_json_storage_type()
+        return self._get_create_app_states_table_sql_for_type(storage_type)
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for user-scoped state."""
+        storage_type = await self._detect_json_storage_type()
+        return self._get_create_user_states_table_sql_for_type(storage_type)
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._metadata_table} (
+                key VARCHAR2(128) PRIMARY KEY,
+                value VARCHAR2(512) NOT NULL
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get Oracle SQL to seed the ADK schema-version metadata row."""
+        return f"""
+        BEGIN
+            INSERT INTO {self._metadata_table} (key, value)
+            SELECT 'schema_version', '1'
+            FROM DUAL
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version'
+            );
+        END;
+        """
+
+    async def _detect_json_storage_type(self) -> JSONStorageType:
+        """Detect the appropriate JSON storage type based on Oracle version.
+
+        Returns:
+            Appropriate JSONStorageType for this Oracle version.
+
+        Notes:
+            Queries product_component_version to determine Oracle version.
+            - Oracle 21c+ with compatible >= 20: Native JSON type
+            - Oracle 12c+: BLOB with IS JSON constraint
+            - Oracle 11g and earlier: plain BLOB
+
+            Result is cached in self._json_storage_type.
+        """
+        if self._json_storage_type is not None:
+            return self._json_storage_type
+
+        version_info = await self._get_version_info()
+        self._json_storage_type = _storage_type_from_version(version_info)
+        return self._json_storage_type
+
+    async def _get_version_info(self) -> "OracleVersionInfo | None":
+        """Return cached Oracle version info using Oracle data dictionary."""
+
+        if self._oracle_version_info is not None:
+            return self._oracle_version_info
+
+        async with self._config.provide_session() as driver:
+            dictionary = OracledbAsyncDataDictionary()
+            self._oracle_version_info = await dictionary.get_version(driver)
+
+        if self._oracle_version_info is None:
+            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
+        return self._oracle_version_info
+
+    async def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
+        """Serialize state dictionary to appropriate format based on storage type.
+
+        Args:
+            state: State dictionary to serialize.
+
+        Returns:
+            JSON string for JSON_NATIVE, bytes for BLOB types.
+        """
+        storage_type = await self._detect_json_storage_type()
+
+        if storage_type == JSONStorageType.JSON_NATIVE:
+            return to_json(state)
+
+        return to_json(state, as_bytes=True)
+
+    async def _deserialize_state(self, data: Any) -> "dict[str, Any]":
+        """Deserialize state data from database format.
+
+        Args:
+            data: Data from database (may be LOB, str, bytes, or dict).
+
+        Returns:
+            Deserialized state dictionary.
+
+        Notes:
+            Handles LOB reading if data has read() method.
+            Oracle JSON type may return dict directly.
+        """
+        if is_async_readable(data):
+            data = await data.read()
+        elif is_readable(data):
+            data = data.read()
+
+        if isinstance(data, dict):
+            return cast("dict[str, Any]", _coerce_decimal_values(data))
+
+        if isinstance(data, bytes):
+            return from_json(data)  # type: ignore[no-any-return]
+
+        if isinstance(data, str):
+            return from_json(data)  # type: ignore[no-any-return]
+
+        return from_json(str(data))  # type: ignore[no-any-return]
+
+    async def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
+        """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
+        if data is None:
+            return None
+        return await self._deserialize_state(data)
+
+    async def _serialize_event_data(self, event_data: Any) -> "str | bytes":
+        """Serialize event_data to the configured Oracle JSON storage format."""
+        storage_type = await self._detect_json_storage_type()
+        if storage_type == JSONStorageType.JSON_NATIVE:
+            return to_json(event_data)
+        return to_json(event_data, as_bytes=True)
+
+    async def _read_event_data(self, data: Any) -> str:
+        """Read event_data from database, handling LOB types.
+
+        Args:
+            data: Data from database (may be LOB, str, or dict).
+
+        Returns:
+            JSON string.
+        """
+        if is_async_readable(data):
+            data = await data.read()
+        elif is_readable(data):
+            data = data.read()
+
+        if isinstance(data, dict):
+            return to_json(data)
+
+        if isinstance(data, bytes):
+            return data.decode("utf-8")
+
+        return str(data)
+
+    def _get_create_sessions_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+        """Get Oracle CREATE TABLE SQL for sessions with specified storage type.
+
+        Args:
+            storage_type: JSON storage type to use.
+
+        Returns:
+            SQL statement to create adk_session table.
+        """
+        if storage_type == JSONStorageType.JSON_NATIVE:
+            state_column = "state JSON NOT NULL"
+        elif storage_type == JSONStorageType.BLOB_JSON:
+            state_column = "state BLOB CHECK (state IS JSON) NOT NULL"
+        else:
+            state_column = "state BLOB NOT NULL"
+
+        owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "session",
+            in_memory=self._in_memory,
+            hash_partition_key="id",
+            range_partition_key="create_time",
+        )
+
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
+                id VARCHAR2(128) PRIMARY KEY,
+                app_name VARCHAR2(128) NOT NULL,
+                user_id VARCHAR2(128) NOT NULL,
+                {state_column},
+                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
+            ){table_clauses}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
+                ON {self._session_table}(app_name, user_id)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
+                ON {self._session_table}(update_time DESC)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+        """Get Oracle CREATE TABLE SQL for events with specified storage type.
+
+        The events table uses the new 5-column contract: session_id, invocation_id,
+        author, timestamp, and event_data. The event_data column stores the full
+        ADK Event as JSON (21c+) or BLOB (older versions).
+
+        Args:
+            storage_type: JSON storage type to use.
+
+        Returns:
+            SQL statement to create adk_event table.
+        """
+        event_data_col = _event_data_column_ddl(storage_type)
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "events",
+            in_memory=self._in_memory,
+            hash_partition_key="session_id",
+            range_partition_key="timestamp",
+        )
+
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
+                session_id VARCHAR2(128) NOT NULL,
+                invocation_id VARCHAR2(256),
+                author VARCHAR2(256),
+                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                {event_data_col},
+                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
+                    REFERENCES {self._session_table}(id) ON DELETE CASCADE
+            ){table_clauses}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
+                ON {self._events_table}(session_id, timestamp ASC)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_create_app_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+        """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
+        state_column = _json_column_ddl("state", storage_type)
+
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._app_state_table} (
+                app_name VARCHAR2(128) PRIMARY KEY,
+                {state_column},
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_create_user_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+        """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
+        state_column = _json_column_ddl("state", storage_type)
+
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._user_state_table} (
+                app_name VARCHAR2(128) NOT NULL,
+                user_id VARCHAR2(128) NOT NULL,
+                {state_column},
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                PRIMARY KEY (app_name, user_id)
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {self._app_state_table}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {self._user_state_table}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {self._metadata_table}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        """Get Oracle DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop tables and indexes.
+
+        Notes:
+            Order matters: drop events table (child) before sessions (parent).
+            Oracle automatically drops indexes when dropping tables.
+        """
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_update_time';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._session_table}_app_user';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP TABLE {self._events_table}';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -942 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP TABLE {self._session_table}';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -942 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+        ]
+
 
 class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     """Oracle synchronous ADK store using oracledb sync driver.
@@ -876,8 +1106,8 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Notes:
             Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
+            - session_table: Sessions table name (default: "adk_session")
+            - events_table: Events table name (default: "adk_event")
             - owner_id_column: Optional owner FK column DDL (default: None)
             - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
@@ -887,6 +1117,82 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         adk_config = config.extension_config.get("adk", {})
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id, renew_for)
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state."""
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
+
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        return await async_(self._get_app_state)(app_name)
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        return await async_(self._get_user_state)(app_name, user_id)
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        await async_(self._upsert_app_state)(app_name, state)
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        await async_(self._upsert_user_state)(app_name, user_id, state)
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        return await async_(self._get_metadata)(key)
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        await async_(self._set_metadata)(key, value)
 
     async def _get_create_sessions_table_sql(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
@@ -905,6 +1211,45 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         """
         storage_type = self._detect_json_storage_type()
         return self._get_create_events_table_sql_for_type(storage_type)
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for app-scoped state."""
+        storage_type = self._detect_json_storage_type()
+        return self._get_create_app_states_table_sql_for_type(storage_type)
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for user-scoped state."""
+        storage_type = self._detect_json_storage_type()
+        return self._get_create_user_states_table_sql_for_type(storage_type)
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._metadata_table} (
+                key VARCHAR2(128) PRIMARY KEY,
+                value VARCHAR2(512) NOT NULL
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get Oracle SQL to seed the ADK schema-version metadata row."""
+        return f"""
+        BEGIN
+            INSERT INTO {self._metadata_table} (key, value)
+            SELECT 'schema_version', '1'
+            FROM DUAL
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version'
+            );
+        END;
+        """
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -1025,7 +1370,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             storage_type: JSON storage type to use.
 
         Returns:
-            SQL statement to create adk_sessions table.
+            SQL statement to create adk_session table.
         """
         if storage_type == JSONStorageType.JSON_NATIVE:
             state_column = "state JSON NOT NULL"
@@ -1092,7 +1437,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             storage_type: JSON storage type to use.
 
         Returns:
-            SQL statement to create adk_events table.
+            SQL statement to create adk_event table.
         """
         event_data_col = _event_data_column_ddl(storage_type)
         table_clauses = _oracle_table_feature_clauses(
@@ -1132,6 +1477,82 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         END;
         """
 
+    def _get_create_app_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+        """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
+        state_column = _json_column_ddl("state", storage_type)
+
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._app_state_table} (
+                app_name VARCHAR2(128) PRIMARY KEY,
+                {state_column},
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_create_user_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+        """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
+        state_column = _json_column_ddl("state", storage_type)
+
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._user_state_table} (
+                app_name VARCHAR2(128) NOT NULL,
+                user_id VARCHAR2(128) NOT NULL,
+                {state_column},
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                PRIMARY KEY (app_name, user_id)
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {self._app_state_table}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {self._user_state_table}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {self._metadata_table}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
     def _get_drop_tables_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL statements.
 
@@ -1143,6 +1564,9 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             Oracle automatically drops indexes when dropping tables.
         """
         return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
             f"""
             BEGIN
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
@@ -1211,10 +1635,10 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
             events_sql = SQL(self._get_create_events_table_sql_for_type(storage_type))
             driver.execute_script(events_sql)
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
+            driver.execute_script(SQL(self._get_create_app_states_table_sql_for_type(storage_type)))
+            driver.execute_script(SQL(self._get_create_user_states_table_sql_for_type(storage_type)))
+            driver.execute_script(SQL(run_(self._get_create_metadata_table_sql)()))
+            driver.execute_script(SQL(run_(self._get_seed_metadata_sql)()))
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1267,12 +1691,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
-
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         """Get session by ID.
@@ -1329,12 +1747,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 return None
             raise
 
-    async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
-
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
@@ -1360,10 +1772,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"state": state_data, "id": session_id})
             conn.commit()
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
-
     def _delete_session(self, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
@@ -1379,10 +1787,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor = conn.cursor()
             cursor.execute(sql, {"id": session_id})
             conn.commit()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app, optionally filtered by user.
@@ -1442,10 +1846,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
-
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return await async_(self._list_sessions)(app_name, user_id)
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
@@ -1515,12 +1915,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             update_time=update_time,
         )
 
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
-
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -1573,12 +1967,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 return []
             raise
 
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
-
     def _delete_expired_events(self, before: "datetime") -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
 
@@ -1594,10 +1982,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 return 0
             raise
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
-        return await async_(self._delete_expired_events)(before)
-
     def _delete_idle_sessions(self, updated_before: "datetime") -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
 
@@ -1612,10 +1996,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
-
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        return await async_(self._delete_idle_sessions)(updated_before)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
@@ -1641,9 +2021,111 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             )
             conn.commit()
 
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        await async_(self._append_event)(event_record)
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Synchronous implementation of get_app_state."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"app_name": app_name})
+                row = cursor.fetchone()
+                return self._deserialize_state(row[0]) if row is not None else None
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Synchronous implementation of get_user_state."""
+        sql = f"""
+        SELECT state
+        FROM {self._user_state_table}
+        WHERE app_name = :app_name AND user_id = :user_id
+        """
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
+                row = cursor.fetchone()
+                return self._deserialize_state(row[0]) if row is not None else None
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of upsert_app_state."""
+        sql = f"""
+        MERGE INTO {self._app_state_table} target
+        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, state, update_time)
+            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"app_name": app_name, "state": self._serialize_state(state)})
+            conn.commit()
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of upsert_user_state."""
+        sql = f"""
+        MERGE INTO {self._user_state_table} target
+        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, user_id, state, update_time)
+            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(state)})
+            conn.commit()
+
+    def _get_metadata(self, key: str) -> "str | None":
+        """Synchronous implementation of get_metadata."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = :key"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"key": key})
+                row = cursor.fetchone()
+                return str(row[0]) if row is not None else None
+        except oracledb.DatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        """Synchronous implementation of set_metadata."""
+        sql = f"""
+        MERGE INTO {self._metadata_table} target
+        USING (SELECT :key AS key, :value AS value FROM DUAL) source
+        ON (target.key = source.key)
+        WHEN MATCHED THEN
+            UPDATE SET target.value = source.value
+        WHEN NOT MATCHED THEN
+            INSERT (key, value)
+            VALUES (source.key, source.value)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"key": key, "value": value})
+            conn.commit()
 
 
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
@@ -1657,6 +2139,98 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         self._oracle_version_info: OracleVersionInfo | None = None
         adk_config = config.extension_config.get("adk", {})
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
+
+    async def create_tables(self) -> None:
+        if not self._enabled:
+            return
+
+        async with self._config.provide_session() as driver:
+            await driver.execute_script(await self._get_create_memory_table_sql())
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
+        owner_param = ", :owner_id" if self._owner_id_column_name else ""
+        sql = f"""
+        INSERT INTO {self._memory_table} (
+            id, session_id, app_name, user_id, event_id, author{owner_column},
+            timestamp, content_json, content_text, metadata_json, inserted_at
+        ) VALUES (
+            :id, :session_id, :app_name, :user_id, :event_id, :author{owner_param},
+            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
+        )
+        """
+
+        inserted_count = 0
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            for entry in entries:
+                content_json = await self._serialize_json_field(entry["content_json"])
+                metadata_json = await self._serialize_json_field(entry["metadata_json"])
+                params = {
+                    "id": entry["id"],
+                    "session_id": entry["session_id"],
+                    "app_name": entry["app_name"],
+                    "user_id": entry["user_id"],
+                    "event_id": entry["event_id"],
+                    "author": entry["author"],
+                    "timestamp": entry["timestamp"],
+                    "content_json": content_json,
+                    "content_text": entry["content_text"],
+                    "metadata_json": metadata_json,
+                    "inserted_at": entry["inserted_at"],
+                }
+                if self._owner_id_column_name:
+                    params["owner_id"] = str(owner_id) if owner_id is not None else None
+                if await self._execute_insert_entry(cursor, sql, params):
+                    inserted_count += 1
+            await conn.commit()
+
+        return inserted_count
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        effective_limit = limit if limit is not None else self._max_results
+
+        try:
+            if self._use_fts:
+                return await self._search_entries_fts(query, app_name, user_id, effective_limit)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
+        except oracledb.DatabaseError as exc:
+            error_obj = exc.args[0] if exc.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return []
+            raise
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            await cursor.execute(sql, {"session_id": session_id})
+            await conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        sql = f"""
+        DELETE FROM {self._memory_table}
+        WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
+        """
+        async with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            await cursor.execute(sql, {"days": days})
+            await conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     async def _detect_json_storage_type(self) -> "JSONStorageType":
         if self._json_storage_type is not None:
@@ -1818,13 +2392,6 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             """,
         ]
 
-    async def create_tables(self) -> None:
-        if not self._enabled:
-            return
-
-        async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_memory_table_sql())
-
     async def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
         try:
@@ -1835,72 +2402,6 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 return False
             raise
         return True
-
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        if not entries:
-            return 0
-
-        owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
-        owner_param = ", :owner_id" if self._owner_id_column_name else ""
-        sql = f"""
-        INSERT INTO {self._memory_table} (
-            id, session_id, app_name, user_id, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
-        ) VALUES (
-            :id, :session_id, :app_name, :user_id, :event_id, :author{owner_param},
-            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
-        )
-        """
-
-        inserted_count = 0
-        async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            for entry in entries:
-                content_json = await self._serialize_json_field(entry["content_json"])
-                metadata_json = await self._serialize_json_field(entry["metadata_json"])
-                params = {
-                    "id": entry["id"],
-                    "session_id": entry["session_id"],
-                    "app_name": entry["app_name"],
-                    "user_id": entry["user_id"],
-                    "event_id": entry["event_id"],
-                    "author": entry["author"],
-                    "timestamp": entry["timestamp"],
-                    "content_json": content_json,
-                    "content_text": entry["content_text"],
-                    "metadata_json": metadata_json,
-                    "inserted_at": entry["inserted_at"],
-                }
-                if self._owner_id_column_name:
-                    params["owner_id"] = str(owner_id) if owner_id is not None else None
-                if await self._execute_insert_entry(cursor, sql, params):
-                    inserted_count += 1
-            await conn.commit()
-
-        return inserted_count
-
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        effective_limit = limit if limit is not None else self._max_results
-
-        try:
-            if self._use_fts:
-                return await self._search_entries_fts(query, app_name, user_id, effective_limit)
-            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except oracledb.DatabaseError as exc:
-            error_obj = exc.args[0] if exc.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return []
-            raise
 
     async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -1948,25 +2449,6 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             rows = await cursor.fetchall()
         return await self._rows_to_records(rows)
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
-        async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": session_id})
-            await conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
-        """
-        async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"days": days})
-            await conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
     async def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []
         for row in rows:
@@ -2002,6 +2484,28 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
         self._oracle_version_info: OracleVersionInfo | None = None
         adk_config = config.extension_config.get("adk", {})
         self._in_memory = bool(adk_config.get("in_memory", False))
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     def _detect_json_storage_type(self) -> "JSONStorageType":
         if self._json_storage_type is not None:
@@ -2170,10 +2674,6 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_memory_table_sql)())
 
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
-
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
         try:
@@ -2232,10 +2732,6 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
 
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -2254,12 +2750,6 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
-
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -2315,10 +2805,6 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
-
     def _delete_entries_older_than(self, days: int) -> int:
         sql = f"""
         DELETE FROM {self._memory_table}
@@ -2329,10 +2815,6 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
             cursor.execute(sql, {"days": days})
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []
@@ -2420,6 +2902,15 @@ def _event_data_column_ddl(storage_type: JSONStorageType) -> str:
     if storage_type == JSONStorageType.BLOB_JSON:
         return "event_data BLOB CHECK (event_data IS JSON) NOT NULL"
     return "event_data BLOB NOT NULL"
+
+
+def _json_column_ddl(column_name: str, storage_type: JSONStorageType) -> str:
+    """Return an Oracle JSON column DDL fragment for the configured storage type."""
+    if storage_type == JSONStorageType.JSON_NATIVE:
+        return f"{column_name} JSON NOT NULL"
+    if storage_type == JSONStorageType.BLOB_JSON:
+        return f"{column_name} BLOB CHECK ({column_name} IS JSON) NOT NULL"
+    return f"{column_name} BLOB NOT NULL"
 
 
 def _get_oracle_adk_config(config: Any) -> dict[str, Any]:

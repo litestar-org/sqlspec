@@ -298,8 +298,11 @@ All backends are configured through ``extension_config["adk"]``:
        connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "adk": {
-               "session_table": "adk_sessions",
-               "events_table": "adk_events",
+               "session_table": "adk_session",
+               "events_table": "adk_event",
+               "app_state_table": "adk_app_state",
+               "user_state_table": "adk_user_state",
+               "metadata_table": "adk_internal_metadata",
                "memory_table": "adk_memory_entries",
                "memory_use_fts": True,
                "owner_id_column": "tenant_id INTEGER NOT NULL",

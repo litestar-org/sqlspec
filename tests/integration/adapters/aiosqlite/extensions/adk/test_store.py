@@ -12,6 +12,7 @@ from tests.integration.adapters._adk_contract_helpers import (
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
+    assert_session_scoped_state_contract,
     assert_session_table_lifecycle_contract,
 )
 
@@ -38,7 +39,7 @@ async def test_aiosqlite_session_owner_column_is_created_when_configured(tmp_pat
         await store.create_session("session-owner", "app", "user", {}, owner_id="tenant-1")
 
         async with config.provide_connection() as conn:
-            cursor = await conn.execute("SELECT owner_id FROM adk_sessions WHERE id = ?", ("session-owner",))
+            cursor = await conn.execute("SELECT owner_id FROM adk_session WHERE id = ?", ("session-owner",))
             row = await cursor.fetchone()
 
         assert row == ("tenant-1",)
@@ -83,6 +84,15 @@ async def test_aiosqlite_session_get_session_renewal_contract(tmp_path: Path) ->
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_get_session_renewal_contract(store, marker="aiosqlite")
+    finally:
+        await config.close_pool()
+
+
+async def test_aiosqlite_session_scoped_state_contract(tmp_path: Path) -> None:
+    """AioSQLite service reads merge app/user state from dedicated scoped tables."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_scoped_state_contract(store, marker="aiosqlite")
     finally:
         await config.close_pool()
 

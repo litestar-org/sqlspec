@@ -75,8 +75,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
     Notes:
         Configuration is read from config.extension_config["adk"]:
-        - session_table: Sessions table name (default: "adk_sessions")
-        - events_table: Events table name (default: "adk_events")
+        - session_table: Sessions table name (default: "adk_session")
+        - events_table: Events table name (default: "adk_event")
+        - app_state_table: App-scoped state table name (default: "adk_app_state")
+        - user_state_table: User-scoped state table name (default: "adk_user_state")
+        - metadata_table: Internal metadata table name (default: "adk_internal_metadata")
         - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
@@ -99,8 +102,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
         Notes:
             Reads configuration from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
+            - session_table: Sessions table name (default: "adk_session")
+            - events_table: Events table name (default: "adk_event")
+            - app_state_table: App-scoped state table name (default: "adk_app_state")
+            - user_state_table: User-scoped state table name (default: "adk_user_state")
+            - metadata_table: Internal metadata table name (default: "adk_internal_metadata")
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config
@@ -119,14 +125,6 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         validate_identifier(self._app_state_table, label="table name")
         validate_identifier(self._user_state_table, label="table name")
         validate_identifier(self._metadata_table, label="table name")
-
-    def _get_store_config_from_extension(self) -> "dict[str, Any]":
-        """Extract ADK store configuration from config.extension_config.
-
-        Returns:
-            Dict with session_table, events_table, and optionally owner_id_column.
-        """
-        return dict(_get_adk_session_store_config(self._config))
 
     @property
     def config(self) -> ConfigT:
@@ -167,6 +165,14 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     def owner_id_column_name(self) -> "str | None":
         """Return the owner ID column name only (or None if not configured)."""
         return self._owner_id_column_name
+
+    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+        """Extract ADK store configuration from config.extension_config.
+
+        Returns:
+            Dict with ADK table names and optionally owner_id_column.
+        """
+        return dict(_get_adk_session_store_config(self._config))
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
         """Calculate expiration timestamp from expires_in.
@@ -341,6 +347,74 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application.
+
+        Args:
+            app_name: Application name.
+
+        Returns:
+            App-scoped state mapping if present, otherwise ``None``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+
+        Returns:
+            User-scoped state mapping if present, otherwise ``None``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application.
+
+        Args:
+            app_name: Application name.
+            state: App-scoped state mapping.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            state: User-scoped state mapping.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table.
+
+        Args:
+            key: Metadata key.
+
+        Returns:
+            Metadata value if present, otherwise ``None``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table.
+
+        Args:
+            key: Metadata key.
+            value: Metadata value.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError
@@ -403,6 +477,69 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
         Returns:
             SQL statement to create the events table.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get the CREATE TABLE SQL for the app-scoped state table.
+
+        Returns:
+            SQL statement to create the app-scoped state table.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get the CREATE TABLE SQL for the user-scoped state table.
+
+        Returns:
+            SQL statement to create the user-scoped state table.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get the CREATE TABLE SQL for the ADK internal metadata table.
+
+        Returns:
+            SQL statement to create the ADK internal metadata table.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get the SQL statement that seeds the ADK schema-version metadata row.
+
+        Returns:
+            SQL statement that records ``schema_version = 1``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_drop_app_states_table_sql(self) -> str:
+        """Get the DROP TABLE SQL statement for the app-scoped state table.
+
+        Returns:
+            SQL statement to drop the app-scoped state table.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_drop_user_states_table_sql(self) -> str:
+        """Get the DROP TABLE SQL statement for the user-scoped state table.
+
+        Returns:
+            SQL statement to drop the user-scoped state table.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_drop_metadata_table_sql(self) -> str:
+        """Get the DROP TABLE SQL statement for the ADK internal metadata table.
+
+        Returns:
+            SQL statement to drop the ADK internal metadata table.
         """
         raise NotImplementedError
 

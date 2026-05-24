@@ -8,7 +8,8 @@ used by your ADK backend, then run them with the SQLSpec migration CLI.
 Schema Bootstrapping
 ====================
 
-You can programmatically create ADK session/event and memory tables with
+You can programmatically create ADK session/event/scoped-state/metadata and
+memory tables with
 ``create_tables()`` / ``ensure_tables()``:
 
 .. code-block:: python
@@ -55,13 +56,19 @@ If you are upgrading from a pre-clean-break version of the ADK extension,
 note the following schema changes:
 
 - **Events table**: The column layout changed to full-event JSON storage.
-  The ``event_json`` column now stores the entire ADK Event as a JSON blob.
+  The ``event_data`` column now stores the entire ADK Event as a JSON blob.
   Individual event columns (``content``, ``actions``, ``branch``, etc.) have
   been replaced by indexed scalar columns (``invocation_id``, ``author``,
-  ``timestamp``) plus ``event_json``.
+  ``timestamp``) plus ``event_data``.
+- **Scoped state tables**: New ``adk_app_state`` and ``adk_user_state`` tables
+  store ``app:`` and ``user:`` scoped keys. Raw ``adk_session.state`` rows now
+  contain only session-scoped keys; ``SQLSpecSessionService.get_session()``
+  returns the merged ADK view.
+- **Internal metadata table**: New ``adk_internal_metadata`` table seeded with
+  ``schema_version = 1``.
 - **Artifact table**: New table (``adk_artifact_versions``) for artifact
   metadata. Create this table when enabling the artifact service.
-- **BigQuery**: Removed. Migrate to Spanner, PostgreSQL, or any other
-  supported backend.
+- **BigQuery**: Treated as an analytics-replica backend. Use Spanner or a
+  PostgreSQL-family adapter for latency-sensitive live session state.
 
 See :doc:`/usage/migrations` for the full workflow and commands.

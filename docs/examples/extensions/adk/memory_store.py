@@ -29,7 +29,7 @@ def test_adk_memory_store() -> None:
             "invocation_id": "inv_1",
             "author": "user",
             "timestamp": datetime.now(timezone.utc),
-            "event_json": {
+            "event_data": {
                 "id": "evt_1",
                 "invocation_id": "inv_1",
                 "author": "user",

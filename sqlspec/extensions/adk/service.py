@@ -11,7 +11,9 @@ from sqlspec.extensions.adk.converters import (
     compute_update_marker,
     event_to_record,
     filter_temp_state,
+    merge_scoped_state,
     record_to_session,
+    split_scoped_state,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -86,10 +88,16 @@ class SQLSpecSessionService(BaseSessionService):
             state = {}
 
         persisted_state = filter_temp_state(state)
+        app_state, user_state, session_state = split_scoped_state(persisted_state)
 
         record = await self._store.create_session(
-            session_id=session_id, app_name=app_name, user_id=user_id, state=persisted_state
+            session_id=session_id, app_name=app_name, user_id=user_id, state=session_state
         )
+        if app_state:
+            await self._store.upsert_app_state(app_name, app_state)
+        if user_state:
+            await self._store.upsert_user_state(app_name, user_id, user_state)
+        record["state"] = merge_scoped_state(record["state"], app_state, user_state)
         log_with_context(
             logger, logging.DEBUG, "adk.session.create", app_name=app_name, session_id=session_id, has_state=bool(state)
         )
@@ -130,6 +138,10 @@ class SQLSpecSessionService(BaseSessionService):
                 logger, logging.DEBUG, "adk.session.get", app_name=app_name, session_id=session_id, found=False
             )
             return None
+
+        app_state = await self._store.get_app_state(app_name)
+        user_state = await self._store.get_user_state(app_name, user_id)
+        record["state"] = merge_scoped_state(record["state"], app_state, user_state)
 
         after_timestamp = None
         limit = None
@@ -244,6 +256,7 @@ class SQLSpecSessionService(BaseSessionService):
         durable_state = filter_temp_state(session.state)
         if event.actions and event.actions.state_delta:
             durable_state.update(event.actions.state_delta)
+        app_state, user_state, session_state = split_scoped_state(durable_state)
 
         # --- Stale-session detection ---
         current_record = await self._store.get_session(session.id)
@@ -268,8 +281,13 @@ class SQLSpecSessionService(BaseSessionService):
 
         # --- Persist event and state atomically ---
         updated_record = await self._store.append_event_and_update_state(
-            event_record=event_record, session_id=session.id, state=durable_state
+            event_record=event_record, session_id=session.id, state=session_state
         )
+        if app_state:
+            await self._store.upsert_app_state(session.app_name, app_state)
+        if user_state:
+            await self._store.upsert_user_state(session.app_name, session.user_id, user_state)
+        updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
         # Use the returned record directly — saves a round-trip vs a follow-up get_session().
         session.last_update_time = updated_record["update_time"].timestamp()
