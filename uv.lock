@@ -402,6 +402,23 @@ wheels = [
 ]
 
 [[package]]
+name = "arrow-odbc"
+version = "10.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+    { name = "pyarrow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/d9/733054d1f6c3239abd36734eccb13a407114c420e7cc994a266c22f1f790/arrow_odbc-10.4.0.tar.gz", hash = "sha256:7453cbf9cb9318696c7df7ea10eb2dad182c9bd4bbd010ec1b785fa45dbfb470", size = 106032, upload-time = "2026-04-30T09:30:18.73Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/ea/1b900e387a2420ec6c81acb2772018943235ef153150b1c3fc4bc6d6c626/arrow_odbc-10.4.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:e7ecf8ebb2c4db3c5ac79cbcbfc191dff896f379041d87e90daa46cfb07db151", size = 808016, upload-time = "2026-04-30T09:33:11.86Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/e1/265408e9a79faebee0e4957cb0895e09943c758f2a68694ae9486cd44b74/arrow_odbc-10.4.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:77d2a8371cfe06ad4fd82de6d7920d35c3ebe3727e18d79cc179864b9522b70a", size = 782554, upload-time = "2026-04-30T09:30:17.018Z" },
+    { url = "https://files.pythonhosted.org/packages/15/07/6daf87290bd539bf229c65cafc1990a25c935be8c3f1a8ce3c867f0540d5/arrow_odbc-10.4.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:e73517ba27036f486e21a406d6c0b960540c188df71e8d88603563f8d791c312", size = 891516, upload-time = "2026-04-30T09:31:49.399Z" },
+    { url = "https://files.pythonhosted.org/packages/34/f1/39a940a857179a675710afe68a0624f34c9b14a0ba54a48a9606f8e62901/arrow_odbc-10.4.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:a44de146e3db7aac1f054f803c4bbd00319dfdb4c2143c76425b62a969725264", size = 921999, upload-time = "2026-04-30T09:31:44.559Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/47/cc26007858cd8b36ce3a2d3da1232a29cebfb4b27455d6d92f0ff2e7ab5e/arrow_odbc-10.4.0-py3-none-win_amd64.whl", hash = "sha256:019bda957449463f0ce36ba0cfb14ddeeed7ba462468838aed912ddf81e1ad98", size = 691034, upload-time = "2026-04-30T09:31:47.267Z" },
+]
+
+[[package]]
 name = "ast-serialize"
 version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6400,6 +6417,10 @@ aiosqlite = [
 alloydb = [
     { name = "google-cloud-alloydb-connector" },
 ]
+arrow-odbc = [
+    { name = "arrow-odbc" },
+    { name = "pyarrow" },
+]
 asyncmy = [
     { name = "asyncmy" },
 ]
@@ -6677,6 +6698,7 @@ requires-dist = [
     { name = "aiomysql", marker = "extra == 'aiomysql'" },
     { name = "aioodbc", marker = "extra == 'aioodbc'" },
     { name = "aiosqlite", marker = "extra == 'aiosqlite'" },
+    { name = "arrow-odbc", marker = "extra == 'arrow-odbc'", specifier = ">=10.4" },
     { name = "asyncmy", marker = "extra == 'asyncmy'" },
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
     { name = "asyncpg", marker = "extra == 'cockroachdb'" },
@@ -6711,6 +6733,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'cockroachdb'" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'psycopg'" },
     { name = "pyarrow", marker = "extra == 'adbc'" },
+    { name = "pyarrow", marker = "extra == 'arrow-odbc'" },
     { name = "pyarrow", marker = "extra == 'pandas'" },
     { name = "pyarrow", marker = "extra == 'polars'" },
     { name = "pydantic", marker = "extra == 'pydantic'" },
@@ -6727,7 +6750,7 @@ requires-dist = [
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'" },
 ]
-provides-extras = ["adbc", "adk", "aiomysql", "aioodbc", "aiosqlite", "alloydb", "asyncmy", "asyncpg", "attrs", "bigquery", "cloud-sql", "cockroachdb", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "mysql-connector", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "sanic", "spanner", "starlette", "uuid"]
+provides-extras = ["adbc", "adk", "aiomysql", "aioodbc", "aiosqlite", "alloydb", "arrow-odbc", "asyncmy", "asyncpg", "attrs", "bigquery", "cloud-sql", "cockroachdb", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mypyc", "mysql-connector", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "sanic", "spanner", "starlette", "uuid"]
 
 [package.metadata.requires-dev]
 benchmarks = [

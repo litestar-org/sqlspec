@@ -38,6 +38,7 @@ aiomysql = ["aiomysql"]
 aioodbc = ["aioodbc"]
 aiosqlite = ["aiosqlite"]
 alloydb = ["google-cloud-alloydb-connector"]
+arrow-odbc = ["arrow-odbc>=10.4", "pyarrow"]
 asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 attrs = ["attrs", "cattrs"]
@@ -415,6 +416,7 @@ markers = [
   "aiomysql: marks tests using aiomysql",
   "aioodbc: marks tests using aioodbc",
   "aiosqlite: marks tests using aiosqlite",
+  "arrow_odbc: marks tests using the arrow_odbc adapter",
   "asyncmy: marks tests using asyncmy",
   "asyncpg: marks tests using asyncpg",
   "duckdb_driver: marks tests using the duckdb driver",
@@ -460,6 +462,8 @@ module = [
   "uvloop.*",
   "aiomysql",
   "aiomysql.*",
+  "arrow_odbc",
+  "arrow_odbc.*",
   "asyncmy",
   "asyncmy.*",
   "pyarrow",
