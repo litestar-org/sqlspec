@@ -22,7 +22,7 @@ from tests.integration.adapters._adk_contract_helpers import (
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.pymysql, pytest.mark.integration]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def pymysql_adk_store(pymysql_config: "PyMysqlConfig") -> "AsyncGenerator[PyMysqlADKStore, None]":
     store = PyMysqlADKStore(pymysql_config)
     try:

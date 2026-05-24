@@ -30,7 +30,7 @@ pytestmark = [
 ]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def cockroach_psycopg_adk_store(
     cockroach_async_config: "CockroachPsycopgAsyncConfig",
 ) -> "AsyncGenerator[CockroachPsycopgAsyncADKStore, None]":

@@ -22,7 +22,7 @@ from tests.integration.adapters._adk_contract_helpers import (
 pytestmark = [pytest.mark.xdist_group("cockroachdb"), pytest.mark.cockroachdb, pytest.mark.integration]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def cockroach_asyncpg_adk_store(
     cockroach_asyncpg_config: "CockroachAsyncpgConfig",
 ) -> "AsyncGenerator[CockroachAsyncpgADKStore, None]":

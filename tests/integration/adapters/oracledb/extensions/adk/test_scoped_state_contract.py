@@ -22,7 +22,7 @@ from tests.integration.adapters._adk_contract_helpers import (
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def oracle_adk_store(oracle_async_config: "OracleAsyncConfig") -> "AsyncGenerator[OracleAsyncADKStore, None]":
     store = OracleAsyncADKStore(oracle_async_config)
     try:
