@@ -74,10 +74,7 @@ def main() -> int:
         help="ADK adapter to exercise.",
     )
     parser.add_argument(
-        "--scenario",
-        required=True,
-        choices=("chat_loop", "list_replay", "struct_scan"),
-        help="Workload scenario.",
+        "--scenario", required=True, choices=("chat_loop", "list_replay", "struct_scan"), help="Workload scenario."
     )
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=10)

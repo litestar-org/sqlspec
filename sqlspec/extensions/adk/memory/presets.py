@@ -151,7 +151,9 @@ def resolve_embedding_config(memory_config: "dict[str, object] | None") -> Resol
         return ResolvedEmbeddingConfig(
             dim=explicit_dim,
             precision=str(explicit_precision) if explicit_precision else (preset.precision if preset else "float32"),
-            normalize=bool(explicit_normalize) if explicit_normalize is not None else (preset.normalize if preset else True),
+            normalize=bool(explicit_normalize)
+            if explicit_normalize is not None
+            else (preset.normalize if preset else True),
             source="embedding_dimension",
             preset=preset,
         )
