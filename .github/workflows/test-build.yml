@@ -200,6 +200,8 @@ jobs:
           # python.exe blocks virtualenv discovery past its 10s timeout.
           Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pypa\cibuildwheel" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE\wheelhouse" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionProcess "python.exe" -ErrorAction SilentlyContinue
 
       - name: Install cibuildwheel
