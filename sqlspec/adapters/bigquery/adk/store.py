@@ -160,9 +160,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         from google.cloud import bigquery
 
         client = self._config.create_connection()
-        job_config = (
-            bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
-        )
+        job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
         job = client.query(sql, job_config=job_config)
         return [dict(row) for row in job.result()]
 
@@ -203,9 +201,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
             "update_time": now,
         }
 
-    def _get_session(
-        self, session_id: str, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             self._update_session_touch(session_id)
 
@@ -387,10 +383,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         FROM {self._qualified(self._user_state_table)}
         WHERE app_name = @app_name AND user_id = @user_id LIMIT 1
         """
-        rows = self._run_query(
-            sql,
-            [self._query_param("app_name", app_name), self._query_param("user_id", user_id)],
-        )
+        rows = self._run_query(sql, [self._query_param("app_name", app_name), self._query_param("user_id", user_id)])
         return self._decode_json(rows[0]["state"]) if rows else None
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:

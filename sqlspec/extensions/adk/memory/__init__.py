@@ -52,14 +52,26 @@ from sqlspec.extensions.adk.memory.converters import (
     record_to_memory_entry,
     session_to_memory_records,
 )
+from sqlspec.extensions.adk.memory.presets import (
+    EMBEDDING_PRESETS,
+    EmbeddingPreset,
+    ResolvedEmbeddingConfig,
+    register_embedding_preset,
+    resolve_embedding_config,
+)
 from sqlspec.extensions.adk.memory.service import SQLSpecMemoryService
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 
 __all__ = (
+    "EMBEDDING_PRESETS",
     "BaseAsyncADKMemoryStore",
+    "EmbeddingPreset",
     "MemoryRecord",
+    "ResolvedEmbeddingConfig",
     "SQLSpecMemoryService",
     "extract_content_text",
     "record_to_memory_entry",
+    "register_embedding_preset",
+    "resolve_embedding_config",
     "session_to_memory_records",
 )

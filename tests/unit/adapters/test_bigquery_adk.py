@@ -18,8 +18,7 @@ def _make_store(extras: "dict[str, Any] | None" = None) -> BigQueryADKStore:
     if extras:
         extension["adk"].update(extras)
     config = BigQueryConfig(
-        connection_config={"project": "test-project", "dataset_id": "test_dataset"},
-        extension_config=extension,
+        connection_config={"project": "test-project", "dataset_id": "test_dataset"}, extension_config=extension
     )
     return BigQueryADKStore(config)
 
