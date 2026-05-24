@@ -26,7 +26,7 @@ from tests.integration.adapters._adk_contract_helpers import (
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.mark.integration]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def psqlpy_adk_store(postgres_service: "PostgresService") -> "AsyncGenerator[PsqlpyADKStore, None]":
     dsn = (
         f"postgres://{postgres_service.user}:{postgres_service.password}@"

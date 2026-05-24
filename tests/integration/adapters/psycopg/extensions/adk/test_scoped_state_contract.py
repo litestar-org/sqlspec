@@ -30,7 +30,7 @@ pytestmark = [
 ]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def psycopg_adk_store(psycopg_async_config: "PsycopgAsyncConfig") -> "AsyncGenerator[PsycopgAsyncADKStore, None]":
     store = PsycopgAsyncADKStore(psycopg_async_config)
     try:
