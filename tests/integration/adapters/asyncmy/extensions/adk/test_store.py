@@ -9,7 +9,11 @@ from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_atomic_scoped_write_contract,
+    assert_session_empty_state_roundtrip,
     assert_session_scoped_state_contract,
+    assert_session_sibling_app_isolation,
+    assert_session_sibling_user_isolation,
+    assert_session_temp_state_not_persisted,
 )
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncmy, pytest.mark.integration]
@@ -29,6 +33,26 @@ async def test_asyncmy_session_scoped_state_contract(asyncmy_adk_store: AsyncmyA
 async def test_asyncmy_session_atomic_scoped_write_contract(asyncmy_adk_store: AsyncmyADKStore) -> None:
     """Asyncmy routes scoped-state upserts inside the append/update transaction."""
     await assert_session_atomic_scoped_write_contract(asyncmy_adk_store, marker="asyncmy")
+
+
+async def test_asyncmy_session_temp_state_not_persisted(asyncmy_adk_store: AsyncmyADKStore) -> None:
+    """Asyncmy never persists temp:* through the service-level append_event path."""
+    await assert_session_temp_state_not_persisted(asyncmy_adk_store, marker="asyncmy")
+
+
+async def test_asyncmy_session_empty_state_roundtrip(asyncmy_adk_store: AsyncmyADKStore) -> None:
+    """Asyncmy preserves empty session/app/user state through append_event_and_update_state."""
+    await assert_session_empty_state_roundtrip(asyncmy_adk_store, marker="asyncmy")
+
+
+async def test_asyncmy_session_sibling_app_isolation(asyncmy_adk_store: AsyncmyADKStore) -> None:
+    """Asyncmy isolates app:* writes per app_name across sibling sessions."""
+    await assert_session_sibling_app_isolation(asyncmy_adk_store, marker="asyncmy")
+
+
+async def test_asyncmy_session_sibling_user_isolation(asyncmy_adk_store: AsyncmyADKStore) -> None:
+    """Asyncmy isolates user:* writes per (app_name, user_id) across sibling sessions."""
+    await assert_session_sibling_user_isolation(asyncmy_adk_store, marker="asyncmy")
 
 
 async def test_storage_types_verification(asyncmy_adk_store: AsyncmyADKStore) -> None:

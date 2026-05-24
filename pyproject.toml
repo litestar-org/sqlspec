@@ -417,9 +417,9 @@ markers = [
   "mysql: marks tests specific to MySQL",
   "oracle: marks tests specific to Oracle",
   "spanner: marks tests specific to Google Cloud Spanner",
+  "cockroachdb: marks tests specific to CockroachDB",
   "snowflake: marks tests specific to Snowflake",
   "mssql: marks tests specific to Microsoft SQL Server",
-  # Driver markers
   "adbc: marks tests using ADBC drivers",
   "aiomysql: marks tests using aiomysql",
   "aioodbc: marks tests using aioodbc",

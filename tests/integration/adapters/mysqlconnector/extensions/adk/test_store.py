@@ -10,7 +10,11 @@ from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore
 from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_atomic_scoped_write_contract,
+    assert_session_empty_state_roundtrip,
     assert_session_scoped_state_contract,
+    assert_session_sibling_app_isolation,
+    assert_session_sibling_user_isolation,
+    assert_session_temp_state_not_persisted,
 )
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.integration]
@@ -34,6 +38,34 @@ async def test_mysqlconnector_session_atomic_scoped_write_contract(
 ) -> None:
     """MysqlConnector routes scoped-state upserts inside the append/update transaction."""
     await assert_session_atomic_scoped_write_contract(mysqlconnector_adk_store, marker="mysqlconnector")
+
+
+async def test_mysqlconnector_session_temp_state_not_persisted(
+    mysqlconnector_adk_store: MysqlConnectorAsyncADKStore,
+) -> None:
+    """MysqlConnector never persists temp:* through the service-level append_event path."""
+    await assert_session_temp_state_not_persisted(mysqlconnector_adk_store, marker="mysqlconnector")
+
+
+async def test_mysqlconnector_session_empty_state_roundtrip(
+    mysqlconnector_adk_store: MysqlConnectorAsyncADKStore,
+) -> None:
+    """MysqlConnector preserves empty session/app/user state through append_event_and_update_state."""
+    await assert_session_empty_state_roundtrip(mysqlconnector_adk_store, marker="mysqlconnector")
+
+
+async def test_mysqlconnector_session_sibling_app_isolation(
+    mysqlconnector_adk_store: MysqlConnectorAsyncADKStore,
+) -> None:
+    """MysqlConnector isolates app:* writes per app_name across sibling sessions."""
+    await assert_session_sibling_app_isolation(mysqlconnector_adk_store, marker="mysqlconnector")
+
+
+async def test_mysqlconnector_session_sibling_user_isolation(
+    mysqlconnector_adk_store: MysqlConnectorAsyncADKStore,
+) -> None:
+    """MysqlConnector isolates user:* writes per (app_name, user_id) across sibling sessions."""
+    await assert_session_sibling_user_isolation(mysqlconnector_adk_store, marker="mysqlconnector")
 
 
 async def test_storage_types_verification(mysqlconnector_adk_store: MysqlConnectorAsyncADKStore) -> None:
