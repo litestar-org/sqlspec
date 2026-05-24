@@ -38,6 +38,10 @@ def test_default_version_plan_matches_clean_break_v1_contract() -> None:
     )
 
 
+def test_schema_version_key_matches_official_adk_metadata_key() -> None:
+    assert ADK_SCHEMA_VERSION_KEY == "schema_version"
+
+
 def test_version_plan_metadata_items_include_schema_and_payload_versions() -> None:
     metadata_items = dict(_get_adk_version_plan(_Config({})).metadata_items())
 

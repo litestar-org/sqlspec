@@ -2,9 +2,10 @@
 Schema
 ======
 
-ADK stores create tables for sessions, events, and memory entries. The artifact
-metadata table contract is documented for deployments that provide a concrete
-artifact metadata store. Table names are configurable via
+ADK stores create tables for sessions, events, scoped state, metadata, and
+memory entries. The artifact metadata table contract is documented for
+deployments that provide a concrete artifact metadata store. Table names are
+configurable via
 ``extension_config["adk"]``.
 
 You can programmatically create the schema with ``create_tables()`` or
@@ -24,7 +25,7 @@ Sessions Table
 
 The sessions table stores agent session metadata and durable state.
 
-Default name: ``adk_sessions``
+Default name: ``adk_session``
 
 .. list-table::
    :header-rows: 1
@@ -60,13 +61,13 @@ Events Table (EventRecord)
 ==========================
 
 The events table uses **full-event JSON storage**: the entire ADK ``Event`` is
-serialized into a single ``event_json`` column alongside a small set of indexed
+serialized into a single ``event_data`` column alongside a small set of indexed
 scalar columns used for query filtering.
 
 This design eliminates column drift with upstream ADK releases. New ``Event``
-fields are automatically captured in ``event_json`` without schema changes.
+fields are automatically captured in ``event_data`` without schema changes.
 
-Default name: ``adk_events``
+Default name: ``adk_event``
 
 .. list-table::
    :header-rows: 1
@@ -86,7 +87,7 @@ Default name: ``adk_events``
    * - ``timestamp``
      - ``TIMESTAMP``
      - Event timestamp (UTC, indexed for range queries).
-   * - ``event_json``
+   * - ``event_data``
      - ``JSONB`` / ``JSON`` / ``TEXT``
      - Full ADK Event serialized via ``Event.model_dump()``.
 
@@ -113,7 +114,8 @@ Scoped State Semantics
 ======================
 
 ADK uses key prefixes to scope state visibility across sessions. SQLSpec
-respects these prefixes when persisting and loading state.
+respects these prefixes at the ``SQLSpecSessionService`` boundary when
+persisting and loading state.
 
 .. list-table::
    :header-rows: 1
@@ -145,10 +147,11 @@ respects these prefixes when persisting and loading state.
    initial ``INSERT``.
 
 2. On ``append_event()``, the service calls ``filter_temp_state()`` to produce
-   a durable state snapshot, then calls ``append_event_and_update_state()`` to
-   atomically persist the event and the state update.
+   a durable state snapshot, splits prefixed keys into session/app/user
+   buckets, then calls the matching store hooks.
 
-3. On ``get_session()``, state is loaded from the database. Since ``temp:``
+3. On ``get_session()``, the service loads the session row, app state row, and
+   user state row, then merges them into the ADK-visible state. Since ``temp:``
    keys were never written, they are absent from the loaded state.
 
 .. code-block:: python
@@ -172,6 +175,82 @@ respects these prefixes when persisting and loading state.
    # user_state: {"user:preferences": {"theme": "dark"}}
    # session_state: {"conversation_turn": 5}
 
+App State Table
+===============
+
+The app state table stores ``app:`` keys shared by all sessions with the same
+``app_name``.
+
+Default name: ``adk_app_state``
+
+.. list-table::
+   :header-rows: 1
+
+   * - Column
+     - Type
+     - Description
+   * - ``app_name``
+     - ``VARCHAR`` / ``TEXT``
+     - Primary key. Application identifier.
+   * - ``state``
+     - ``JSONB`` / ``JSON`` / ``TEXT``
+     - App-scoped state mapping.
+   * - ``update_time``
+     - ``TIMESTAMP``
+     - Last update time (UTC).
+
+User State Table
+================
+
+The user state table stores ``user:`` keys shared by sessions with the same
+``app_name`` and ``user_id``.
+
+Default name: ``adk_user_state``
+
+.. list-table::
+   :header-rows: 1
+
+   * - Column
+     - Type
+     - Description
+   * - ``app_name``
+     - ``VARCHAR`` / ``TEXT``
+     - Application identifier.
+   * - ``user_id``
+     - ``VARCHAR`` / ``TEXT``
+     - User identifier.
+   * - ``state``
+     - ``JSONB`` / ``JSON`` / ``TEXT``
+     - User-scoped state mapping.
+   * - ``update_time``
+     - ``TIMESTAMP``
+     - Last update time (UTC).
+
+The composite primary key is ``(app_name, user_id)``.
+
+Internal Metadata Table
+=======================
+
+The metadata table stores ADK schema metadata used by migrations and future
+schema-version dispatch.
+
+Default name: ``adk_internal_metadata``
+
+.. list-table::
+   :header-rows: 1
+
+   * - Column
+     - Type
+     - Description
+   * - ``key``
+     - ``VARCHAR`` / ``TEXT``
+     - Primary key.
+   * - ``value``
+     - ``VARCHAR`` / ``TEXT``
+     - Metadata value.
+
+The initial ADK migration seeds ``schema_version = 1``.
+
 .. _append-event-contract:
 
 The ``append_event_and_update_state()`` Contract
@@ -181,10 +260,11 @@ This method is the **authoritative durable write boundary** for post-creation
 session mutations. It atomically:
 
 1. Inserts the event record into the events table.
-2. Updates the session's durable state in the sessions table.
+2. Updates the session-scoped durable state in the sessions table.
 
 Both operations succeed together or fail together within a single database
-transaction.
+transaction. App/user scoped state writes are routed separately by the session
+service through the dedicated scoped-state hooks.
 
 .. code-block:: python
 
@@ -192,7 +272,7 @@ transaction.
    await store.append_event_and_update_state(
        event_record=event_record,
        session_id=session.id,
-       state=durable_state,  # temp: keys already stripped
+       state=session_state,  # temp/app/user keys already stripped
    )
 
 **Why this matters:**
@@ -302,8 +382,11 @@ All table names are configurable:
        connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
-               "session_table": "my_sessions",        # default: "adk_sessions"
-               "events_table": "my_events",            # default: "adk_events"
+               "session_table": "my_session",          # default: "adk_session"
+               "events_table": "my_event",             # default: "adk_event"
+               "app_state_table": "my_app_state",      # default: "adk_app_state"
+               "user_state_table": "my_user_state",    # default: "adk_user_state"
+               "metadata_table": "my_adk_metadata",    # default: "adk_internal_metadata"
                "memory_table": "my_memory",            # default: "adk_memory_entries"
                "artifact_table": "my_artifacts",       # artifact metadata stores
            }

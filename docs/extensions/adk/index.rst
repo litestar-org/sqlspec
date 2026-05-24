@@ -58,6 +58,12 @@ Choose a guide
 
       Table layouts, EventRecord, scoped state, and artifact metadata.
 
+   .. grid-item-card:: Scoped State
+      :link: scoped_state
+      :link-type: doc
+
+      App, user, session, and runtime-only state behavior.
+
    .. grid-item-card:: API Reference
       :link: api
       :link-type: doc
@@ -78,5 +84,6 @@ Choose a guide
    backends
    adapters
    schema
+   scoped_state
    api
    migrations

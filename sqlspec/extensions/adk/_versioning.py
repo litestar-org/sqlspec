@@ -17,7 +17,7 @@ ADK_STATE_PAYLOAD_VERSION: Final = 1
 ADK_MEMORY_PAYLOAD_VERSION: Final = 1
 ADK_ARTIFACT_PAYLOAD_VERSION: Final = 1
 
-ADK_SCHEMA_VERSION_KEY: Final = "sqlspec.adk.schema_version"
+ADK_SCHEMA_VERSION_KEY: Final = "schema_version"
 ADK_PAYLOAD_VERSION_KEYS: Final[dict[ADKPayloadKind, str]] = {
     "event": "sqlspec.adk.payload.event",
     "state": "sqlspec.adk.payload.state",

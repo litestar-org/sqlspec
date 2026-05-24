@@ -10,6 +10,7 @@ from sqlspec.adapters.adbc.adk import AdbcADKStore
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_event_cleanup_contract,
     assert_session_get_session_renewal_contract,
+    assert_session_scoped_state_contract,
     assert_session_table_lifecycle_contract,
 )
 
@@ -104,6 +105,11 @@ async def test_session_event_cleanup_contract(adbc_store: Any) -> None:
 async def test_session_get_session_renewal_contract(adbc_store: Any) -> None:
     """ADBC can touch session update_time while reading a session."""
     await assert_session_get_session_renewal_contract(adbc_store, marker="adbc")
+
+
+async def test_session_scoped_state_contract(adbc_store: Any) -> None:
+    """ADBC service reads merge app/user state from dedicated scoped tables."""
+    await assert_session_scoped_state_contract(adbc_store, marker="adbc")
 
 
 async def test_session_table_lifecycle_contract(adbc_store: Any) -> None:

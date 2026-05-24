@@ -16,8 +16,8 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.m
 def _make_config_with_owner_id(
     postgres_service: Any,
     owner_id_column: "str | None" = None,
-    session_table: str = "adk_sessions",
-    events_table: str = "adk_events",
+    session_table: str = "adk_session",
+    events_table: str = "adk_event",
 ) -> AsyncpgConfig:
     """Helper to create config with ADK extension config."""
     extension_config = cast("ExtensionConfigs", {"adk": {"session_table": session_table, "events_table": events_table}})
@@ -68,8 +68,8 @@ async def tenants_table(asyncpg_config_for_fk: AsyncpgConfig) -> "AsyncGenerator
     yield
 
     async with asyncpg_config_for_fk.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_event CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_session CASCADE")
         await conn.execute("DROP TABLE IF EXISTS tenants CASCADE")
 
 
@@ -93,8 +93,8 @@ async def users_table(asyncpg_config_for_fk: AsyncpgConfig) -> "AsyncGenerator[N
     yield
 
     async with asyncpg_config_for_fk.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_event CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_session CASCADE")
         await conn.execute("DROP TABLE IF EXISTS users CASCADE")
 
 
@@ -111,8 +111,8 @@ async def test_store_without_owner_id_column(asyncpg_config_for_fk: AsyncpgConfi
     assert session["state"] == {"data": "test"}
 
     async with asyncpg_config_for_fk.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_event CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_session CASCADE")
 
 
 async def test_create_tables_with_owner_id_column(
@@ -129,7 +129,7 @@ async def test_create_tables_with_owner_id_column(
             result = await conn.fetchrow("""
                 SELECT column_name, data_type, is_nullable
                 FROM information_schema.columns
-                WHERE table_name = 'adk_sessions' AND column_name = 'tenant_id'
+                WHERE table_name = 'adk_session' AND column_name = 'tenant_id'
             """)
 
             assert result is not None
@@ -158,7 +158,7 @@ async def test_create_session_with_owner_id(tenants_table: Any, postgres_service
         assert session["state"] == {"data": "test"}
 
         async with config.provide_connection() as conn:
-            result = await conn.fetchrow("SELECT tenant_id FROM adk_sessions WHERE id = $1", "session-1")
+            result = await conn.fetchrow("SELECT tenant_id FROM adk_session WHERE id = $1", "session-1")
             assert result is not None
             assert result["tenant_id"] == 1
     finally:
@@ -242,7 +242,7 @@ async def test_nullable_owner_id_column(tenants_table: Any, postgres_service: An
         assert session is not None
 
         async with config.provide_connection() as conn:
-            result = await conn.fetchrow("SELECT tenant_id FROM adk_sessions WHERE id = $1", "session-1")
+            result = await conn.fetchrow("SELECT tenant_id FROM adk_session WHERE id = $1", "session-1")
             assert result is not None
             assert result["tenant_id"] is None
     finally:
@@ -262,13 +262,13 @@ async def test_set_null_on_delete_behavior(tenants_table: Any, postgres_service:
         await store.create_session("session-1", "app-1", "user-1", {"data": "test"}, owner_id=1)
 
         async with config.provide_connection() as conn:
-            result = await conn.fetchrow("SELECT tenant_id FROM adk_sessions WHERE id = $1", "session-1")
+            result = await conn.fetchrow("SELECT tenant_id FROM adk_session WHERE id = $1", "session-1")
             assert result is not None
             assert result["tenant_id"] == 1
 
             await conn.execute("DELETE FROM tenants WHERE id = 1")
 
-            result = await conn.fetchrow("SELECT tenant_id FROM adk_sessions WHERE id = $1", "session-1")
+            result = await conn.fetchrow("SELECT tenant_id FROM adk_session WHERE id = $1", "session-1")
             assert result is not None
             assert result["tenant_id"] is None
     finally:
@@ -294,7 +294,7 @@ async def test_uuid_owner_id_column(users_table: Any, postgres_service: Any) -> 
         assert session is not None
 
         async with config.provide_connection() as conn:
-            result = await conn.fetchrow("SELECT account_id FROM adk_sessions WHERE id = $1", "session-1")
+            result = await conn.fetchrow("SELECT account_id FROM adk_session WHERE id = $1", "session-1")
             assert result is not None
             assert result["account_id"] == user_uuid
     finally:
@@ -336,8 +336,8 @@ async def test_backwards_compatibility_without_owner_id(asyncpg_config_for_fk: A
     assert sessions[0]["id"] == "session-1"
 
     async with asyncpg_config_for_fk.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS adk_events CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS adk_sessions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_event CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS adk_session CASCADE")
 
 
 async def test_owner_id_column_name_property(tenants_table: Any, postgres_service: Any) -> None:
@@ -375,7 +375,7 @@ async def test_multiple_sessions_same_tenant(tenants_table: Any, postgres_servic
             await store.create_session(f"session-{i}", "app-1", f"user-{i}", {"session_num": i}, owner_id=1)
 
         async with config.provide_connection() as conn:
-            result = await conn.fetch("SELECT id FROM adk_sessions WHERE tenant_id = $1 ORDER BY id", 1)
+            result = await conn.fetch("SELECT id FROM adk_session WHERE tenant_id = $1 ORDER BY id", 1)
             assert len(result) == 5
             assert [r["id"] for r in result] == [f"session-{i}" for i in range(5)]
     finally:

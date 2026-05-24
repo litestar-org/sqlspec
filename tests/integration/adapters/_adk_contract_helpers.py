@@ -6,12 +6,14 @@ from typing import Protocol
 from uuid import uuid4
 
 from sqlspec.extensions.adk import EventRecord, MemoryRecord, SessionRecord
+from sqlspec.extensions.adk.service import SQLSpecSessionService
 
 __all__ = (
     "assert_memory_store_contract",
     "assert_session_event_cleanup_contract",
     "assert_session_event_store_contract",
     "assert_session_get_session_renewal_contract",
+    "assert_session_scoped_state_contract",
     "assert_session_table_lifecycle_contract",
 )
 
@@ -46,6 +48,14 @@ class SessionEventStore(Protocol):
     async def delete_expired_events(self, before: datetime) -> int: ...
 
     async def delete_idle_sessions(self, updated_before: datetime) -> int: ...
+
+    async def get_app_state(self, app_name: str) -> dict[str, object] | None: ...
+
+    async def get_user_state(self, app_name: str, user_id: str) -> dict[str, object] | None: ...
+
+    async def upsert_app_state(self, app_name: str, state: dict[str, object]) -> None: ...
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, object]) -> None: ...
 
     async def drop_tables(self) -> None: ...
 
@@ -237,6 +247,63 @@ async def assert_session_get_session_renewal_contract(store: SessionEventStore, 
     assert renewed_update_time > original_update_time
     assert before_renewal <= renewed_update_time <= after_renewal
     assert renewed["state"] == {"renew": True}
+
+
+async def assert_session_scoped_state_contract(store: SessionEventStore, *, marker: str) -> None:
+    """Assert service-level app:/user:/temp: semantics over a real store."""
+    from google.adk.events.event import Event
+    from google.adk.events.event_actions import EventActions
+
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    app_name = _contract_key(marker, "scoped-app")
+    user_id = _contract_key(marker, "scoped-user")
+    other_user_id = _contract_key(marker, "scoped-other-user")
+
+    session_a = await service.create_session(
+        app_name=app_name,
+        user_id=user_id,
+        session_id=_contract_key(marker, "scoped-session-a"),
+        state={"session_seed": "a", "temp:create": "drop"},
+    )
+    session_b = await service.create_session(
+        app_name=app_name, user_id=user_id, session_id=_contract_key(marker, "scoped-session-b"), state={}
+    )
+    other_user_session = await service.create_session(
+        app_name=app_name,
+        user_id=other_user_id,
+        session_id=_contract_key(marker, "scoped-session-other-user"),
+        state={},
+    )
+    session_a = await service.get_session(app_name=app_name, user_id=user_id, session_id=session_a.id)
+    assert session_a is not None
+
+    event = Event(
+        invocation_id=_contract_key(marker, "scoped-invocation"),
+        author="user",
+        timestamp=datetime.now(timezone.utc).timestamp(),
+        actions=EventActions(state_delta={"app:counter": 1, "user:theme": "dark", "turn": 1, "temp:scratch": "drop"}),
+    )
+    await service.append_event(session_a, event)
+
+    raw_session = await store.get_session(session_a.id)
+    assert raw_session is not None
+    assert raw_session["state"] == {"session_seed": "a", "turn": 1}
+    assert await store.get_app_state(app_name) == {"app:counter": 1}
+    assert await store.get_user_state(app_name, user_id) == {"user:theme": "dark"}
+
+    fetched_a = await service.get_session(app_name=app_name, user_id=user_id, session_id=session_a.id)
+    assert fetched_a is not None
+    assert fetched_a.state == {"session_seed": "a", "turn": 1, "app:counter": 1, "user:theme": "dark"}
+
+    fetched_b = await service.get_session(app_name=app_name, user_id=user_id, session_id=session_b.id)
+    assert fetched_b is not None
+    assert fetched_b.state == {"app:counter": 1, "user:theme": "dark"}
+
+    fetched_other_user = await service.get_session(
+        app_name=app_name, user_id=other_user_id, session_id=other_user_session.id
+    )
+    assert fetched_other_user is not None
+    assert fetched_other_user.state == {"app:counter": 1}
 
 
 async def assert_session_table_lifecycle_contract(store: SessionEventStore, *, marker: str) -> None:

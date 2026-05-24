@@ -34,7 +34,15 @@ async def asyncmy_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Asyn
             "minsize": 1,
             "maxsize": 5,
         },
-        extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
+        extension_config={
+            "adk": {
+                "session_table": "test_sessions",
+                "events_table": "test_events",
+                "app_state_table": "test_app_state",
+                "user_state_table": "test_user_state",
+                "metadata_table": "test_adk_metadata",
+            }
+        },
     )
 
     try:
@@ -46,6 +54,9 @@ async def asyncmy_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Asyn
         async with config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute("DROP TABLE IF EXISTS test_events")
             await cursor.execute("DROP TABLE IF EXISTS test_sessions")
+            await cursor.execute("DROP TABLE IF EXISTS test_user_state")
+            await cursor.execute("DROP TABLE IF EXISTS test_app_state")
+            await cursor.execute("DROP TABLE IF EXISTS test_adk_metadata")
             await conn.commit()
     finally:
         pool = config.connection_instance
@@ -84,6 +95,9 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
             "adk": {
                 "session_table": "test_fk_sessions",
                 "events_table": "test_fk_events",
+                "app_state_table": "test_fk_app_state",
+                "user_state_table": "test_fk_user_state",
+                "metadata_table": "test_fk_adk_metadata",
                 "owner_id_column": "tenant_id BIGINT NOT NULL REFERENCES test_tenants(id) ON DELETE CASCADE",
             }
         },
@@ -108,6 +122,9 @@ async def asyncmy_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGenera
         async with config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute("DROP TABLE IF EXISTS test_fk_events")
             await cursor.execute("DROP TABLE IF EXISTS test_fk_sessions")
+            await cursor.execute("DROP TABLE IF EXISTS test_fk_user_state")
+            await cursor.execute("DROP TABLE IF EXISTS test_fk_app_state")
+            await cursor.execute("DROP TABLE IF EXISTS test_fk_adk_metadata")
             await cursor.execute("DROP TABLE IF EXISTS test_tenants")
             await conn.commit()
     finally:

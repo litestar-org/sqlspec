@@ -21,6 +21,26 @@ __all__ = ("AsyncmyADKMemoryStore", "AsyncmyADKStore")
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
+def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
+    """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
+
+    Args:
+        column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE".
+
+    Returns:
+        Tuple of (column_definition, foreign_key_constraint).
+    """
+    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
+    if not references_match:
+        return (column_ddl.strip(), "")
+
+    col_def = column_ddl[: references_match.start()].strip()
+    fk_clause = references_match.group(1).strip()
+    col_name = col_def.split()[0]
+    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
+    return (col_def, fk_constraint)
+
+
 class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     """MySQL/MariaDB ADK store using AsyncMy driver.
 
@@ -50,97 +70,15 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """
         super().__init__(config)
 
-    def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
-        """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
-
-        MySQL ignores inline REFERENCES syntax in column definitions.
-        This method extracts the column definition and creates a separate
-        FOREIGN KEY constraint.
-
-        Args:
-            column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-
-        Returns:
-            Tuple of (column_definition, foreign_key_constraint)
-        """
-        references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
-
-        if not references_match:
-            return (column_ddl.strip(), "")
-
-        col_def = column_ddl[: references_match.start()].strip()
-        fk_clause = references_match.group(1).strip()
-        col_name = col_def.split()[0]
-        fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
-
-        return (col_def, fk_constraint)
-
-    async def _get_create_sessions_table_sql(self) -> str:
-        """Get MySQL CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-        """
-        owner_id_col = ""
-        fk_constraint = ""
-
-        if self._owner_id_column_ddl:
-            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_col = f"{col_def},"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            {owner_id_col}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    async def _get_create_events_table_sql(self) -> str:
-        """Get MySQL CREATE TABLE SQL for events.
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-
-        Notes:
-            Post clean-break schema: 5 columns only.
-            - session_id, invocation_id, author: indexed scalars
-            - timestamp: microsecond-precision TIMESTAMP
-            - event_data: full Event as native JSON
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(128) NOT NULL,
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            event_data JSON NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        """Get MySQL DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-        """
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
+            await driver.execute_script(await self._get_create_app_states_table_sql())
+            await driver.execute_script(await self._get_create_user_states_table_sql())
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -475,25 +413,225 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 return 0
             raise
 
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
-def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
-    """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (app_name,))
+                row = await cursor.fetchone()
+                return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
 
-    Args:
-        column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE".
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
 
-    Returns:
-        Tuple of (column_definition, foreign_key_constraint).
-    """
-    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
-    if not references_match:
-        return (column_ddl.strip(), "")
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (app_name, user_id))
+                row = await cursor.fetchone()
+                return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
 
-    col_def = column_ddl[: references_match.start()].strip()
-    fk_clause = references_match.group(1).strip()
-    col_name = col_def.split()[0]
-    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
-    return (col_def, fk_constraint)
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute(sql, (app_name, to_json(state)))
+            await conn.commit()
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute(sql, (app_name, user_id, to_json(state)))
+            await conn.commit()
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+                await cursor.execute(sql, (key,))
+                row = await cursor.fetchone()
+                return row[0] if row is not None else None
+        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        sql = f"""
+        INSERT INTO {self._metadata_table} (`key`, value)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE value = VALUES(value)
+        """
+
+        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            await cursor.execute(sql, (key, value))
+            await conn.commit()
+
+    def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
+        """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
+
+        MySQL ignores inline REFERENCES syntax in column definitions.
+        This method extracts the column definition and creates a separate
+        FOREIGN KEY constraint.
+
+        Args:
+            column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
+
+        Returns:
+            Tuple of (column_definition, foreign_key_constraint)
+        """
+        references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
+
+        if not references_match:
+            return (column_ddl.strip(), "")
+
+        col_def = column_ddl[: references_match.start()].strip()
+        fk_clause = references_match.group(1).strip()
+        col_name = col_def.split()[0]
+        fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
+
+        return (col_def, fk_constraint)
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for sessions.
+
+        Returns:
+            SQL statement to create adk_session table with indexes.
+        """
+        owner_id_col = ""
+        fk_constraint = ""
+
+        if self._owner_id_column_ddl:
+            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            owner_id_col = f"{col_def},"
+            if fk_def:
+                fk_constraint = f",\n            {fk_def}"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            {owner_id_col}
+            state JSON NOT NULL,
+            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+            INDEX idx_{self._session_table}_app_user (app_name, user_id),
+            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    async def _get_create_events_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for events.
+
+        Returns:
+            SQL statement to create adk_event table with indexes.
+
+        Notes:
+            Post clean-break schema: 5 columns only.
+            - session_id, invocation_id, author: indexed scalars
+            - timestamp: microsecond-precision TIMESTAMP
+            - event_data: full Event as native JSON
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            session_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256) NOT NULL,
+            author VARCHAR(128) NOT NULL,
+            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            event_data JSON NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
+            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for app-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name VARCHAR(128) PRIMARY KEY,
+            state JSON NOT NULL,
+            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for user-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            state JSON NOT NULL,
+            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (app_name, user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for ADK internal metadata."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            `key` VARCHAR(128) PRIMARY KEY,
+            value VARCHAR(512) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get MySQL SQL that seeds the ADK schema version metadata row."""
+        return f"""
+        INSERT IGNORE INTO {self._metadata_table} (`key`, value)
+        VALUES ('schema_version', '1')
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        """Get MySQL DROP TABLE SQL for app-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        """Get MySQL DROP TABLE SQL for user-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        """Get MySQL DROP TABLE SQL for ADK internal metadata."""
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        """Get MySQL DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop tables and indexes.
+        """
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
 
 class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
@@ -504,42 +642,6 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy memory store."""
         super().__init__(config)
-
-    async def _get_create_memory_table_sql(self) -> str:
-        """Get MySQL CREATE TABLE SQL for memory entries."""
-        owner_id_line = ""
-        fk_constraint = ""
-        if self._owner_id_column_ddl:
-            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_line = f",\n            {col_def}"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
-            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _get_drop_memory_table_sql(self) -> "list[str]":
-        """Get MySQL DROP TABLE SQL statements."""
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -676,3 +778,39 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             await cursor.execute(sql, (days,))
             await conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        fk_constraint = ""
+        if self._owner_id_column_ddl:
+            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            owner_id_line = f",\n            {col_def}"
+            if fk_def:
+                fk_constraint = f",\n            {fk_def}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            content_json JSON NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSON,
+            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
+            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get MySQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]

@@ -113,11 +113,175 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Notes:
             Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
+            - session_table: Sessions table name (default: "adk_session")
+            - events_table: Events table name (default: "adk_event")
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         super().__init__(config)
+
+    async def create_tables(self) -> None:
+        """Create both sessions and events tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session.
+
+        Args:
+            session_id: Unique session identifier.
+            app_name: Application name.
+            user_id: User identifier.
+            state: Initial session state.
+            owner_id: Optional owner ID value for owner ID column.
+
+        Returns:
+            Created session record.
+
+        Notes:
+            Uses Julian Day for create_time and update_time.
+            State is always JSON-serialized (empty dict becomes '{}', never NULL).
+            If owner_id_column is configured, owner_id is inserted into that column.
+        """
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID.
+
+        Args:
+            session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
+
+        Returns:
+            Session record or None if not found.
+
+        Notes:
+            SQLite returns Julian Day (REAL) for timestamps.
+            JSON is parsed from TEXT storage.
+        """
+        return await async_(self._get_session)(session_id, renew_for)
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state.
+
+        Args:
+            session_id: Session identifier.
+            state: New state dictionary (replaces existing state).
+
+        Notes:
+            This replaces the entire state dictionary.
+            Updates update_time to current Julian Day.
+            Empty dict is serialized as '{}', never NULL.
+        """
+        await async_(self._update_session_state)(session_id, state)
+
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier. If None, lists all sessions for the app.
+
+        Returns:
+            List of session records ordered by update_time DESC.
+
+        Notes:
+            Uses composite index on (app_name, user_id) when user_id is provided.
+        """
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and all associated events (cascade).
+
+        Args:
+            session_id: Session identifier.
+
+        Notes:
+            Foreign key constraint ensures events are cascade-deleted.
+        """
+        await async_(self._delete_session)(session_id)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session.
+
+        Args:
+            event_record: Event record with 5 keys: session_id, invocation_id,
+                author, timestamp, event_data.
+
+        Notes:
+            Uses Julian Day for timestamp.
+            event_data dict is serialized to TEXT as event_data column.
+        """
+        await async_(self._append_event)(event_record)
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state.
+
+        Inserts the event and updates the session state + update_time in a
+        single transaction, returning the updated SessionRecord via RETURNING.
+
+        Args:
+            event_record: Event record to store.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (temp: keys already
+                stripped by the service layer).
+        """
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session.
+
+        Args:
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+
+        Notes:
+            Uses index on (session_id, timestamp ASC).
+            Parses event_data TEXT back to dict for event_data field.
+        """
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    async def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        return await async_(self._get_app_state)(app_name)
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        return await async_(self._get_user_state)(app_name, user_id)
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        await async_(self._upsert_app_state)(app_name, state)
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        await async_(self._upsert_user_state)(app_name, user_id, state)
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        return await async_(self._get_metadata)(key)
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        await async_(self._set_metadata)(key, value)
 
     def _apply_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile for this connection.
@@ -139,7 +303,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """Get SQLite CREATE TABLE SQL for sessions.
 
         Returns:
-            SQL statement to create adk_sessions table with indexes.
+            SQL statement to create adk_session table with indexes.
 
         Notes:
             - TEXT for IDs, names, and JSON state
@@ -171,7 +335,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """Get SQLite CREATE TABLE SQL for events.
 
         Returns:
-            SQL statement to create adk_events table with indexes.
+            SQL statement to create adk_event table with indexes.
 
         Notes:
             - TEXT for IDs and indexed scalars
@@ -194,6 +358,56 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             ON {self._events_table}(session_id, timestamp ASC);
         """
 
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for app-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT '{{}}',
+            update_time REAL NOT NULL
+        );
+        """
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for user-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT '{{}}',
+            update_time REAL NOT NULL,
+            PRIMARY KEY (app_name, user_id)
+        );
+        """
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for ADK internal metadata."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get SQLite SQL that seeds the ADK schema version metadata row."""
+        return f"""
+        INSERT OR IGNORE INTO {self._metadata_table} (key, value)
+        VALUES ('schema_version', '1')
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for app-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for user-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for ADK internal metadata."""
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
     def _get_drop_tables_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements.
 
@@ -204,7 +418,13 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             Order matters: drop events table (child) before sessions (parent).
             SQLite automatically drops indexes when dropping tables.
         """
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
@@ -212,10 +432,10 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             self._apply_pragmas(driver.connection)
             driver.execute_script(run_(self._get_create_sessions_table_sql)())
             driver.execute_script(run_(self._get_create_events_table_sql)())
-
-    async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist."""
-        await async_(self._create_tables)()
+            driver.execute_script(run_(self._get_create_app_states_table_sql)())
+            driver.execute_script(run_(self._get_create_user_states_table_sql)())
+            driver.execute_script(run_(self._get_create_metadata_table_sql)())
+            driver.execute_script(run_(self._get_seed_metadata_sql)())
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -248,28 +468,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         return SessionRecord(
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
-
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner ID column.
-
-        Returns:
-            Created session record.
-
-        Notes:
-            Uses Julian Day for create_time and update_time.
-            State is always JSON-serialized (empty dict becomes '{}', never NULL).
-            If owner_id_column is configured, owner_id is inserted into that column.
-        """
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         """Synchronous implementation of get_session."""
@@ -306,24 +504,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return None
             raise
 
-    async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID.
-
-        Args:
-            session_id: Session identifier.
-            renew_for: If positive, touch update_time while reading.
-
-        Returns:
-            Session record or None if not found.
-
-        Notes:
-            SQLite returns Julian Day (REAL) for timestamps.
-            JSON is parsed from TEXT storage.
-        """
-        return await async_(self._get_session)(session_id, renew_for)
-
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         """Synchronous implementation of update_session_state."""
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
@@ -339,20 +519,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             self._apply_pragmas(conn)
             conn.execute(sql, (state_json, now_julian, session_id))
             conn.commit()
-
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
-
-        Args:
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current Julian Day.
-            Empty dict is serialized as '{}', never NULL.
-        """
-        await async_(self._update_session_state)(session_id, state)
 
     def _list_sessions(self, app_name: str, user_id: "str | None") -> "list[SessionRecord]":
         """Synchronous implementation of list_sessions."""
@@ -395,21 +561,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return []
             raise
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
-        """
-        return await async_(self._list_sessions)(app_name, user_id)
-
     def _delete_session(self, session_id: str) -> None:
         """Synchronous implementation of delete_session."""
         sql = f"DELETE FROM {self._session_table} WHERE id = ?"
@@ -418,17 +569,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             self._apply_pragmas(conn)
             conn.execute(sql, (session_id,))
             conn.commit()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
-
-        Args:
-            session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
-        """
-        await async_(self._delete_session)(session_id)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
@@ -459,19 +599,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 ),
             )
             conn.commit()
-
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session.
-
-        Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_data.
-
-        Notes:
-            Uses Julian Day for timestamp.
-            event_data dict is serialized to TEXT as event_data column.
-        """
-        await async_(self._append_event)(event_record)
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
@@ -528,22 +655,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             update_time=_julian_to_datetime(row[5]),
         )
 
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state.
-
-        Inserts the event and updates the session state + update_time in a
-        single transaction, returning the updated SessionRecord via RETURNING.
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (temp: keys already
-                stripped by the service layer).
-        """
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
-
     def _get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
     ) -> "list[EventRecord]":
@@ -586,25 +697,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return []
             raise
 
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session.
-
-        Args:
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            Parses event_data TEXT back to dict for event_data field.
-        """
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
-
     def _delete_expired_events(self, before: datetime) -> int:
         """Synchronous implementation of delete_expired_events."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
@@ -614,10 +706,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             cursor = conn.execute(sql, (_datetime_to_julian(before),))
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-    async def delete_expired_events(self, before: datetime) -> int:
-        """Delete events older than the given timestamp."""
-        return await async_(self._delete_expired_events)(before)
 
     def _delete_idle_sessions(self, updated_before: datetime) -> int:
         """Synchronous implementation of delete_idle_sessions."""
@@ -629,9 +717,90 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    async def delete_idle_sessions(self, updated_before: datetime) -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        return await async_(self._delete_idle_sessions)(updated_before)
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Synchronous implementation of get_app_state."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                row = conn.execute(sql, (app_name,)).fetchone()
+                return from_json(row[0]) if row is not None and row[0] else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Synchronous implementation of get_user_state."""
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                row = conn.execute(sql, (app_name, user_id)).fetchone()
+                return from_json(row[0]) if row is not None and row[0] else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of upsert_app_state."""
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
+            conn.commit()
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of upsert_user_state."""
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
+            conn.commit()
+
+    def _get_metadata(self, key: str) -> "str | None":
+        """Synchronous implementation of get_metadata."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                row = conn.execute(sql, (key,)).fetchone()
+                return row[0] if row is not None else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        """Synchronous implementation of set_metadata."""
+        sql = f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(sql, (key, value))
+            conn.commit()
 
 
 class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
@@ -692,6 +861,28 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             - enable_memory: Whether memory is enabled (default: True)
         """
         super().__init__(config)
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     async def _get_create_memory_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
@@ -797,10 +988,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             self._enable_foreign_keys(driver.connection)
             driver.execute_script(run_(self._get_create_memory_table_sql)())
 
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
-
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
@@ -885,10 +1072,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -918,12 +1101,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             except Exception as exc:  # pragma: no cover - defensive fallback
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
-
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -996,10 +1173,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         return deleted_count
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
-
     def _delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days.
 
@@ -1022,7 +1195,3 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             conn.commit()
 
         return deleted_count
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)

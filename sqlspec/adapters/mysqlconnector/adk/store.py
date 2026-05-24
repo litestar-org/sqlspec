@@ -80,6 +80,62 @@ def _mysql_events_ddl(events_table: str, session_table: str) -> str:
     """
 
 
+def _mysql_app_states_ddl(app_state_table: str) -> str:
+    """Generate shared MySQL app-scoped state CREATE TABLE DDL."""
+    return f"""
+    CREATE TABLE IF NOT EXISTS {app_state_table} (
+        app_name VARCHAR(128) PRIMARY KEY,
+        state JSON NOT NULL,
+        update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
+def _mysql_user_states_ddl(user_state_table: str) -> str:
+    """Generate shared MySQL user-scoped state CREATE TABLE DDL."""
+    return f"""
+    CREATE TABLE IF NOT EXISTS {user_state_table} (
+        app_name VARCHAR(128) NOT NULL,
+        user_id VARCHAR(128) NOT NULL,
+        state JSON NOT NULL,
+        update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+        PRIMARY KEY (app_name, user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
+def _mysql_metadata_ddl(metadata_table: str) -> str:
+    """Generate shared MySQL ADK internal metadata CREATE TABLE DDL."""
+    return f"""
+    CREATE TABLE IF NOT EXISTS {metadata_table} (
+        `key` VARCHAR(128) PRIMARY KEY,
+        value VARCHAR(512) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
+def _mysql_seed_metadata_sql(metadata_table: str) -> str:
+    """Generate shared MySQL ADK schema-version seed SQL."""
+    return f"""
+    INSERT IGNORE INTO {metadata_table} (`key`, value)
+    VALUES ('schema_version', '1')
+    """
+
+
+def _state_from_row_value(value: Any) -> "dict[str, Any] | None":
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return cast("dict[str, Any]", from_json(value))
+    return cast("dict[str, Any]", value)
+
+
+def _metadata_from_row_value(value: Any) -> "str | None":
+    if value is None:
+        return None
+    return str(value)
+
+
 class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector async driver.
 
@@ -100,22 +156,14 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
 
-    def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
-        return _parse_owner_id_column_for_mysql(column_ddl)
-
-    async def _get_create_sessions_table_sql(self) -> str:
-        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
-
-    async def _get_create_events_table_sql(self) -> str:
-        return _mysql_events_ddl(self._events_table, self._session_table)
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     async def create_tables(self) -> None:
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
+            await driver.execute_script(await self._get_create_app_states_table_sql())
+            await driver.execute_script(await self._get_create_user_states_table_sql())
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -449,6 +497,141 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 return 0
             raise
 
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, (app_name,))
+                    row = await cursor.fetchone()
+                finally:
+                    await cursor.close()
+                return _state_from_row_value(row[0]) if row is not None else None
+        except mysql.connector.Error as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, (app_name, user_id))
+                    row = await cursor.fetchone()
+                finally:
+                    await cursor.close()
+                return _state_from_row_value(row[0]) if row is not None else None
+        except mysql.connector.Error as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.cursor()
+            try:
+                await cursor.execute(sql, (app_name, to_json(state)))
+            finally:
+                await cursor.close()
+            await conn.commit()
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.cursor()
+            try:
+                await cursor.execute(sql, (app_name, user_id, to_json(state)))
+            finally:
+                await cursor.close()
+            await conn.commit()
+
+    async def get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, (key,))
+                    row = await cursor.fetchone()
+                finally:
+                    await cursor.close()
+                return _metadata_from_row_value(row[0]) if row is not None else None
+        except mysql.connector.Error as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        sql = f"""
+        INSERT INTO {self._metadata_table} (`key`, value)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE value = VALUES(value)
+        """
+
+        async with self._config.provide_connection() as conn:
+            cursor = await conn.cursor()
+            try:
+                await cursor.execute(sql, (key, value))
+            finally:
+                await cursor.close()
+            await conn.commit()
+
+    def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
+        return _parse_owner_id_column_for_mysql(column_ddl)
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
+
+    async def _get_create_events_table_sql(self) -> str:
+        return _mysql_events_ddl(self._events_table, self._session_table)
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        return _mysql_app_states_ddl(self._app_state_table)
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return _mysql_user_states_ddl(self._user_state_table)
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return _mysql_metadata_ddl(self._metadata_table)
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return _mysql_seed_metadata_sql(self._metadata_table)
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
+
 
 class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector sync driver.
@@ -470,6 +653,82 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
 
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+
+    async def get_session(
+        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID."""
+        return await async_(self._get_session)(session_id, renew_for)
+
+    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        await async_(self._update_session_state)(session_id, state)
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete session and associated events."""
+        await async_(self._delete_session)(session_id)
+
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return await async_(self._list_sessions)(app_name, user_id)
+
+    async def append_event_and_update_state(
+        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state."""
+        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+
+    async def get_events(
+        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return await async_(self._get_events)(session_id, after_timestamp, limit)
+
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        return await async_(self._delete_expired_events)(before)
+
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return await async_(self._delete_idle_sessions)(updated_before)
+
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        return await async_(self._get_app_state)(app_name)
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        return await async_(self._get_user_state)(app_name, user_id)
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        await async_(self._upsert_app_state)(app_name, state)
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        await async_(self._upsert_user_state)(app_name, user_id, state)
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        return await async_(self._get_metadata)(key)
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        await async_(self._set_metadata)(key, value)
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        await async_(self._append_event)(event_record)
+
     def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
         return _parse_owner_id_column_for_mysql(column_ddl)
 
@@ -479,17 +738,44 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
     async def _get_create_events_table_sql(self) -> str:
         return _mysql_events_ddl(self._events_table, self._session_table)
 
+    async def _get_create_app_states_table_sql(self) -> str:
+        return _mysql_app_states_ddl(self._app_state_table)
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return _mysql_user_states_ddl(self._user_state_table)
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return _mysql_metadata_ddl(self._metadata_table)
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return _mysql_seed_metadata_sql(self._metadata_table)
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
     def _get_drop_tables_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
     def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_sessions_table_sql)())
             driver.execute_script(run_(self._get_create_events_table_sql)())
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
+            driver.execute_script(run_(self._get_create_app_states_table_sql)())
+            driver.execute_script(run_(self._get_create_user_states_table_sql)())
+            driver.execute_script(run_(self._get_create_metadata_table_sql)())
+            driver.execute_script(run_(self._get_seed_metadata_sql)())
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -523,12 +809,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
-
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
         sql = f"""
@@ -569,12 +849,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 return None
             raise
 
-    async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
-
     def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
         state_json = to_json(state)
 
@@ -592,10 +866,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
-
     def _delete_session(self, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE id = %s"
 
@@ -606,10 +876,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
             finally:
                 cursor.close()
             conn.commit()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
@@ -653,10 +919,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
-
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return await async_(self._list_sessions)(app_name, user_id)
 
     def _append_event_and_update_state(
         self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
@@ -727,12 +989,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
             create_time=cast("datetime", row[4]),
             update_time=cast("datetime", row[5]),
         )
-
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
 
     def _insert_event(self, event_record: EventRecord) -> None:
         event_data = event_record["event_data"]
@@ -816,12 +1072,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 return []
             raise
 
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
-
     def _delete_expired_events(self, before: "datetime") -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
 
@@ -838,10 +1088,6 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
-
-    async def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
-        return await async_(self._delete_expired_events)(before)
 
     def _delete_idle_sessions(self, updated_before: "datetime") -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
@@ -860,17 +1106,105 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 return 0
             raise
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        return await async_(self._delete_idle_sessions)(updated_before)
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (app_name,))
+                    row = cursor.fetchone()
+                finally:
+                    cursor.close()
+                return _state_from_row_value(row[0]) if row is not None else None
+        except mysql.connector.Error as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (app_name, user_id))
+                    row = cursor.fetchone()
+                finally:
+                    cursor.close()
+                return _state_from_row_value(row[0]) if row is not None else None
+        except mysql.connector.Error as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (app_name, to_json(state)))
+            finally:
+                cursor.close()
+            conn.commit()
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (app_name, user_id, to_json(state)))
+            finally:
+                cursor.close()
+            conn.commit()
+
+    def _get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (key,))
+                    row = cursor.fetchone()
+                finally:
+                    cursor.close()
+                return _metadata_from_row_value(row[0]) if row is not None else None
+        except mysql.connector.Error as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        sql = f"""
+        INSERT INTO {self._metadata_table} (`key`, value)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE value = VALUES(value)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (key, value))
+            finally:
+                cursor.close()
+            conn.commit()
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
-
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        await async_(self._append_event)(event_record)
 
 
 class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorAsyncConfig"]):
@@ -880,40 +1214,6 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
 
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
-
-    async def _get_create_memory_table_sql(self) -> str:
-        owner_id_line = ""
-        fk_constraint = ""
-        if self._owner_id_column_ddl:
-            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_line = f",\n            {col_def}"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
-            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _get_drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     async def create_tables(self) -> None:
         if not self._enabled:
@@ -1061,6 +1361,40 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             finally:
                 await cursor.close()
 
+    async def _get_create_memory_table_sql(self) -> str:
+        owner_id_line = ""
+        fk_constraint = ""
+        if self._owner_id_column_ddl:
+            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            owner_id_line = f",\n            {col_def}"
+            if fk_def:
+                fk_constraint = f",\n            {fk_def}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            content_json JSON NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSON,
+            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
+            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
 
 class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK memory store using mysql-connector sync driver."""
@@ -1069,6 +1403,28 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
+
+    async def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        await async_(self._create_tables)()
+
+    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return await async_(self._insert_memory_entries)(entries, owner_id)
+
+    async def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return await async_(self._search_entries)(query, app_name, user_id, limit)
+
+    async def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return await async_(self._delete_entries_by_session)(session_id)
+
+    async def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return await async_(self._delete_entries_older_than)(days)
 
     async def _get_create_memory_table_sql(self) -> str:
         owner_id_line = ""
@@ -1110,10 +1466,6 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
 
         with self._config.provide_session() as driver:
             driver.execute_script(run_(self._get_create_memory_table_sql)())
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
 
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -1181,10 +1533,6 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
             conn.commit()
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -1225,12 +1573,6 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
 
         return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
 
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
-
     def _delete_entries_by_session(self, session_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1245,10 +1587,6 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
 
     def _delete_entries_older_than(self, days: int) -> int:
         if not self._enabled:
@@ -1267,7 +1605,3 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)

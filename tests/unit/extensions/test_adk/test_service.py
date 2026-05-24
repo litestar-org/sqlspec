@@ -45,6 +45,10 @@ class MockStore:
 
         # Track calls to create_session
         self.create_session_calls: list[dict[str, Any]] = []
+        self.upsert_app_state_calls: list[dict[str, Any]] = []
+        self.upsert_user_state_calls: list[dict[str, Any]] = []
+        self.app_state: dict[str, Any] | None = None
+        self.user_state: dict[str, Any] | None = None
 
         # Provide a get_session that returns a minimal session record
         self._session_record = {
@@ -104,6 +108,20 @@ class MockStore:
     async def get_events(self, *, session_id: str, after_timestamp: Any = None, limit: Any = None) -> list:
         return []
 
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        return self.app_state
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return self.user_state
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        self.upsert_app_state_calls.append({"app_name": app_name, "state": state})
+        self.app_state = state
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        self.upsert_user_state_calls.append({"app_name": app_name, "user_id": user_id, "state": state})
+        self.user_state = state
+
     async def list_sessions(self, *, app_name: str, user_id: "str | None" = None) -> list:
         return []
 
@@ -152,6 +170,21 @@ async def test_get_session_forwards_renew_for_to_store() -> None:
 
     assert session is not None
     assert store.get_session_call_args[0] == {"session_id": "s1", "renew_for": renew_for}
+
+
+@pytest.mark.anyio
+async def test_get_session_merges_scoped_state_from_store() -> None:
+    """get_session returns the ADK merged state view."""
+    store = MockStore()
+    store._session_record["state"] = {"session:key": "session"}
+    store.app_state = {"app:counter": 1}
+    store.user_state = {"user:theme": "dark"}
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    session = await service.get_session(app_name="app", user_id="u1", session_id="s1")
+
+    assert session is not None
+    assert session.state == {"session:key": "session", "app:counter": 1, "user:theme": "dark"}
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +281,22 @@ async def test_append_event_strips_temp_state_delta_from_persisted_state() -> No
 
 
 @pytest.mark.anyio
+async def test_append_event_routes_scoped_state_to_app_and_user_tables() -> None:
+    """app:* and user:* state is not stored in the per-session state blob."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"regular": "v0", "app:counter": 1, "user:theme": "light"})
+    event = _make_event(state_delta={"regular": "v1", "app:counter": 2, "user:theme": "dark"})
+
+    await service.append_event(session, event)
+
+    persisted_state = store.append_event_and_update_state_calls[-1]["state"]
+    assert persisted_state == {"regular": "v1"}
+    assert store.upsert_app_state_calls[-1] == {"app_name": "app", "state": {"app:counter": 2}}
+    assert store.upsert_user_state_calls[-1] == {"app_name": "app", "user_id": "u1", "state": {"user:theme": "dark"}}
+
+
+@pytest.mark.anyio
 async def test_append_event_skips_partial_events() -> None:
     """Partial events are not persisted to the store."""
     store = MockStore()
@@ -323,7 +372,21 @@ async def test_create_session_strips_temp_keys_from_initial_state() -> None:
     persisted_state = store.create_session_calls[0]["state"]
     assert "temp:y" not in persisted_state
     assert persisted_state["x"] == 1
-    assert persisted_state["app:z"] == 3
+    assert "app:z" not in persisted_state
+    assert store.upsert_app_state_calls[-1] == {"app_name": "app", "state": {"app:z": 3}}
+
+
+@pytest.mark.anyio
+async def test_create_session_routes_initial_user_scoped_state() -> None:
+    """create_session writes user:* state to the user-scoped store."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    await service.create_session(app_name="app", user_id="u1", state={"x": 1, "user:theme": "dark"})
+
+    persisted_state = store.create_session_calls[0]["state"]
+    assert persisted_state == {"x": 1}
+    assert store.upsert_user_state_calls[-1] == {"app_name": "app", "user_id": "u1", "state": {"user:theme": "dark"}}
 
 
 @pytest.mark.anyio

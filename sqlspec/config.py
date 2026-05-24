@@ -920,7 +920,7 @@ class ADKConfig(TypedDict):
     """
 
     session_table: NotRequired[str]
-    """Name of the sessions table. Default: 'adk_sessions'
+    """Name of the sessions table. Default: 'adk_session'
 
     Examples:
         "agent_sessions"
@@ -929,13 +929,22 @@ class ADKConfig(TypedDict):
     """
 
     events_table: NotRequired[str]
-    """Name of the events table. Default: 'adk_events'
+    """Name of the events table. Default: 'adk_event'
 
     Examples:
         "agent_events"
         "my_app_events"
         "tenant_acme_events"
     """
+
+    app_state_table: NotRequired[str]
+    """Name of the app-scoped state table. Default: 'adk_app_state'."""
+
+    user_state_table: NotRequired[str]
+    """Name of the user-scoped state table. Default: 'adk_user_state'."""
+
+    metadata_table: NotRequired[str]
+    """Name of the internal ADK metadata table. Default: 'adk_internal_metadata'."""
 
     memory_table: NotRequired[str]
     """Name of the memory entries table. Default: 'adk_memory_entries'

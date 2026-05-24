@@ -8,6 +8,7 @@ import pytest
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.extensions.adk import EventRecord
+from tests.integration.adapters._adk_contract_helpers import assert_session_scoped_state_contract
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.aiomysql, pytest.mark.integration]
 
@@ -16,6 +17,11 @@ async def test_create_tables(aiomysql_adk_store: AiomysqlADKStore) -> None:
     """Test table creation succeeds without errors."""
     assert aiomysql_adk_store.session_table == "test_sessions"
     assert aiomysql_adk_store.events_table == "test_events"
+
+
+async def test_aiomysql_session_scoped_state_contract(aiomysql_adk_store: AiomysqlADKStore) -> None:
+    """Aiomysql service reads merge app/user state from dedicated scoped tables."""
+    await assert_session_scoped_state_contract(aiomysql_adk_store, marker="aiomysql")
 
 
 async def test_storage_types_verification(aiomysql_adk_store: AiomysqlADKStore) -> None:

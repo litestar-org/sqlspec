@@ -12,6 +12,7 @@ from tests.integration.adapters._adk_contract_helpers import (
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
+    assert_session_scoped_state_contract,
     assert_session_table_lifecycle_contract,
 )
 
@@ -63,6 +64,15 @@ async def test_sqlite_session_get_session_renewal_contract(tmp_path: Path) -> No
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_get_session_renewal_contract(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_scoped_state_contract(tmp_path: Path) -> None:
+    """SQLite service reads merge app/user state from dedicated scoped tables."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_scoped_state_contract(store, marker="sqlite")
     finally:
         config.close_pool()
 

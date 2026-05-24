@@ -22,6 +22,7 @@ __all__ = ("PsqlpyADKMemoryStore", "PsqlpyADKStore")
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
 POSTGRES_TABLE_NOT_FOUND_SQLSTATE: Final = "42P01"
+PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 
 class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
@@ -50,54 +51,14 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     def __init__(self, config: "PsqlpyConfig") -> None:
         super().__init__(config)
 
-    async def _get_create_sessions_table_sql(self) -> str:
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
-
-    async def _get_create_events_table_sql(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     async def create_tables(self) -> None:
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
+            await driver.execute_script(await self._get_create_app_states_table_sql())
+            await driver.execute_script(await self._get_create_user_states_table_sql())
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -354,8 +315,175 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 return 0
             raise
 
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = $1"
 
-PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+        try:
+            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+                result = await conn.fetch(sql, [app_name])
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return rows[0]["state"] if rows else None
+        except psqlpy.exceptions.DatabaseError as e:
+            error_msg = str(e).lower()
+            if "does not exist" in error_msg or "relation" in error_msg:
+                return None
+            raise
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = $1 AND user_id = $2"
+
+        try:
+            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+                result = await conn.fetch(sql, [app_name, user_id])
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return rows[0]["state"] if rows else None
+        except psqlpy.exceptions.DatabaseError as e:
+            error_msg = str(e).lower()
+            if "does not exist" in error_msg or "relation" in error_msg:
+                return None
+            raise
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """
+
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            await conn.execute(sql, [app_name, state])
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name, user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """
+
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            await conn.execute(sql, [app_name, user_id, state])
+
+    async def get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = $1"
+
+        try:
+            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+                result = await conn.fetch(sql, [key])
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return rows[0]["value"] if rows else None
+        except psqlpy.exceptions.DatabaseError as e:
+            error_msg = str(e).lower()
+            if "does not exist" in error_msg or "relation" in error_msg:
+                return None
+            raise
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        sql = f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """
+
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            await conn.execute(sql, [key, value])
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{owner_id_line},
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) WITH (fillfactor = 80);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
+            ON {self._session_table}(app_name, user_id);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
+            ON {self._session_table}(update_time DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
+            ON {self._session_table} USING GIN (state)
+            WHERE state != '{{}}'::jsonb;
+        """
+
+    async def _get_create_events_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            session_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256) NOT NULL,
+            author VARCHAR(256) NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            event_data JSONB NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        ) WITH (fillfactor = 80);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
+            ON {self._events_table}(session_id, timestamp ASC);
+        """
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name VARCHAR(128) PRIMARY KEY,
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) WITH (fillfactor = 80);
+        """
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (app_name, user_id)
+        ) WITH (fillfactor = 80);
+        """
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key VARCHAR(128) PRIMARY KEY,
+            value VARCHAR(512) NOT NULL
+        );
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT (key) DO NOTHING
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
 
 class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
@@ -366,46 +494,6 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
     def __init__(self, config: "PsqlpyConfig") -> None:
         """Initialize Psqlpy memory store."""
         super().__init__(config)
-
-    async def _get_create_memory_table_sql(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
-
-    def _get_drop_memory_table_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements."""
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -509,42 +597,6 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 return []
             raise
 
-    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
-        sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at,
-               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
-        FROM {self._memory_table}
-        WHERE app_name = $2
-          AND user_id = $3
-          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
-        ORDER BY rank DESC, timestamp DESC
-        LIMIT $4
-        """
-        params = [query, app_name, user_id, limit]
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            result = await conn.fetch(sql, params)
-            rows: list[dict[str, Any]] = result.result() if result else []
-        return _rows_to_records(rows)
-
-    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
-        sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
-        FROM {self._memory_table}
-        WHERE app_name = $1
-          AND user_id = $2
-          AND content_text ILIKE $3
-        ORDER BY timestamp DESC
-        LIMIT $4
-        """
-        pattern = f"%{query}%"
-        params = [app_name, user_id, pattern, limit]
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            result = await conn.fetch(sql, params)
-            rows: list[dict[str, Any]] = result.result() if result else []
-        return _rows_to_records(rows)
-
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         count_sql = f"SELECT COUNT(*) AS count FROM {self._memory_table} WHERE session_id = $1"
@@ -586,6 +638,82 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             if "does not exist" in error_msg or "relation" in error_msg:
                 return 0
             raise
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at,
+               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
+        FROM {self._memory_table}
+        WHERE app_name = $2
+          AND user_id = $3
+          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
+        ORDER BY rank DESC, timestamp DESC
+        LIMIT $4
+        """
+        params = [query, app_name, user_id, limit]
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            result = await conn.fetch(sql, params)
+            rows: list[dict[str, Any]] = result.result() if result else []
+        return _rows_to_records(rows)
+
+    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at
+        FROM {self._memory_table}
+        WHERE app_name = $1
+          AND user_id = $2
+          AND content_text ILIKE $3
+        ORDER BY timestamp DESC
+        LIMIT $4
+        """
+        pattern = f"%{query}%"
+        params = [app_name, user_id, pattern, limit]
+        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            result = await conn.fetch(sql, params)
+            rows: list[dict[str, Any]] = result.result() if result else []
+        return _rows_to_records(rows)
 
     def _extract_rows_affected(self, result: Any) -> int:
         """Extract rows affected from psqlpy result."""

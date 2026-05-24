@@ -122,6 +122,10 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     statements = [
         await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
         await store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_app_states_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_user_states_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_metadata_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_seed_metadata_sql(),  # pyright: ignore[reportPrivateUsage]
     ]
 
     if _is_memory_enabled(context):

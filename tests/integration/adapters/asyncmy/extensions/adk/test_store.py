@@ -7,6 +7,7 @@ import pytest
 
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.extensions.adk import EventRecord
+from tests.integration.adapters._adk_contract_helpers import assert_session_scoped_state_contract
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncmy, pytest.mark.integration]
 
@@ -15,6 +16,11 @@ async def test_create_tables(asyncmy_adk_store: AsyncmyADKStore) -> None:
     """Test table creation succeeds without errors."""
     assert asyncmy_adk_store.session_table == "test_sessions"
     assert asyncmy_adk_store.events_table == "test_events"
+
+
+async def test_asyncmy_session_scoped_state_contract(asyncmy_adk_store: AsyncmyADKStore) -> None:
+    """Asyncmy service reads merge app/user state from dedicated scoped tables."""
+    await assert_session_scoped_state_contract(asyncmy_adk_store, marker="asyncmy")
 
 
 async def test_storage_types_verification(asyncmy_adk_store: AsyncmyADKStore) -> None:
