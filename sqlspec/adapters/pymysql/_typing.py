@@ -6,7 +6,10 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-import pymysql
+import pymysql as _pymysql
+from pymysql.constants import FIELD_TYPE as PYMYSQL_FIELD_TYPE
+
+PYMYSQL_MODULE: Any = _pymysql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -16,12 +19,12 @@ if TYPE_CHECKING:
     from sqlspec.adapters.pymysql.driver import PyMysqlDriver
     from sqlspec.core import StatementConfig
 
-    PyMysqlConnection: TypeAlias = pymysql.connections.Connection
-    PyMysqlRawCursor: TypeAlias = pymysql.cursors.Cursor
+    PyMysqlConnection: TypeAlias = _pymysql.connections.Connection
+    PyMysqlRawCursor: TypeAlias = _pymysql.cursors.Cursor
 
 if not TYPE_CHECKING:
-    PyMysqlConnection = pymysql.connections.Connection
-    PyMysqlRawCursor = pymysql.cursors.Cursor
+    PyMysqlConnection = _pymysql.connections.Connection
+    PyMysqlRawCursor = _pymysql.cursors.Cursor
 
 
 class PyMysqlCursor:
@@ -89,4 +92,11 @@ class PyMysqlSessionContext:
         return None
 
 
-__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")
+__all__ = (
+    "PYMYSQL_FIELD_TYPE",
+    "PYMYSQL_MODULE",
+    "PyMysqlConnection",
+    "PyMysqlCursor",
+    "PyMysqlRawCursor",
+    "PyMysqlSessionContext",
+)

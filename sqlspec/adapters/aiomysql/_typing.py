@@ -6,10 +6,15 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import aiomysql as _aiomysql  # pyright: ignore
 from aiomysql import Connection  # pyright: ignore
 from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
 from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
 from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
+from pymysql import err as PYMYSQL_ERRORS  # pyright: ignore
+from pymysql.constants import FIELD_TYPE as PYMYSQL_FIELD_TYPE  # pyright: ignore
+
+AIOMYSQL_MODULE: Any = _aiomysql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -128,10 +133,13 @@ class AiomysqlSessionContext:
 
 
 __all__ = (
+    "AIOMYSQL_MODULE",
     "AiomysqlConnection",
     "AiomysqlCursor",
     "AiomysqlDictCursor",
     "AiomysqlPool",
     "AiomysqlRawCursor",
     "AiomysqlSessionContext",
+    "PYMYSQL_ERRORS",
+    "PYMYSQL_FIELD_TYPE",
 )

@@ -4,9 +4,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import oracledb
-
 from sqlspec import SQL
+from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
     OracledbSyncDataDictionary,
@@ -243,7 +242,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -343,7 +342,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                         )
                     )
                 return results
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -534,7 +533,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     )
                     for row in rows
                 ]
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -549,7 +548,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"before": before})
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return 0
@@ -564,7 +563,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"updated_before": updated_before})
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return 0
@@ -580,7 +579,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"app_name": app_name})
                 row = await cursor.fetchone()
                 return await self._deserialize_state(row[0]) if row is not None else None
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -600,7 +599,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
                 row = await cursor.fetchone()
                 return await self._deserialize_state(row[0]) if row is not None else None
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -654,7 +653,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"key": key})
                 row = await cursor.fetchone()
                 return str(row[0]) if row is not None else None
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -1794,7 +1793,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -1894,7 +1893,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                         )
                     )
                 return results
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -2050,7 +2049,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                     )
                     for row in rows
                 ]
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -2065,7 +2064,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor.execute(sql, {"before": before})
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return 0
@@ -2080,7 +2079,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor.execute(sql, {"updated_before": updated_before})
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return 0
@@ -2120,7 +2119,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor.execute(sql, {"app_name": app_name})
                 row = cursor.fetchone()
                 return self._deserialize_state(row[0]) if row is not None else None
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -2140,7 +2139,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
                 row = cursor.fetchone()
                 return self._deserialize_state(row[0]) if row is not None else None
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -2192,7 +2191,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor.execute(sql, {"key": key})
                 row = cursor.fetchone()
                 return str(row[0]) if row is not None else None
-        except oracledb.DatabaseError as e:
+        except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -2296,7 +2295,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             if self._use_fts:
                 return await self._search_entries_fts(query, app_name, user_id, effective_limit)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
@@ -2485,7 +2484,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """Execute an insert and skip duplicate key errors."""
         try:
             await cursor.execute(sql, params)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
                 return False
@@ -2767,7 +2766,7 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
         """Execute an insert and skip duplicate key errors."""
         try:
             cursor.execute(sql, params)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_DUPLICATE_KEY_ERROR:
                 return False
@@ -2834,7 +2833,7 @@ class OracleSyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleSyncConfig"]):
             if self._use_fts:
                 return self._search_entries_fts(query, app_name, user_id, effective_limit)
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except oracledb.DatabaseError as exc:
+        except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []

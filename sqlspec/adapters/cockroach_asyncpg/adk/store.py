@@ -2,8 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, cast
 
-import asyncpg
-
+from sqlspec.adapters.cockroach_asyncpg._typing import COCKROACH_ASYNCPG_EXCEPTIONS
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -18,6 +17,9 @@ if TYPE_CHECKING:
 __all__ = ("CockroachAsyncpgADKMemoryStore", "CockroachAsyncpgADKStore")
 
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg.adk.store")
+_COCKROACH_ASYNCPG_UNDEFINED_TABLE_ERROR = cast(
+    "type[BaseException]", getattr(COCKROACH_ASYNCPG_EXCEPTIONS, "UndefinedTableError", Exception)
+)
 
 
 class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
@@ -106,7 +108,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                     create_time=row["create_time"],
                     update_time=row["update_time"],
                 )
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
@@ -146,7 +148,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         try:
             async with self._config.provide_connection() as conn:
                 rows = await conn.fetch(sql, *params)
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return []
 
         return [
@@ -274,7 +276,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         try:
             async with self._config.provide_connection() as conn:
                 rows = await conn.fetch(sql, *params)
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return []
 
         return [
@@ -295,7 +297,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, before)
                 return int(result.split()[-1]) if result else 0
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return 0
 
     async def delete_idle_sessions(self, updated_before: "datetime") -> int:
@@ -305,7 +307,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, updated_before)
                 return int(result.split()[-1]) if result else 0
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return 0
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
@@ -315,7 +317,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, app_name)
                 return row["state"] if row is not None else None
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
@@ -325,7 +327,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, app_name, user_id)
                 return row["state"] if row is not None else None
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
@@ -353,7 +355,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, key)
                 return row["value"] if row is not None else None
-        except asyncpg.exceptions.UndefinedTableError:
+        except COCKROACH_ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def set_metadata(self, key: str, value: str) -> None:

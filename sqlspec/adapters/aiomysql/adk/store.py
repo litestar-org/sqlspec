@@ -3,9 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql.err
-
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
+from sqlspec.adapters.aiomysql._typing import PYMYSQL_ERRORS, AiomysqlCursor, AiomysqlRawCursor
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -20,6 +18,7 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlADKMemoryStore", "AiomysqlADKStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_PYMYSQL_PROGRAMMING_ERROR = cast("type[BaseException]", getattr(PYMYSQL_ERRORS, "ProgrammingError", Exception))
 
 
 def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
@@ -165,7 +164,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -253,7 +252,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                     )
                     for row in rows
                 ]
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -432,7 +431,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                     )
                     for row in rows
                 ]
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -448,7 +447,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (before,))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -464,7 +463,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (updated_before,))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -481,7 +480,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (app_name,))
                 row = await cursor.fetchone()
                 return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -498,7 +497,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (app_name, user_id))
                 row = await cursor.fetchone()
                 return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -545,7 +544,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
                 return row[0] if row is not None else None
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise

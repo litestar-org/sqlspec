@@ -1,10 +1,9 @@
 """PyMySQL session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
-import pymysql
-
+from sqlspec.adapters.pymysql._typing import PYMYSQL_MODULE
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -17,6 +16,7 @@ logger = get_logger("sqlspec.adapters.pymysql.litestar.store")
 __all__ = ("PyMysqlStore",)
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_PYMYSQL_ERROR = cast("type[BaseException]", getattr(PYMYSQL_MODULE, "MySQLError", Exception))
 
 
 class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
@@ -64,7 +64,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
-                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                cursor = conn.cursor(PYMYSQL_MODULE.cursors.DictCursor)
                 try:
                     cursor.execute(sql, (key,))
                     row = cursor.fetchone()
@@ -91,7 +91,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                         conn.commit()
 
                 return bytes(row["data"])
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -150,7 +150,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                     cursor.close()
                 conn.commit()
             self._log_delete_all()
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -175,7 +175,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 finally:
                     cursor.close()
                 return result is not None
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

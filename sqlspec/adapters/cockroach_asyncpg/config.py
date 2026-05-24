@@ -2,7 +2,6 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.core import (
@@ -12,6 +11,7 @@ from sqlspec.adapters.asyncpg.core import (
     register_json_codecs,
 )
 from sqlspec.adapters.cockroach_asyncpg._typing import (
+    COCKROACH_ASYNCPG_MODULE,
     CockroachAsyncpgConnection,
     CockroachAsyncpgPool,
     CockroachAsyncpgSessionContext,
@@ -180,7 +180,7 @@ class CockroachAsyncpgConfig(
     async def _create_pool(self) -> "CockroachAsyncpgPool":
         config = build_connection_config(self.connection_config)
         config.setdefault("init", self._init_connection)
-        return await asyncpg_create_pool(**config)
+        return cast("CockroachAsyncpgPool", await COCKROACH_ASYNCPG_MODULE.create_pool(**config))
 
     async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
         """Initialize connection with JSON codecs and user callback."""

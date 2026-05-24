@@ -6,9 +6,10 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from duckdb import DuckDBPyConnection
+import duckdb as _duckdb
 
-_DuckDBConnection = DuckDBPyConnection
+DUCKDB_MODULE: Any = _duckdb
+_DuckDBConnection = _duckdb.DuckDBPyConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -101,4 +102,4 @@ class DuckDBSessionContext:
         return None
 
 
-__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")
+__all__ = ("DUCKDB_MODULE", "DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")

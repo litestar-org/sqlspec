@@ -4,10 +4,10 @@ from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
-import psycopg
 from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
+    PSYCOPG_MODULE,
     PsycopgAsyncConnection,
     PsycopgAsyncCursor,
     PsycopgAsyncSessionContext,
@@ -79,6 +79,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.psycopg")
 COLUMN_CACHE_MAX_SIZE = 256
+_PSYCOPG_ERROR = cast("type[BaseException]", getattr(PSYCOPG_MODULE, "Error", Exception))
 
 
 class PsycopgPipelineMixin:
@@ -135,7 +136,7 @@ class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, psycopg.Error):
+        if issubclass(exc_type, _PSYCOPG_ERROR):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -585,7 +586,7 @@ class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, psycopg.Error):
+        if issubclass(exc_type, _PSYCOPG_ERROR):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False

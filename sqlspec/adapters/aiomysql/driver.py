@@ -10,10 +10,12 @@ rather than a driver-specific error module.
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql.err  # pyright: ignore
-from pymysql.constants import FIELD_TYPE as PYMYSQL_FIELD_TYPE  # pyright: ignore
-
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlSessionContext
+from sqlspec.adapters.aiomysql._typing import (
+    PYMYSQL_ERRORS,
+    PYMYSQL_FIELD_TYPE,
+    AiomysqlCursor,
+    AiomysqlSessionContext,
+)
 from sqlspec.adapters.aiomysql.core import (
     build_insert_statement,
     collect_rows,
@@ -48,6 +50,8 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlCursor", "AiomysqlDriver", "AiomysqlExceptionHandler", "AiomysqlSessionContext")
 
 logger = get_logger(__name__)
+_PYMYSQL_ERROR = cast("type[BaseException]", getattr(PYMYSQL_ERRORS, "Error", Exception))
+_PYMYSQL_MYSQL_ERROR = cast("type[BaseException]", getattr(PYMYSQL_ERRORS, "MySQLError", _PYMYSQL_ERROR))
 
 json_type_value = (
     PYMYSQL_FIELD_TYPE.JSON if PYMYSQL_FIELD_TYPE is not None and supports_json_type(PYMYSQL_FIELD_TYPE) else None
@@ -74,7 +78,7 @@ class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, pymysql.err.Error):
+        if issubclass(exc_type, _PYMYSQL_ERROR):
             result = create_mapped_exception(exc_val, logger=logger)
             if result is True:
                 return True
@@ -208,7 +212,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             async with AiomysqlCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
-        except pymysql.err.MySQLError as e:
+        except _PYMYSQL_MYSQL_ERROR as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -220,7 +224,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.commit()
-        except pymysql.err.MySQLError as e:
+        except _PYMYSQL_MYSQL_ERROR as e:
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -232,7 +236,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.rollback()
-        except pymysql.err.MySQLError as e:
+        except _PYMYSQL_MYSQL_ERROR as e:
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 

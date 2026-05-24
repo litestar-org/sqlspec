@@ -442,6 +442,22 @@ def test_get_driver_profile_missing_raises() -> None:
         get_driver_profile("does-not-exist")
 
 
+def test_mssql_python_parameter_profile_registered() -> None:
+    """mssql_python should register a qmark default profile with pyformat support."""
+    pytest.importorskip("mssql_python")
+    from sqlspec.adapters.mssql_python.core import driver_profile  # noqa: F401
+
+    profile = get_driver_profile("mssql_python")
+
+    assert profile.default_dialect == "tsql"
+    assert profile.default_style is ParameterStyle.QMARK
+    assert ParameterStyle.QMARK in profile.supported_styles
+    assert ParameterStyle.NAMED_PYFORMAT in profile.supported_styles
+    assert profile.default_execution_style is ParameterStyle.QMARK
+    assert profile.supported_execution_styles == frozenset({ParameterStyle.QMARK})
+    assert profile.allow_mixed_parameter_styles is False
+
+
 def test_register_driver_profile_duplicate_guard() -> None:
     """Registering the same adapter twice without override should fail."""
 

@@ -6,8 +6,7 @@ import re
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
-import asyncpg
-
+from sqlspec.adapters.asyncpg._typing import ASYNCPG_MODULE
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
@@ -383,47 +382,49 @@ def _create_postgres_error(
     return exc
 
 
+_ASYNCPG_EXCEPTIONS = ASYNCPG_MODULE.exceptions
+
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.UniqueViolationError, ("23505", UniqueViolationError, "unique constraint violation")
+    _ASYNCPG_EXCEPTIONS.UniqueViolationError, ("23505", UniqueViolationError, "unique constraint violation")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.ForeignKeyViolationError, ("23503", ForeignKeyViolationError, "foreign key constraint violation")
+    _ASYNCPG_EXCEPTIONS.ForeignKeyViolationError, ("23503", ForeignKeyViolationError, "foreign key constraint violation")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.NotNullViolationError, ("23502", NotNullViolationError, "not-null constraint violation")
+    _ASYNCPG_EXCEPTIONS.NotNullViolationError, ("23502", NotNullViolationError, "not-null constraint violation")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.CheckViolationError, ("23514", CheckViolationError, "check constraint violation")
+    _ASYNCPG_EXCEPTIONS.CheckViolationError, ("23514", CheckViolationError, "check constraint violation")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.IntegrityConstraintViolationError, ("23000", IntegrityError, "integrity constraint violation")
+    _ASYNCPG_EXCEPTIONS.IntegrityConstraintViolationError, ("23000", IntegrityError, "integrity constraint violation")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.DeadlockDetectedError, ("40P01", DeadlockError, "deadlock detected")
+    _ASYNCPG_EXCEPTIONS.DeadlockDetectedError, ("40P01", DeadlockError, "deadlock detected")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.SerializationError, ("40001", SerializationConflictError, "serialization failure")
+    _ASYNCPG_EXCEPTIONS.SerializationError, ("40001", SerializationConflictError, "serialization failure")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.QueryCanceledError, ("57014", QueryTimeoutError, "query canceled")
+    _ASYNCPG_EXCEPTIONS.QueryCanceledError, ("57014", QueryTimeoutError, "query canceled")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.InsufficientPrivilegeError, ("42501", PermissionDeniedError, "insufficient privilege")
+    _ASYNCPG_EXCEPTIONS.InsufficientPrivilegeError, ("42501", PermissionDeniedError, "insufficient privilege")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.InvalidPasswordError, ("28P01", PermissionDeniedError, "invalid password")
+    _ASYNCPG_EXCEPTIONS.InvalidPasswordError, ("28P01", PermissionDeniedError, "invalid password")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.InvalidAuthorizationSpecificationError, ("28000", PermissionDeniedError, "authorization error")
+    _ASYNCPG_EXCEPTIONS.InvalidAuthorizationSpecificationError, ("28000", PermissionDeniedError, "authorization error")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", ConnectionTimeoutError, "connection does not exist")
+    _ASYNCPG_EXCEPTIONS.ConnectionDoesNotExistError, ("08003", ConnectionTimeoutError, "connection does not exist")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.CannotConnectNowError, ("57P03", ConnectionTimeoutError, "cannot connect now")
+    _ASYNCPG_EXCEPTIONS.CannotConnectNowError, ("57P03", ConnectionTimeoutError, "cannot connect now")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")
+    _ASYNCPG_EXCEPTIONS.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")
 )
 
 

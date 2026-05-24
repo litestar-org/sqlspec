@@ -1,11 +1,9 @@
 """aiomysql session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
-import pymysql.err
-
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
+from sqlspec.adapters.aiomysql._typing import PYMYSQL_ERRORS, AiomysqlCursor, AiomysqlRawCursor
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
@@ -17,6 +15,7 @@ logger = get_logger("sqlspec.adapters.aiomysql.litestar.store")
 __all__ = ("AiomysqlStore",)
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_PYMYSQL_PROGRAMMING_ERROR = cast("type[BaseException]", getattr(PYMYSQL_ERRORS, "ProgrammingError", Exception))
 
 
 class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
@@ -150,7 +149,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                         await conn.commit()
 
                 return bytes(data_value)
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -215,7 +214,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -247,7 +246,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
-        except pymysql.err.ProgrammingError as e:
+        except PYMYSQL_ERRORS.ProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

@@ -21,6 +21,8 @@ from oracledb import (
 )
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
+ORACLEDB_MODULE: Any = _oracledb
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, Statement, StatementConfig
 
+    OracleAuthMode: TypeAlias = AuthMode
     OracleSyncConnection: TypeAlias = Connection
     OracleAsyncConnection: TypeAlias = AsyncConnection
     OracleSyncConnectionPool: TypeAlias = ConnectionPool
@@ -49,6 +52,7 @@ if not TYPE_CHECKING:
         DB_TYPE_VECTOR = None
         OracleVectorType = int
 
+    OracleAuthMode = Any
     OracleSyncConnection = Connection
     OracleAsyncConnection = AsyncConnection
     OracleSyncConnectionPool = ConnectionPool
@@ -243,11 +247,13 @@ __all__ = (
     "DB_TYPE_VECTOR",
     "AQDequeueOptions",
     "DatabaseError",
+    "OracleAuthMode",
     "OracleAsyncConnection",
     "OracleAsyncConnectionPool",
     "OracleAsyncCursor",
     "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
+    "ORACLEDB_MODULE",
     "OraclePipelineDriver",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",

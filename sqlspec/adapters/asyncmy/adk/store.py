@@ -3,8 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncmy
-
+from sqlspec.adapters.asyncmy._typing import ASYNCMY_ERRORS
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -19,6 +18,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncmyADKMemoryStore", "AsyncmyADKStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_ASYNCMY_PROGRAMMING_ERROR = cast("type[BaseException]", getattr(ASYNCMY_ERRORS, "ProgrammingError", Exception))
 
 
 def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
@@ -158,7 +158,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue][reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue][reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -237,7 +237,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     )
                     for row in rows
                 ]
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -407,7 +407,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     )
                     for row in rows
                 ]
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -420,7 +420,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (before,))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -433,7 +433,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (updated_before,))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -447,7 +447,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (app_name,))
                 row = await cursor.fetchone()
                 return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -461,7 +461,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (app_name, user_id))
                 row = await cursor.fetchone()
                 return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -499,7 +499,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
                 return row[0] if row is not None else None
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
+        except ASYNCMY_ERRORS.ProgrammingError as e:  # pyright: ignore[reportAttributeAccessIssue]
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise

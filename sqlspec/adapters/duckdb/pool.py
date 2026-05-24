@@ -7,9 +7,7 @@ import uuid
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import duckdb
-
-from sqlspec.adapters.duckdb._typing import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import DUCKDB_MODULE, DuckDBConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -115,7 +113,7 @@ class DuckDBConnectionPool:
         if config_dict:
             connect_parameters["config"] = config_dict
 
-        connection = duckdb.connect(**connect_parameters)
+        connection = DUCKDB_MODULE.connect(**connect_parameters)
 
         self._apply_extension_flags(connection)
 

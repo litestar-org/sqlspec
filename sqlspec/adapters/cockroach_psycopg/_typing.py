@@ -6,9 +6,19 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import psycopg as _psycopg
+from psycopg import errors as PSYCOPG_ERRORS
+from psycopg import sql as PSYCOPG_SQL
 from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as psycopg_crdb
+from psycopg.rows import dict_row as PsycopgDictRowFactory
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.types.json import Jsonb as PsycopgJsonb
+from psycopg_pool import AsyncConnectionPool as CockroachPsycopgAsyncConnectionPool
+from psycopg_pool import ConnectionPool as CockroachPsycopgSyncConnectionPool
+
+PSYCOPG_MODULE: Any = _psycopg
+PSYCOPG_CRDB_MODULE: Any = psycopg_crdb
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -129,9 +139,17 @@ class CockroachPsycopgAsyncSessionContext:
 __all__ = (
     "CockroachAsyncConnection",
     "CockroachAsyncCursor",
+    "CockroachPsycopgAsyncConnectionPool",
     "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgSyncConnectionPool",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "CockroachSyncCursor",
+    "PSYCOPG_ERRORS",
+    "PSYCOPG_CRDB_MODULE",
+    "PSYCOPG_MODULE",
+    "PSYCOPG_SQL",
     "PsycopgDictRow",
+    "PsycopgDictRowFactory",
+    "PsycopgJsonb",
 )

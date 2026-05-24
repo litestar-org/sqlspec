@@ -2,15 +2,16 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from psycopg import crdb as psycopg_crdb
-from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
+    CockroachPsycopgAsyncConnectionPool,
     CockroachPsycopgAsyncSessionContext,
+    CockroachPsycopgSyncConnectionPool,
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
+    PSYCOPG_CRDB_MODULE,
 )
 from sqlspec.adapters.cockroach_psycopg.core import apply_driver_features, build_statement_config
 from sqlspec.adapters.cockroach_psycopg.driver import (
@@ -155,7 +156,7 @@ class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class CockroachPsycopgSyncConfig(
-    SyncDatabaseConfig[CockroachSyncConnection, ConnectionPool, CockroachPsycopgSyncDriver]
+    SyncDatabaseConfig[CockroachSyncConnection, CockroachPsycopgSyncConnectionPool, CockroachPsycopgSyncDriver]
 ):
     """Configuration for CockroachDB synchronous connections using psycopg."""
 
@@ -179,7 +180,7 @@ class CockroachPsycopgSyncConfig(
         self,
         *,
         connection_config: "CockroachPsycopgPoolConfig | dict[str, Any] | None" = None,
-        connection_instance: "ConnectionPool | None" = None,
+        connection_instance: "CockroachPsycopgSyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None" = None,
@@ -212,7 +213,7 @@ class CockroachPsycopgSyncConfig(
             **kwargs,
         )
 
-    def _create_pool(self) -> "ConnectionPool":
+    def _create_pool(self) -> "CockroachPsycopgSyncConnectionPool":
         all_config = dict(self.connection_config)
 
         pool_parameters = {
@@ -232,12 +233,14 @@ class CockroachPsycopgSyncConfig(
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            return ConnectionPool(conninfo, open=True, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters)
+            return CockroachPsycopgSyncConnectionPool(
+                conninfo, open=True, connection_class=PSYCOPG_CRDB_MODULE.CrdbConnection, **pool_parameters
+            )
 
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
-        return ConnectionPool(
-            "", kwargs=all_config, open=True, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
+        return CockroachPsycopgSyncConnectionPool(
+            "", kwargs=all_config, open=True, connection_class=PSYCOPG_CRDB_MODULE.CrdbConnection, **pool_parameters
         )
 
     def _configure_connection(self, conn: "CockroachSyncConnection") -> None:
@@ -285,7 +288,7 @@ class CockroachPsycopgSyncConfig(
             prepare_driver=self._prepare_driver,
         )
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
+    def provide_pool(self, *args: Any, **kwargs: Any) -> "CockroachPsycopgSyncConnectionPool":
         if not self.connection_instance:
             self.connection_instance = self.create_pool()
         return self.connection_instance
@@ -355,7 +358,7 @@ class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 
 class CockroachPsycopgAsyncConfig(
-    AsyncDatabaseConfig[CockroachAsyncConnection, AsyncConnectionPool, CockroachPsycopgAsyncDriver]
+    AsyncDatabaseConfig[CockroachAsyncConnection, CockroachPsycopgAsyncConnectionPool, CockroachPsycopgAsyncDriver]
 ):
     """Configuration for CockroachDB async connections using psycopg."""
 
@@ -379,7 +382,7 @@ class CockroachPsycopgAsyncConfig(
         self,
         *,
         connection_config: "CockroachPsycopgPoolConfig | dict[str, Any] | None" = None,
-        connection_instance: "AsyncConnectionPool | None" = None,
+        connection_instance: "CockroachPsycopgAsyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None" = None,
@@ -412,7 +415,7 @@ class CockroachPsycopgAsyncConfig(
             **kwargs,
         )
 
-    async def _create_pool(self) -> "AsyncConnectionPool":
+    async def _create_pool(self) -> "CockroachPsycopgAsyncConnectionPool":
         all_config = dict(self.connection_config)
 
         pool_parameters = {
@@ -432,18 +435,22 @@ class CockroachPsycopgAsyncConfig(
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            pool = AsyncConnectionPool(
-                conninfo, open=False, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+            pool = CockroachPsycopgAsyncConnectionPool(
+                conninfo, open=False, connection_class=PSYCOPG_CRDB_MODULE.AsyncCrdbConnection, **pool_parameters
             )
         else:
             kwargs = all_config.pop("kwargs", {})
             all_config.update(kwargs)
-            pool = AsyncConnectionPool(
-                "", kwargs=all_config, open=False, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+            pool = CockroachPsycopgAsyncConnectionPool(
+                "",
+                kwargs=all_config,
+                open=False,
+                connection_class=PSYCOPG_CRDB_MODULE.AsyncCrdbConnection,
+                **pool_parameters,
             )
 
         await pool.open()
-        return cast("AsyncConnectionPool", pool)
+        return cast("CockroachPsycopgAsyncConnectionPool", pool)
 
     async def _configure_async_connection(self, conn: "CockroachAsyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")
@@ -490,7 +497,7 @@ class CockroachPsycopgAsyncConfig(
             prepare_driver=self._prepare_driver,
         )
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "CockroachPsycopgAsyncConnectionPool":
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()
         return self.connection_instance

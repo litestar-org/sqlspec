@@ -6,11 +6,20 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any, Protocol
 
+import psycopg as _psycopg
+from psycopg import errors as PSYCOPG_ERRORS
+from psycopg import sql as PSYCOPG_SQL
 from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
+from psycopg.rows import dict_row as PsycopgDictRowFactory
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.sql import SQL as PsycopgSQL  # noqa: N811
 from psycopg.sql import Composed as PsycopgComposed
 from psycopg.sql import Identifier as PsycopgIdentifier
+from psycopg.types.json import Jsonb as PsycopgJsonb
+from psycopg_pool import AsyncConnectionPool as PsycopgAsyncConnectionPool
+from psycopg_pool import ConnectionPool as PsycopgSyncConnectionPool
+
+PSYCOPG_MODULE: Any = _psycopg
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -206,12 +215,19 @@ __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncRawCursor",
     "PsycopgAsyncSessionContext",
+    "PsycopgAsyncConnectionPool",
     "PsycopgComposed",
     "PsycopgDictRow",
+    "PsycopgDictRowFactory",
     "PsycopgIdentifier",
+    "PsycopgJsonb",
+    "PSYCOPG_MODULE",
+    "PSYCOPG_ERRORS",
+    "PSYCOPG_SQL",
     "PsycopgPipelineDriver",
     "PsycopgSQL",
     "PsycopgSyncConnection",
+    "PsycopgSyncConnectionPool",
     "PsycopgSyncCursor",
     "PsycopgSyncRawCursor",
     "PsycopgSyncSessionContext",

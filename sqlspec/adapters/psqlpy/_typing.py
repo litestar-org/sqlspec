@@ -6,6 +6,8 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from psqlpy import ConnectionPool as _PsqlpyConnectionPool
+from psqlpy import exceptions as PSQLPY_EXCEPTIONS
 from psqlpy import Connection as _PsqlpyConnection
 from psqlpy import Listener as _PsqlpyListener
 
@@ -18,10 +20,12 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     PsqlpyConnection: TypeAlias = _PsqlpyConnection
+    PsqlpyConnectionPool: TypeAlias = _PsqlpyConnectionPool
     PsqlpyListener: TypeAlias = _PsqlpyListener
 
 if not TYPE_CHECKING:
     PsqlpyConnection = _PsqlpyConnection
+    PsqlpyConnectionPool = _PsqlpyConnectionPool
     PsqlpyListener = _PsqlpyListener
 
 
@@ -118,4 +122,11 @@ class PsqlpySessionContext:
         return None
 
 
-__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyListener", "PsqlpySessionContext")
+__all__ = (
+    "PSQLPY_EXCEPTIONS",
+    "PsqlpyConnection",
+    "PsqlpyConnectionPool",
+    "PsqlpyCursor",
+    "PsqlpyListener",
+    "PsqlpySessionContext",
+)

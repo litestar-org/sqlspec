@@ -2,18 +2,20 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from asyncpg import Connection, Record
-from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.connection import ConnectionMeta
-from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._typing import (
+    ASYNCPG_MODULE,
+    AsyncpgBaseConnection,
+    AsyncpgBasePool,
     AsyncpgConnection,
+    AsyncpgConnectionMeta,
     AsyncpgCursor,
     AsyncpgPool,
+    AsyncpgPoolConnectionProxyMeta,
     AsyncpgPreparedStatement,
+    AsyncpgRecord,
     AsyncpgSessionContext,
 )
 from sqlspec.adapters.asyncpg.core import (
@@ -89,7 +91,7 @@ class AsyncpgPoolConfig(AsyncpgConnectionConfig):
     init: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
     loop: NotRequired["AbstractEventLoop"]
     connection_class: NotRequired[type["AsyncpgConnection"]]
-    record_class: NotRequired[type[Record]]
+    record_class: NotRequired[type["AsyncpgRecord"]]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -245,7 +247,7 @@ class AsyncpgConnectionContext(AsyncPoolConnectionContext):
 
 
 @mypyc_attr(native_class=False)
-class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
+class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, AsyncpgPool, AsyncpgDriver]):
     """Configuration for AsyncPG database connections using TypedDict.
 
     Example::
@@ -273,7 +275,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self,
         *,
         connection_config: "AsyncpgPoolConfig | dict[str, Any] | None" = None,
-        connection_instance: "Pool[Record] | None" = None,
+        connection_instance: "AsyncpgPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "AsyncpgDriverFeatures | dict[str, Any] | None" = None,
@@ -416,7 +418,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         config["connect"] = _AsyncpgAlloydbConnector(self, user, password, database)
 
-    async def _create_pool(self) -> "Pool[Record]":
+    async def _create_pool(self) -> "AsyncpgPool":
         """Create the actual async connection pool."""
         config = build_connection_config(self.connection_config)
 
@@ -427,7 +429,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         config.setdefault("init", self._init_connection)
 
-        return await asyncpg_create_pool(**config)
+        return cast("AsyncpgPool", await ASYNCPG_MODULE.create_pool(**config))
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:
         """Initialize connection with JSON codecs, pgvector support, and user callback.
@@ -528,7 +530,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             prepare_driver=self._prepare_driver,
         )
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncpgPool":
         """Provide async pool instance.
 
         Returns:
@@ -550,12 +552,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         namespace = super().get_signature_namespace()
         namespace.update({
-            "Connection": Connection,
-            "Pool": Pool,
-            "PoolConnectionProxy": PoolConnectionProxy,
-            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-            "ConnectionMeta": ConnectionMeta,
-            "Record": Record,
+            "Connection": AsyncpgBaseConnection,
+            "Pool": AsyncpgBasePool,
+            "PoolConnectionProxy": AsyncpgConnection,
+            "PoolConnectionProxyMeta": AsyncpgPoolConnectionProxyMeta,
+            "ConnectionMeta": AsyncpgConnectionMeta,
+            "Record": AsyncpgRecord,
             "AsyncpgConnection": AsyncpgConnection,
             "AsyncpgConnectionConfig": AsyncpgConnectionConfig,
             "AsyncpgConnectionContext": AsyncpgConnectionContext,

@@ -3,13 +3,18 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
-import asyncmy
-from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
-from asyncmy.pool import Pool as AsyncmyPool  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor, AsyncmySessionContext
+from sqlspec.adapters.asyncmy._typing import (
+    ASYNCMY_MODULE,
+    AsyncmyConnection,
+    AsyncmyCursor,
+    AsyncmyDictCursor,
+    AsyncmyPool,
+    AsyncmyRawCursor,
+    AsyncmySessionContext,
+)
 from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -20,9 +25,6 @@ from sqlspec.utils.config_tools import normalize_connection_config
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
-
-    from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore
-    from asyncmy.pool import Pool  # pyright: ignore
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -49,7 +51,7 @@ class AsyncmyConnectionParams(TypedDict):
     ssl: NotRequired[Any]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
-    cursor_class: NotRequired[type["Cursor"] | type["DictCursor"]]
+    cursor_class: NotRequired[type["AsyncmyRawCursor"] | type["AsyncmyDictCursor"]]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -235,7 +237,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Future driver_features can be added here if needed (e.g., custom connection
         initialization, specialized type handling).
         """
-        return cast("AsyncmyPool", await asyncmy.create_pool(**dict(self.connection_config)))
+        return cast("AsyncmyPool", await ASYNCMY_MODULE.create_pool(**dict(self.connection_config)))
 
     async def _ensure_connection_initialized(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
@@ -269,7 +271,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         await self._ensure_connection_initialized(connection)
         return connection
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncmyPool":
         """Provide async pool instance.
 
         Returns:

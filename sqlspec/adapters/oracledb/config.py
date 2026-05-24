@@ -2,12 +2,13 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-import oracledb
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb._typing import (
+    ORACLEDB_MODULE,
+    OracleAuthMode,
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
     OracleAsyncCursor,
@@ -35,8 +36,6 @@ from sqlspec.utils.config_tools import normalize_connection_config
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
-
-    from oracledb import AuthMode
 
     from sqlspec.core import StatementConfig
 
@@ -87,7 +86,7 @@ class OracleConnectionParams(TypedDict):
     tcp_connect_timeout: NotRequired[float]
     retry_count: NotRequired[int]
     retry_delay: NotRequired[int]
-    mode: NotRequired["AuthMode"]
+    mode: NotRequired["OracleAuthMode"]
     events: NotRequired[bool]
     edition: NotRequired[str]
 
@@ -295,7 +294,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
             config["session_callback"] = self._init_connection
 
-        return oracledb.create_pool(**config)
+        return ORACLEDB_MODULE.create_pool(**config)
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
         """Initialize connection with type handlers and cached server metadata.
@@ -486,7 +485,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
             config["session_callback"] = self._init_connection
 
-        return oracledb.create_pool_async(**config)
+        return ORACLEDB_MODULE.create_pool_async(**config)
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
         """Initialize async connection with type handlers and cached server metadata.

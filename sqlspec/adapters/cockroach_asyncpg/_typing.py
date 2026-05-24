@@ -2,8 +2,12 @@
 
 from typing import TYPE_CHECKING, Any
 
+import asyncpg as _asyncpg
 from asyncpg import Pool
 from asyncpg.pool import PoolConnectionProxy
+
+COCKROACH_ASYNCPG_MODULE: Any = _asyncpg
+COCKROACH_ASYNCPG_EXCEPTIONS: Any = _asyncpg.exceptions
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -70,4 +74,10 @@ class CockroachAsyncpgSessionContext:
         return None
 
 
-__all__ = ("CockroachAsyncpgConnection", "CockroachAsyncpgPool", "CockroachAsyncpgSessionContext")
+__all__ = (
+    "COCKROACH_ASYNCPG_MODULE",
+    "COCKROACH_ASYNCPG_EXCEPTIONS",
+    "CockroachAsyncpgConnection",
+    "CockroachAsyncpgPool",
+    "CockroachAsyncpgSessionContext",
+)

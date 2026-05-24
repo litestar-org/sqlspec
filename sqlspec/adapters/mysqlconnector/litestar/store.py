@@ -3,8 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import mysql.connector
-
+from sqlspec.adapters.mysqlconnector._typing import MYSQL_CONNECTOR_MODULE
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -17,6 +16,7 @@ logger = get_logger("sqlspec.adapters.mysqlconnector.litestar.store")
 __all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorSyncStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_MYSQL_CONNECTOR_ERROR = cast("type[BaseException]", getattr(MYSQL_CONNECTOR_MODULE, "Error", Exception))
 
 
 class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
@@ -90,7 +90,7 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                         await conn.commit()
 
                 return bytes(cast("bytes", data_value))
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -140,7 +140,7 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                     await cursor.close()
                 await conn.commit()
             self._log_delete_all()
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -162,7 +162,7 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                 finally:
                     await cursor.close()
                 return result is not None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise
@@ -285,7 +285,7 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                         conn.commit()
 
                 return bytes(cast("bytes", data_value))
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -344,7 +344,7 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                     cursor.close()
                 conn.commit()
             self._log_delete_all()
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -369,7 +369,7 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
                 return result is not None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

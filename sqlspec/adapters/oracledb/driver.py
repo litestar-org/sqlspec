@@ -3,9 +3,10 @@
 import logging
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-import oracledb
-
 from sqlspec.adapters.oracledb._typing import (
+    DB_TYPE_BLOB,
+    DB_TYPE_CLOB,
+    ORACLEDB_MODULE,
     OracleAsyncConnection,
     OracleAsyncCursor,
     OracleAsyncSessionContext,
@@ -68,6 +69,8 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+_ORACLEDB_DATABASE_ERROR = cast("type[BaseException]", getattr(ORACLEDB_MODULE, "DatabaseError", Exception))
+_ORACLEDB_ERROR = cast("type[BaseException]", getattr(ORACLEDB_MODULE, "Error", _ORACLEDB_DATABASE_ERROR))
 
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
 # on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
@@ -242,7 +245,7 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, oracledb.DatabaseError):
+        if issubclass(exc_type, _ORACLEDB_DATABASE_ERROR):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -264,7 +267,7 @@ class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, oracledb.DatabaseError):
+        if issubclass(exc_type, _ORACLEDB_DATABASE_ERROR):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -324,8 +327,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         prepared_parameters = coerce_large_parameters_sync(
             self.connection,
             prepared_parameters,
-            clob_type=oracledb.DB_TYPE_CLOB,
-            blob_type=oracledb.DB_TYPE_BLOB,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
             varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
@@ -429,7 +432,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         try:
             self.connection.commit()
-        except oracledb.Error as e:
+        except _ORACLEDB_ERROR as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -442,7 +445,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         try:
             self.connection.rollback()
-        except oracledb.Error as e:
+        except _ORACLEDB_ERROR as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -706,7 +709,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = oracledb.create_pipeline()
+        pipeline = ORACLEDB_MODULE.create_pipeline()
         for compiled in compiled_operations:
             self._add_pipeline_operation(pipeline, compiled)
 
@@ -820,8 +823,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         prepared_parameters = await coerce_large_parameters_async(
             self.connection,
             prepared_parameters,
-            clob_type=oracledb.DB_TYPE_CLOB,
-            blob_type=oracledb.DB_TYPE_BLOB,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
             varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
@@ -927,7 +930,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         try:
             await self.connection.commit()
-        except oracledb.Error as e:
+        except _ORACLEDB_ERROR as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -940,7 +943,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         try:
             await self.connection.rollback()
-        except oracledb.Error as e:
+        except _ORACLEDB_ERROR as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -1214,7 +1217,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self, stack: "StatementStack", *, continue_on_error: bool
     ) -> "tuple[StackResult, ...]":
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = oracledb.create_pipeline()
+        pipeline = ORACLEDB_MODULE.create_pipeline()
         for compiled in compiled_operations:
             self._add_pipeline_operation(pipeline, compiled)
 

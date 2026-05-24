@@ -3,8 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import mysql.connector
-
+from sqlspec.adapters.mysqlconnector._typing import MYSQL_CONNECTOR_MODULE
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -25,6 +24,7 @@ __all__ = (
 )
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_MYSQL_CONNECTOR_ERROR = cast("type[BaseException]", getattr(MYSQL_CONNECTOR_MODULE, "Error", Exception))
 
 
 def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
@@ -230,7 +230,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     create_time=cast("datetime", create_time_val),
                     update_time=cast("datetime", update_time_val),
                 )
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -301,7 +301,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -483,7 +483,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -500,7 +500,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
                     await cursor.close()
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -517,7 +517,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
                     await cursor.close()
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -534,7 +534,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
                 return _state_from_row_value(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -551,7 +551,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
                 return _state_from_row_value(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -598,7 +598,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
                 return _metadata_from_row_value(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -885,7 +885,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     create_time=cast("datetime", create_time_val),
                     update_time=cast("datetime", update_time_val),
                 )
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -956,7 +956,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -1133,7 +1133,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     )
                     for row in rows
                 ]
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -1150,7 +1150,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
                     cursor.close()
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -1167,7 +1167,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
                     cursor.close()
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -1184,7 +1184,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
                 return _state_from_row_value(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -1201,7 +1201,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
                 return _state_from_row_value(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -1248,7 +1248,7 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
                 return _metadata_from_row_value(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MYSQL_CONNECTOR_MODULE.Error as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise

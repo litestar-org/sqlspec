@@ -4,11 +4,9 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
-import asyncpg
-
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
-from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgSessionContext
+from sqlspec.adapters.cockroach_asyncpg._typing import COCKROACH_ASYNCPG_MODULE, CockroachAsyncpgSessionContext
 from sqlspec.adapters.cockroach_asyncpg.core import (
     CockroachAsyncpgRetryConfig,
     calculate_backoff_seconds,
@@ -31,6 +29,7 @@ if TYPE_CHECKING:
 __all__ = ("CockroachAsyncpgDriver", "CockroachAsyncpgExceptionHandler", "CockroachAsyncpgSessionContext")
 
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg")
+_POSTGRES_ERROR = cast("type[BaseException]", getattr(COCKROACH_ASYNCPG_MODULE, "PostgresError", Exception))
 
 
 class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
@@ -40,7 +39,7 @@ class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
-        if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
+        if isinstance(exc_val, _POSTGRES_ERROR) or has_sqlstate(exc_val):
             if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
                 self.pending_exception = SerializationConflictError(str(exc_val))
                 return True

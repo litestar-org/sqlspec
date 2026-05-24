@@ -6,9 +6,17 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from asyncpg import Pool
+import asyncpg as _asyncpg
+from asyncpg import Connection as AsyncpgBaseConnection
+from asyncpg import Pool as AsyncpgBasePool
+from asyncpg import Record as AsyncpgRecord
+from asyncpg.connection import ConnectionMeta as AsyncpgConnectionMeta
 from asyncpg.pool import PoolConnectionProxy
+from asyncpg.pool import PoolConnectionProxyMeta as AsyncpgPoolConnectionProxyMeta
 from asyncpg.prepared_stmt import PreparedStatement
+
+ASYNCPG_MODULE: Any = _asyncpg
+ASYNCPG_EXCEPTIONS: Any = _asyncpg.exceptions
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -26,7 +34,7 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     AsyncpgConnection = PoolConnectionProxy
-    AsyncpgPool = Pool
+    AsyncpgPool = AsyncpgBasePool
     AsyncpgPreparedStatement = PreparedStatement
 
 
@@ -100,4 +108,17 @@ class AsyncpgSessionContext:
         return None
 
 
-__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")
+__all__ = (
+    "ASYNCPG_MODULE",
+    "ASYNCPG_EXCEPTIONS",
+    "AsyncpgBaseConnection",
+    "AsyncpgBasePool",
+    "AsyncpgConnection",
+    "AsyncpgConnectionMeta",
+    "AsyncpgCursor",
+    "AsyncpgPoolConnectionProxyMeta",
+    "AsyncpgPool",
+    "AsyncpgPreparedStatement",
+    "AsyncpgRecord",
+    "AsyncpgSessionContext",
+)

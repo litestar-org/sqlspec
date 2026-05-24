@@ -1,10 +1,9 @@
 """Psqlpy ADK store for Google Agent Development Kit session/event storage."""
 
 import re
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
-import psqlpy.exceptions
-
+from sqlspec.adapters.psqlpy._typing import PSQLPY_EXCEPTIONS
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -23,6 +22,7 @@ logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
 POSTGRES_TABLE_NOT_FOUND_SQLSTATE: Final = "42P01"
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+_PSQLPY_DATABASE_ERROR = cast("type[BaseException]", getattr(PSQLPY_EXCEPTIONS, "DatabaseError", Exception))
 
 
 class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
@@ -114,7 +114,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     create_time=row["create_time"],
                     update_time=row["update_time"],
                 )
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return None
@@ -170,7 +170,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     )
                     for row in rows
                 ]
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return []
@@ -307,7 +307,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     )
                     for row in rows
                 ]
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return []
@@ -324,7 +324,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [before])
                 return count
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return 0
@@ -341,7 +341,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [updated_before])
                 return count
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return 0
@@ -355,7 +355,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 result = await conn.fetch(sql, [app_name])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["state"] if rows else None
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return None
@@ -369,7 +369,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 result = await conn.fetch(sql, [app_name, user_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["state"] if rows else None
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return None
@@ -407,7 +407,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 result = await conn.fetch(sql, [key])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["value"] if rows else None
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return None
@@ -623,7 +623,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 except Exception as exc:  # pragma: no cover - defensive fallback
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return []
@@ -641,7 +641,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [session_id])
                 return count
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return 0
@@ -665,7 +665,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [])
                 return count
-        except psqlpy.exceptions.DatabaseError as e:
+        except PSQLPY_EXCEPTIONS.DatabaseError as e:
             error_msg = str(e).lower()
             if "does not exist" in error_msg or "relation" in error_msg:
                 return 0

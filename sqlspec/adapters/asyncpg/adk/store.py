@@ -1,9 +1,8 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncpg
-
+from sqlspec.adapters.asyncpg._typing import ASYNCPG_EXCEPTIONS
 from sqlspec.config import AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -18,6 +17,9 @@ if TYPE_CHECKING:
 __all__ = ("AsyncpgADKMemoryStore", "AsyncpgADKStore")
 
 POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
+_ASYNCPG_UNDEFINED_TABLE_ERROR = cast(
+    "type[BaseException]", getattr(ASYNCPG_EXCEPTIONS, "UndefinedTableError", Exception)
+)
 
 
 class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
@@ -107,7 +109,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                     create_time=row["create_time"],
                     update_time=row["update_time"],
                 )
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
@@ -159,7 +161,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                     )
                     for row in rows
                 ]
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return []
 
     async def append_event(self, event_record: EventRecord) -> None:
@@ -286,7 +288,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                     )
                     for row in rows
                 ]
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return []
 
     async def delete_expired_events(self, before: "datetime") -> int:
@@ -296,7 +298,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, before)
                 return int(result.split()[-1]) if result else 0
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return 0
 
     async def delete_idle_sessions(self, updated_before: "datetime") -> int:
@@ -306,7 +308,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, updated_before)
                 return int(result.split()[-1]) if result else 0
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return 0
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
@@ -316,7 +318,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, app_name)
                 return row["state"] if row is not None else None
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
@@ -326,7 +328,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, app_name, user_id)
                 return row["state"] if row is not None else None
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
@@ -360,7 +362,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             async with self._config.provide_connection() as conn:
                 row = await conn.fetchrow(sql, key)
                 return row["value"] if row is not None else None
-        except asyncpg.exceptions.UndefinedTableError:
+        except ASYNCPG_EXCEPTIONS.UndefinedTableError:
             return None
 
     async def set_metadata(self, key: str, value: str) -> None:

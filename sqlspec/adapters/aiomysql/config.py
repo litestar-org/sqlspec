@@ -3,11 +3,11 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
-import aiomysql  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiomysql._typing import (
+    AIOMYSQL_MODULE,
     AiomysqlConnection,
     AiomysqlCursor,
     AiomysqlDictCursor,
@@ -233,7 +233,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
         """
-        return cast("AiomysqlPool", await aiomysql.create_pool(**dict(self.connection_config)))
+        return cast("AiomysqlPool", await AIOMYSQL_MODULE.create_pool(**dict(self.connection_config)))
 
     async def _ensure_connection_initialized(self, connection: "AiomysqlConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.

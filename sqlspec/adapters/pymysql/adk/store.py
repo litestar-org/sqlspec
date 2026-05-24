@@ -3,8 +3,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql
-
+from sqlspec.adapters.pymysql._typing import PYMYSQL_MODULE
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
 __all__ = ("PyMysqlADKMemoryStore", "PyMysqlADKStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_PYMYSQL_ERROR = cast("type[BaseException]", getattr(PYMYSQL_MODULE, "MySQLError", Exception))
 
 
 def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
@@ -328,7 +328,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     create_time=create_time,
                     update_time=update_time,
                 )
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -399,7 +399,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     )
                     for row in rows
                 ]
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -576,7 +576,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     )
                     for row in rows
                 ]
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
@@ -593,7 +593,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
                     cursor.close()
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -610,7 +610,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
                     cursor.close()
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return 0
             raise
@@ -627,7 +627,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 finally:
                     cursor.close()
                 return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -644,7 +644,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 finally:
                     cursor.close()
                 return from_json(row[0]) if row is not None and isinstance(row[0], str) else (row[0] if row else None)
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -691,7 +691,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 finally:
                     cursor.close()
                 return row[0] if row is not None else None
-        except pymysql.MySQLError as exc:
+        except PYMYSQL_MODULE.MySQLError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise

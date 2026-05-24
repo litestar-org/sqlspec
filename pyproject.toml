@@ -34,6 +34,7 @@ Source = "https://github.com/litestar-org/sqlspec"
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
 adk = ["google-adk"]
+arrow-odbc = ["arrow-odbc>=10.4", "pyarrow"]
 aiomysql = ["aiomysql"]
 aioodbc = ["aioodbc"]
 aiosqlite = ["aiosqlite"]
@@ -50,6 +51,7 @@ flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar>=2.22.0"]
 msgspec = ["msgspec"]
+mssql-python = ["mssql-python>=1.7"]
 mypyc = ["sqlglot[c]>=30.0.0"]
 mysql-connector = [
   "mysql-connector-python; python_version < '3.12'",
@@ -411,6 +413,8 @@ markers = [
   "cockroachdb: marks tests specific to CockroachDB",
   "snowflake: marks tests specific to Snowflake",
   "mssql: marks tests specific to Microsoft SQL Server",
+  "mssql_python: marks tests using the mssql-python driver",
+  "arrow_odbc: marks tests using the arrow_odbc adapter",
   "adbc: marks tests using ADBC drivers",
   "aiomysql: marks tests using aiomysql",
   "aioodbc: marks tests using aioodbc",
@@ -462,6 +466,10 @@ module = [
   "aiomysql.*",
   "asyncmy",
   "asyncmy.*",
+  "arrow_odbc",
+  "arrow_odbc.*",
+  "mssql_python",
+  "mssql_python.*",
   "pyarrow",
   "pyarrow.*",
   "opentelemetry.*",

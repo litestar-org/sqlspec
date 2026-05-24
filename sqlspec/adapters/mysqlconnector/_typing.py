@@ -6,14 +6,21 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import mysql.connector as _mysql_connector
+from mysql.connector import aio as MYSQL_CONNECTOR_AIO_MODULE  # pyright: ignore[reportMissingImports]
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
+from mysql.connector import pooling as MYSQL_CONNECTOR_POOLING
 from mysql.connector.aio import (
     MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
 )
 from mysql.connector.aio.cursor import (
     MySQLCursor as _MysqlConnectorAsyncRawCursor,  # pyright: ignore[reportMissingImports]
 )
+from mysql.connector.constants import FieldType as MYSQL_FIELD_TYPE
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
+from mysql.connector.pooling import MySQLConnectionPool as _MysqlConnectorConnectionPool
+
+MYSQL_CONNECTOR_MODULE: Any = _mysql_connector
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -34,12 +41,14 @@ if TYPE_CHECKING:
 
     MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
+    MysqlConnectorConnectionPool: TypeAlias = _MysqlConnectorConnectionPool
     MysqlConnectorSyncRawCursor: TypeAlias = _MysqlConnectorSyncRawCursor
     MysqlConnectorAsyncRawCursor: TypeAlias = _MysqlConnectorAsyncRawCursor
 
 if not TYPE_CHECKING:
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
+    MysqlConnectorConnectionPool = _MysqlConnectorConnectionPool
     MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
     MysqlConnectorAsyncRawCursor = _MysqlConnectorAsyncRawCursor
 
@@ -179,6 +188,11 @@ __all__ = (
     "MysqlConnectorAsyncCursor",
     "MysqlConnectorAsyncRawCursor",
     "MysqlConnectorAsyncSessionContext",
+    "MYSQL_CONNECTOR_AIO_MODULE",
+    "MYSQL_CONNECTOR_MODULE",
+    "MYSQL_CONNECTOR_POOLING",
+    "MYSQL_FIELD_TYPE",
+    "MysqlConnectorConnectionPool",
     "MysqlConnectorSyncConnection",
     "MysqlConnectorSyncCursor",
     "MysqlConnectorSyncRawCursor",

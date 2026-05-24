@@ -6,8 +6,15 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import asyncmy as _asyncmy  # pyright: ignore
+from asyncmy import errors as ASYNCMY_ERRORS  # pyright: ignore
 from asyncmy import Connection  # pyright: ignore
+from asyncmy.constants import FIELD_TYPE as ASYNCMY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
+from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
+from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
+
+ASYNCMY_MODULE: Any = _asyncmy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -27,10 +34,14 @@ if TYPE_CHECKING:
         async def close(self) -> Any: ...
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
+    AsyncmyDictCursor: TypeAlias = _AsyncmyDictCursor
+    AsyncmyPool: TypeAlias = _AsyncmyPool
     AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
 
 if not TYPE_CHECKING:
     AsyncmyConnection = Connection
+    AsyncmyDictCursor = _AsyncmyDictCursor
+    AsyncmyPool = _AsyncmyPool
     AsyncmyRawCursor = _AsyncmyCursor
 
 
@@ -110,4 +121,14 @@ class AsyncmySessionContext:
         return None
 
 
-__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyRawCursor", "AsyncmySessionContext")
+__all__ = (
+    "ASYNCMY_ERRORS",
+    "ASYNCMY_FIELD_TYPE",
+    "ASYNCMY_MODULE",
+    "AsyncmyConnection",
+    "AsyncmyCursor",
+    "AsyncmyDictCursor",
+    "AsyncmyPool",
+    "AsyncmyRawCursor",
+    "AsyncmySessionContext",
+)
