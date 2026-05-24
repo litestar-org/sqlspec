@@ -7,7 +7,10 @@ from typing import Any
 import pytest
 
 from sqlspec.extensions.adk import EventRecord
-from tests.integration.adapters._adk_contract_helpers import assert_session_scoped_state_contract
+from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_atomic_scoped_write_contract,
+    assert_session_scoped_state_contract,
+)
 
 pytestmark = [pytest.mark.spanner, pytest.mark.integration]
 
@@ -26,6 +29,11 @@ async def test_create_and_get_session(spanner_adk_store: Any) -> None:
 async def test_spanner_session_scoped_state_contract(spanner_adk_store: Any) -> None:
     """Spanner service reads merge app/user state from dedicated scoped tables."""
     await assert_session_scoped_state_contract(spanner_adk_store, marker="spanner")
+
+
+async def test_spanner_session_atomic_scoped_write_contract(spanner_adk_store: Any) -> None:
+    """Spanner routes scoped-state upserts inside the append/update transaction."""
+    await assert_session_atomic_scoped_write_contract(spanner_adk_store, marker="spanner")
 
 
 async def test_update_session_state(spanner_adk_store: Any) -> None:

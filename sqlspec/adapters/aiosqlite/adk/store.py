@@ -350,20 +350,17 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.commit()
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state.
-
-        Inserts the event and updates the session state + update_time in a
-        single transaction. Both operations succeed or fail together. Returns
-        the updated SessionRecord via SQLite RETURNING (3.35+).
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (temp: keys already
-                stripped by the service layer).
-        """
+        """Atomically append an event and update session + scoped state."""
         import uuid
 
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
@@ -385,6 +382,22 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
+        app_upsert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        user_upsert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
             await conn.execute(
@@ -400,6 +413,16 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             )
             cursor = await conn.execute(update_sql, (state_json, now_julian, session_id))
             row = await cursor.fetchone()
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                await conn.execute(app_upsert_sql, (app_name, to_json(app_state), now_julian))
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                await conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
             await conn.commit()
 
         if row is None:

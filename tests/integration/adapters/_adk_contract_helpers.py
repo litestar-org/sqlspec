@@ -10,6 +10,7 @@ from sqlspec.extensions.adk.service import SQLSpecSessionService
 
 __all__ = (
     "assert_memory_store_contract",
+    "assert_session_atomic_scoped_write_contract",
     "assert_session_event_cleanup_contract",
     "assert_session_event_store_contract",
     "assert_session_get_session_renewal_contract",
@@ -38,7 +39,15 @@ class SessionEventStore(Protocol):
     async def append_event(self, event_record: EventRecord) -> None: ...
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: dict[str, object]
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: dict[str, object],
+        *,
+        app_name: str | None = None,
+        user_id: str | None = None,
+        app_state: dict[str, object] | None = None,
+        user_state: dict[str, object] | None = None,
     ) -> SessionRecord: ...
 
     async def get_events(
@@ -304,6 +313,65 @@ async def assert_session_scoped_state_contract(store: SessionEventStore, *, mark
     )
     assert fetched_other_user is not None
     assert fetched_other_user.state == {"app:counter": 1}
+
+
+async def assert_session_atomic_scoped_write_contract(store: SessionEventStore, *, marker: str) -> None:
+    """Assert append_event_and_update_state accepts scoped-state kwargs.
+
+    Verifies the store-level atomic write delivers events INSERT + sessions UPDATE
+    + app_state UPSERT + user_state UPSERT in a single round-trip when callers
+    supply ``app_state`` and ``user_state`` alongside the session state snapshot.
+    """
+    app_name = _contract_key(marker, "atomic-app")
+    user_id = _contract_key(marker, "atomic-user")
+    session_id = _contract_key(marker, "atomic-session")
+    no_scope_session_id = _contract_key(marker, "atomic-no-scope-session")
+    base_time = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
+
+    await store.create_session(session_id, app_name, user_id, {"initial": 0})
+
+    event = _event_record(
+        session_id=session_id,
+        event_id="atomic-event-1",
+        invocation_id="atomic-inv-1",
+        author="user",
+        timestamp=base_time,
+        event_data={"actions": {"state_delta": {"app:counter": 1, "user:theme": "dark", "turn": 1}}},
+    )
+
+    updated = await store.append_event_and_update_state(
+        event,
+        session_id,
+        {"turn": 1},
+        app_name=app_name,
+        user_id=user_id,
+        app_state={"app:counter": 1},
+        user_state={"user:theme": "dark"},
+    )
+
+    assert updated["state"] == {"turn": 1}
+    assert updated["id"] == session_id
+    assert await store.get_app_state(app_name) == {"app:counter": 1}
+    assert await store.get_user_state(app_name, user_id) == {"user:theme": "dark"}
+    stored_events = await store.get_events(session_id)
+    assert any(record["invocation_id"] == "atomic-inv-1" for record in stored_events)
+
+    await store.create_session(no_scope_session_id, app_name, user_id, {"phase": 0})
+    no_scope_event = _event_record(
+        session_id=no_scope_session_id,
+        event_id="atomic-event-2",
+        invocation_id="atomic-inv-2",
+        author="model",
+        timestamp=base_time + timedelta(seconds=1),
+        event_data={"content": {"parts": [{"text": "no scope delta"}]}},
+    )
+    no_scope_update = await store.append_event_and_update_state(
+        no_scope_event, no_scope_session_id, {"phase": 1}, app_name=app_name, user_id=user_id
+    )
+    assert no_scope_update["state"] == {"phase": 1}
+    # Skipped scoped writes leave existing app/user state untouched.
+    assert await store.get_app_state(app_name) == {"app:counter": 1}
+    assert await store.get_user_state(app_name, user_id) == {"user:theme": "dark"}
 
 
 async def assert_session_table_lifecycle_contract(store: SessionEventStore, *, marker: str) -> None:

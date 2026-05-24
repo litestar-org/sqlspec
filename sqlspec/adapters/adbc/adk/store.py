@@ -128,10 +128,26 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         return await async_(self._list_sessions)(app_name, user_id)
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        """Atomically append an event and update session + scoped state."""
+        return await async_(self._append_event_and_update_state)(
+            event_record,
+            session_id,
+            state,
+            app_name=app_name,
+            user_id=user_id,
+            app_state=app_state,
+            user_state=user_state,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -884,21 +900,22 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.close()
 
     def _append_event_and_update_state(
-        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: "EventRecord",
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically insert an event and update the session's durable state.
+        """Atomically insert an event and update session + scoped state.
 
-        The event insert, state update, and refresh-SELECT are executed within
-        a single connection and committed together.  ADBC drivers wrap a
-        variety of backends (Postgres, SQLite, DuckDB, ...) so we use a
-        SELECT-after-UPDATE rather than relying on RETURNING which not every
-        backend supports.
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
+        The event insert, state update, scoped-state upserts, and refresh-SELECT
+        are executed within a single connection and committed together. ADBC
+        drivers wrap a variety of backends (Postgres, SQLite, DuckDB, ...) so we
+        use DELETE+INSERT for upserts to remain portable across dialects.
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
@@ -915,8 +932,28 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         FROM {self._session_table}
         WHERE id = ?
         """
+        app_delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
+        app_insert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        """
+        user_delete_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
+        user_insert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        """
+        if app_state and app_name is None:
+            msg = "app_name is required when app_state is provided."
+            raise ValueError(msg)
+        if user_state and (app_name is None or user_id is None):
+            msg = "app_name and user_id are required when user_state is provided."
+            raise ValueError(msg)
+
         state_json = self._serialize_state(state)
         event_data = self._serialize_json_field(event_record["event_data"])
+        now = datetime.now(timezone.utc)
+        app_state_serialized = self._serialize_state(app_state) if app_state else None
+        user_state_serialized = self._serialize_state(user_state) if user_state else None
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -934,6 +971,12 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.execute(update_sql, (state_json, session_id))
                 cursor.execute(select_sql, (session_id,))
                 row = cursor.fetchone()
+                if app_state:
+                    cursor.execute(app_delete_sql, (app_name,))
+                    cursor.execute(app_insert_sql, (app_name, app_state_serialized, now))
+                if user_state:
+                    cursor.execute(user_delete_sql, (app_name, user_id))
+                    cursor.execute(user_insert_sql, (app_name, user_id, user_state_serialized, now))
                 conn.commit()
             except Exception:
                 with contextlib.suppress(Exception):

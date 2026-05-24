@@ -61,14 +61,32 @@ class MockStore:
         }
 
     async def append_event_and_update_state(
-        self, event_record: Any, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: Any,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: str | None = None,
+        user_id: str | None = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> "dict[str, Any]":
         self.append_event_and_update_state_called = True
         self.append_event_and_update_state_calls.append({
             "event_record": event_record,
             "session_id": session_id,
             "state": state,
+            "app_name": app_name,
+            "user_id": user_id,
+            "app_state": app_state,
+            "user_state": user_state,
         })
+        if app_state:
+            self.upsert_app_state_calls.append({"app_name": app_name, "state": app_state})
+            self.app_state = app_state
+        if user_state:
+            self.upsert_user_state_calls.append({"app_name": app_name, "user_id": user_id, "state": user_state})
+            self.user_state = user_state
         # Return the updated SessionRecord — caller no longer needs a follow-up get_session().
         updated = dict(self._session_record)
         updated["state"] = state
@@ -540,7 +558,15 @@ async def test_append_event_updates_inmemory_after_persist() -> None:
 
     class FailingStore(MockStore):
         async def append_event_and_update_state(
-            self, event_record: Any, session_id: str, state: Any
+            self,
+            event_record: Any,
+            session_id: str,
+            state: Any,
+            *,
+            app_name: str | None = None,
+            user_id: str | None = None,
+            app_state: "dict[str, Any] | None" = None,
+            user_state: "dict[str, Any] | None" = None,
         ) -> "dict[str, Any]":
             raise RuntimeError("Simulated DB failure")
 

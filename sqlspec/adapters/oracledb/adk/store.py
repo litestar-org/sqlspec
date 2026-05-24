@@ -379,22 +379,22 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await conn.commit()
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state.
+        """Atomically append an event and update session + scoped state.
 
-        Both the event insert and session state update are executed within a
-        single transaction so they succeed or fail together. The refreshed
-        SessionRecord is read inside the same transaction (Oracle's RETURNING
-        INTO requires output bind variables which complicate async cursor
-        handling, so a SELECT-after-UPDATE is used instead).
-
-        Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_data.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
+        All writes are executed within a single transaction so they succeed or
+        fail together. The refreshed SessionRecord is read inside the same
+        transaction (Oracle's RETURNING INTO requires output bind variables
+        which complicate async cursor handling, so SELECT-after-UPDATE is used).
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
@@ -417,6 +417,28 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         WHERE id = :id
         """
 
+        app_upsert_sql = f"""
+        MERGE INTO {self._app_state_table} target
+        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, state, update_time)
+            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+        """
+
+        user_upsert_sql = f"""
+        MERGE INTO {self._user_state_table} target
+        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, user_id, state, update_time)
+            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+        """
+
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             await cursor.execute(
@@ -432,17 +454,32 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(update_sql, {"state": state_data, "id": session_id})
             await cursor.execute(select_sql, {"id": session_id})
             row = await cursor.fetchone()
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                await cursor.execute(
+                    app_upsert_sql, {"app_name": app_name, "state": await self._serialize_state(app_state)}
+                )
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                await cursor.execute(
+                    user_upsert_sql,
+                    {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(user_state)},
+                )
             await conn.commit()
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
-        session_id_val, app_name, user_id, state_data_row, create_time, update_time = row
+        session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
         return SessionRecord(
             id=session_id_val,
-            app_name=app_name,
-            user_id=user_id,
+            app_name=row_app_name,
+            user_id=row_user_id,
             state=await self._deserialize_state(state_data_row),
             create_time=create_time,
             update_time=update_time,
@@ -1147,10 +1184,26 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         return await async_(self._list_sessions)(app_name, user_id)
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        """Atomically append an event and update session + scoped state."""
+        return await async_(self._append_event_and_update_state)(
+            event_record,
+            session_id,
+            state,
+            app_name=app_name,
+            user_id=user_id,
+            app_state=app_state,
+            user_state=user_state,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -1848,20 +1901,21 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             raise
 
     def _append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically create an event and update the session's durable state.
+        """Atomically create an event and update session + scoped state.
 
-        Both the event insert and session state update are executed within a
-        single transaction so they succeed or fail together; the refreshed
-        SessionRecord is read inside the same transaction.
-
-        Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_data.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
+        All writes are executed within a single transaction so they succeed or
+        fail together; the refreshed SessionRecord is read inside the same
+        transaction.
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
@@ -1884,6 +1938,28 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         WHERE id = :id
         """
 
+        app_upsert_sql = f"""
+        MERGE INTO {self._app_state_table} target
+        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, state, update_time)
+            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+        """
+
+        user_upsert_sql = f"""
+        MERGE INTO {self._user_state_table} target
+        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, user_id, state, update_time)
+            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+        """
+
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -1899,17 +1975,30 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor.execute(update_sql, {"state": state_data, "id": session_id})
             cursor.execute(select_sql, {"id": session_id})
             row = cursor.fetchone()
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                cursor.execute(app_upsert_sql, {"app_name": app_name, "state": self._serialize_state(app_state)})
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                cursor.execute(
+                    user_upsert_sql,
+                    {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)},
+                )
             conn.commit()
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
-        session_id_val, app_name, user_id, state_data_row, create_time, update_time = row
+        session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
         return SessionRecord(
             id=session_id_val,
-            app_name=app_name,
-            user_id=user_id,
+            app_name=row_app_name,
+            user_id=row_user_id,
             state=self._deserialize_state(state_data_row),
             create_time=create_time,
             update_time=update_time,

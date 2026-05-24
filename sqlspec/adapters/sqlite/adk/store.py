@@ -217,20 +217,26 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         await async_(self._append_event)(event_record)
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state.
-
-        Inserts the event and updates the session state + update_time in a
-        single transaction, returning the updated SessionRecord via RETURNING.
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (temp: keys already
-                stripped by the service layer).
-        """
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        """Atomically append an event and update session + scoped state."""
+        return await async_(self._append_event_and_update_state)(
+            event_record,
+            session_id,
+            state,
+            app_name=app_name,
+            user_id=user_id,
+            app_state=app_state,
+            user_state=user_state,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -601,7 +607,15 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             conn.commit()
 
     def _append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Synchronous implementation of append_event_and_update_state."""
         import uuid
@@ -625,6 +639,22 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
+        app_upsert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        user_upsert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(
@@ -640,6 +670,16 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             )
             cursor = conn.execute(update_sql, (state_json, now_julian, session_id))
             row = cursor.fetchone()
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                conn.execute(app_upsert_sql, (app_name, to_json(app_state), now_julian))
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
             conn.commit()
 
         if row is None:

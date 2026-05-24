@@ -4,7 +4,10 @@ from typing import Any
 
 import pytest
 
-from tests.integration.adapters._adk_contract_helpers import assert_session_scoped_state_contract
+from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_atomic_scoped_write_contract,
+    assert_session_scoped_state_contract,
+)
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
 
@@ -45,6 +48,11 @@ async def test_get_session(asyncpg_adk_store: Any) -> None:
 async def test_asyncpg_session_scoped_state_contract(asyncpg_adk_store: Any) -> None:
     """Asyncpg service reads merge app/user state from dedicated scoped tables."""
     await assert_session_scoped_state_contract(asyncpg_adk_store, marker="asyncpg")
+
+
+async def test_asyncpg_session_atomic_scoped_write_contract(asyncpg_adk_store: Any) -> None:
+    """Asyncpg routes scoped-state upserts inside the append/update transaction."""
+    await assert_session_atomic_scoped_write_contract(asyncpg_adk_store, marker="asyncpg")
 
 
 async def test_get_nonexistent_session(asyncpg_adk_store: Any) -> None:

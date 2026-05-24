@@ -8,7 +8,10 @@ import pytest
 
 from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore
 from sqlspec.extensions.adk import EventRecord
-from tests.integration.adapters._adk_contract_helpers import assert_session_scoped_state_contract
+from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_atomic_scoped_write_contract,
+    assert_session_scoped_state_contract,
+)
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.integration]
 
@@ -24,6 +27,13 @@ async def test_mysqlconnector_session_scoped_state_contract(
 ) -> None:
     """MysqlConnector service reads merge app/user state from dedicated scoped tables."""
     await assert_session_scoped_state_contract(mysqlconnector_adk_store, marker="mysqlconnector")
+
+
+async def test_mysqlconnector_session_atomic_scoped_write_contract(
+    mysqlconnector_adk_store: MysqlConnectorAsyncADKStore,
+) -> None:
+    """MysqlConnector routes scoped-state upserts inside the append/update transaction."""
+    await assert_session_atomic_scoped_write_contract(mysqlconnector_adk_store, marker="mysqlconnector")
 
 
 async def test_storage_types_verification(mysqlconnector_adk_store: MysqlConnectorAsyncADKStore) -> None:

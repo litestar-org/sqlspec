@@ -61,12 +61,20 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
         return None
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: dict[str, Any]
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: dict[str, Any],
+        *,
+        app_name: str | None = None,
+        user_id: str | None = None,
+        app_state: dict[str, Any] | None = None,
+        user_state: dict[str, Any] | None = None,
     ) -> SessionRecord:
         return SessionRecord(
             id=session_id,
-            app_name="test-app",
-            user_id="test-user",
+            app_name=app_name or "test-app",
+            user_id=user_id or "test-user",
             state=state,
             create_time=datetime.now(),
             update_time=datetime.now(),

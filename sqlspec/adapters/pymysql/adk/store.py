@@ -86,10 +86,26 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         return await async_(self._list_sessions)(app_name, user_id)
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        """Atomically append an event and update session + scoped state."""
+        return await async_(self._append_event_and_update_state)(
+            event_record,
+            session_id,
+            state,
+            app_name=app_name,
+            user_id=user_id,
+            app_state=app_state,
+            user_state=user_state,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -389,18 +405,21 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
             raise
 
     def _append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically create an event and update the session's durable state.
+        """Atomically create an event and update session + scoped state.
 
         MySQL doesn't support UPDATE...RETURNING; the UPDATE is followed by a
         SELECT inside the same transaction so callers get the refreshed row
         without acquiring a second connection.
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot.
         """
         event_data = event_record["event_data"]
         event_data_str = to_json(event_data) if not isinstance(event_data, str) else event_data
@@ -424,6 +443,18 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         WHERE id = %s
         """
 
+        app_upsert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+        user_upsert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -440,6 +471,16 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.execute(update_sql, (state_json, session_id))
                 cursor.execute(select_sql, (session_id,))
                 row = cursor.fetchone()
+                if app_state:
+                    if app_name is None:
+                        msg = "app_name is required when app_state is provided."
+                        raise ValueError(msg)
+                    cursor.execute(app_upsert_sql, (app_name, to_json(app_state)))
+                if user_state:
+                    if app_name is None or user_id is None:
+                        msg = "app_name and user_id are required when user_state is provided."
+                        raise ValueError(msg)
+                    cursor.execute(user_upsert_sql, (app_name, user_id, to_json(user_state)))
             finally:
                 cursor.close()
             conn.commit()
