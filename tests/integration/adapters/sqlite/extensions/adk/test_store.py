@@ -10,11 +10,15 @@ from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_atomic_scoped_write_contract,
+    assert_session_empty_state_roundtrip,
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
     assert_session_scoped_state_contract,
+    assert_session_sibling_app_isolation,
+    assert_session_sibling_user_isolation,
     assert_session_table_lifecycle_contract,
+    assert_session_temp_state_not_persisted,
 )
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -92,6 +96,42 @@ async def test_sqlite_session_atomic_scoped_write_contract(tmp_path: Path) -> No
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_atomic_scoped_write_contract(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_temp_state_not_persisted(tmp_path: Path) -> None:
+    """SQLite never persists temp:* through the service-level append_event path."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_temp_state_not_persisted(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_empty_state_roundtrip(tmp_path: Path) -> None:
+    """SQLite preserves empty session/app/user state through append_event_and_update_state."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_empty_state_roundtrip(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_sibling_app_isolation(tmp_path: Path) -> None:
+    """SQLite isolates app:* writes per app_name across sibling sessions."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_sibling_app_isolation(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_sibling_user_isolation(tmp_path: Path) -> None:
+    """SQLite isolates user:* writes per (app_name, user_id) across sibling sessions."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_sibling_user_isolation(store, marker="sqlite")
     finally:
         config.close_pool()
 

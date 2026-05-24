@@ -11,11 +11,15 @@ from sqlspec.extensions.adk.service import SQLSpecSessionService
 __all__ = (
     "assert_memory_store_contract",
     "assert_session_atomic_scoped_write_contract",
+    "assert_session_empty_state_roundtrip",
     "assert_session_event_cleanup_contract",
     "assert_session_event_store_contract",
     "assert_session_get_session_renewal_contract",
     "assert_session_scoped_state_contract",
+    "assert_session_sibling_app_isolation",
+    "assert_session_sibling_user_isolation",
     "assert_session_table_lifecycle_contract",
+    "assert_session_temp_state_not_persisted",
 )
 
 
@@ -372,6 +376,135 @@ async def assert_session_atomic_scoped_write_contract(store: SessionEventStore, 
     # Skipped scoped writes leave existing app/user state untouched.
     assert await store.get_app_state(app_name) == {"app:counter": 1}
     assert await store.get_user_state(app_name, user_id) == {"user:theme": "dark"}
+
+
+async def assert_session_temp_state_not_persisted(store: SessionEventStore, *, marker: str) -> None:
+    """Assert temp:* keys never survive a service-level append_event round-trip."""
+    from google.adk.events.event import Event
+    from google.adk.events.event_actions import EventActions
+
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    app_name = _contract_key(marker, "temp-app")
+    user_id = _contract_key(marker, "temp-user")
+    session_id = _contract_key(marker, "temp-session")
+
+    session = await service.create_session(
+        app_name=app_name, user_id=user_id, session_id=session_id, state={"temp:create_seed": "drop"}
+    )
+    session = await service.get_session(app_name=app_name, user_id=user_id, session_id=session.id)
+    assert session is not None
+    event = Event(
+        invocation_id=_contract_key(marker, "temp-invocation"),
+        author="user",
+        timestamp=datetime.now(timezone.utc).timestamp(),
+        actions=EventActions(state_delta={"temp:scratch": "drop", "turn": 1}),
+    )
+    await service.append_event(session, event)
+
+    raw_session = await store.get_session(session_id)
+    assert raw_session is not None
+    assert "temp:scratch" not in raw_session["state"]
+    assert "temp:create_seed" not in raw_session["state"]
+    assert raw_session["state"] == {"turn": 1}
+
+    app_state = await store.get_app_state(app_name)
+    assert app_state in (None, {})
+    user_state = await store.get_user_state(app_name, user_id)
+    assert user_state in (None, {})
+
+    fetched = await service.get_session(app_name=app_name, user_id=user_id, session_id=session_id)
+    assert fetched is not None
+    assert "temp:scratch" not in fetched.state
+    assert "temp:create_seed" not in fetched.state
+    assert fetched.state == {"turn": 1}
+
+
+async def assert_session_empty_state_roundtrip(store: SessionEventStore, *, marker: str) -> None:
+    """Assert empty session/app/user state survives the append_event_and_update_state round-trip."""
+    app_name = _contract_key(marker, "empty-app")
+    user_id = _contract_key(marker, "empty-user")
+    session_id = _contract_key(marker, "empty-session")
+    base_time = datetime(2026, 5, 24, 14, 0, tzinfo=timezone.utc)
+
+    created = await store.create_session(session_id, app_name, user_id, {})
+    assert created["state"] == {}
+    fetched = await store.get_session(session_id)
+    assert fetched is not None
+    assert fetched["state"] == {}
+
+    event = _event_record(
+        session_id=session_id,
+        event_id="empty-event-1",
+        invocation_id="empty-inv-1",
+        author="user",
+        timestamp=base_time,
+        event_data={"content": {"parts": [{"text": "no state delta"}]}},
+    )
+    updated = await store.append_event_and_update_state(event, session_id, {}, app_name=app_name, user_id=user_id)
+    assert updated["state"] == {}
+
+    after = await store.get_session(session_id)
+    assert after is not None
+    assert after["state"] == {}
+
+    assert (await store.get_app_state(app_name)) in (None, {})
+    assert (await store.get_user_state(app_name, user_id)) in (None, {})
+
+
+async def assert_session_sibling_app_isolation(store: SessionEventStore, *, marker: str) -> None:
+    """Assert app:* writes are isolated per app_name across sibling sessions."""
+    app_a = _contract_key(marker, "sibling-app-a")
+    app_b = _contract_key(marker, "sibling-app-b")
+    user_id = _contract_key(marker, "sibling-app-user")
+    session_a = _contract_key(marker, "sibling-app-session-a")
+    session_b = _contract_key(marker, "sibling-app-session-b")
+    base_time = datetime(2026, 5, 24, 15, 0, tzinfo=timezone.utc)
+
+    await store.create_session(session_a, app_a, user_id, {})
+    await store.create_session(session_b, app_b, user_id, {})
+
+    event = _event_record(
+        session_id=session_a,
+        event_id="sibling-app-event-1",
+        invocation_id="sibling-app-inv-1",
+        author="user",
+        timestamp=base_time,
+        event_data={"actions": {"state_delta": {"app:counter": 7, "turn": 1}}},
+    )
+    await store.append_event_and_update_state(
+        event, session_a, {"turn": 1}, app_name=app_a, user_id=user_id, app_state={"app:counter": 7}
+    )
+
+    assert await store.get_app_state(app_a) == {"app:counter": 7}
+    assert (await store.get_app_state(app_b)) in (None, {})
+
+
+async def assert_session_sibling_user_isolation(store: SessionEventStore, *, marker: str) -> None:
+    """Assert user:* writes are isolated per (app_name, user_id) across sibling sessions."""
+    app_name = _contract_key(marker, "sibling-user-app")
+    user_a = _contract_key(marker, "sibling-user-a")
+    user_b = _contract_key(marker, "sibling-user-b")
+    session_a = _contract_key(marker, "sibling-user-session-a")
+    session_b = _contract_key(marker, "sibling-user-session-b")
+    base_time = datetime(2026, 5, 24, 16, 0, tzinfo=timezone.utc)
+
+    await store.create_session(session_a, app_name, user_a, {})
+    await store.create_session(session_b, app_name, user_b, {})
+
+    event = _event_record(
+        session_id=session_a,
+        event_id="sibling-user-event-1",
+        invocation_id="sibling-user-inv-1",
+        author="user",
+        timestamp=base_time,
+        event_data={"actions": {"state_delta": {"user:pref": "dark", "turn": 1}}},
+    )
+    await store.append_event_and_update_state(
+        event, session_a, {"turn": 1}, app_name=app_name, user_id=user_a, user_state={"user:pref": "dark"}
+    )
+
+    assert await store.get_user_state(app_name, user_a) == {"user:pref": "dark"}
+    assert (await store.get_user_state(app_name, user_b)) in (None, {})
 
 
 async def assert_session_table_lifecycle_contract(store: SessionEventStore, *, marker: str) -> None:

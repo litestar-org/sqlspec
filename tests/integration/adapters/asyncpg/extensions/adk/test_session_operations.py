@@ -6,7 +6,11 @@ import pytest
 
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_atomic_scoped_write_contract,
+    assert_session_empty_state_roundtrip,
     assert_session_scoped_state_contract,
+    assert_session_sibling_app_isolation,
+    assert_session_sibling_user_isolation,
+    assert_session_temp_state_not_persisted,
 )
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.asyncpg, pytest.mark.integration]
@@ -53,6 +57,26 @@ async def test_asyncpg_session_scoped_state_contract(asyncpg_adk_store: Any) -> 
 async def test_asyncpg_session_atomic_scoped_write_contract(asyncpg_adk_store: Any) -> None:
     """Asyncpg routes scoped-state upserts inside the append/update transaction."""
     await assert_session_atomic_scoped_write_contract(asyncpg_adk_store, marker="asyncpg")
+
+
+async def test_asyncpg_session_temp_state_not_persisted(asyncpg_adk_store: Any) -> None:
+    """Asyncpg never persists temp:* through the service-level append_event path."""
+    await assert_session_temp_state_not_persisted(asyncpg_adk_store, marker="asyncpg")
+
+
+async def test_asyncpg_session_empty_state_roundtrip(asyncpg_adk_store: Any) -> None:
+    """Asyncpg preserves empty session/app/user state through append_event_and_update_state."""
+    await assert_session_empty_state_roundtrip(asyncpg_adk_store, marker="asyncpg")
+
+
+async def test_asyncpg_session_sibling_app_isolation(asyncpg_adk_store: Any) -> None:
+    """Asyncpg isolates app:* writes per app_name across sibling sessions."""
+    await assert_session_sibling_app_isolation(asyncpg_adk_store, marker="asyncpg")
+
+
+async def test_asyncpg_session_sibling_user_isolation(asyncpg_adk_store: Any) -> None:
+    """Asyncpg isolates user:* writes per (app_name, user_id) across sibling sessions."""
+    await assert_session_sibling_user_isolation(asyncpg_adk_store, marker="asyncpg")
 
 
 async def test_get_nonexistent_session(asyncpg_adk_store: Any) -> None:

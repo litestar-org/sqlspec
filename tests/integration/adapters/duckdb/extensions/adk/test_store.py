@@ -12,11 +12,15 @@ from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_atomic_scoped_write_contract,
+    assert_session_empty_state_roundtrip,
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
     assert_session_scoped_state_contract,
+    assert_session_sibling_app_isolation,
+    assert_session_sibling_user_isolation,
     assert_session_table_lifecycle_contract,
+    assert_session_temp_state_not_persisted,
 )
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
@@ -83,6 +87,26 @@ async def test_duckdb_session_table_lifecycle_contract(duckdb_adk_store: DuckdbA
 async def test_duckdb_session_atomic_scoped_write_contract(duckdb_adk_store: DuckdbADKStore) -> None:
     """DuckDB routes scoped-state upserts inside the append/update transaction."""
     await assert_session_atomic_scoped_write_contract(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_temp_state_not_persisted(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB never persists temp:* through the service-level append_event path."""
+    await assert_session_temp_state_not_persisted(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_empty_state_roundtrip(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB preserves empty session/app/user state through append_event_and_update_state."""
+    await assert_session_empty_state_roundtrip(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_sibling_app_isolation(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB isolates app:* writes per app_name across sibling sessions."""
+    await assert_session_sibling_app_isolation(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_sibling_user_isolation(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB isolates user:* writes per (app_name, user_id) across sibling sessions."""
+    await assert_session_sibling_user_isolation(duckdb_adk_store, marker="duckdb")
 
 
 async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:

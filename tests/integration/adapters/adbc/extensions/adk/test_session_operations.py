@@ -9,10 +9,14 @@ from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKStore
 from tests.integration.adapters._adk_contract_helpers import (
     assert_session_atomic_scoped_write_contract,
+    assert_session_empty_state_roundtrip,
     assert_session_event_cleanup_contract,
     assert_session_get_session_renewal_contract,
     assert_session_scoped_state_contract,
+    assert_session_sibling_app_isolation,
+    assert_session_sibling_user_isolation,
     assert_session_table_lifecycle_contract,
+    assert_session_temp_state_not_persisted,
 )
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
@@ -121,6 +125,26 @@ async def test_session_table_lifecycle_contract(adbc_store: Any) -> None:
 async def test_session_atomic_scoped_write_contract(adbc_store: Any) -> None:
     """ADBC routes scoped-state upserts inside the append/update transaction."""
     await assert_session_atomic_scoped_write_contract(adbc_store, marker="adbc")
+
+
+async def test_session_temp_state_not_persisted(adbc_store: Any) -> None:
+    """ADBC never persists temp:* through the service-level append_event path."""
+    await assert_session_temp_state_not_persisted(adbc_store, marker="adbc")
+
+
+async def test_session_empty_state_roundtrip(adbc_store: Any) -> None:
+    """ADBC preserves empty session/app/user state through append_event_and_update_state."""
+    await assert_session_empty_state_roundtrip(adbc_store, marker="adbc")
+
+
+async def test_session_sibling_app_isolation(adbc_store: Any) -> None:
+    """ADBC isolates app:* writes per app_name across sibling sessions."""
+    await assert_session_sibling_app_isolation(adbc_store, marker="adbc")
+
+
+async def test_session_sibling_user_isolation(adbc_store: Any) -> None:
+    """ADBC isolates user:* writes per (app_name, user_id) across sibling sessions."""
+    await assert_session_sibling_user_isolation(adbc_store, marker="adbc")
 
 
 async def test_list_sessions(adbc_store: Any) -> None:
