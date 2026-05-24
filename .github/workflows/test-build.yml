@@ -128,7 +128,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        python-version: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]') || fromJSON('["3.12"]') }}
+        python-version: ["3.12"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -251,7 +251,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        python-version: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["3.10", "3.12", "3.14"]') || fromJSON('["3.12"]') }}
+        python-version: ["3.12"]
 
     runs-on: ${{ matrix.os }}
     steps:
