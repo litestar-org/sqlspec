@@ -21,8 +21,6 @@ __all__ = ("ArrowOdbcDataDictionary",)
 class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     """Runtime-dialect data dictionary for generic ODBC connections."""
 
-    __slots__ = ("_dialect",)
-
     dialect: ClassVar[str] = "sqlite"
 
     def __init__(self, dialect: str = "sqlite") -> None:
