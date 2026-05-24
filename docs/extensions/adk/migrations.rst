@@ -49,6 +49,23 @@ through your deployment workflow.
    by extension name. Use ``migration_config={"enabled": False}`` to disable
    migrations entirely for a given database config.
 
+Programmatic Cutover with ``recreate_tables()``
+================================================
+
+The base store exposes ``await store.recreate_tables()``, which drops every
+ADK-managed table in FK-safe order and recreates them from the current DDL.
+This is the supported in-place cutover for deployments that own the database
+end-to-end and can tolerate a full ADK schema reset:
+
+.. code-block:: python
+
+   await store.recreate_tables()
+
+``recreate_tables()`` does not touch the SQLSpec migrations runner state, so
+the next ``sqlspec upgrade`` run still sees the unchanged migration history.
+Use ``await store.drop_tables()`` if you need to remove the schema without
+rebuilding it.
+
 Clean-Break Migration Notes
 ============================
 
