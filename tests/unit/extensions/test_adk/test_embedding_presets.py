@@ -37,9 +37,7 @@ def test_resolve_with_preset_returns_preset_dimensions() -> None:
 
 
 def test_resolve_with_explicit_dimension_overrides_preset() -> None:
-    resolved = resolve_embedding_config(
-        {"embedding_dimension": 3072, "embedding_preset": "embeddinggemma-300m"}
-    )
+    resolved = resolve_embedding_config({"embedding_dimension": 3072, "embedding_preset": "embeddinggemma-300m"})
     assert resolved.dim == 3072
     assert resolved.precision == "float32"
     assert resolved.source == "embedding_dimension"
@@ -73,13 +71,7 @@ def test_resolve_rejects_non_int_dimension() -> None:
 
 
 def test_register_embedding_preset_extends_registry() -> None:
-    custom = EmbeddingPreset(
-        name="custom-mini",
-        dim=256,
-        precision="float32",
-        normalize=True,
-        note="Test-only preset.",
-    )
+    custom = EmbeddingPreset(name="custom-mini", dim=256, precision="float32", normalize=True, note="Test-only preset.")
     try:
         register_embedding_preset("custom-mini", custom)
         resolved = resolve_embedding_config({"embedding_preset": "custom-mini"})
