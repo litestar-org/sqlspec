@@ -43,7 +43,7 @@ jobs:
         run: uv build --sdist
 
       - name: Upload source artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-dist
           path: dist/*.tar.gz
@@ -68,7 +68,7 @@ jobs:
         run: uv build --wheel
 
       - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-standard
           path: dist/*.whl
@@ -85,12 +85,12 @@ jobs:
 
       - name: Set up QEMU
         if: github.event.inputs.test_matrix == 'full'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: all
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -151,7 +151,7 @@ jobs:
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
       - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mypyc-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
@@ -178,13 +178,13 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Download standard wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: wheels-standard
           path: dist-standard/
 
       - name: Download mypyc wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: wheels-mypyc-*
           merge-multiple: true
@@ -211,7 +211,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: "*"
           merge-multiple: true
