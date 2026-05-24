@@ -525,6 +525,7 @@ async def assert_session_table_lifecycle_contract(store: SessionEventStore, *, m
     await store.drop_tables()
     assert await store.get_session(session_id) is None
     await store.drop_tables()
+    await store.recreate_tables()
 
 
 async def assert_session_event_cleanup_contract(store: SessionEventStore, *, marker: str) -> None:
