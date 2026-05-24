@@ -152,12 +152,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up QEMU
-        if: matrix.os == 'ubuntu-latest' && needs.detect-mode.outputs.matrix_mode == 'full'
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -213,9 +207,9 @@ jobs:
           CIBW_BUILD: "cp${{ matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' }}-*"
           CIBW_BUILD_VERBOSITY: 1
 
-          # Conditional aarch64 cross-build only in 'full' mode (QEMU enabled).
-          CIBW_ARCHS_LINUX: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && 'x86_64 aarch64' || 'x86_64' }}
-          CIBW_ARCHS_MACOS: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && 'x86_64 arm64' || 'x86_64' }}
+          # PR validation builds host arch only — release covers full cross-arch matrix.
+          CIBW_ARCHS_LINUX: "x86_64"
+          CIBW_ARCHS_MACOS: "arm64"
           CIBW_ARCHS_WINDOWS: "AMD64"
 
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
