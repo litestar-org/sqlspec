@@ -11,6 +11,17 @@ on:
         options:
           - 'full'
           - 'subset'
+      python_version:
+        description: 'Python version to build/test (single value; default 3.12)'
+        required: false
+        default: '3.12'
+        type: choice
+        options:
+          - '3.10'
+          - '3.11'
+          - '3.12'
+          - '3.13'
+          - '3.14'
   pull_request:
     paths:
       - '.github/workflows/test-build.yml'
@@ -22,7 +33,55 @@ on:
       - 'sqlspec/**'
       - 'tools/scripts/mypyc_smoke.py'
 
+# Cancel in-flight runs of this workflow on the same ref when a newer
+# commit lands. Saves runner minutes during a churn of PR pushes. Not
+# applied to publish.yml — releases must never be cancelled mid-upload.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  detect-mode:
+    name: Detect matrix mode
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_mode: ${{ steps.detect.outputs.matrix_mode }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # workflow_dispatch with test_matrix=full always wins. Otherwise,
+      # promote a PR to the full per-OS x per-py matrix when its diff
+      # touches anything that could affect wheel-build correctness
+      # (workflow yaml, packaging metadata, PGO training, smoke script).
+      # Non-infra PRs stay in subset mode (linux x py3.12) for fast feedback.
+      - name: Detect matrix mode
+        id: detect
+        env:
+          DISPATCH_MODE: ${{ github.event.inputs.test_matrix }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          if [ "$DISPATCH_MODE" = "full" ]; then
+            mode=full
+            reason="workflow_dispatch input"
+          else
+            mode=subset
+            reason="default"
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+              changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)
+              if printf '%s\n' "$changed" | grep -qE '^(\.github/workflows/.*\.yml|pyproject\.toml|uv\.lock|tools/scripts/(pgo_training|mypyc_smoke)\.py)$'; then
+                mode=full
+                reason="PR touches build-matrix infra"
+              fi
+            fi
+          fi
+          echo "matrix_mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Resolved matrix_mode=$mode ($reason)"
+
   build-source:
     name: Build source distribution
     runs-on: ubuntu-latest
@@ -32,6 +91,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install 3.12
@@ -57,6 +119,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python 3.12
         run: uv python install 3.12
@@ -74,20 +139,18 @@ jobs:
           path: dist/*.whl
 
   build-wheels-mypyc:
-    name: Build MyPyC wheels for all platforms
-    runs-on: ubuntu-latest
+    name: Build MyPyC wheels (${{ matrix.os }} py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    needs: [detect-mode]
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]') || fromJSON('["3.12"]') }}
+        os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version:
+          - ${{ github.event.inputs.python_version || '3.12' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        if: github.event.inputs.test_matrix == 'full'
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: all
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -96,9 +159,44 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Export build constraints from uv.lock
         run: uv export --frozen --no-emit-project --no-hashes --format requirements.txt --output-file build-constraints.txt
+
+      - name: Cache pip downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('build-constraints.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ matrix.python-version }}-
+
+      - name: Cache mypyc build dir
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/cache@v5
+        with:
+          path: /tmp/sqlspec-mypyc-build
+          key: mypyc-${{ matrix.os }}-py${{ matrix.python-version }}-${{ hashFiles('sqlspec/**/*.py', 'pyproject.toml') }}
+          restore-keys: |
+            mypyc-${{ matrix.os }}-py${{ matrix.python-version }}-
+
+      - name: Pre-warm Windows Defender exclusions
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Defender's real-time scan on the freshly-extracted nuget-cpython
+          # python.exe blocks virtualenv discovery past its 10s timeout.
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pypa\cibuildwheel" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE\wheelhouse" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess "python.exe" -ErrorAction SilentlyContinue
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel
@@ -106,31 +204,25 @@ jobs:
       - name: Build wheels with cibuildwheel
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          # Configure cibuildwheel
           CIBW_BUILD: "cp${{ matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' }}-*"
           CIBW_BUILD_VERBOSITY: 1
 
-          # Platform configuration - conditional ARM64 support with QEMU
-          CIBW_ARCHS_LINUX: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 aarch64' || 'x86_64' }}
-          CIBW_ARCHS_MACOS: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 arm64' || 'x86_64' }}
+          # PR validation builds host arch only — release covers full cross-arch matrix.
+          CIBW_ARCHS_LINUX: "x86_64"
+          CIBW_ARCHS_MACOS: "arm64"
           CIBW_ARCHS_WINDOWS: "AMD64"
 
-          # Skip problematic combinations
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
 
-          # Install build dependencies (base, overridden per-platform below).
-          # build-constraints.txt is produced from uv.lock so hatch-mypyc / mypy / hatchling
-          # versions match the locked dev environment and can't drift on each cibw run.
-          CIBW_BEFORE_BUILD: "pip install -c /project/build-constraints.txt hatch-mypyc hatchling"
+          CIBW_BEFORE_BUILD: "pip install -c {project}/build-constraints.txt hatch-mypyc hatchling"
 
-          # Test the built wheels
           CIBW_TEST_REQUIRES: "cloud-sql-python-connector google-cloud-alloydb-connector"
           CIBW_TEST_COMMAND: >-
-            python /project/tools/scripts/mypyc_smoke.py --require-compiled
+            python {project}/tools/scripts/mypyc_smoke.py --require-compiled
 
-          # Linux PR validation should exercise the same three-stage PGO path as publish.yml.
+          # Linux PR validation exercises the same three-stage PGO path as publish.yml.
           CIBW_BEFORE_BUILD_LINUX: >-
-            pip install -c /project/build-constraints.txt hatch-mypyc hatchling &&
+            pip install -c {project}/build-constraints.txt hatch-mypyc hatchling &&
             PGO_DIR=/tmp/sqlspec-pgo &&
             BUILD_DIR=/tmp/sqlspec-mypyc-build &&
             mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
@@ -140,7 +232,7 @@ jobs:
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             pip install {package} --no-build-isolation &&
             pip install anyio pyarrow aiosqlite duckdb adbc-driver-sqlite adbc-driver-manager &&
-            python /project/tools/scripts/pgo_training.py &&
+            python {project}/tools/scripts/pgo_training.py &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
@@ -150,29 +242,51 @@ jobs:
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
+          # macOS + Windows: plain mypyc, no PGO. macOS PGO needs filter
+          # deps absent from BEFORE_BUILD; MSVC PGO isn't validated.
+          CIBW_ENVIRONMENT_MACOS: >-
+            HATCH_BUILD_HOOKS_ENABLE=1
+            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+
+          CIBW_ENVIRONMENT_WINDOWS: >-
+            HATCH_BUILD_HOOKS_ENABLE=1
+            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: wheels-mypyc-py${{ matrix.python-version }}
+          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
 
 
   test-wheels:
     name: Test ${{ matrix.os }} py${{ matrix.python-version }}
-    needs: [build-wheels-standard, build-wheels-mypyc]
+    needs: [build-wheels-standard, build-wheels-mypyc, detect-mode]
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.10", "3.12", "3.14"]') || fromJSON('["3.12"]') }}
+        os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version:
+          - ${{ github.event.inputs.python_version || '3.12' }}
 
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      # PR builds have no release tag — derive expected version from
+      # pyproject.toml so the version assertion below has something to check.
+      - name: Resolve expected version
+        shell: bash
+        run: |
+          v=$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "SQLSPEC_EXPECTED_VERSION=$v" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -191,15 +305,21 @@ jobs:
           path: dist-mypyc/
 
       - name: Test standard wheel installation
+        shell: bash
         run: |
           uv venv test-standard --python ${{ matrix.python-version }}
-          uv pip install --python test-standard --find-links dist-standard/ sqlspec
+          uv pip install --python test-standard --no-index --no-deps --find-links dist-standard/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
+          uv pip install --python test-standard "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-standard/
+          uv run --no-project --python test-standard python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
           uv run --no-project --python test-standard python -I -c "import sqlspec; print('Standard wheel OK')"
 
       - name: Test mypyc wheel installation
+        shell: bash
         run: |
           uv venv test-mypyc --python ${{ matrix.python-version }}
-          uv pip install --python test-mypyc --find-links dist-mypyc/ sqlspec
+          uv pip install --python test-mypyc --no-index --no-deps --find-links dist-mypyc/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
+          uv pip install --python test-mypyc "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-mypyc/
+          uv run --no-project --python test-mypyc python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
           uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
 
   verify-packages:
@@ -209,6 +329,9 @@ jobs:
     steps:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Download all artifacts
         uses: actions/download-artifact@v7
