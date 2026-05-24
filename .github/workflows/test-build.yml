@@ -292,13 +292,13 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Download standard wheel artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: wheels-standard
           path: dist-standard/
 
       - name: Download mypyc wheel artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-mypyc-*
           merge-multiple: true
@@ -334,7 +334,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: "*"
           merge-multiple: true
