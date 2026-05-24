@@ -14,6 +14,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install 3.11
@@ -41,6 +44,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install 3.11
@@ -58,6 +64,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install 3.11
@@ -75,6 +84,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install 3.11
@@ -98,6 +110,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
@@ -105,7 +120,19 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Cache docker images
+        id: docker-image-cache
+        uses: actions/cache@v5
+        with:
+          path: /tmp/docker-images
+          key: docker-images-v1-${{ hashFiles('.github/workflows/ci.yml') }}
+
+      - name: Load cached docker images
+        if: steps.docker-image-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/docker-images/sqlspec-test-images.tar
+
       - name: Pre-pull docker images
+        if: steps.docker-image-cache.outputs.cache-hit != 'true'
         run: |
           set -eu
           images=(
@@ -121,6 +148,8 @@ jobs:
             rustfs/rc:latest
           )
           printf '%s\n' "${images[@]}" | xargs -P 4 -I{} docker pull {}
+          mkdir -p /tmp/docker-images
+          docker save "${images[@]}" -o /tmp/docker-images/sqlspec-test-images.tar
 
       - name: Test
         id: pytest
@@ -230,6 +259,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python
         run: uv python install 3.12
