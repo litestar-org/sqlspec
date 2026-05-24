@@ -282,20 +282,40 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
     @abstractmethod
     async def append_event_and_update_state(
-        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: "EventRecord",
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> "SessionRecord":
         """Atomically append an event and update the session's durable state.
 
         This is the authoritative durable write boundary for post-creation
-        session mutations.  The event insert and state update must succeed
-        together or fail together, and the updated session record is returned
-        in the same round-trip so callers don't need a follow-up read.
+        session mutations.  The event insert, session state update, and the
+        optional scoped-state upserts must succeed together or fail together,
+        and the updated session record is returned in the same round-trip so
+        callers don't need a follow-up read.
+
+        When ``app_state`` is provided (non-None), it is upserted into the
+        ``app_state_table`` for ``app_name``.  When ``user_state`` is provided,
+        it is upserted into the ``user_state_table`` for ``(app_name, user_id)``.
+        Empty dicts are treated as "no scoped delta" and skipped.
 
         Args:
             event_record: Event record to store.
             session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
+            state: Post-append durable session-scoped state snapshot
+                (``temp:`` keys already stripped by the service layer).
+            app_name: Application name for routing scoped-state upserts. Required
+                when ``app_state`` or ``user_state`` is non-empty.
+            user_id: User identifier for routing user-scoped upserts. Required
+                when ``user_state`` is non-empty.
+            app_state: App-scoped state delta (``app:*`` keys) to upsert atomically.
+            user_state: User-scoped state delta (``user:*`` keys) to upsert atomically.
 
         Returns:
             The updated SessionRecord reflecting the new state and update_time.

@@ -8,6 +8,7 @@ import pytest
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKStore
 from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_atomic_scoped_write_contract,
     assert_session_event_cleanup_contract,
     assert_session_get_session_renewal_contract,
     assert_session_scoped_state_contract,
@@ -115,6 +116,11 @@ async def test_session_scoped_state_contract(adbc_store: Any) -> None:
 async def test_session_table_lifecycle_contract(adbc_store: Any) -> None:
     """ADBC can drop and recreate its ADK session tables programmatically."""
     await assert_session_table_lifecycle_contract(adbc_store, marker="adbc")
+
+
+async def test_session_atomic_scoped_write_contract(adbc_store: Any) -> None:
+    """ADBC routes scoped-state upserts inside the append/update transaction."""
+    await assert_session_atomic_scoped_write_contract(adbc_store, marker="adbc")
 
 
 async def test_list_sessions(adbc_store: Any) -> None:

@@ -11,6 +11,7 @@ from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_atomic_scoped_write_contract,
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
@@ -77,6 +78,11 @@ async def test_duckdb_session_scoped_state_contract(duckdb_adk_store: DuckdbADKS
 async def test_duckdb_session_table_lifecycle_contract(duckdb_adk_store: DuckdbADKStore) -> None:
     """DuckDB can drop and recreate its ADK session tables programmatically."""
     await assert_session_table_lifecycle_contract(duckdb_adk_store, marker="duckdb")
+
+
+async def test_duckdb_session_atomic_scoped_write_contract(duckdb_adk_store: DuckdbADKStore) -> None:
+    """DuckDB routes scoped-state upserts inside the append/update transaction."""
+    await assert_session_atomic_scoped_write_contract(duckdb_adk_store, marker="duckdb")
 
 
 async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:

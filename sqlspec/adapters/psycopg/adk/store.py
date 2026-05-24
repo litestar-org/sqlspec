@@ -227,7 +227,15 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             )
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
@@ -241,6 +249,22 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         WHERE id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
+
+        app_upsert_query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._app_state_table))
+
+        user_upsert_query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name, user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._user_state_table))
 
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
@@ -258,6 +282,16 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             )
             await cur.execute(update_query, (Jsonb(state), session_id))
             row = await cur.fetchone()
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             await conn.commit()
 
         if row is None:
@@ -567,10 +601,26 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         return await async_(self._list_sessions)(app_name, user_id)
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        """Atomically append an event and update session + scoped state."""
+        return await async_(self._append_event_and_update_state)(
+            event_record,
+            session_id,
+            state,
+            app_name=app_name,
+            user_id=user_id,
+            app_state=app_state,
+            user_state=user_state,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -856,7 +906,15 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             conn.commit()
 
     def _append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
@@ -870,6 +928,22 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         WHERE id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
+
+        app_upsert_query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._app_state_table))
+
+        user_upsert_query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name, user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._user_state_table))
 
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
@@ -887,6 +961,16 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             )
             cur.execute(update_query, (Jsonb(state), session_id))
             row = cur.fetchone()
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             conn.commit()
 
         if row is None:

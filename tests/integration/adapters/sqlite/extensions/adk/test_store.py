@@ -9,6 +9,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.extensions.adk import EventRecord
 from tests.integration.adapters._adk_contract_helpers import (
+    assert_session_atomic_scoped_write_contract,
     assert_session_event_cleanup_contract,
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
@@ -82,6 +83,15 @@ async def test_sqlite_session_table_lifecycle_contract(tmp_path: Path) -> None:
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_table_lifecycle_contract(store, marker="sqlite")
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_session_atomic_scoped_write_contract(tmp_path: Path) -> None:
+    """SQLite ADK store routes scoped-state upserts inside the append/update transaction."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_atomic_scoped_write_contract(store, marker="sqlite")
     finally:
         config.close_pool()
 

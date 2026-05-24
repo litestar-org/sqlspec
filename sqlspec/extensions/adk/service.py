@@ -279,14 +279,16 @@ class SQLSpecSessionService(BaseSessionService):
             )
             raise ValueError(msg)
 
-        # --- Persist event and state atomically ---
+        # --- Persist event and all scoped state atomically ---
         updated_record = await self._store.append_event_and_update_state(
-            event_record=event_record, session_id=session.id, state=session_state
+            event_record=event_record,
+            session_id=session.id,
+            state=session_state,
+            app_name=session.app_name,
+            user_id=session.user_id,
+            app_state=app_state or None,
+            user_state=user_state or None,
         )
-        if app_state:
-            await self._store.upsert_app_state(session.app_name, app_state)
-        if user_state:
-            await self._store.upsert_user_state(session.app_name, session.user_id, user_state)
         updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
         # Use the returned record directly — saves a round-trip vs a follow-up get_session().

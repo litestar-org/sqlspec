@@ -66,10 +66,26 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         await async_(self._delete_session)(session_id)
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
+        """Atomically append an event and update session + scoped state."""
+        return await async_(self._append_event_and_update_state)(
+            event_record,
+            session_id,
+            state,
+            app_name=app_name,
+            user_id=user_id,
+            app_state=app_state,
+            user_state=user_state,
+        )
 
     async def get_events(
         self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
@@ -283,20 +299,22 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
 
     def _append_event_and_update_state(
-        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: "EventRecord",
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically insert an event and update session state in one transaction.
+        """Atomically insert event + update session + upsert scoped state.
 
-        Both the event INSERT and the session state UPDATE execute within a single
-        Spanner transaction so they succeed or fail together. A follow-up
-        single-use read returns the SessionRecord; we can't capture update_time
-        inside the write txn because PENDING_COMMIT_TIMESTAMP() only materialises
-        on commit.
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session whose state should be updated.
-            state: Post-append durable state snapshot.
+        All writes execute within a single Spanner transaction so they succeed
+        or fail together. A follow-up single-use read returns the SessionRecord;
+        we can't capture update_time inside the write txn because
+        PENDING_COMMIT_TIMESTAMP() only materialises on commit.
         """
         event_params: dict[str, Any] = {
             "session_id": event_record["session_id"],
@@ -320,10 +338,47 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         if self._shard_count > 1:
             update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
 
-        self._run_write([
+        statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
             (insert_sql, event_params, self._event_param_types()),
             (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
-        ])
+        ]
+
+        if app_state:
+            if app_name is None:
+                msg = "app_name is required when app_state is provided."
+                raise ValueError(msg)
+            app_delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = @app_name"
+            app_insert_sql = f"""
+                INSERT INTO {self._app_state_table} (app_name, state, update_time)
+                VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
+            """
+            statements.append((app_delete_sql, {"app_name": app_name}, {"app_name": SPANNER_PARAM_TYPES.STRING}))
+            statements.append((
+                app_insert_sql,
+                {"app_name": app_name, "state": to_json(app_state)},
+                {"app_name": SPANNER_PARAM_TYPES.STRING, "state": json_type},
+            ))
+        if user_state:
+            if app_name is None or user_id is None:
+                msg = "app_name and user_id are required when user_state is provided."
+                raise ValueError(msg)
+            user_delete_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = @app_name AND user_id = @user_id"
+            user_insert_sql = f"""
+                INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+                VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
+            """
+            statements.append((
+                user_delete_sql,
+                {"app_name": app_name, "user_id": user_id},
+                {"app_name": SPANNER_PARAM_TYPES.STRING, "user_id": SPANNER_PARAM_TYPES.STRING},
+            ))
+            statements.append((
+                user_insert_sql,
+                {"app_name": app_name, "user_id": user_id, "state": to_json(user_state)},
+                {"app_name": SPANNER_PARAM_TYPES.STRING, "user_id": SPANNER_PARAM_TYPES.STRING, "state": json_type},
+            ))
+
+        self._run_write(statements)
 
         record = self._get_session(session_id)
         if record is None:

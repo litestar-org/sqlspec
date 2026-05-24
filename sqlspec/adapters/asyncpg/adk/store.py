@@ -180,7 +180,15 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             )
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
@@ -193,6 +201,20 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         WHERE id = $2
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
+        app_upsert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """
+        user_upsert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name, user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """
 
         async with self._config.provide_connection() as conn, conn.transaction():
             await conn.execute(
@@ -204,6 +226,16 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                 event_record["event_data"],
             )
             row = await conn.fetchrow(update_sql, state, session_id)
+            if app_state:
+                if app_name is None:
+                    msg = "app_name is required when app_state is provided."
+                    raise ValueError(msg)
+                await conn.execute(app_upsert_sql, app_name, app_state)
+            if user_state:
+                if app_name is None or user_id is None:
+                    msg = "app_name and user_id are required when user_state is provided."
+                    raise ValueError(msg)
+                await conn.execute(user_upsert_sql, app_name, user_id, user_state)
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
