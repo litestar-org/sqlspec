@@ -68,19 +68,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
-      # Linux is the only host that cross-builds an additional arch (aarch64)
-      # under QEMU. macOS arm64 and Windows AMD64 are native to their runners.
-      - name: Set up QEMU
-        if: matrix.os == 'ubuntu-latest'
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -108,9 +100,9 @@ jobs:
             pip-${{ runner.os }}-py${{ matrix.python-version }}-
 
       # mypyc compile cache only useful on PGO hosts where HATCH_MYPYC_BUILD_DIR
-      # is pinned. Windows builds without PGO and without a pinned build dir.
+      # is pinned. Windows + macOS build without PGO and without a pinned build dir.
       - name: Cache mypyc build dir
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         uses: actions/cache@v5
         with:
           path: /tmp/sqlspec-mypyc-build
@@ -139,10 +131,10 @@ jobs:
           CIBW_BUILD: "cp${{ matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' }}-*"
           CIBW_BUILD_VERBOSITY: 1
 
-          # cibuildwheel reads only the *_ARCHS_<HOST> var matching the current
-          # runner OS; leaving all three set documents intent without side effects.
-          CIBW_ARCHS_LINUX: "x86_64 aarch64"
-          CIBW_ARCHS_MACOS: "x86_64 arm64"
+          # Native host arch only — Linux aarch64 builds on ubuntu-24.04-arm,
+          # macOS arm64 on macos-latest (Apple Silicon). No QEMU emulation.
+          CIBW_ARCHS_LINUX: ${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}
+          CIBW_ARCHS_MACOS: "arm64"
           CIBW_ARCHS_WINDOWS: "AMD64"
 
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
@@ -209,7 +201,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
         python-version: ["3.10", "3.12", "3.14"]
 
     runs-on: ${{ matrix.os }}
