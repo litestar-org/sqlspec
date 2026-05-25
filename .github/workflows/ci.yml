@@ -127,6 +127,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Free runner disk before docker work
+        run: |
+          set -eu
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/lib/android /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
       - name: Cache docker images
         id: docker-image-cache
         uses: actions/cache@v5
@@ -136,7 +144,9 @@ jobs:
 
       - name: Load cached docker images
         if: steps.docker-image-cache.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/docker-images/sqlspec-test-images.tar
+        run: |
+          docker load -i /tmp/docker-images/sqlspec-test-images.tar
+          rm -f /tmp/docker-images/sqlspec-test-images.tar
 
       - name: Pre-pull docker images
         if: steps.docker-image-cache.outputs.cache-hit != 'true'
