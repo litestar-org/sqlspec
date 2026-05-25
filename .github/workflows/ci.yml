@@ -107,7 +107,13 @@ jobs:
   test-linux:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      # fail-fast: true — matrix dimension is Python version only.
+      # sqlspec failures are typically version-agnostic library bugs, so the
+      # other 4 jobs running to completion after one fails wastes ~60 min of
+      # billed runner time. test-build.yml::build-wheels-mypyc and ::test-wheels
+      # deliberately keep fail-fast: false because their failures diverge
+      # per-platform (GCC/Clang/MSVC) and we need every signal.
+      fail-fast: true
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     timeout-minutes: 30
