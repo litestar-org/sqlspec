@@ -1,6 +1,6 @@
 """Generic data dictionary for arrow-odbc connections."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import mypyc_attr
 
@@ -84,14 +84,14 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
 
     def get_optimal_type(self, driver: "ArrowOdbcDriver", type_category: str) -> str:
         """Get the optimal runtime dialect type for a category."""
+        _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)
 
     def get_tables(self, driver: "ArrowOdbcDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get table metadata for dialects with bundled catalog queries."""
         try:
-            return cast(
-                "list[TableMetadata]",
-                driver.select(self.get_query("tables_by_schema"), schema_name=self.resolve_schema(schema)),
+            return driver.select(
+                self.get_query("tables_by_schema"), schema_name=self.resolve_schema(schema), schema_type=TableMetadata
             )
         except SQLFileNotFoundError:
             return []
@@ -105,7 +105,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         if table is not None:
             parameters["table_name"] = table
         try:
-            return cast("list[ColumnMetadata]", driver.select(self.get_query(query_name), **parameters))
+            return driver.select(self.get_query(query_name), schema_type=ColumnMetadata, **parameters)
         except SQLFileNotFoundError:
             return []
 
@@ -118,7 +118,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         if table is not None:
             parameters["table_name"] = table
         try:
-            return cast("list[IndexMetadata]", driver.select(self.get_query(query_name), **parameters))
+            return driver.select(self.get_query(query_name), schema_type=IndexMetadata, **parameters)
         except SQLFileNotFoundError:
             return []
 
@@ -131,6 +131,6 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         if table is not None:
             parameters["table_name"] = table
         try:
-            return cast("list[ForeignKeyMetadata]", driver.select(self.get_query(query_name), **parameters))
+            return driver.select(self.get_query(query_name), schema_type=ForeignKeyMetadata, **parameters)
         except SQLFileNotFoundError:
             return []
