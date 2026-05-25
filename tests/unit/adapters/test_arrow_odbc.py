@@ -168,9 +168,7 @@ def test_arrow_odbc_session_release_allows_connections_without_close(monkeypatch
     """arrow-odbc 10.4 Connection has no close() method, so release should be a no-op."""
     connection = NoCloseConnection()
 
-    monkeypatch.setattr(
-        "sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", lambda *_args, **_kwargs: connection
-    )
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", lambda *_args, **_kwargs: connection)
 
     config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={ODBC Driver 18 for SQL Server};"})
 
@@ -182,9 +180,7 @@ def test_arrow_odbc_field_config_uses_driver_name_for_dialect(monkeypatch: Any) 
     """Field-based configs should still infer dialect from the ODBC driver name."""
     connection = NoCloseConnection()
 
-    monkeypatch.setattr(
-        "sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", lambda *_args, **_kwargs: connection
-    )
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", lambda *_args, **_kwargs: connection)
 
     config = ArrowOdbcConfig(
         connection_config={"driver": "ODBC Driver 18 for SQL Server", "server": "localhost", "database": "app"}
