@@ -316,3 +316,26 @@ def assert_sql_execution_result(result: ExecutionResult, expected_rowcount: int 
     assert result is not None
     if expected_rowcount >= 0:
         assert result.data_row_count == expected_rowcount
+
+
+def _coverage_is_active(config: pytest.Config) -> bool:
+    if not config.pluginmanager.has_plugin("pytest_cov"):
+        return False
+    return bool(config.getoption("--cov", default=None))
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "benchmark: wall-clock-sensitive perf test; skipped when --cov is active "
+        "because sys.settrace overhead invalidates the timing threshold.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
+    if not _coverage_is_active(config):
+        return
+    skip = pytest.mark.skip(reason="benchmark test skipped under --cov: coverage tracing skews wall-clock timing")
+    for item in items:
+        if "benchmark" in item.keywords:
+            item.add_marker(skip)

@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    # Skip the docs build on pushes that only touch ignorable surfaces.
+    # docs/** is NOT ignored here — building docs is this workflow's job.
+    paths-ignore:
+      - '*.md'
 
 permissions:
   contents: read

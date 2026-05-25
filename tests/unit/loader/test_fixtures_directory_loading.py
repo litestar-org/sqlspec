@@ -39,6 +39,7 @@ def fixtures_path() -> Path:
     return Path(__file__).parent.parent.parent / "fixtures"
 
 
+@pytest.mark.benchmark
 def test_load_entire_fixtures_directory(fixtures_path: Path) -> None:
     """Test loading the entire fixtures directory successfully."""
     loader = SQLFileLoader()
@@ -279,6 +280,7 @@ def test_file_metadata_tracking(fixtures_path: Path) -> None:
     console.print(f"[green]✓[/green] Validated metadata for {tested_count} queries from {len(files)} files")
 
 
+@pytest.mark.benchmark
 def test_performance_benchmarks(fixtures_path: Path) -> None:
     """Test that loading performance meets expectations."""
     loader = SQLFileLoader()

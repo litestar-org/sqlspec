@@ -896,6 +896,7 @@ def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
         assert "No named SQL statements found" in str(e)
 
 
+@pytest.mark.benchmark
 def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
     """Test parsing performance with large fixture files."""
 

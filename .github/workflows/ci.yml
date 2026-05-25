@@ -2,9 +2,22 @@ name: Tests And Linting
 
 on:
   pull_request:
+    # paths-ignore skips this workflow entirely when only the listed paths
+    # change. Negation (!docs/examples/**) re-includes paths that DO need
+    # CI — docs/examples/** is in pytest testpaths and runs as integration
+    # tests, so it must trigger the workflow even though it lives under
+    # docs/.
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '!docs/examples/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '!docs/examples/**'
 
 # Cancel in-flight runs of this workflow on the same ref when a newer
 # commit lands. Saves runner minutes during a churn of PR pushes. Not
@@ -14,8 +27,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -28,7 +42,15 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
-      - name: Create virtual environment
+      - name: Cache uv-managed virtualenv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-quality-${{ runner.os }}-py3.11-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            venv-quality-${{ runner.os }}-py3.11-
+
+      - name: Install dependencies
         run: uv sync --all-extras --dev
 
       - name: Install Pre-Commit hooks
@@ -41,53 +63,48 @@ jobs:
           path: ~/.cache/pre-commit/
           key: pre-commit|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
+      # Each subsequent step uses `if: always()` so a failing earlier step
+      # does not stop the others — a single failed run still reports every
+      # tool's output, matching the parallel-jobs behavior of the old
+      # validate/mypy/pyright/slotscheck split.
       - name: Execute Pre-Commit
+        id: pre_commit
         run: uv run pre-commit run --show-diff-on-failure --color=always --all-files
 
-  mypy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
       - name: Run mypy
+        id: mypy
+        if: always() && steps.pre_commit.conclusion != 'skipped' && steps.pre_commit.conclusion != 'cancelled'
         run: uv run mypy
 
-  pyright:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
       - name: Run pyright
+        id: pyright
+        if: always() && steps.mypy.conclusion != 'skipped' && steps.mypy.conclusion != 'cancelled'
         run: uv run pyright
 
-  slotscheck:
+      - name: Run slotscheck
+        if: always() && steps.pyright.conclusion != 'skipped' && steps.pyright.conclusion != 'cancelled'
+        run: uv run slotscheck sqlspec
+
+  # test-unit: fast tier — no Docker, runs tests/unit only.
+  # Acts as a gate for test-integration: a broken unit test cancels the
+  # entire matrix (fail-fast: true) AND prevents integration jobs from
+  # ever starting via `needs:` below.
+  test-unit:
     runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: true — matrix dimension is Python version only.
+      # sqlspec failures are typically version-agnostic library bugs, so the
+      # other 4 jobs running to completion after one fails wastes ~60 min of
+      # billed runner time. test-build.yml::build-wheels-mypyc and ::test-wheels
+      # deliberately keep fail-fast: false because their failures diverge
+      # per-platform (GCC/Clang/MSVC) and we need every signal.
+      fail-fast: true
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -96,18 +113,47 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Set up Python
-        run: uv python install 3.11
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache uv-managed virtualenv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-
 
       - name: Install dependencies
+        # tests/unit/ imports every adapter module, so the install set is
+        # the same as integration. Speed comes from skipping Docker
+        # pre-pull and running only tests/unit/, not from a lighter sync.
         run: uv sync --all-extras --dev
 
-      - name: Run slotscheck
-        run: uv run slotscheck sqlspec
+      - name: Test
+        # covdefaults sets fail_under=100 globally; the per-tier run only
+        # covers a slice of sqlspec, so override to 0 here. The combined
+        # view in Codecov is the source of truth.
+        run: >-
+          uv run pytest tests/unit
+          -n auto --dist=loadgroup
+          --cov=sqlspec --cov-report=xml:coverage-unit.xml --cov-report=term-missing
+          --cov-fail-under=0
 
-  test-linux:
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-unit.xml
+          flags: unit,py${{ matrix.python-version }}
+          name: test-unit-${{ matrix.python-version }}
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  test-integration:
+    needs: [test-unit]
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     timeout-minutes: 30
@@ -123,6 +169,14 @@ jobs:
 
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache uv-managed virtualenv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
@@ -186,10 +240,25 @@ jobs:
             echo "::endgroup::"
           ) &
           aborter_pid=$!
-          uv run pytest -n 2 --dist=loadgroup
+          # covdefaults sets fail_under=100 globally; per-tier coverage
+          # only covers a slice, so override to 0. Codecov merges the
+          # tiers server-side.
+          uv run pytest tests/integration docs/examples -n 2 --dist=loadgroup \
+            --cov=sqlspec --cov-report=xml:coverage-integration.xml --cov-report=term-missing \
+            --cov-fail-under=0
           rc=$?
           kill "$aborter_pid" 2>/dev/null || true
           exit $rc
+
+      - name: Upload coverage to Codecov
+        if: always() && steps.pytest.outcome != 'skipped'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-integration.xml
+          flags: integration,py${{ matrix.python-version }}
+          name: test-integration-${{ matrix.python-version }}
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Dump python stacks on hang
         if: failure() && steps.pytest.outcome == 'failure'
@@ -267,7 +336,8 @@ jobs:
 
   build-docs:
     needs:
-      - validate
+      - quality
+      - test-unit
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
