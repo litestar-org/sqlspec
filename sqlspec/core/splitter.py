@@ -875,9 +875,6 @@ class StatementSplitter:
                     if token.value in self._dialect.statement_terminators:
                         should_delay = self._dialect.should_delay_semicolon_termination(all_tokens, token_idx)
 
-                        if not should_delay and token.value == ";" and self._dialect.batch_separators:
-                            should_delay = True
-
                         if not should_delay:
                             is_terminator = True
                     elif token.value in self._dialect.special_terminators:
@@ -889,7 +886,9 @@ class StatementSplitter:
                     is_terminator = True
 
             if is_terminator:
-                if current_statement_writer is None:
+                if token.type == TokenType.KEYWORD and token_upper in self._dialect.batch_separators:
+                    statement = _join_string_fragments([item.value for item in current_statement_tokens[:-1]]).strip()
+                elif current_statement_writer is None:
                     statement = _join_string_fragments(current_statement_chars).strip()
                 else:
                     statement = cast("str", current_statement_writer.getvalue()).strip()
