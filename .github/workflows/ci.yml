@@ -2,9 +2,22 @@ name: Tests And Linting
 
 on:
   pull_request:
+    # paths-ignore skips this workflow entirely when only the listed paths
+    # change. Negation (!docs/examples/**) re-includes paths that DO need
+    # CI — docs/examples/** is in pytest testpaths and runs as integration
+    # tests, so it must trigger the workflow even though it lives under
+    # docs/.
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '!docs/examples/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '!docs/examples/**'
 
 # Cancel in-flight runs of this workflow on the same ref when a newer
 # commit lands. Saves runner minutes during a churn of PR pushes. Not
