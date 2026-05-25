@@ -51,6 +51,7 @@ flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar>=2.22.0"]
 msgspec = ["msgspec"]
+mssql-python = ["mssql-python>=1.7"]
 mypyc = ["sqlglot[c]>=30.0.0"]
 mysql-connector = [
   "mysql-connector-python; python_version < '3.12'",
@@ -424,6 +425,7 @@ markers = [
   "google_spanner: marks tests using google-cloud-spanner",
   "oracledb: marks tests using oracledb",
   "psycopg: marks tests using psycopg",
+  "mssql_python: marks tests using the mssql-python driver",
   "pymssql: marks tests using pymssql",
   "mysql_connector: marks tests using mysql-connector",
   "pymysql: marks tests using pymysql",
@@ -466,6 +468,8 @@ module = [
   "arrow_odbc.*",
   "asyncmy",
   "asyncmy.*",
+  "mssql_python",
+  "mssql_python.*",
   "pyarrow",
   "pyarrow.*",
   "opentelemetry.*",

@@ -109,6 +109,12 @@ exports a typed config class and a driver implementation.
 
       Sync Arrow-over-ODBC for any ODBC-compliant database.
 
+   .. grid-item-card:: mssql-python
+      :link: mssql_python
+      :link-type: doc
+
+      Sync + Async SQL Server via Microsoft's official mssql-python driver.
+
 Feature Comparison
 ==================
 
@@ -223,6 +229,12 @@ Feature Comparison
      -
      - Yes
      -
+   * - mssql_python
+     - Yes
+     - Yes
+     - Yes
+     -
+     -
 
 .. toctree::
    :hidden:
@@ -244,3 +256,4 @@ Feature Comparison
    cockroach_psycopg
    adbc
    arrow_odbc
+   mssql_python
