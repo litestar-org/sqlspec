@@ -77,7 +77,11 @@ jobs:
         if: always() && steps.pyright.conclusion != 'skipped' && steps.pyright.conclusion != 'cancelled'
         run: uv run slotscheck sqlspec
 
-  test-linux:
+  # test-unit: fast tier — no Docker, runs tests/unit only.
+  # Acts as a gate for test-integration: a broken unit test cancels the
+  # entire matrix (fail-fast: true) AND prevents integration jobs from
+  # ever starting via `needs:` below.
+  test-unit:
     runs-on: ubuntu-latest
     strategy:
       # fail-fast: true — matrix dimension is Python version only.
@@ -86,6 +90,36 @@ jobs:
       # billed runner time. test-build.yml::build-wheels-mypyc and ::test-wheels
       # deliberately keep fail-fast: false because their failures diverge
       # per-platform (GCC/Clang/MSVC) and we need every signal.
+      fail-fast: true
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # tests/unit/ imports every adapter module, so the install set is
+        # the same as integration. Speed comes from skipping Docker
+        # pre-pull and running only tests/unit/, not from a lighter sync.
+        run: uv sync --all-extras --dev
+
+      - name: Test
+        run: uv run pytest tests/unit -n auto --dist=loadgroup
+
+  test-integration:
+    needs: [test-unit]
+    runs-on: ubuntu-latest
+    strategy:
       fail-fast: true
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -165,7 +199,7 @@ jobs:
             echo "::endgroup::"
           ) &
           aborter_pid=$!
-          uv run pytest -n 2 --dist=loadgroup
+          uv run pytest tests/integration docs/examples -n 2 --dist=loadgroup
           rc=$?
           kill "$aborter_pid" 2>/dev/null || true
           exit $rc
