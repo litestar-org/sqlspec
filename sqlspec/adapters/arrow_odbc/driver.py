@@ -1,14 +1,9 @@
 """arrow-odbc sync driver."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.arrow_odbc._typing import (
-    ARROW_ODBC_MODULE,
-    ArrowOdbcConnection,
-    ArrowOdbcCursor,
-    ArrowOdbcRawCursor,
-)
+from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
 from sqlspec.adapters.arrow_odbc.core import (
     build_statement_config,
     create_mapped_exception,
@@ -38,9 +33,8 @@ class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        error_type = getattr(ARROW_ODBC_MODULE, "Error", Exception)
-        if isinstance(exc_val, error_type):
-            self.pending_exception = create_mapped_exception(cast("Exception", exc_val))
+        if isinstance(exc_val, ArrowOdbcError):
+            self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
@@ -297,4 +291,4 @@ def _table_to_reader(table: Any, chunk_size: int) -> Any:
     return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=chunk_size))
 
 
-register_driver_profile("arrow_odbc", driver_profile, allow_override=True)
+register_driver_profile("arrow_odbc", driver_profile)

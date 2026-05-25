@@ -4,8 +4,7 @@
 from typing import TYPE_CHECKING, Any
 
 import arrow_odbc as _arrow_odbc  # pyright: ignore[reportMissingImports]
-
-ARROW_ODBC_MODULE: Any = _arrow_odbc
+from arrow_odbc import connect as arrow_odbc_connect  # pyright: ignore[reportMissingImports]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -21,6 +20,8 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     ArrowOdbcConnection = _arrow_odbc.Connection
     ArrowOdbcRawCursor = _arrow_odbc.Connection
+
+ArrowOdbcError: "type[Exception]" = getattr(_arrow_odbc, "Error", Exception)
 
 
 class ArrowOdbcCursor:
@@ -86,9 +87,10 @@ class ArrowOdbcSessionContext:
 
 
 __all__ = (
-    "ARROW_ODBC_MODULE",
     "ArrowOdbcConnection",
     "ArrowOdbcCursor",
+    "ArrowOdbcError",
     "ArrowOdbcRawCursor",
     "ArrowOdbcSessionContext",
+    "arrow_odbc_connect",
 )
