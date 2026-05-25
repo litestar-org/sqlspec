@@ -33,6 +33,10 @@ on:
       - 'sqlspec/**'
       - 'tools/scripts/mypyc_smoke.py'
 
+permissions:
+  contents: read
+  checks: read
+
 # Cancel in-flight runs of this workflow on the same ref when a newer
 # commit lands. Saves runner minutes during a churn of PR pushes. Not
 # applied to publish.yml — releases must never be cancelled mid-upload.
@@ -82,9 +86,87 @@ jobs:
           echo "matrix_mode=$mode" >> "$GITHUB_OUTPUT"
           echo "Resolved matrix_mode=$mode ($reason)"
 
+  wait-for-cheap-ci:
+    name: Wait for quality and unit checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Skip wait for manual runs
+        if: github.event_name != 'pull_request'
+        run: echo "workflow_dispatch builds do not wait for PR checks"
+
+      - name: Wait for Tests And Linting checks
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+          REQUIRED_CHECKS: |
+            quality
+            test-unit (3.10)
+            test-unit (3.11)
+            test-unit (3.12)
+            test-unit (3.13)
+            test-unit (3.14)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          deadline=$((SECONDS + 25 * 60))
+
+          while true; do
+            response="$(gh api "repos/$REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100")"
+            pending=0
+
+            while IFS= read -r check_name; do
+              [ -z "$check_name" ] && continue
+
+              row="$(jq -r --arg name "$check_name" '
+                [.check_runs[] | select(.name == $name)]
+                | sort_by(.started_at // .created_at // "")
+                | last
+                | if . == null then "" else [.status, (.conclusion // ""), .html_url] | @tsv end
+              ' <<< "$response")"
+
+              if [ -z "$row" ]; then
+                echo "Waiting for check to appear: $check_name"
+                pending=$((pending + 1))
+                continue
+              fi
+
+              IFS=$'\t' read -r status conclusion url <<< "$row"
+              case "$status:$conclusion" in
+                completed:success)
+                  echo "Passed: $check_name"
+                  ;;
+                completed:*)
+                  echo "::error::Required check '$check_name' completed with conclusion '$conclusion': $url"
+                  exit 1
+                  ;;
+                *)
+                  echo "Waiting for $check_name ($status): $url"
+                  pending=$((pending + 1))
+                  ;;
+              esac
+            done <<< "$REQUIRED_CHECKS"
+
+            if [ "$pending" -eq 0 ]; then
+              echo "Quality and unit checks passed for $HEAD_SHA"
+              exit 0
+            fi
+
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for quality and unit checks for $HEAD_SHA"
+              exit 1
+            fi
+
+            sleep 30
+          done
+
   build-source:
     name: Build source distribution
     runs-on: ubuntu-latest
+    needs: [wait-for-cheap-ci]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -113,6 +195,7 @@ jobs:
   build-wheels-standard:
     name: Build standard pure Python wheel
     runs-on: ubuntu-latest
+    needs: [wait-for-cheap-ci]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -141,9 +224,9 @@ jobs:
   build-wheels-mypyc:
     name: Build MyPyC wheels (${{ matrix.os }} py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    needs: [detect-mode]
+    needs: [detect-mode, wait-for-cheap-ci]
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
         python-version:
@@ -263,7 +346,7 @@ jobs:
     name: Test ${{ matrix.os }} py${{ matrix.python-version }}
     needs: [build-wheels-standard, build-wheels-mypyc, detect-mode]
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: ${{ needs.detect-mode.outputs.matrix_mode == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
         python-version:
