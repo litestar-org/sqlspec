@@ -8,6 +8,8 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.core import StatementConfig
 
 __all__ = (
@@ -115,6 +117,18 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     return ";".join(parts) + ";", connect_kwargs
 
 
+def _build_arrow_odbc_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for arrow-odbc."""
+    return {
+        bool: _identity,
+        int: _identity,
+        float: _identity,
+        str: _identity,
+        bytes: _identity,
+        **build_uuid_coercions(native=False),
+    }
+
+
 def build_profile() -> "DriverParameterProfile":
     """Create the arrow-odbc driver parameter profile."""
     return DriverParameterProfile(
@@ -129,14 +143,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={
-            bool: _identity,
-            int: _identity,
-            float: _identity,
-            str: _identity,
-            bytes: _identity,
-            **build_uuid_coercions(native=False),
-        },
+        custom_type_coercions=_build_arrow_odbc_custom_type_coercions(),
         default_dialect="sqlite",
     )
 
