@@ -130,10 +130,14 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Test
+        # covdefaults sets fail_under=100 globally; the per-tier run only
+        # covers a slice of sqlspec, so override to 0 here. The combined
+        # view in Codecov is the source of truth.
         run: >-
           uv run pytest tests/unit
           -n auto --dist=loadgroup
           --cov=sqlspec --cov-report=xml:coverage-unit.xml --cov-report=term-missing
+          --cov-fail-under=0
 
       - name: Upload coverage to Codecov
         if: always()
@@ -236,8 +240,12 @@ jobs:
             echo "::endgroup::"
           ) &
           aborter_pid=$!
+          # covdefaults sets fail_under=100 globally; per-tier coverage
+          # only covers a slice, so override to 0. Codecov merges the
+          # tiers server-side.
           uv run pytest tests/integration docs/examples -n 2 --dist=loadgroup \
-            --cov=sqlspec --cov-report=xml:coverage-integration.xml --cov-report=term-missing
+            --cov=sqlspec --cov-report=xml:coverage-integration.xml --cov-report=term-missing \
+            --cov-fail-under=0
           rc=$?
           kill "$aborter_pid" 2>/dev/null || true
           exit $rc
