@@ -27,8 +27,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -41,7 +42,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
-      - name: Create virtual environment
+      - name: Install dependencies
         run: uv sync --all-extras --dev
 
       - name: Install Pre-Commit hooks
@@ -54,67 +55,26 @@ jobs:
           path: ~/.cache/pre-commit/
           key: pre-commit|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
+      # Each subsequent step uses `if: always()` so a failing earlier step
+      # does not stop the others — a single failed run still reports every
+      # tool's output, matching the parallel-jobs behavior of the old
+      # validate/mypy/pyright/slotscheck split.
       - name: Execute Pre-Commit
+        id: pre_commit
         run: uv run pre-commit run --show-diff-on-failure --color=always --all-files
 
-  mypy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
       - name: Run mypy
+        id: mypy
+        if: always() && steps.pre_commit.conclusion != 'skipped' && steps.pre_commit.conclusion != 'cancelled'
         run: uv run mypy
 
-  pyright:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
       - name: Run pyright
+        id: pyright
+        if: always() && steps.mypy.conclusion != 'skipped' && steps.mypy.conclusion != 'cancelled'
         run: uv run pyright
 
-  slotscheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
       - name: Run slotscheck
+        if: always() && steps.pyright.conclusion != 'skipped' && steps.pyright.conclusion != 'cancelled'
         run: uv run slotscheck sqlspec
 
   test-linux:
@@ -286,7 +246,7 @@ jobs:
 
   build-docs:
     needs:
-      - validate
+      - quality
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
