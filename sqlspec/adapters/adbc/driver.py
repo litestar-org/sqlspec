@@ -28,6 +28,7 @@ from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
+from sqlspec.migrations.utils import quote_migration_identifier
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -291,6 +292,23 @@ class AdbcDriver(SyncDriverAdapterBase):
         except Exception as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for migration SQL when using ADBC PostgreSQL."""
+        if not self._is_postgres:
+            super().set_migration_session_schema(schema)
+            return
+        quoted_schema = quote_migration_identifier(schema)
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(f'SET search_path TO {quoted_schema}, "$user", public')
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether a PostgreSQL schema exists when using ADBC PostgreSQL."""
+        if not self._is_postgres:
+            return super().has_schema(schema)
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", parameters=[schema])
+            return cursor.fetchone() is not None
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         """Create context manager for cursor.

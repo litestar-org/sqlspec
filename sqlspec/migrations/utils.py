@@ -4,7 +4,6 @@ import importlib
 import inspect
 import os
 import subprocess
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -14,12 +13,12 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase
 
-__all__ = ("create_migration_file", "drop_all", "get_author", "resolve_tracker_schema")
+__all__ = ("create_migration_file", "drop_all", "get_author", "quote_migration_identifier", "resolve_tracker_schema")
 
 logger = get_logger(__name__)
 
@@ -42,6 +41,18 @@ def resolve_tracker_schema(migration_config: "Mapping[str, Any] | None") -> str 
     if isinstance(default_schema, str) and default_schema:
         return default_schema
     return None
+
+
+def quote_migration_identifier(identifier: str) -> str:
+    """Quote a SQL identifier for migration schema/session commands.
+
+    Args:
+        identifier: SQL identifier to quote.
+
+    Returns:
+        Double-quoted identifier with embedded double quotes escaped.
+    """
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def create_migration_file(

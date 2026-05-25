@@ -240,6 +240,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             observability_config=observability_config,
             **kwargs,
         )
+        object.__setattr__(
+            self, "supports_migration_schemas", is_postgres_dialect(resolve_dialect_from_config(self.connection_config))
+        )
 
     def create_connection(self) -> AdbcConnection:
         """Create and return a new connection using the specified driver.

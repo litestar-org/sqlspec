@@ -6,7 +6,16 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.adbc.config import AdbcConfig
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
+from tests.integration.adapters._postgres_migration_schema import (
+    create_schema_sql,
+    drop_schema_sql,
+    sync_table_exists,
+    unique_identifier,
+    write_unqualified_table_migration,
+)
+from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 
 # xdist_group is assigned per test based on database backend to enable parallel execution
 
@@ -72,9 +81,130 @@ def down():
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgresql_migration_workflow() -> None:
-    """Test ADBC PostgreSQL migration workflow with test database."""
-    pytest.skip("Requires running PostgreSQL")
+@xfail_if_driver_missing
+def test_adbc_postgresql_migration_default_schema_applies_to_ddl(
+    tmp_path: Path, adbc_postgres_connection_config: "dict[str, str]"
+) -> None:
+    """ADBC PostgreSQL migrations run unqualified DDL in the configured default schema."""
+    schema = unique_identifier("adbc_default")
+    table_name = unique_identifier("adbc_table")
+    version_table = unique_identifier("adbc_versions")
+    migration_dir = tmp_path / "migrations"
+    connection_config = dict(adbc_postgres_connection_config)
+    connection_config["driver_name"] = "adbc_driver_postgresql"
+
+    config = AdbcConfig(
+        connection_config=connection_config,
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": version_table,
+            "default_schema": schema,
+        },
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(create_schema_sql(schema))
+            driver.commit()
+
+        commands.init(str(migration_dir), package=True)
+        write_unqualified_table_migration(migration_dir, table_name)
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert sync_table_exists(driver, schema, table_name, style="numeric")
+            assert not sync_table_exists(driver, "public", table_name, style="numeric")
+            assert sync_table_exists(driver, schema, version_table, style="numeric")
+    finally:
+        with config.provide_session() as driver:
+            driver.execute_script(drop_schema_sql(schema))
+            driver.commit()
+        config.close_pool()
+
+
+@pytest.mark.xdist_group("postgres")
+@xfail_if_driver_missing
+def test_adbc_postgresql_migration_separable_tracker_and_default_schema(
+    tmp_path: Path, adbc_postgres_connection_config: "dict[str, str]"
+) -> None:
+    """ADBC PostgreSQL supports separate schemas for migrated DDL and the tracker table."""
+    default_schema = unique_identifier("adbc_default")
+    tracker_schema = unique_identifier("adbc_tracker")
+    table_name = unique_identifier("adbc_table")
+    version_table = unique_identifier("adbc_versions")
+    migration_dir = tmp_path / "migrations"
+    connection_config = dict(adbc_postgres_connection_config)
+    connection_config["driver_name"] = "adbc_driver_postgresql"
+
+    config = AdbcConfig(
+        connection_config=connection_config,
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": version_table,
+            "default_schema": default_schema,
+            "version_table_schema": tracker_schema,
+        },
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(create_schema_sql(default_schema))
+            driver.execute_script(create_schema_sql(tracker_schema))
+            driver.commit()
+
+        commands.init(str(migration_dir), package=True)
+        write_unqualified_table_migration(migration_dir, table_name)
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert sync_table_exists(driver, default_schema, table_name, style="numeric")
+            assert sync_table_exists(driver, tracker_schema, version_table, style="numeric")
+            assert not sync_table_exists(driver, default_schema, version_table, style="numeric")
+    finally:
+        with config.provide_session() as driver:
+            driver.execute_script(drop_schema_sql(default_schema))
+            driver.execute_script(drop_schema_sql(tracker_schema))
+            driver.commit()
+        config.close_pool()
+
+
+@pytest.mark.xdist_group("postgres")
+@xfail_if_driver_missing
+def test_adbc_postgresql_migration_missing_schema_fails_fast(
+    tmp_path: Path, adbc_postgres_connection_config: "dict[str, str]"
+) -> None:
+    """ADBC PostgreSQL validates the default schema before creating tracker tables or applying DDL."""
+    schema = unique_identifier("adbc_missing")
+    table_name = unique_identifier("adbc_table")
+    version_table = unique_identifier("adbc_versions")
+    migration_dir = tmp_path / "migrations"
+    connection_config = dict(adbc_postgres_connection_config)
+    connection_config["driver_name"] = "adbc_driver_postgresql"
+
+    config = AdbcConfig(
+        connection_config=connection_config,
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": version_table,
+            "default_schema": schema,
+        },
+    )
+    commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(config)
+
+    try:
+        commands.init(str(migration_dir), package=True)
+        write_unqualified_table_migration(migration_dir, table_name)
+
+        with pytest.raises(MigrationError, match=f"Configured schema '{schema}' does not exist"):
+            commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert not sync_table_exists(driver, "public", version_table, style="numeric")
+            assert not sync_table_exists(driver, "public", table_name, style="numeric")
+    finally:
+        config.close_pool()
 
 
 @pytest.mark.xdist_group("sqlite")

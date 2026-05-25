@@ -48,13 +48,7 @@ class _AsyncMigrationLoader:
 
 
 def _migration(file_path: Path, loader: Any) -> dict[str, Any]:
-    return {
-        "version": "0001",
-        "file_path": file_path,
-        "loader": loader,
-        "has_upgrade": True,
-        "has_downgrade": True,
-    }
+    return {"version": "0001", "file_path": file_path, "loader": loader, "has_upgrade": True, "has_downgrade": True}
 
 
 def _sync_runner(tmp_path: Path, migration_config: dict[str, Any]) -> SyncMigrationRunner:

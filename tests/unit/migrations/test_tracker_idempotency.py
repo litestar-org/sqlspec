@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -43,9 +43,7 @@ def test_sync_tracker_qualifies_table_sql_when_schema_is_configured() -> None:
         str(tracker._get_remove_migration_sql("0001")),  # pyright: ignore[reportPrivateUsage]
         str(tracker._get_update_version_sql("20250101000000", "0001", "sequential")),  # pyright: ignore[reportPrivateUsage]
         str(tracker._get_delete_versions_sql(["0001"])),  # pyright: ignore[reportPrivateUsage]
-        str(
-            tracker._get_record_squashed_migration_sql("0002", "sequential", 2, "squash", 0, "def", "tester", "0001")
-        ),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_record_squashed_migration_sql("0002", "sequential", 2, "squash", 0, "def", "tester", "0001")),  # pyright: ignore[reportPrivateUsage]
         str(tracker._get_check_column_exists_sql()),  # pyright: ignore[reportPrivateUsage]
     ]
 

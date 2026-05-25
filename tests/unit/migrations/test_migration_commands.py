@@ -285,9 +285,7 @@ async def test_async_validate_migration_schema_raises_for_missing_schema(async_c
     driver.has_schema.assert_awaited_once_with("missing_schema")
 
 
-def test_sqlite_default_schema_noop_migration_succeeds(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_sqlite_default_schema_noop_migration_succeeds(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     migration_file = migrations_dir / "0001_schema_noop.sql"
