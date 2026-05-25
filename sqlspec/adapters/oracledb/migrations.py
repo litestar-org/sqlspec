@@ -38,6 +38,22 @@ class OracleMigrationTrackerMixin:
     __slots__ = ()
 
     version_table: str
+    version_table_name: str
+    version_table_schema: str | None
+
+    def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
+        """Return Oracle tracker table name, uppercasing qualified identifiers."""
+        if version_table_schema:
+            return f"{version_table_schema.upper()}.{version_table_name.upper()}"
+        return version_table_name
+
+    def _get_create_table_builder(self) -> CreateTable:
+        """Return an Oracle CREATE TABLE builder for the tracker table."""
+        table_name = self.version_table_name.upper() if self.version_table_schema else self.version_table_name
+        builder = sql.create_table(table_name)
+        if self.version_table_schema:
+            builder.in_schema(self.version_table_schema.upper())
+        return builder
 
     def _get_create_table_sql(self) -> CreateTable:
         """Get Oracle-specific SQL builder for creating the tracking table.
@@ -51,8 +67,8 @@ class OracleMigrationTrackerMixin:
             SQL builder object for Oracle table creation.
         """
         return (
-            sql
-            .create_table(self.version_table)
+            self
+            ._get_create_table_builder()
             .column("version_num", "VARCHAR2(32)", primary_key=True)
             .column("version_type", "VARCHAR2(16)")
             .column("execution_sequence", "INTEGER")
@@ -125,10 +141,14 @@ class OracleMigrationTrackerMixin:
         Returns:
             Raw SQL string for Oracle's USER_TAB_COLUMNS query.
         """
+        table_name = self.version_table_name.upper()
+        owner_filter = ""
+        if self.version_table_schema:
+            owner_filter = f"\n              AND owner = '{self.version_table_schema.upper()}'"
         return f"""
             SELECT column_name
-            FROM user_tab_columns
-            WHERE table_name = '{self.version_table.upper()}'
+            FROM all_tab_columns
+            WHERE table_name = '{table_name}'{owner_filter}
         """
 
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":

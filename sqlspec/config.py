@@ -144,6 +144,12 @@ class MigrationConfig(TypedDict):
     version_table_name: NotRequired[str]
     """Name of the table used to track applied migrations. Defaults to 'sqlspec_migrations'."""
 
+    default_schema: NotRequired[str]
+    """Schema applied to migration sessions before user migration SQL runs, when supported by the adapter."""
+
+    version_table_schema: NotRequired[str]
+    """Schema that stores the migration tracking table. Defaults to default_schema when omitted."""
+
     project_root: NotRequired[str]
     """Path to the project root directory. Used for relative path resolution."""
 

@@ -39,16 +39,32 @@ logger = get_logger("sqlspec.migrations.base")
 class BaseMigrationTracker(ABC, Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    __slots__ = ("_output_policy", "version_table")
+    __slots__ = ("_output_policy", "version_table", "version_table_name", "version_table_schema")
 
-    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+    def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
 
         Args:
             version_table_name: Name of the table to track migrations.
+            version_table_schema: Optional schema that stores the tracking table.
         """
-        self.version_table = version_table_name
+        self.version_table_name = version_table_name
+        self.version_table_schema = version_table_schema
+        self.version_table = self._qualify_version_table(version_table_name, version_table_schema)
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+
+    def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
+        """Return the tracker table name, qualified with schema when configured."""
+        if version_table_schema:
+            return f"{version_table_schema}.{version_table_name}"
+        return version_table_name
+
+    def _get_create_table_builder(self) -> CreateTable:
+        """Return a CREATE TABLE builder for the tracker table."""
+        builder = sql.create_table(self.version_table_name)
+        if self.version_table_schema:
+            builder.in_schema(self.version_table_schema)
+        return builder
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
@@ -79,8 +95,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL builder object for table creation.
         """
         return (
-            sql
-            .create_table(self.version_table)
+            self
+            ._get_create_table_builder()
             .if_not_exists()
             .column("version_num", "VARCHAR(32)", primary_key=True)
             .column("version_type", "VARCHAR(16)")

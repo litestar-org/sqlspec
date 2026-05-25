@@ -4,6 +4,7 @@ import importlib
 import inspect
 import os
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -18,9 +19,29 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase
 
-__all__ = ("create_migration_file", "drop_all", "get_author")
+__all__ = ("create_migration_file", "drop_all", "get_author", "resolve_tracker_schema")
 
 logger = get_logger(__name__)
+
+
+def resolve_tracker_schema(migration_config: "Mapping[str, Any] | None") -> str | None:
+    """Resolve the schema for the migration tracking table.
+
+    Args:
+        migration_config: Migration configuration mapping.
+
+    Returns:
+        Explicit tracker schema, default migration schema, or None.
+    """
+    if not migration_config:
+        return None
+    version_table_schema = migration_config.get("version_table_schema")
+    if isinstance(version_table_schema, str) and version_table_schema:
+        return version_table_schema
+    default_schema = migration_config.get("default_schema")
+    if isinstance(default_schema, str) and default_schema:
+        return default_schema
+    return None
 
 
 def create_migration_file(

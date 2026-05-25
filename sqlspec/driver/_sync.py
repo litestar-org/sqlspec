@@ -144,6 +144,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         """
 
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set the default schema for migration SQL when supported.
+
+        Args:
+            schema: Schema requested for the current migration session.
+        """
+        logger.debug("migration.schema.noop", extra={"schema": schema, "driver": type(self).__name__})
+
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS - The Execution Engine
     # ─────────────────────────────────────────────────────────────────────────────
