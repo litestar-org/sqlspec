@@ -148,13 +148,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
 def _build_mssql_python_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for mssql-python."""
-    return {
-        bool: _identity,
-        int: _identity,
-        float: _identity,
-        bytes: _identity,
-        **build_uuid_coercions(native=True),
-    }
+    return {bool: _identity, int: _identity, float: _identity, bytes: _identity, **build_uuid_coercions(native=True)}
 
 
 def build_profile() -> "DriverParameterProfile":
