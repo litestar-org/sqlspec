@@ -84,6 +84,23 @@ __all__ = (
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: int = 23
+ORACLE_QUOTED_IDENTIFIER_MIN_LENGTH: int = 2
+
+
+def _normalize_oracle_schema_name(schema: str) -> str:
+    """Return the Oracle schema name used for metadata lookup."""
+    stripped = schema.strip()
+    if len(stripped) >= ORACLE_QUOTED_IDENTIFIER_MIN_LENGTH and stripped.startswith('"') and stripped.endswith('"'):
+        return stripped[1:-1].replace('""', '"')
+    return stripped
+
+
+def _quote_oracle_schema_identifier(schema: str) -> str:
+    """Quote an Oracle schema identifier for ALTER SESSION."""
+    normalized = _normalize_oracle_schema_name(schema)
+    if not (schema.strip().startswith('"') and schema.strip().endswith('"')):
+        normalized = normalized.upper()
+    return '"' + normalized.replace('"', '""') + '"'
 
 
 class _CompiledStackOperation(NamedTuple):
@@ -445,6 +462,19 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         except oracledb.Error as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set Oracle CURRENT_SCHEMA for migration SQL."""
+        quoted_schema = _quote_oracle_schema_identifier(schema)
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether an Oracle schema/user exists."""
+        schema_name = _normalize_oracle_schema_name(schema)
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": schema_name})
+            return cursor.fetchone() is not None
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
         """Create context manager for Oracle cursor.
@@ -943,6 +973,22 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         except oracledb.Error as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    async def set_migration_session_schema(self, schema: str) -> None:
+        """Set Oracle CURRENT_SCHEMA for migration SQL."""
+        quoted_schema = _quote_oracle_schema_identifier(schema)
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
+
+    async def has_schema(self, schema: str) -> bool:
+        """Return whether an Oracle schema/user exists."""
+        schema_name = _normalize_oracle_schema_name(schema)
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(
+                "SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": schema_name}
+            )
+            row = await cursor.fetchone()
+            return row is not None
 
     def with_cursor(self, connection: OracleAsyncConnection) -> OracleAsyncCursor:
         """Create context manager for Oracle cursor.
