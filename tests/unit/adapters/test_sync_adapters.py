@@ -21,67 +21,77 @@ __all__ = ()
 def test_sync_driver_initialization() -> None:
     """Test basic sync driver initialization."""
     conn = sqlite3.connect(":memory:")
-    driver = SqliteDriver(conn)
+    try:
+        driver = SqliteDriver(conn)
 
-    assert driver.connection is conn
-    assert driver.dialect == "sqlite"
-    assert driver.statement_config.dialect == "sqlite"
-    assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
-    conn.close()
+        assert driver.connection is conn
+        assert driver.dialect == "sqlite"
+        assert driver.statement_config.dialect == "sqlite"
+        assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+    finally:
+        conn.close()
 
 
 def test_sync_driver_with_custom_config() -> None:
     """Test sync driver initialization with custom statement config."""
     conn = sqlite3.connect(":memory:")
-    custom_config = StatementConfig(
-        dialect="postgresql",
-        parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
-        ),
-    )
+    try:
+        custom_config = StatementConfig(
+            dialect="postgresql",
+            parameter_config=ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
+            ),
+        )
 
-    driver = SqliteDriver(conn, custom_config)
-    assert driver.statement_config.dialect == "postgresql"
-    assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
-    conn.close()
+        driver = SqliteDriver(conn, custom_config)
+        assert driver.statement_config.dialect == "postgresql"
+        assert driver.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
+    finally:
+        conn.close()
 
 
 def test_sync_driver_fast_path_flag_default() -> None:
     conn = sqlite3.connect(":memory:")
-    driver = SqliteDriver(conn)
+    try:
+        driver = SqliteDriver(conn)
 
-    assert driver._stmt_cache_enabled is True
-    conn.close()
+        assert driver._stmt_cache_enabled is True
+    finally:
+        conn.close()
 
 
 def test_sync_driver_fast_path_flag_disabled_by_transformer() -> None:
     conn = sqlite3.connect(":memory:")
+    try:
 
-    def transformer(expression: Any, context: Any) -> "tuple[Any, Any]":
-        return expression, context
+        def transformer(expression: Any, context: Any) -> "tuple[Any, Any]":
+            return expression, context
 
-    custom_config = StatementConfig(
-        dialect="sqlite",
-        parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-        ),
-        statement_transformers=(transformer,),
-    )
-    driver = SqliteDriver(conn, custom_config)
+        custom_config = StatementConfig(
+            dialect="sqlite",
+            parameter_config=ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            ),
+            statement_transformers=(transformer,),
+        )
+        driver = SqliteDriver(conn, custom_config)
 
-    assert driver._stmt_cache_enabled is False
-    conn.close()
+        assert driver._stmt_cache_enabled is False
+    finally:
+        conn.close()
 
 
 def test_sync_driver_fast_path_flag_disabled_by_observability() -> None:
     conn = sqlite3.connect(":memory:")
-    driver = SqliteDriver(conn)
-    runtime = ObservabilityRuntime(ObservabilityConfig(print_sql=True))
+    try:
+        driver = SqliteDriver(conn)
+        runtime = ObservabilityRuntime(ObservabilityConfig(print_sql=True))
 
-    driver.attach_observability(runtime)
+        driver.attach_observability(runtime)
 
-    assert driver._stmt_cache_enabled is False
-    conn.close()
+        assert driver._stmt_cache_enabled is False
+    finally:
+        conn.close()
 
 
 def test_sync_driver_with_cursor(sqlite_sync_driver: SqliteDriver) -> None:

@@ -399,6 +399,10 @@ filterwarnings = [
   "ignore:PROCEDURE .* does not exist:Warning",
   "ignore::Warning:aiomysql.cursors",
   "ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning",
+  # coverage 7.x opens sqlite databases internally to store contexts and
+  # does not close them deterministically; the resulting ResourceWarnings
+  # are coverage's own and not actionable from this repo.
+  "ignore:unclosed database:ResourceWarning:coverage\\..*",
 ]
 markers = [
   "xdist_group: pin tests sharing state to the same xdist worker (registered to silence PytestUnknownMarkWarning when xdist isn't actively loaded)",
