@@ -146,6 +146,17 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     return ";".join(parts) + ";", connect_kwargs
 
 
+def _build_mssql_python_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for mssql-python."""
+    return {
+        bool: _identity,
+        int: _identity,
+        float: _identity,
+        bytes: _identity,
+        **build_uuid_coercions(native=True),
+    }
+
+
 def build_profile() -> "DriverParameterProfile":
     """Create the mssql-python driver parameter profile."""
     return DriverParameterProfile(
@@ -160,13 +171,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={
-            bool: _identity,
-            int: _identity,
-            float: _identity,
-            bytes: _identity,
-            **build_uuid_coercions(native=True),
-        },
+        custom_type_coercions=_build_mssql_python_custom_type_coercions(),
         default_dialect="tsql",
     )
 
