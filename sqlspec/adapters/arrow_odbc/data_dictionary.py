@@ -56,15 +56,25 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         try:
             version_value = driver.select_value_or_none(self.get_query("version"))
         except SQLFileNotFoundError:
+            self._log_version_unavailable(self._dialect, "no_query")
+            self.cache_version(driver_id, None)
+            return None
+        except Exception:
+            self._log_version_unavailable(self._dialect, "query_failed")
             self.cache_version(driver_id, None)
             return None
 
         if not version_value:
+            self._log_version_unavailable(self._dialect, "missing")
             self.cache_version(driver_id, None)
             return None
 
         config = self.get_dialect_config()
         version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
+        if version_info is None:
+            self._log_version_unavailable(self._dialect, "parse_failed")
+        else:
+            self._log_version_detected(self._dialect, version_info)
         self.cache_version(driver_id, version_info)
         return version_info
 

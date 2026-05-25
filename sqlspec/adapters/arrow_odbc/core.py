@@ -2,9 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.core.parameters import ParameterStyle
-from sqlspec.core.parameters._registry import build_statement_config_from_profile
-from sqlspec.core.parameters._types import DriverParameterProfile
+from sqlspec.core import DriverParameterProfile, ParameterStyle, build_statement_config_from_profile
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions

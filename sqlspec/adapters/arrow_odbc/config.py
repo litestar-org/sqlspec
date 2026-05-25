@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.arrow_odbc._typing import ARROW_ODBC_MODULE, ArrowOdbcConnection, ArrowOdbcSessionContext
+from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcSessionContext, arrow_odbc_connect
 from sqlspec.adapters.arrow_odbc.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
@@ -153,7 +153,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             return cast("ArrowOdbcConnection", self.connection_instance)
         connection_string, connect_kwargs = build_connection_config(self.connection_config)
         try:
-            connection = cast("ArrowOdbcConnection", ARROW_ODBC_MODULE.connect(connection_string, **connect_kwargs))
+            connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
             return cast("ArrowOdbcConnection", connection)
         except Exception as exc:
             msg = f"Could not configure arrow-odbc connection. Error: {exc}"

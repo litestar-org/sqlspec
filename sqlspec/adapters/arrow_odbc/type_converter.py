@@ -49,6 +49,8 @@ _ODBC_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, An
     "uniqueidentifier": ("string", (), {}),
 }
 
+_ARROW_TYPE_CACHE: "dict[tuple[str, tuple[Any, ...], tuple[tuple[str, Any], ...]], Any]" = {}
+
 
 class ArrowOdbcTypeConverter:
     """Small bind/read converter surface for arrow-odbc."""
@@ -77,7 +79,15 @@ def odbc_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: in
 
 
 def _arrow_type(name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> "pa.DataType":
+    kwargs_key = tuple(sorted((kwargs or {}).items()))
+    cache_key = (name, args, kwargs_key)
+    cached = _ARROW_TYPE_CACHE.get(cache_key)
+    if cached is not None:
+        return cast("pa.DataType", cached)
+
     ensure_pyarrow()
     import pyarrow as pa
 
-    return cast("pa.DataType", getattr(pa, name)(*args, **(kwargs or {})))
+    resolved = getattr(pa, name)(*args, **(kwargs or {}))
+    _ARROW_TYPE_CACHE[cache_key] = resolved
+    return cast("pa.DataType", resolved)
