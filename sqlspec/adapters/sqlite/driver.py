@@ -393,10 +393,12 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Ignore migration default schema for SQLite."""
+        super().set_migration_session_schema(schema)
         logger.debug("%s driver does not support default schemas; ignoring default_schema=%r", "SQLite", schema)
 
     def has_schema(self, schema: str) -> bool:
         """Return True because SQLite has no separate schema namespace."""
+        super().has_schema(schema)
         logger.debug("%s driver does not support default schemas; accepting default_schema=%r", "SQLite", schema)
         return True
 

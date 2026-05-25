@@ -186,10 +186,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Ignore migration default schema for aiosqlite."""
+        await super().set_migration_session_schema(schema)
         logger.debug("%s driver does not support default schemas; ignoring default_schema=%r", "aiosqlite", schema)
 
     async def has_schema(self, schema: str) -> bool:
         """Return True because SQLite has no separate schema namespace."""
+        await super().has_schema(schema)
         logger.debug("%s driver does not support default schemas; accepting default_schema=%r", "aiosqlite", schema)
         return True
 
