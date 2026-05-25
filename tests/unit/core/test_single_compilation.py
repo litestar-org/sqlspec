@@ -150,6 +150,7 @@ class TestSingleCompilation:
         assert call_count <= 1, f"compile() called {call_count} times, expected at most 1"
 
 
+@pytest.mark.benchmark
 class TestPerformanceOverhead:
     """Tests to verify performance overhead is within acceptable bounds."""
 

@@ -337,6 +337,7 @@ jobs:
   build-docs:
     needs:
       - quality
+      - test-unit
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:

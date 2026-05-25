@@ -461,6 +461,7 @@ LIMIT 1000;
     assert "query_099" in queries
 
 
+@pytest.mark.benchmark
 def test_deep_directory_structure_performance(tmp_path: Path) -> None:
     """Test performance with deep directory structures."""
     base_path = tmp_path
@@ -596,6 +597,7 @@ def fixtures_path() -> Path:
     return Path(__file__).parent.parent.parent / "fixtures"
 
 
+@pytest.mark.benchmark
 def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
     """Test performance loading large fixture files."""
     import time
@@ -641,6 +643,7 @@ def test_large_fixture_loading_performance(fixtures_path: Path) -> None:
             assert isinstance(sql_obj, SQL)
 
 
+@pytest.mark.benchmark
 def test_multiple_fixture_batch_loading(fixtures_path: Path) -> None:
     """Test performance when loading multiple fixture files at once."""
     import time
@@ -672,6 +675,7 @@ def test_multiple_fixture_batch_loading(fixtures_path: Path) -> None:
         assert str(fixture_file) in loaded_files
 
 
+@pytest.mark.benchmark
 def test_fixture_directory_scanning_performance(fixtures_path: Path) -> None:
     """Test performance when scanning fixture directories."""
     import time
@@ -699,6 +703,7 @@ def test_fixture_directory_scanning_performance(fixtures_path: Path) -> None:
             assert len(queries) > 0, f"No queries found in {test_dir}"
 
 
+@pytest.mark.benchmark
 def test_fixture_cache_performance(fixtures_path: Path) -> None:
     """Test performance benefits of caching with fixture files."""
     import time
@@ -722,6 +727,7 @@ def test_fixture_cache_performance(fixtures_path: Path) -> None:
     assert len(queries1) > 0
 
 
+@pytest.mark.benchmark
 def test_concurrent_fixture_access_simulation(fixtures_path: Path) -> None:
     """Test simulated concurrent access to fixture files."""
     import time

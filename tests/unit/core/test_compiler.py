@@ -665,6 +665,7 @@ def test_parsing_disabled_fallback(
     ]
 
 
+@pytest.mark.benchmark
 def test_compilation_performance_characteristics(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:
@@ -938,6 +939,7 @@ def test_processor_memory_efficiency_with_slots() -> None:
         assert set(slots) == expected_slots
 
 
+@pytest.mark.benchmark
 def test_compilation_speed_benchmark(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:
