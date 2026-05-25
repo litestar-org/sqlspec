@@ -142,11 +142,7 @@ class BigQueryMigrationTracker(SyncMigrationTracker):
                 version_type = @new_version_type
             WHERE version_num = @old_version
             """,
-            {
-                "old_version": old_version,
-                "new_version": new_version,
-                "new_version_type": parsed_new_version.type.value,
-            },
+            {"old_version": old_version, "new_version": new_version, "new_version_type": parsed_new_version.type.value},
         )
         if result.rows_affected == 0:
             applied_versions = {row["version_num"] for row in self.get_applied_migrations(driver)}
@@ -165,8 +161,7 @@ class BigQueryMigrationTracker(SyncMigrationTracker):
     ) -> None:
         """Replace multiple migration records with one squashed migration record."""
         driver.execute(
-            f"DELETE FROM {self.version_table} WHERE version_num IN UNNEST(@versions)",
-            {"versions": replaced_versions},
+            f"DELETE FROM {self.version_table} WHERE version_num IN UNNEST(@versions)", {"versions": replaced_versions}
         )
         parsed_version = parse_version(squashed_version)
         driver.execute(

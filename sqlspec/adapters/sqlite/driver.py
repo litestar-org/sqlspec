@@ -20,6 +20,7 @@ from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -34,6 +35,8 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
+
+logger = get_logger(__name__)
 
 
 class SqliteExceptionHandler(BaseSyncExceptionHandler):
@@ -387,6 +390,15 @@ class SqliteDriver(SyncDriverAdapterBase):
         except sqlite3.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Ignore migration default schema for SQLite."""
+        logger.debug("%s driver does not support default schemas; ignoring default_schema=%r", "SQLite", schema)
+
+    def has_schema(self, schema: str) -> bool:
+        """Return True because SQLite has no separate schema namespace."""
+        logger.debug("%s driver does not support default schemas; accepting default_schema=%r", "SQLite", schema)
+        return True
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.

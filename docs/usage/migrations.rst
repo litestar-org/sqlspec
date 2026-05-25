@@ -74,6 +74,68 @@ specific extension, ``migration_config["include_extensions"]`` to opt in
 explicitly by extension name, or ``migration_config["enabled"] = False`` to
 disable migrations entirely for a database config.
 
+Configuring a Default Schema
+----------------------------
+
+Use ``migration_config["default_schema"]`` when migration SQL should run
+against a pre-existing schema or dataset without qualifying every table in each
+migration file. SQLSpec validates the schema before creating the tracker table
+or applying DDL, then configures the migration session before each migration is
+executed.
+
+Use ``migration_config["version_table_schema"]`` when the migration tracker
+table should live somewhere different from the objects managed by migrations.
+If ``version_table_schema`` is not set, the tracker schema resolves to
+``default_schema``. If neither field is set, the tracker table is unqualified and
+uses the adapter's normal default namespace.
+
+.. code-block:: python
+
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        migration_config={
+            "script_location": "migrations/postgres",
+            "version_table_name": "schema_versions",
+            "default_schema": "app_schema",
+            "version_table_schema": "admin_schema",
+        },
+    )
+
+The operator must create the target schema or dataset before running
+migrations. The migration role also needs the database-specific privileges to
+create objects there. For PostgreSQL, that usually means ``USAGE`` and
+``CREATE`` on the target schema, plus permission to create or update the
+tracker table.
+
+Adapter support:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Adapter
+     - Behavior
+   * - ``asyncpg``, ``psycopg``, ``psqlpy``, ADBC PostgreSQL
+     - Uses PostgreSQL ``search_path`` and validates ``information_schema.schemata``.
+   * - ``oracledb``
+     - Uses ``ALTER SESSION SET CURRENT_SCHEMA`` and validates Oracle users.
+   * - ``duckdb``
+     - Uses ``SET search_path`` and validates ``information_schema.schemata``.
+   * - ``bigquery``
+     - Treats schemas as datasets and sets the BigQuery job ``default_dataset``.
+   * - ``sqlite``, ``aiosqlite``, ``asyncmy``
+     - Accept the setting as an explicit no-op and log that default schemas are unsupported.
+   * - ADBC SQL Server
+     - Accepts the setting as a no-op; configure the default schema at the user or login level.
+
+Example with unqualified DDL:
+
+.. literalinclude:: /examples/patterns/migrations_with_schema.py
+   :language: python
+   :start-after: # start-example
+   :end-before: # end-example
+
 Logging and Echo Controls
 -------------------------
 

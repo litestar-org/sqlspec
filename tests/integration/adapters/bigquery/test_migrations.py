@@ -91,9 +91,7 @@ def _bigquery_table_exists(config: BigQueryConfig, dataset_name: str, table_name
         return True
 
 
-def test_bigquery_migration_default_schema_applies_to_ddl(
-    tmp_path: Path, bigquery_service: "BigQueryService"
-) -> None:
+def test_bigquery_migration_default_schema_applies_to_ddl(tmp_path: Path, bigquery_service: "BigQueryService") -> None:
     """BigQuery migrations run unqualified DDL in the configured default dataset."""
     dataset_name = _bigquery_identifier("dataset")
     table_name = _bigquery_identifier("table")
