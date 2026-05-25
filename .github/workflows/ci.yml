@@ -42,6 +42,14 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
+      - name: Cache uv-managed virtualenv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-quality-${{ runner.os }}-py3.11-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            venv-quality-${{ runner.os }}-py3.11-
+
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
@@ -107,6 +115,14 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
 
+      - name: Cache uv-managed virtualenv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-
+
       - name: Install dependencies
         # tests/unit/ imports every adapter module, so the install set is
         # the same as integration. Speed comes from skipping Docker
@@ -136,6 +152,14 @@ jobs:
 
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache uv-managed virtualenv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
