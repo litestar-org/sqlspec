@@ -11,6 +11,8 @@ from google.api_core.retry import Retry
 from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
+from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
+from sqlglot.generators.bigquery import BigQueryGenerator
 
 from sqlspec.core import (
     DriverParameterProfile,
@@ -72,6 +74,41 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
+
+
+if not getattr(BigQueryGenerator, "_sqlspec_constraint_rendering", False):
+    _original_primary_key_column_constraint_sql = BigQueryGenerator.primarykeycolumnconstraint_sql
+    _original_column_def_sql = BigQueryGenerator.columndef_sql
+
+    def _primary_key_column_constraint_sql(self: BigQueryGenerator, expression: exp.PrimaryKeyColumnConstraint) -> str:
+        rendered = _original_primary_key_column_constraint_sql(self, expression)
+        if "NOT ENFORCED" not in rendered.upper():
+            return f"{rendered} NOT ENFORCED"
+        return rendered
+
+    def _column_constraint_sort_key(item: tuple[int, exp.ColumnConstraint]) -> tuple[int, int]:
+        index, constraint = item
+        kind = constraint.args.get("kind")
+        if isinstance(kind, exp.DefaultColumnConstraint):
+            return 1, index
+        if isinstance(kind, exp.NotNullColumnConstraint):
+            return 2, index
+        return 0, index
+
+    def _column_def_sql(self: BigQueryGenerator, expression: exp.ColumnDef, sep: str = " ") -> str:
+        constraints = expression.args.get("constraints")
+        if constraints:
+            expression = expression.copy()
+            expression.set(
+                "constraints",
+                [constraint for _, constraint in sorted(enumerate(constraints), key=_column_constraint_sort_key)],
+            )
+        return _original_column_def_sql(self, expression, sep=sep)
+
+    BigQueryGenerator.primarykeycolumnconstraint_sql = _primary_key_column_constraint_sql  # type: ignore[assignment, method-assign]
+    BigQueryGenerator.columndef_sql = _column_def_sql  # type: ignore[assignment, method-assign]
+    BigQueryGenerator._sqlspec_constraint_rendering = True  # type: ignore[attr-defined]
+    _DISPATCH_CACHE.pop(BigQueryGenerator, None)
 
 
 def _identity(value: Any) -> Any:

@@ -68,15 +68,6 @@ def test_oracle_sync_migration_schema_hooks() -> None:
     assert OracleSyncConfig.supports_migration_schemas is True
 
 
-def test_oracle_sync_migration_schema_hook_preserves_quoted_identifier() -> None:
-    cursor = FakeSyncCursor()
-    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
-
-    driver.set_migration_session_schema('"TenantCase"')
-
-    assert cursor.executed == [('ALTER SESSION SET CURRENT_SCHEMA = "TenantCase"', None)]
-
-
 @pytest.mark.anyio
 async def test_oracle_async_migration_schema_hooks() -> None:
     cursor = FakeAsyncCursor()

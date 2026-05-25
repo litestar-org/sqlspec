@@ -8,7 +8,6 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
-from sqlspec.adapters.bigquery.migrations import BigQueryMigrationTracker
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
@@ -164,7 +163,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
     connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
-    migration_tracker_type: "ClassVar[type[BigQueryMigrationTracker]]" = BigQueryMigrationTracker
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True

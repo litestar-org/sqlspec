@@ -7,7 +7,7 @@ from google.cloud.exceptions import NotFound
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
-from sqlspec.adapters.bigquery.migrations import BigQueryMigrationTracker
+from sqlspec.migrations.tracker import SyncMigrationTracker
 
 
 class FakeBigQueryClient:
@@ -20,26 +20,8 @@ class FakeBigQueryClient:
     def get_dataset(self, dataset_path: str) -> object:
         self.requested_datasets.append(dataset_path)
         if dataset_path not in self.datasets:
-            raise NotFound("missing dataset")
+            raise NotFound("missing dataset")  # type: ignore[no-untyped-call]
         return object()
-
-
-class FakeResult:
-    data = []
-
-    def get_data(self) -> list[dict[str, Any]]:
-        return []
-
-
-class FakeMigrationDriver:
-    driver_features = {"autocommit": True}
-
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, Any]] = []
-
-    def execute(self, sql: str, parameters: Any | None = None) -> FakeResult:
-        self.executed.append((sql, parameters))
-        return FakeResult()
 
 
 def _bigquery_driver(client: FakeBigQueryClient, default_config: QueryJobConfig | None = None) -> BigQueryDriver:
@@ -52,6 +34,19 @@ def _bigquery_driver(client: FakeBigQueryClient, default_config: QueryJobConfig 
         statement_config=config.statement_config,
         driver_features=features,
     )
+
+
+def _compile_bigquery_tracker_create_table_sql() -> str:
+    client = FakeBigQueryClient()
+    driver = _bigquery_driver(client)
+    tracker = SyncMigrationTracker("ddl_migrations", version_table_schema="tenant")
+    statement = driver.prepare_statement(tracker._get_create_table_sql())  # pyright: ignore[reportPrivateUsage]
+    sql, _ = driver._get_compiled_sql(statement, driver.statement_config)  # pyright: ignore[reportPrivateUsage]
+    return sql
+
+
+def test_bigquery_uses_shared_sync_migration_tracker() -> None:
+    assert BigQueryConfig.migration_tracker_type is SyncMigrationTracker
 
 
 def test_bigquery_migration_schema_sets_driver_default_dataset_without_mutating_base_config() -> None:
@@ -88,15 +83,10 @@ def test_bigquery_has_schema_uses_client_dataset_lookup() -> None:
     assert client.requested_datasets == ["test-project.tenant", "test-project.missing"]
 
 
-def test_bigquery_tracker_uses_backtick_qualified_table_path() -> None:
-    tracker = BigQueryMigrationTracker("ddl_migrations", version_table_schema="test-project.tenant")
-    driver = FakeMigrationDriver()
+def test_bigquery_shared_tracker_compiles_valid_create_table_ddl() -> None:
+    create_sql = _compile_bigquery_tracker_create_table_sql()
 
-    tracker.ensure_tracking_table(driver)  # type: ignore[arg-type]
-
-    assert tracker.version_table == "`test-project.tenant.ddl_migrations`"
-    assert driver.executed
-    create_sql = driver.executed[0][0]
-    assert "CREATE TABLE IF NOT EXISTS `test-project.tenant.ddl_migrations`" in create_sql
-    assert "version_num STRING NOT NULL" in create_sql
-    assert "execution_sequence INT64" in create_sql
+    assert "CREATE TABLE IF NOT EXISTS `tenant`.`ddl_migrations`" in create_sql
+    assert "version_num` STRING(32) PRIMARY KEY NOT ENFORCED" in create_sql
+    assert "applied_at` DATETIME DEFAULT CURRENT_TIMESTAMP() NOT NULL" in create_sql
+    assert "execution_sequence` INT64" in create_sql

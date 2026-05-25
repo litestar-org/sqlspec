@@ -91,8 +91,11 @@ def _bigquery_table_exists(config: BigQueryConfig, dataset_name: str, table_name
         return True
 
 
-def test_bigquery_migration_default_schema_applies_to_ddl(tmp_path: Path, bigquery_service: "BigQueryService") -> None:
+def test_bigquery_migration_default_schema_applies_to_ddl(
+    tmp_path: Path, native_bigquery_service: "BigQueryService"
+) -> None:
     """BigQuery migrations run unqualified DDL in the configured default dataset."""
+    bigquery_service = native_bigquery_service
     dataset_name = _bigquery_identifier("dataset")
     table_name = _bigquery_identifier("table")
     version_table = _bigquery_identifier("versions")
@@ -122,9 +125,10 @@ def test_bigquery_migration_default_schema_applies_to_ddl(tmp_path: Path, bigque
 
 
 def test_bigquery_migration_tracker_lives_in_configured_schema(
-    tmp_path: Path, bigquery_service: "BigQueryService"
+    tmp_path: Path, native_bigquery_service: "BigQueryService"
 ) -> None:
     """BigQuery stores the tracker table in version_table_schema when configured."""
+    bigquery_service = native_bigquery_service
     tracker_dataset = _bigquery_identifier("tracker")
     table_name = _bigquery_identifier("table")
     version_table = _bigquery_identifier("versions")
@@ -155,9 +159,10 @@ def test_bigquery_migration_tracker_lives_in_configured_schema(
 
 
 def test_bigquery_migration_separable_tracker_and_default_schema(
-    tmp_path: Path, bigquery_service: "BigQueryService"
+    tmp_path: Path, native_bigquery_service: "BigQueryService"
 ) -> None:
     """BigQuery supports separate datasets for migrated DDL and the tracker table."""
+    bigquery_service = native_bigquery_service
     default_dataset = _bigquery_identifier("default")
     tracker_dataset = _bigquery_identifier("tracker")
     table_name = _bigquery_identifier("table")
