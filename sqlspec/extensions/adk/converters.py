@@ -103,7 +103,7 @@ def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Se
 # ---------------------------------------------------------------------------
 
 
-def event_to_record(event: "Event", session_id: str) -> EventRecord:
+def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str) -> EventRecord:
     """Convert ADK Event to database record using full-event JSON storage.
 
     The entire Event is serialized into ``event_data`` via Pydantic's
@@ -112,15 +112,19 @@ def event_to_record(event: "Event", session_id: str) -> EventRecord:
 
     Args:
         event: ADK Event object.
+        app_name: Name of the application.
+        user_id: ID of the user.
         session_id: ID of the parent session.
 
     Returns:
         EventRecord for database storage.
     """
     return EventRecord(
+        id=event.id,
+        app_name=app_name,
+        user_id=user_id,
         session_id=session_id,
         invocation_id=event.invocation_id,
-        author=event.author,
         timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
         event_data=event.model_dump(exclude_none=True, mode="json"),
     )

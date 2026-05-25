@@ -127,7 +127,7 @@ async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:
     assert isinstance(created_session["create_time"], datetime)
     assert isinstance(created_session["update_time"], datetime)
 
-    retrieved_session = await duckdb_adk_store.get_session(session_id)
+    retrieved_session = await duckdb_adk_store.get_session(app_name, user_id, session_id)
     assert retrieved_session is not None
     assert retrieved_session["id"] == session_id
     assert retrieved_session["state"] == state
@@ -135,7 +135,7 @@ async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:
 
 async def test_get_nonexistent_session(duckdb_adk_store: DuckdbADKStore) -> None:
     """Test getting a non-existent session returns None."""
-    result = await duckdb_adk_store.get_session("nonexistent-session")
+    result = await duckdb_adk_store.get_session("test-app", "user-001", "nonexistent-session")
     assert result is None
 
 
@@ -149,13 +149,13 @@ async def test_update_session_state(duckdb_adk_store: DuckdbADKStore) -> None:
         session_id=session_id, app_name="test-app", user_id="user-002", state=initial_state
     )
 
-    session_before = await duckdb_adk_store.get_session(session_id)
+    session_before = await duckdb_adk_store.get_session("test-app", "user-002", session_id)
     assert session_before is not None
     assert session_before["state"] == initial_state
 
-    await duckdb_adk_store.update_session_state(session_id, updated_state)
+    await duckdb_adk_store.update_session_state("test-app", "user-002", session_id, updated_state)
 
-    session_after = await duckdb_adk_store.get_session(session_id)
+    session_after = await duckdb_adk_store.get_session("test-app", "user-002", session_id)
     assert session_after is not None
     assert session_after["state"] == updated_state
     assert session_after["update_time"] >= session_before["update_time"]
@@ -191,11 +191,11 @@ async def test_delete_session(duckdb_adk_store: DuckdbADKStore) -> None:
     session_id = "session-to-delete"
     await duckdb_adk_store.create_session(session_id, "test-app", "user-004", {"data": "test"})
 
-    assert await duckdb_adk_store.get_session(session_id) is not None
+    assert await duckdb_adk_store.get_session("test-app", "user-004", session_id) is not None
 
-    await duckdb_adk_store.delete_session(session_id)
+    await duckdb_adk_store.delete_session("test-app", "user-004", session_id)
 
-    assert await duckdb_adk_store.get_session(session_id) is None
+    assert await duckdb_adk_store.get_session("test-app", "user-004", session_id) is None
 
 
 async def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -> None:
@@ -204,9 +204,11 @@ async def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -
     await duckdb_adk_store.create_session(session_id, "test-app", "user-005", {"data": "test"})
 
     event_record: EventRecord = {
+        "id": "event-001",
+        "app_name": "test-app",
+        "user_id": "user-005",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "user",
         "timestamp": datetime.now(timezone.utc),
         "event_data": {
             "id": "event-001",
@@ -217,13 +219,13 @@ async def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -
     }
     await duckdb_adk_store.append_event(event_record)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-005", session_id)
     assert len(events) == 1
 
-    await duckdb_adk_store.delete_session(session_id)
+    await duckdb_adk_store.delete_session("test-app", "user-005", session_id)
 
-    assert await duckdb_adk_store.get_session(session_id) is None
-    events_after = await duckdb_adk_store.get_events(session_id)
+    assert await duckdb_adk_store.get_session("test-app", "user-005", session_id) is None
+    events_after = await duckdb_adk_store.get_events("test-app", "user-005", session_id)
     assert len(events_after) == 0
 
 
@@ -236,18 +238,19 @@ async def test_create_event(duckdb_adk_store: DuckdbADKStore) -> None:
     content = {"text": "Test message", "role": "user"}
 
     event_record: EventRecord = {
+        "id": "event-002",
+        "app_name": "test-app",
+        "user_id": "user-006",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "user",
         "timestamp": timestamp,
         "event_data": {"id": "event-002", "content": content, "app_name": "test-app", "user_id": "user-006"},
     }
     await duckdb_adk_store.append_event(event_record)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-006", session_id)
     assert len(events) == 1
     assert events[0]["session_id"] == session_id
-    assert events[0]["author"] == "user"
 
     # Content is stored inside event_data
     event_data = (
@@ -262,16 +265,20 @@ async def test_list_events(duckdb_adk_store: DuckdbADKStore) -> None:
     await duckdb_adk_store.create_session(session_id, "test-app", "user-007", {})
 
     event1: EventRecord = {
+        "id": "event-1",
+        "app_name": "test-app",
+        "user_id": "user-007",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "user",
         "timestamp": datetime.now(timezone.utc),
         "event_data": {"id": "event-1", "content": {"message": "First"}, "app_name": "test-app", "user_id": "user-007"},
     }
     event2: EventRecord = {
+        "id": "event-2",
+        "app_name": "test-app",
+        "user_id": "user-007",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
         "event_data": {
             "id": "event-2",
@@ -283,11 +290,9 @@ async def test_list_events(duckdb_adk_store: DuckdbADKStore) -> None:
     await duckdb_adk_store.append_event(event1)
     await duckdb_adk_store.append_event(event2)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-007", session_id)
 
     assert len(events) == 2
-    assert events[0]["author"] == "user"
-    assert events[1]["author"] == "assistant"
     assert events[0]["timestamp"] <= events[1]["timestamp"]
 
 
@@ -296,7 +301,7 @@ async def test_list_events_empty(duckdb_adk_store: DuckdbADKStore) -> None:
     session_id = "session-no-events"
     await duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-008", session_id)
     assert events == []
 
 
@@ -306,9 +311,11 @@ async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> N
     await duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
 
     event_record: EventRecord = {
+        "id": "event-full",
+        "app_name": "test-app",
+        "user_id": "user-008",
         "session_id": session_id,
         "invocation_id": "inv-123",
-        "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
         "event_data": {
             "id": "event-full",
@@ -325,7 +332,7 @@ async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> N
     }
     await duckdb_adk_store.append_event(event_record)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-008", session_id)
     assert len(events) == 1
 
     # The 5-key record has invocation_id as a top-level indexed column
@@ -351,23 +358,29 @@ async def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> 
     t3 = datetime.now(timezone.utc)
 
     ev_middle: EventRecord = {
+        "id": "event-middle",
+        "app_name": "test-app",
+        "user_id": "user-009",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "",
         "timestamp": t2,
         "event_data": {"id": "event-middle", "app_name": "test-app", "user_id": "user-009"},
     }
     ev_last: EventRecord = {
+        "id": "event-last",
+        "app_name": "test-app",
+        "user_id": "user-009",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "",
         "timestamp": t3,
         "event_data": {"id": "event-last", "app_name": "test-app", "user_id": "user-009"},
     }
     ev_first: EventRecord = {
+        "id": "event-first",
+        "app_name": "test-app",
+        "user_id": "user-009",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "",
         "timestamp": t1,
         "event_data": {"id": "event-first", "app_name": "test-app", "user_id": "user-009"},
     }
@@ -376,7 +389,7 @@ async def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> 
     await duckdb_adk_store.append_event(ev_last)
     await duckdb_adk_store.append_event(ev_first)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-009", session_id)
 
     assert len(events) == 3
     # Events should be ordered by timestamp ASC
@@ -402,7 +415,7 @@ async def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore)
 
     await duckdb_adk_store.create_session(session_id, "test-app", "user-010", complex_state)
 
-    session = await duckdb_adk_store.get_session(session_id)
+    session = await duckdb_adk_store.get_session("test-app", "user-010", session_id)
     assert session is not None
     assert session["state"] == complex_state
     assert session["state"]["user"]["preferences"]["theme"] == "dark"
@@ -414,7 +427,7 @@ async def test_empty_state(duckdb_adk_store: DuckdbADKStore) -> None:
     session_id = "session-empty-state"
     await duckdb_adk_store.create_session(session_id, "test-app", "user-011", {})
 
-    session = await duckdb_adk_store.get_session(session_id)
+    session = await duckdb_adk_store.get_session("test-app", "user-011", session_id)
     assert session is not None
     assert session["state"] == {}
 
@@ -426,13 +439,13 @@ async def test_table_not_found_handling(tmp_path: Path) -> None:
         config = DuckDBConfig(connection_config={"database": str(db_path)})
         store = DuckdbADKStore(config)
 
-        result = await store.get_session("nonexistent")
+        result = await store.get_session("app", "user", "nonexistent")
         assert result is None
 
         sessions = await store.list_sessions("app", "user")
         assert sessions == []
 
-        events = await store.get_events("session")
+        events = await store.get_events("app", "user", "session")
         assert events == []
     finally:
         if db_path.exists():
@@ -445,15 +458,17 @@ async def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
     await duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
 
     event_record: EventRecord = {
+        "id": "event-json",
+        "app_name": "test-app",
+        "user_id": "user-012",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "system",
         "timestamp": datetime.now(timezone.utc),
         "event_data": {"id": "event-json", "content": {"data": "value"}, "app_name": "test-app", "user_id": "user-012"},
     }
     await duckdb_adk_store.append_event(event_record)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = await duckdb_adk_store.get_events("test-app", "user-012", session_id)
     assert len(events) == 1
     event_data = (
         json.loads(events[0]["event_data"]) if isinstance(events[0]["event_data"], str) else events[0]["event_data"]
@@ -467,12 +482,14 @@ async def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> N
     await duckdb_adk_store.create_session(session_id, "test-app", "user-013", {"counter": 0})
 
     for i in range(10):
-        session = await duckdb_adk_store.get_session(session_id)
+        session = await duckdb_adk_store.get_session("test-app", "user-013", session_id)
         assert session is not None
         current_counter = session["state"]["counter"]
-        await duckdb_adk_store.update_session_state(session_id, {"counter": current_counter + 1})
+        await duckdb_adk_store.update_session_state(
+            "test-app", "user-013", session_id, {"counter": current_counter + 1}
+        )
 
-    final_session = await duckdb_adk_store.get_session(session_id)
+    final_session = await duckdb_adk_store.get_session("test-app", "user-013", session_id)
     assert final_session is not None
     assert final_session["state"]["counter"] == 10
 
@@ -638,7 +655,7 @@ async def test_owner_id_column_without_value(tmp_path: Path) -> None:
 
         assert session["id"] == "session-no-fk"
 
-        retrieved = await store.get_session("session-no-fk")
+        retrieved = await store.get_session("test-app", "user-001", "session-no-fk")
         assert retrieved is not None
     finally:
         if db_path.exists():

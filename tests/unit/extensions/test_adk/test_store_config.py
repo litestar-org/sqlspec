@@ -45,16 +45,18 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
             update_time=datetime.now(),
         )
 
-    async def get_session(self, session_id: str, *, renew_for: int | timedelta | None = None) -> SessionRecord | None:
+    async def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
+    ) -> SessionRecord | None:
         return None
 
-    async def update_session_state(self, session_id: str, state: dict[str, Any]) -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         return None
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]:
         return []
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         return None
 
     async def append_event(self, event_record: EventRecord) -> None:
@@ -63,25 +65,30 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: dict[str, Any],
         *,
-        app_name: str | None = None,
-        user_id: str | None = None,
         app_state: dict[str, Any] | None = None,
         user_state: dict[str, Any] | None = None,
     ) -> SessionRecord:
         return SessionRecord(
             id=session_id,
-            app_name=app_name or "test-app",
-            user_id=user_id or "test-user",
+            app_name=app_name,
+            user_id=user_id,
             state=state,
             create_time=datetime.now(),
             update_time=datetime.now(),
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: datetime | None = None, limit: int | None = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: datetime | None = None,
+        limit: int | None = None,
     ) -> list[EventRecord]:
         return []
 

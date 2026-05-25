@@ -57,7 +57,7 @@ async def test_aiosqlite_session_empty_state_round_trip(tmp_path: Path) -> None:
     config, store = await _build_store(tmp_path)
     try:
         created = await store.create_session("session-empty", "app", "user", {})
-        fetched = await store.get_session("session-empty")
+        fetched = await store.get_session("app", "user", "session-empty")
 
         assert created["state"] == {}
         assert fetched is not None
@@ -164,16 +164,18 @@ async def test_aiosqlite_append_event_and_update_state_is_atomic_contract(tmp_pa
         await store.create_session(session_id, "app", "user", {})
 
         event: EventRecord = {
+            "id": "event-1",
+            "app_name": "app",
+            "user_id": "user",
             "session_id": session_id,
             "invocation_id": "inv-1",
-            "author": "user",
             "timestamp": datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc),
             "event_data": {"id": "event-1", "content": {"parts": [{"text": "hello"}]}},
         }
-        await store.append_event_and_update_state(event, session_id, {"turn": 1})
+        await store.append_event_and_update_state(event, "app", "user", session_id, {"turn": 1})
 
-        session = await store.get_session(session_id)
-        events = await store.get_events(session_id)
+        session = await store.get_session("app", "user", session_id)
+        events = await store.get_events("app", "user", session_id)
 
         assert session is not None
         assert session["state"] == {"turn": 1}
@@ -190,10 +192,10 @@ async def test_aiosqlite_reads_return_empty_when_tables_missing(tmp_path: Path) 
     config = AiosqliteConfig(connection_config={"database": str(db_path)})
     store = AiosqliteADKStore(config)
     try:
-        assert await store.get_session("missing") is None
+        assert await store.get_session("app", "user", "missing") is None
         assert await store.list_sessions("app") == []
         assert await store.list_sessions("app", "user") == []
-        assert await store.get_events("session-x") == []
+        assert await store.get_events("app", "user", "session-x") == []
     finally:
         await config.close_pool()
 
@@ -208,15 +210,19 @@ async def test_aiosqlite_get_events_filters_by_timestamp_and_limit(tmp_path: Pat
 
         for index in range(3):
             event: EventRecord = {
+                "id": f"event-{index}",
+                "app_name": "app",
+                "user_id": "user",
                 "session_id": session_id,
                 "invocation_id": f"inv-{index}",
-                "author": "user",
                 "timestamp": base + timedelta(seconds=index),
                 "event_data": {"id": f"event-{index}"},
             }
             await store.append_event(event)
 
-        events = await store.get_events(session_id, after_timestamp=base + timedelta(milliseconds=500), limit=1)
+        events = await store.get_events(
+            "app", "user", session_id, after_timestamp=base + timedelta(milliseconds=500), limit=1
+        )
 
         assert len(events) == 1
         assert events[0]["invocation_id"] == "inv-1"

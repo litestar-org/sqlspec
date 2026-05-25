@@ -48,50 +48,49 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
+        return await async_(self._get_session)(app_name, user_id, session_id, renew_for)
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
+        await async_(self._update_session_state)(app_name, user_id, session_id, state)
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
         return await async_(self._list_sessions)(app_name, user_id)
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
+        await async_(self._delete_session)(app_name, user_id, session_id)
 
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
         return await async_(self._append_event_and_update_state)(
-            event_record,
-            session_id,
-            state,
-            app_name=app_name,
-            user_id=user_id,
-            app_state=app_state,
-            user_state=user_state,
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+        return await async_(self._get_events)(app_name, user_id, session_id, after_timestamp, limit)
 
     async def delete_expired_events(self, before: "datetime") -> int:
         """Return 0 because Spanner row deletion policies own TTL cleanup."""
@@ -161,9 +160,9 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
     def _event_param_types(self) -> "dict[str, Any]":
         json_type = _json_param_type()
         return {
+            "id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
             "invocation_id": SPANNER_PARAM_TYPES.STRING,
-            "author": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
             "event_data": json_type,
         }
@@ -209,27 +208,44 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "update_time": datetime.now(timezone.utc),
         }
 
-    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             update_sql = f"""
                 UPDATE {self._session_table}
                 SET update_time = PENDING_COMMIT_TIMESTAMP()
-                WHERE id = @id
+                WHERE app_name = @app_name AND user_id = @user_id AND id = @id
             """
             if self._shard_count > 1:
                 update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
-            self._run_write([(update_sql, {"id": session_id}, {"id": SPANNER_PARAM_TYPES.STRING})])
+            self._run_write([
+                (
+                    update_sql,
+                    {"app_name": app_name, "user_id": user_id, "id": session_id},
+                    {
+                        "app_name": SPANNER_PARAM_TYPES.STRING,
+                        "user_id": SPANNER_PARAM_TYPES.STRING,
+                        "id": SPANNER_PARAM_TYPES.STRING,
+                    },
+                )
+            ])
 
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
-            WHERE id = @id
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
         sql = f"{sql} LIMIT 1"
-        params = {"id": session_id}
-        rows = self._run_read(sql, params, {"id": SPANNER_PARAM_TYPES.STRING})
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id}
+        types = {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "id": SPANNER_PARAM_TYPES.STRING,
+        }
+        rows = self._run_read(sql, params, types)
         if not rows:
             return None
 
@@ -245,17 +261,23 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         }
         return record
 
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        params = {"id": session_id, "state": to_json(state)}
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": to_json(state)}
         json_type = _json_param_type()
         sql = f"""
             UPDATE {self._session_table}
             SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
-            WHERE id = @id
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
-        self._run_write([(sql, params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type})])
+        types = {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "id": SPANNER_PARAM_TYPES.STRING,
+            "state": json_type,
+        }
+        self._run_write([(sql, params, types)])
 
     def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         sql = f"""
@@ -288,65 +310,77 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             records.append(record)
         return records
 
-    def _delete_session(self, session_id: str) -> None:
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         shard_clause = (
             f" AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})" if self._shard_count > 1 else ""
         )
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
-        delete_session_sql = f"DELETE FROM {self._session_table} WHERE id = @session_id{shard_clause}"
-        params = {"session_id": session_id}
-        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
-        self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
+        delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
+        params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        types = {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "session_id": SPANNER_PARAM_TYPES.STRING,
+        }
+        self._run_write([
+            (delete_events_sql, {"session_id": session_id}, {"session_id": SPANNER_PARAM_TYPES.STRING}),
+            (delete_session_sql, params, types),
+        ])
 
     def _append_event_and_update_state(
         self,
         event_record: "EventRecord",
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically insert event + update session + upsert scoped state.
-
-        All writes execute within a single Spanner transaction so they succeed
-        or fail together. A follow-up single-use read returns the SessionRecord;
-        we can't capture update_time inside the write txn because
-        PENDING_COMMIT_TIMESTAMP() only materialises on commit.
-        """
+        """Atomically insert event + update session + upsert scoped state."""
         event_params: dict[str, Any] = {
+            "id": event_record["id"],
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
-            "author": event_record["author"],
             "timestamp": event_record["timestamp"],
             "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_data)
-            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_data)
+            INSERT INTO {self._events_table} (id, session_id, invocation_id, timestamp, event_data)
+            VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
         """
 
         json_type = _json_param_type()
-        state_params: dict[str, Any] = {"id": session_id, "state": to_json(state)}
+        state_params: dict[str, Any] = {
+            "app_name": app_name,
+            "user_id": user_id,
+            "id": session_id,
+            "state": to_json(state),
+        }
         update_sql = f"""
             UPDATE {self._session_table}
             SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
-            WHERE id = @id
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
         if self._shard_count > 1:
             update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
 
         statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
             (insert_sql, event_params, self._event_param_types()),
-            (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
+            (
+                update_sql,
+                state_params,
+                {
+                    "app_name": SPANNER_PARAM_TYPES.STRING,
+                    "user_id": SPANNER_PARAM_TYPES.STRING,
+                    "id": SPANNER_PARAM_TYPES.STRING,
+                    "state": json_type,
+                },
+            ),
         ]
 
         if app_state:
-            if app_name is None:
-                msg = "app_name is required when app_state is provided."
-                raise ValueError(msg)
             app_delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = @app_name"
             app_insert_sql = f"""
                 INSERT INTO {self._app_state_table} (app_name, state, update_time)
@@ -359,9 +393,6 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
                 {"app_name": SPANNER_PARAM_TYPES.STRING, "state": json_type},
             ))
         if user_state:
-            if app_name is None or user_id is None:
-                msg = "app_name and user_id are required when user_state is provided."
-                raise ValueError(msg)
             user_delete_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = @app_name AND user_id = @user_id"
             user_insert_sql = f"""
                 INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
@@ -380,7 +411,7 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
         self._run_write(statements)
 
-        record = self._get_session(session_id)
+        record = self._get_session(app_name, user_id, session_id)
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
@@ -388,35 +419,45 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
     def _insert_event(self, event_record: "EventRecord") -> None:
         event_params: dict[str, Any] = {
+            "id": event_record["id"],
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
-            "author": event_record["author"],
             "timestamp": event_record["timestamp"],
             "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_data)
-            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_data)
+            INSERT INTO {self._events_table} (id, session_id, invocation_id, timestamp, event_data)
+            VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
         """
         self._run_write([(insert_sql, event_params, self._event_param_types())])
 
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         sql = f"""
-            SELECT session_id, invocation_id, author, timestamp, event_data
-            FROM {self._events_table}
-            WHERE session_id = @session_id
+            SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+            FROM {self._events_table} e
+            JOIN {self._session_table} s ON e.session_id = s.id
+            WHERE s.app_name = @app_name AND s.user_id = @user_id AND e.session_id = @session_id
         """
+        params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        types: dict[str, Any] = {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "session_id": SPANNER_PARAM_TYPES.STRING,
+        }
         if self._shard_count > 1:
-            sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
-        params: dict[str, Any] = {"session_id": session_id}
-        types: dict[str, Any] = {"session_id": SPANNER_PARAM_TYPES.STRING}
+            sql = f"{sql} AND e.shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         if after_timestamp is not None:
-            sql = f"{sql} AND timestamp > @after_timestamp"
+            sql = f"{sql} AND e.timestamp > @after_timestamp"
             params["after_timestamp"] = after_timestamp
             types["after_timestamp"] = SPANNER_PARAM_TYPES.TIMESTAMP
-        sql = f"{sql} ORDER BY timestamp ASC"
+        sql = f"{sql} ORDER BY e.timestamp ASC"
         if limit is not None:
             sql = f"{sql} LIMIT @limit"
             params["limit"] = limit
@@ -424,11 +465,13 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         rows = self._run_read(sql, params, types)
         return [
             {
-                "session_id": row[0],
-                "invocation_id": row[1] or "",
-                "author": row[2] or "",
+                "id": row[0],
+                "session_id": row[1],
+                "invocation_id": row[2] or "",
                 "timestamp": row[3],
                 "event_data": row[4],
+                "app_name": row[5],
+                "user_id": row[6],
             }
             for row in rows
         ]
@@ -555,20 +598,23 @@ CREATE TABLE {self._session_table} (
 
     async def _get_create_events_table_sql(self) -> str:
         shard_column = ""
-        pk = "PRIMARY KEY (session_id, timestamp)"
+        pk = "PRIMARY KEY (id)"
+        fk = f"CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE"
         if self._shard_count > 1:
             shard_column = f",\n  shard_id INT64 AS (MOD(FARM_FINGERPRINT(session_id), {self._shard_count})) STORED"
-            pk = "PRIMARY KEY (shard_id, session_id, timestamp)"
+            pk = "PRIMARY KEY (shard_id, id)"
+            fk = f"CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (shard_id, session_id) REFERENCES {self._session_table}(shard_id, id) ON DELETE CASCADE"
         options = ""
         if self._events_table_options:
             options = f"\nOPTIONS ({self._events_table_options})"
         return f"""
 CREATE TABLE {self._events_table} (
+  id STRING(128) NOT NULL,
   session_id STRING(128) NOT NULL,
-  invocation_id STRING(256) NOT NULL,
-  author STRING(128) NOT NULL,
+  invocation_id STRING(256),
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
-  event_data JSON NOT NULL{shard_column}
+  event_data JSON NOT NULL{shard_column},
+  {fk}
 ) {pk}{options}{self._events_row_deletion_policy}
 """
 

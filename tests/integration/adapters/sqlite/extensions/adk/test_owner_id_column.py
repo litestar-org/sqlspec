@@ -126,7 +126,7 @@ async def test_owner_id_column_integer_reference(
     assert isinstance(session["create_time"], datetime)
     assert isinstance(session["update_time"], datetime)
 
-    retrieved = await store.get_session(session_id)
+    retrieved = await store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
     assert retrieved["state"] == initial_state
@@ -152,7 +152,7 @@ async def test_owner_id_column_text_reference(
     assert session["id"] == session_id
     assert session["state"] == initial_state
 
-    retrieved = await store.get_session(session_id)
+    retrieved = await store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
 
@@ -175,7 +175,7 @@ async def test_owner_id_column_cascade_delete(
 
     await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
 
-    retrieved_before = await store.get_session(session_id)
+    retrieved_before = await store.get_session(app_name, user_id, session_id)
     assert retrieved_before is not None
 
     with sqlite_config.provide_connection() as conn:
@@ -183,7 +183,7 @@ async def test_owner_id_column_cascade_delete(
         conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
         conn.commit()
 
-    retrieved_after = await store.get_session(session_id)
+    retrieved_after = await store.get_session(app_name, user_id, session_id)
     assert retrieved_after is None
 
 
@@ -260,7 +260,7 @@ async def test_without_owner_id_column(
     assert session["id"] == session_id
     assert session["state"] == initial_state
 
-    retrieved = await store.get_session(session_id)
+    retrieved = await store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
 
@@ -310,8 +310,8 @@ async def test_multi_tenant_isolation(
     await store.create_session(session1_id, app_name, user_id, initial_state, owner_id=tenant1_id)
     await store.create_session(session2_id, app_name, user_id, {"data": "tenant2"}, owner_id=tenant2_id)
 
-    session1 = await store.get_session(session1_id)
-    session2 = await store.get_session(session2_id)
+    session1 = await store.get_session(app_name, user_id, session1_id)
+    session2 = await store.get_session(app_name, user_id, session2_id)
 
     assert session1 is not None
     assert session2 is not None
@@ -323,8 +323,8 @@ async def test_multi_tenant_isolation(
         conn.execute("DELETE FROM tenants WHERE id = ?", (tenant1_id,))
         conn.commit()
 
-    session1_after = await store.get_session(session1_id)
-    session2_after = await store.get_session(session2_id)
+    session1_after = await store.get_session(app_name, user_id, session1_id)
+    session2_after = await store.get_session(app_name, user_id, session2_id)
 
     assert session1_after is None
     assert session2_after is not None
@@ -382,5 +382,5 @@ async def test_owner_id_with_default_value(
     session = await store.create_session(session_id, app_name, user_id, initial_state)
 
     assert session["id"] == session_id
-    retrieved = await store.get_session(session_id)
+    retrieved = await store.get_session(app_name, user_id, session_id)
     assert retrieved is not None

@@ -83,18 +83,18 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
-        return await async_(self._get_session)(session_id, renew_for)
+        return await async_(self._get_session)(app_name, user_id, session_id, renew_for)
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        await async_(self._update_session_state)(session_id, state)
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        await async_(self._update_session_state)(app_name, user_id, session_id, state)
 
     async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         return await async_(self._list_sessions)(app_name, user_id)
 
-    async def delete_session(self, session_id: str) -> None:
-        await async_(self._delete_session)(session_id)
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        await async_(self._delete_session)(app_name, user_id, session_id)
 
     async def append_event(self, event_record: EventRecord) -> None:
         await async_(self._append_event)(event_record)
@@ -102,28 +102,27 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         return await async_(self._append_event_and_update_state)(
-            event_record,
-            session_id,
-            state,
-            app_name=app_name,
-            user_id=user_id,
-            app_state=app_state,
-            user_state=user_state,
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+        return await async_(self._get_events)(app_name, user_id, session_id, after_timestamp, limit)
 
     async def delete_expired_events(self, before: datetime) -> int:
         return await async_(self._delete_expired_events)(before)
@@ -201,17 +200,26 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
             "update_time": now,
         }
 
-    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-            self._update_session_touch(session_id)
+            self._update_session_touch(app_name, user_id, session_id)
 
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._qualified(self._session_table)}
-        WHERE id = @id
+        WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         LIMIT 1
         """
-        rows = self._run_query(sql, [self._query_param("id", session_id)])
+        rows = self._run_query(
+            sql,
+            [
+                self._query_param("app_name", app_name),
+                self._query_param("user_id", user_id),
+                self._query_param("id", session_id),
+            ],
+        )
         if not rows:
             return None
         row = rows[0]
@@ -225,21 +233,36 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         }
         return record
 
-    def _update_session_touch(self, session_id: str) -> None:
+    def _update_session_touch(self, app_name: str, user_id: str, session_id: str) -> None:
         sql = f"""
         UPDATE {self._qualified(self._session_table)}
         SET update_time = CURRENT_TIMESTAMP()
-        WHERE id = @id
+        WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
-        self._run_query(sql, [self._query_param("id", session_id)])
+        self._run_query(
+            sql,
+            [
+                self._query_param("app_name", app_name),
+                self._query_param("user_id", user_id),
+                self._query_param("id", session_id),
+            ],
+        )
 
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
         UPDATE {self._qualified(self._session_table)}
         SET state = @state, update_time = CURRENT_TIMESTAMP()
-        WHERE id = @id
+        WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
-        self._run_query(sql, [self._json_param("state", state), self._query_param("id", session_id)])
+        self._run_query(
+            sql,
+            [
+                self._json_param("state", state),
+                self._query_param("app_name", app_name),
+                self._query_param("user_id", user_id),
+                self._query_param("id", session_id),
+            ],
+        )
 
     def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         window_start = datetime.now(timezone.utc) - timedelta(days=self._lookup_window_days)
@@ -271,22 +294,29 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
             records.append(record)
         return records
 
-    def _delete_session(self, session_id: str) -> None:
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         events_sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE session_id = @id"
-        sessions_sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE id = @id"
+        sessions_sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE app_name = @app_name AND user_id = @user_id AND id = @id"
         self._run_query(events_sql, [self._query_param("id", session_id)])
-        self._run_query(sessions_sql, [self._query_param("id", session_id)])
+        self._run_query(
+            sessions_sql,
+            [
+                self._query_param("app_name", app_name),
+                self._query_param("user_id", user_id),
+                self._query_param("id", session_id),
+            ],
+        )
 
     def _append_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._qualified(self._events_table)}
-            (session_id, invocation_id, author, timestamp, event_data)
-        VALUES (@session_id, @invocation_id, @author, @timestamp, @event_data)
+            (id, session_id, invocation_id, timestamp, event_data)
+        VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
         """
         params = [
+            self._query_param("id", event_record["id"]),
             self._query_param("session_id", event_record["session_id"]),
             self._query_param("invocation_id", event_record["invocation_id"]),
-            self._query_param("author", event_record["author"]),
             self._query_param("timestamp", event_record["timestamp"], bq_type="TIMESTAMP"),
             self._json_param("event_data", event_record["event_data"]),
         ]
@@ -295,61 +325,63 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
     def _append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        if app_state and app_name is None:
-            msg = "app_name is required when app_state is provided."
-            raise ValueError(msg)
-        if user_state and (app_name is None or user_id is None):
-            msg = "app_name and user_id are required when user_state is provided."
-            raise ValueError(msg)
-
-        # BigQuery DML statements are not transactional across separate jobs. We
-        # accept this trade-off because the BigQuery ADK store is positioned as
-        # the analytics-replica path, not a live OLTP store.
         self._append_event(event_record)
-        self._update_session_state(session_id, state)
+        self._update_session_state(app_name, user_id, session_id, state)
         if app_state:
-            self._upsert_app_state(cast("str", app_name), app_state)
+            self._upsert_app_state(app_name, app_state)
         if user_state:
-            self._upsert_user_state(cast("str", app_name), cast("str", user_id), user_state)
+            self._upsert_user_state(app_name, user_id, user_state)
 
-        record = self._get_session(session_id)
+        record = self._get_session(app_name, user_id, session_id)
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
         return record
 
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {self._qualified(self._events_table)}
-        WHERE session_id = @session_id
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._qualified(self._events_table)} e
+        JOIN {self._qualified(self._session_table)} s ON e.session_id = s.id
+        WHERE s.app_name = @app_name AND s.user_id = @user_id AND e.session_id = @session_id
         """
-        params = [self._query_param("session_id", session_id)]
+        params = [
+            self._query_param("app_name", app_name),
+            self._query_param("user_id", user_id),
+            self._query_param("session_id", session_id),
+        ]
         if after_timestamp is not None:
-            sql += " AND timestamp > @after_timestamp"
+            sql += " AND e.timestamp > @after_timestamp"
             params.append(self._query_param("after_timestamp", after_timestamp, bq_type="TIMESTAMP"))
-        sql += " ORDER BY timestamp ASC"
+        sql += " ORDER BY e.timestamp ASC"
         if limit is not None:
             sql += " LIMIT @row_limit"
             params.append(self._query_param("row_limit", limit, bq_type="INT64"))
         rows = self._run_query(sql, params)
         return [
             {
+                "id": row["id"],
                 "session_id": row["session_id"],
                 "invocation_id": row["invocation_id"],
-                "author": row["author"],
                 "timestamp": row["timestamp"],
                 "event_data": self._decode_json(row["event_data"]) or {},
+                "app_name": row["app_name"],
+                "user_id": row["user_id"],
             }
             for row in rows
         ]
@@ -463,15 +495,15 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
     async def _get_create_events_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._qualified(self._events_table)} (
+            id STRING NOT NULL,
             session_id STRING NOT NULL,
-            invocation_id STRING NOT NULL,
-            author STRING NOT NULL,
+            invocation_id STRING,
             timestamp TIMESTAMP NOT NULL,
             event_data JSON
         )
         PARTITION BY DATE(timestamp)
-        CLUSTER BY session_id, app_name_cluster_placeholder, user_id_cluster_placeholder{self._partition_options()}
-        """.replace(", app_name_cluster_placeholder, user_id_cluster_placeholder", "")
+        CLUSTER BY session_id, id{self._partition_options()}
+        """
 
     async def _get_create_app_states_table_sql(self) -> str:
         return f"""

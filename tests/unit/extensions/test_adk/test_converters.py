@@ -220,40 +220,39 @@ def test_merge_scoped_state_does_not_mutate_session_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_event_to_record_only_5_keys() -> None:
-    """EventRecord has exactly session_id, invocation_id, author, timestamp, event_data."""
+def test_event_to_record_keys() -> None:
+    """EventRecord has exactly the expected keys."""
     event = _make_event()
-    record = event_to_record(event, "session-1")
-    assert set(record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_data"}
+    record = event_to_record(event, "test-app", "test-user", "session-1")
+    assert set(record.keys()) == {"id", "app_name", "user_id", "session_id", "invocation_id", "timestamp", "event_data"}
 
 
-def test_event_to_record_signature_two_args_only() -> None:
-    """event_to_record raises TypeError if called with extra positional args (old 4-arg signature)."""
+def test_event_to_record_signature_four_args() -> None:
+    """event_to_record raises TypeError if called with wrong number of args."""
     event = _make_event()
     with pytest.raises(TypeError):
-        event_to_record(event, "session-1", "app-name", "user-id")  # type: ignore[call-arg]
+        event_to_record(event, "session-1")  # type: ignore[call-arg]
 
 
 def test_event_to_record_session_id_stored_correctly() -> None:
     """session_id in the record matches the argument passed."""
     event = _make_event(invocation_id="inv-abc", author="model")
-    record = event_to_record(event, "my-session-id")
+    record = event_to_record(event, "test-app", "test-user", "my-session-id")
     assert record["session_id"] == "my-session-id"
 
 
 def test_event_to_record_indexed_fields_match_event() -> None:
-    """Indexed scalar columns (invocation_id, author, timestamp) match the source event."""
+    """Indexed scalar columns (invocation_id, timestamp) match the source event."""
     event = _make_event(invocation_id="inv-xyz", author="tool")
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
     assert record["invocation_id"] == "inv-xyz"
-    assert record["author"] == "tool"
     assert isinstance(record["timestamp"], datetime)
 
 
 def test_event_to_record_event_data_matches_model_dump() -> None:
     """event_data in the record equals event.model_dump(exclude_none=True, mode='json')."""
     event = _make_event(text="hello", state_delta={"key": "val"}, custom_metadata={"foo": "bar"})
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
     expected_json = event.model_dump(exclude_none=True, mode="json")
     assert record["event_data"] == expected_json
 
@@ -261,16 +260,15 @@ def test_event_to_record_event_data_matches_model_dump() -> None:
 def test_event_to_record_event_data_is_dict() -> None:
     """event_data field is a plain dict (not bytes, not string)."""
     event = _make_event()
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
     assert isinstance(record["event_data"], dict)
 
 
 def test_event_to_record_actions_in_event_data_is_structured() -> None:
     """Actions are stored as structured JSON dict in event_data, not as raw bytes."""
     event = _make_event(state_delta={"x": "y"})
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
     event_data = record["event_data"]
-    # actions should be a dict in the JSON blob
     if "actions" in event_data:
         assert isinstance(event_data["actions"], dict)
 
@@ -278,7 +276,7 @@ def test_event_to_record_actions_in_event_data_is_structured() -> None:
 def test_event_to_record_timestamp_is_datetime() -> None:
     """timestamp column is a datetime object with timezone."""
     event = _make_event()
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
     assert isinstance(record["timestamp"], datetime)
     assert record["timestamp"].tzinfo is not None
 
@@ -291,7 +289,7 @@ def test_event_to_record_timestamp_is_datetime() -> None:
 def test_record_to_event_full_roundtrip_basic() -> None:
     """Event -> record -> Event produces an identical object for basic fields."""
     original = _make_event(event_id="evt-rt", invocation_id="inv-rt", author="model")
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.id == original.id
@@ -302,7 +300,7 @@ def test_record_to_event_full_roundtrip_basic() -> None:
 def test_record_to_event_roundtrip_preserves_content() -> None:
     """Content (parts) survives the round-trip."""
     original = _make_event(text="hello world", author="model")
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.content is not None
@@ -313,7 +311,7 @@ def test_record_to_event_roundtrip_preserves_content() -> None:
 def test_record_to_event_roundtrip_preserves_actions() -> None:
     """EventActions (state_delta) survives the round-trip."""
     original = _make_event(state_delta={"key": "v1", "other": 42})
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.actions is not None
@@ -323,7 +321,7 @@ def test_record_to_event_roundtrip_preserves_actions() -> None:
 def test_record_to_event_roundtrip_preserves_custom_metadata() -> None:
     """custom_metadata survives the round-trip."""
     original = _make_event(custom_metadata={"tag": "v2", "score": 0.9})
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.custom_metadata == {"tag": "v2", "score": 0.9}
@@ -332,7 +330,7 @@ def test_record_to_event_roundtrip_preserves_custom_metadata() -> None:
 def test_record_to_event_roundtrip_preserves_branch() -> None:
     """branch field survives the round-trip."""
     original = _make_event(branch="feature-branch")
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.branch == "feature-branch"
@@ -341,7 +339,7 @@ def test_record_to_event_roundtrip_preserves_branch() -> None:
 def test_record_to_event_roundtrip_preserves_partial_flag() -> None:
     """partial flag survives the round-trip."""
     original = _make_event(partial=True)
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.partial is True
@@ -350,7 +348,7 @@ def test_record_to_event_roundtrip_preserves_partial_flag() -> None:
 def test_record_to_event_roundtrip_preserves_turn_complete() -> None:
     """turn_complete flag survives the round-trip."""
     original = _make_event(turn_complete=True)
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
     assert restored.turn_complete is True
@@ -360,18 +358,17 @@ def test_record_to_event_roundtrip_preserves_timestamp() -> None:
     """timestamp survives the round-trip within float precision."""
     fixed_ts = datetime(2024, 6, 1, 10, 30, 0, tzinfo=timezone.utc).timestamp()
     event = Event(id="ts-evt", invocation_id="inv-1", author="user", actions=EventActions(), timestamp=fixed_ts)
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
     restored = record_to_event(record)
 
-    assert abs(restored.timestamp - fixed_ts) < 1.0  # within 1 second
+    assert abs(restored.timestamp - fixed_ts) < 1.0
 
 
 def test_record_to_event_ignores_unknown_fields_in_event_data() -> None:
     """Unknown event_data fields are ignored by the current ADK Event model."""
     event = _make_event(event_id="extra-fields-evt", author="tool")
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "test-app", "test-user", "s1")
 
-    # Inject hypothetical future ADK field into event_data
     record["event_data"]["hypothetical_v3_field"] = "some_value"  # type: ignore[index]
 
     restored = record_to_event(record)
@@ -446,7 +443,7 @@ def test_record_to_session_with_events_round_trip() -> None:
         update_time=datetime.now(timezone.utc),
     )
     event = _make_event(text="hello", author="user")
-    event_record = event_to_record(event, "s1")
+    event_record = event_to_record(event, "app", "u1", "s1")
 
     session = record_to_session(session_record, [event_record])
 

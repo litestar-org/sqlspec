@@ -34,8 +34,10 @@ class EventRecord(TypedDict):
     automatically captured in ``event_data`` without schema changes.
     """
 
+    id: str
+    app_name: str
+    user_id: str
     session_id: str
     invocation_id: str
-    author: str
     timestamp: datetime
     event_data: "dict[str, Any]"

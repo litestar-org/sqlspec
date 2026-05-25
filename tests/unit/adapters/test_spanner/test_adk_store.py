@@ -19,9 +19,11 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
     store = SpannerSyncADKStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     event: EventRecord = {
+        "id": "event-1",
+        "app_name": "app",
+        "user_id": "u1",
         "session_id": "session-1",
         "invocation_id": "inv-1",
-        "author": "user",
         "timestamp": timestamp,
         "event_data": {"id": "event-1"},
     }
@@ -41,13 +43,14 @@ async def test_append_event_and_update_state_preserves_event_record_timestamp() 
     store = SpannerSyncADKStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     event: EventRecord = {
+        "id": "event-1",
+        "app_name": "app",
+        "user_id": "u1",
         "session_id": "session-1",
         "invocation_id": "inv-1",
-        "author": "user",
         "timestamp": timestamp,
         "event_data": {"id": "event-1"},
     }
-    # Stub the post-write SELECT — the contract requires returning the refreshed record.
     fake_record = {
         "id": "session-1",
         "app_name": "app",
@@ -58,7 +61,7 @@ async def test_append_event_and_update_state_preserves_event_record_timestamp() 
     }
 
     with patch.object(store, "_run_write") as run_write, patch.object(store, "_get_session", return_value=fake_record):
-        returned = await store.append_event_and_update_state(event, "session-1", {"turn": 1})
+        returned = await store.append_event_and_update_state(event, "app", "u1", "session-1", {"turn": 1})
 
     event_sql, event_params, _event_types = run_write.call_args.args[0][0]
     update_sql, _state_params, _state_types = run_write.call_args.args[0][1]

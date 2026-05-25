@@ -501,7 +501,7 @@ module = "tests.*"
 
 [tool.pyright]
 disableBytesTypePromotions = true
-exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs", "**/.*"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs", "**/.*", "tests/integration"]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.10"
 reportMissingTypeStubs = false

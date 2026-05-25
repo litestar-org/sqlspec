@@ -226,11 +226,13 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
     @abstractmethod
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
-        """Get a session by ID.
+        """Get a session.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
             renew_for: If positive, touch the session update timestamp while reading.
 
@@ -240,10 +242,12 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
             state: New state dictionary.
         """
@@ -263,10 +267,12 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete a session and its events.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
         """
         raise NotImplementedError
@@ -284,11 +290,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     async def append_event_and_update_state(
         self,
         event_record: "EventRecord",
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> "SessionRecord":
@@ -307,13 +313,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
         Args:
             event_record: Event record to store.
+            app_name: Application name for routing scoped-state upserts.
+            user_id: User identifier for routing user-scoped upserts.
             session_id: Session identifier whose state should be updated.
             state: Post-append durable session-scoped state snapshot
                 (``temp:`` keys already stripped by the service layer).
-            app_name: Application name for routing scoped-state upserts. Required
-                when ``app_state`` or ``user_state`` is non-empty.
-            user_id: User identifier for routing user-scoped upserts. Required
-                when ``user_state`` is non-empty.
             app_state: App-scoped state delta (``app:*`` keys) to upsert atomically.
             user_state: User-scoped state delta (``user:*`` keys) to upsert atomically.
 
@@ -328,11 +332,18 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
     @abstractmethod
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
             limit: Maximum number of events to return.

@@ -189,14 +189,16 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        return await self.get_session(session_id)  # type: ignore[return-value]
+        return await self.get_session(app_name, user_id, session_id)  # type: ignore[return-value]
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             renew_for: If positive, touch update_time while reading.
 
@@ -213,8 +215,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 cursor = conn.cursor()
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     await cursor.execute(
-                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE id = :id",
-                        {"id": session_id},
+                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
+                        {"app_name": app_name, "user_id": user_id, "id": session_id},
                     )
                     await conn.commit()
 
@@ -222,9 +224,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     f"""
                     SELECT id, app_name, user_id, state, create_time, update_time
                     FROM {self._session_table}
-                    WHERE id = :id
+                    WHERE app_name = :app_name AND user_id = :user_id AND id = :id
                     """,
-                    {"id": session_id},
+                    {"app_name": app_name, "user_id": user_id, "id": session_id},
                 )
                 row = await cursor.fetchone()
 
@@ -249,10 +251,12 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return None
             raise
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
 
@@ -266,28 +270,30 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         sql = f"""
         UPDATE {self._session_table}
         SET state = :state, update_time = SYSTIMESTAMP
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            await cursor.execute(sql, {"state": state_data, "id": session_id})
+            await cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             await conn.commit()
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
 
         Notes:
             Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = :id"
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            await cursor.execute(sql, {"id": session_id})
+            await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             await conn.commit()
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -353,14 +359,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """Append an event to a session.
 
         Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_data.
+            event_record: Event record.
         """
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :session_id, :invocation_id, :author, :timestamp, :event_data
+            :id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -369,9 +374,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(
                 sql,
                 {
+                    "id": event_record["id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
-                    "author": event_record["author"],
                     "timestamp": event_record["timestamp"],
                     "event_data": await self._serialize_event_data(event_record["event_data"]),
                 },
@@ -381,26 +386,24 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state.
 
         All writes are executed within a single transaction so they succeed or
-        fail together. The refreshed SessionRecord is read inside the same
-        transaction (Oracle's RETURNING INTO requires output bind variables
-        which complicate async cursor handling, so SELECT-after-UPDATE is used).
+        fail together.
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :session_id, :invocation_id, :author, :timestamp, :event_data
+            :id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -408,13 +411,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = :state, update_time = SYSTIMESTAMP
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         app_upsert_sql = f"""
@@ -444,27 +447,23 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(
                 insert_sql,
                 {
+                    "id": event_record["id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
-                    "author": event_record["author"],
                     "timestamp": event_record["timestamp"],
                     "event_data": await self._serialize_event_data(event_record["event_data"]),
                 },
             )
-            await cursor.execute(update_sql, {"state": state_data, "id": session_id})
-            await cursor.execute(select_sql, {"id": session_id})
+            await cursor.execute(
+                update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+            )
+            await cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             row = await cursor.fetchone()
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 await cursor.execute(
                     app_upsert_sql, {"app_name": app_name, "state": await self._serialize_state(app_state)}
                 )
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 await cursor.execute(
                     user_upsert_sql,
                     {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(user_state)},
@@ -486,11 +485,18 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
             limit: Maximum number of events to return.
@@ -499,11 +505,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             List of event records ordered by timestamp ASC.
         """
 
-        where_clauses = ["session_id = :session_id"]
-        params: dict[str, Any] = {"session_id": session_id}
+        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "e.session_id = :session_id"]
+        params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > :after_timestamp")
+            where_clauses.append("e.timestamp > :after_timestamp")
             params["after_timestamp"] = after_timestamp
 
         where_clause = " AND ".join(where_clauses)
@@ -512,10 +518,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             limit_clause = f" FETCH FIRST {limit} ROWS ONLY"
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
@@ -526,11 +533,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
                 return [
                     EventRecord(
-                        session_id=row[0],
-                        invocation_id=_oracle_text_value(row[1]),
-                        author=_oracle_text_value(row[2]),
+                        id=row[0],
+                        session_id=row[1],
+                        invocation_id=_oracle_text_value(row[2]),
                         timestamp=row[3],
                         event_data=await self._deserialize_json_field(row[4]) or {},
+                        app_name=row[5],
+                        user_id=row[6],
                     )
                     for row in rows
                 ]
@@ -929,19 +938,15 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         event_data_col = _event_data_column_ddl(storage_type)
         table_clauses = _oracle_table_feature_clauses(
-            self._config,
-            "events",
-            in_memory=self._in_memory,
-            hash_partition_key="session_id",
-            range_partition_key="timestamp",
+            self._config, "events", in_memory=self._in_memory, hash_partition_key="id", range_partition_key="timestamp"
         )
 
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
+                id VARCHAR2(128) PRIMARY KEY,
                 session_id VARCHAR2(128) NOT NULL,
                 invocation_id VARCHAR2(256),
-                author VARCHAR2(256),
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 {event_data_col},
                 CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
@@ -1166,18 +1171,18 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
+        return await async_(self._get_session)(app_name, user_id, session_id, renew_for)
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
+        await async_(self._update_session_state)(app_name, user_id, session_id, state)
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
+        await async_(self._delete_session)(app_name, user_id, session_id)
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
@@ -1186,30 +1191,29 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
         return await async_(self._append_event_and_update_state)(
-            event_record,
-            session_id,
-            state,
-            app_name=app_name,
-            user_id=user_id,
-            app_state=app_state,
-            user_state=user_state,
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+        return await async_(self._get_events)(app_name, user_id, session_id, after_timestamp, limit)
 
     async def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
@@ -1739,16 +1743,20 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, params)
             conn.commit()
 
-        result = self._get_session(session_id)
+        result = self._get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
 
-    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             renew_for: If positive, touch update_time while reading.
 
@@ -1763,7 +1771,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         try:
@@ -1771,12 +1779,12 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 cursor = conn.cursor()
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     cursor.execute(
-                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE id = :id",
-                        {"id": session_id},
+                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
+                        {"app_name": app_name, "user_id": user_id, "id": session_id},
                     )
                     conn.commit()
 
-                cursor.execute(sql, {"id": session_id})
+                cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
                 row = cursor.fetchone()
 
                 if row is None:
@@ -1800,10 +1808,12 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
                 return None
             raise
 
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
 
@@ -1817,28 +1827,30 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         sql = f"""
         UPDATE {self._session_table}
         SET state = :state, update_time = SYSTIMESTAMP
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(sql, {"state": state_data, "id": session_id})
+            cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
-    def _delete_session(self, session_id: str) -> None:
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
 
         Notes:
             Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = :id"
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(sql, {"id": session_id})
+            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -1903,25 +1915,20 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
     def _append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically create an event and update session + scoped state.
-
-        All writes are executed within a single transaction so they succeed or
-        fail together; the refreshed SessionRecord is read inside the same
-        transaction.
-        """
+        """Atomically create an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :session_id, :invocation_id, :author, :timestamp, :event_data
+            :id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -1929,13 +1936,13 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = :state, update_time = SYSTIMESTAMP
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = :id
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
         app_upsert_sql = f"""
@@ -1965,25 +1972,21 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor.execute(
                 insert_sql,
                 {
+                    "id": event_record["id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
-                    "author": event_record["author"],
                     "timestamp": event_record["timestamp"],
                     "event_data": self._serialize_event_data(event_record["event_data"]),
                 },
             )
-            cursor.execute(update_sql, {"state": state_data, "id": session_id})
-            cursor.execute(select_sql, {"id": session_id})
+            cursor.execute(
+                update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+            )
+            cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             row = cursor.fetchone()
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 cursor.execute(app_upsert_sql, {"app_name": app_name, "state": self._serialize_state(app_state)})
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 cursor.execute(
                     user_upsert_sql,
                     {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)},
@@ -2005,11 +2008,18 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         )
 
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """List events for a session ordered by timestamp.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
             limit: Maximum number of events to return.
@@ -2018,20 +2028,21 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             List of event records ordered by timestamp ASC.
         """
 
-        where_clauses = ["session_id = :session_id"]
-        params: dict[str, Any] = {"session_id": session_id}
+        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "e.session_id = :session_id"]
+        params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > :after_timestamp")
+            where_clauses.append("e.timestamp > :after_timestamp")
             params["after_timestamp"] = after_timestamp
 
         where_clause = " AND ".join(where_clauses)
         limit_clause = f" FETCH FIRST {limit} ROWS ONLY" if limit else ""
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
@@ -2042,11 +2053,13 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
                 return [
                     EventRecord(
-                        session_id=row[0],
-                        invocation_id=_oracle_text_value(row[1]),
-                        author=_oracle_text_value(row[2]),
+                        id=row[0],
+                        session_id=row[1],
+                        invocation_id=_oracle_text_value(row[2]),
                         timestamp=row[3],
                         event_data=self._deserialize_json_field(row[4]) or {},
+                        app_name=row[5],
+                        user_id=row[6],
                     )
                     for row in rows
                 ]
@@ -2090,9 +2103,9 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         """Synchronous implementation of append_event."""
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :session_id, :invocation_id, :author, :timestamp, :event_data
+            :id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -2101,9 +2114,9 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
             cursor.execute(
                 sql,
                 {
+                    "id": event_record["id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
-                    "author": event_record["author"],
                     "timestamp": event_record["timestamp"],
                     "event_data": self._serialize_event_data(event_record["event_data"]),
                 },

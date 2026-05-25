@@ -31,31 +31,38 @@ class SessionEventStore(Protocol):
     ) -> SessionRecord: ...
 
     async def get_session(
-        self, session_id: str, *, renew_for: int | timedelta | None = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
     ) -> SessionRecord | None: ...
 
-    async def update_session_state(self, session_id: str, state: dict[str, object]) -> None: ...
+    async def update_session_state(
+        self, app_name: str, user_id: str, session_id: str, state: dict[str, object]
+    ) -> None: ...
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]: ...
 
-    async def delete_session(self, session_id: str) -> None: ...
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None: ...
 
     async def append_event(self, event_record: EventRecord) -> None: ...
 
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: dict[str, object],
         *,
-        app_name: str | None = None,
-        user_id: str | None = None,
         app_state: dict[str, object] | None = None,
         user_state: dict[str, object] | None = None,
     ) -> SessionRecord: ...
 
     async def get_events(
-        self, session_id: str, after_timestamp: datetime | None = None, limit: int | None = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: datetime | None = None,
+        limit: int | None = None,
     ) -> list[EventRecord]: ...
 
     async def delete_expired_events(self, before: datetime) -> int: ...
@@ -95,19 +102,22 @@ def _contract_key(marker: str, suffix: str) -> str:
 
 def _event_record(
     *,
-    session_id: str,
     event_id: str,
+    app_name: str,
+    user_id: str,
+    session_id: str,
     invocation_id: str,
-    author: str,
     timestamp: datetime,
     event_data: dict[str, object],
 ) -> EventRecord:
     data = dict(event_data)
     data.setdefault("id", event_id)
     return {
+        "id": event_id,
+        "app_name": app_name,
+        "user_id": user_id,
         "session_id": session_id,
         "invocation_id": invocation_id,
-        "author": author,
         "timestamp": timestamp,
         "event_data": data,
     }
@@ -172,10 +182,11 @@ async def assert_session_event_store_contract(store: SessionEventStore, *, marke
     assert created["state"] == {"created": True}
 
     first_event = _event_record(
-        session_id=session_id,
         event_id="contract-event-1",
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_id,
         invocation_id="contract-inv-1",
-        author="user",
         timestamp=base_time,
         event_data={
             "output": {"kind": "text", "value": "captured by full-event JSON"},
@@ -188,15 +199,15 @@ async def assert_session_event_store_contract(store: SessionEventStore, *, marke
             },
         },
     )
-    updated = await store.append_event_and_update_state(first_event, session_id, {"turn": 1})
+    updated = await store.append_event_and_update_state(first_event, app_name, user_id, session_id, {"turn": 1})
     assert updated["id"] == session_id
     assert updated["state"] == {"turn": 1}
 
-    fetched = await store.get_session(session_id)
+    fetched = await store.get_session(app_name, user_id, session_id)
     assert fetched is not None
     assert fetched["state"] == {"turn": 1}
 
-    stored_events = await store.get_events(session_id)
+    stored_events = await store.get_events(app_name, user_id, session_id)
     assert len(stored_events) == 1
     assert stored_events[0]["invocation_id"] == "contract-inv-1"
     first_data = _event_data(stored_events[0])
@@ -211,34 +222,38 @@ async def assert_session_event_store_contract(store: SessionEventStore, *, marke
 
     await store.append_event(
         _event_record(
-            session_id=session_id,
             event_id="contract-event-2",
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
             invocation_id="contract-inv-2",
-            author="model",
             timestamp=base_time + timedelta(seconds=1),
             event_data={"content": {"parts": [{"text": "second"}]}},
         )
     )
     await store.append_event(
         _event_record(
-            session_id=session_id,
             event_id="contract-event-3",
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
             invocation_id="contract-inv-3",
-            author="model",
             timestamp=base_time + timedelta(seconds=2),
             event_data={"content": {"parts": [{"text": "third"}]}},
         )
     )
 
-    filtered = await store.get_events(session_id, after_timestamp=base_time + timedelta(milliseconds=500), limit=1)
+    filtered = await store.get_events(
+        app_name, user_id, session_id, after_timestamp=base_time + timedelta(milliseconds=500), limit=1
+    )
     assert [event["invocation_id"] for event in filtered] == ["contract-inv-2"]
 
     listed = await store.list_sessions(app_name, user_id)
     assert any(record["id"] == session_id for record in listed)
 
-    await store.delete_session(session_id)
-    assert await store.get_session(session_id) is None
-    assert await store.get_events(session_id) == []
+    await store.delete_session(app_name, user_id, session_id)
+    assert await store.get_session(app_name, user_id, session_id) is None
+    assert await store.get_events(app_name, user_id, session_id) == []
 
 
 async def assert_session_get_session_renewal_contract(store: SessionEventStore, *, marker: str) -> None:
@@ -252,7 +267,7 @@ async def assert_session_get_session_renewal_contract(store: SessionEventStore, 
     await asyncio.sleep(0.02)
 
     before_renewal = datetime.now(timezone.utc) - timedelta(seconds=2)
-    renewed = await store.get_session(session_id, renew_for=timedelta(hours=1))
+    renewed = await store.get_session(app_name, user_id, session_id, renew_for=timedelta(hours=1))
     after_renewal = datetime.now(timezone.utc) + timedelta(seconds=2)
 
     assert renewed is not None
@@ -298,7 +313,7 @@ async def assert_session_scoped_state_contract(store: SessionEventStore, *, mark
     )
     await service.append_event(session_a, event)
 
-    raw_session = await store.get_session(session_a.id)
+    raw_session = await store.get_session(app_name, user_id, session_a.id)
     assert raw_session is not None
     assert raw_session["state"] == {"session_seed": "a", "turn": 1}
     assert await store.get_app_state(app_name) == {"app:counter": 1}
@@ -335,20 +350,21 @@ async def assert_session_atomic_scoped_write_contract(store: SessionEventStore, 
     await store.create_session(session_id, app_name, user_id, {"initial": 0})
 
     event = _event_record(
-        session_id=session_id,
         event_id="atomic-event-1",
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_id,
         invocation_id="atomic-inv-1",
-        author="user",
         timestamp=base_time,
         event_data={"actions": {"state_delta": {"app:counter": 1, "user:theme": "dark", "turn": 1}}},
     )
 
     updated = await store.append_event_and_update_state(
         event,
+        app_name,
+        user_id,
         session_id,
         {"turn": 1},
-        app_name=app_name,
-        user_id=user_id,
         app_state={"app:counter": 1},
         user_state={"user:theme": "dark"},
     )
@@ -357,20 +373,21 @@ async def assert_session_atomic_scoped_write_contract(store: SessionEventStore, 
     assert updated["id"] == session_id
     assert await store.get_app_state(app_name) == {"app:counter": 1}
     assert await store.get_user_state(app_name, user_id) == {"user:theme": "dark"}
-    stored_events = await store.get_events(session_id)
+    stored_events = await store.get_events(app_name, user_id, session_id)
     assert any(record["invocation_id"] == "atomic-inv-1" for record in stored_events)
 
     await store.create_session(no_scope_session_id, app_name, user_id, {"phase": 0})
     no_scope_event = _event_record(
-        session_id=no_scope_session_id,
         event_id="atomic-event-2",
+        app_name=app_name,
+        user_id=user_id,
+        session_id=no_scope_session_id,
         invocation_id="atomic-inv-2",
-        author="model",
         timestamp=base_time + timedelta(seconds=1),
         event_data={"content": {"parts": [{"text": "no scope delta"}]}},
     )
     no_scope_update = await store.append_event_and_update_state(
-        no_scope_event, no_scope_session_id, {"phase": 1}, app_name=app_name, user_id=user_id
+        no_scope_event, app_name, user_id, no_scope_session_id, {"phase": 1}
     )
     assert no_scope_update["state"] == {"phase": 1}
     # Skipped scoped writes leave existing app/user state untouched.
@@ -401,7 +418,7 @@ async def assert_session_temp_state_not_persisted(store: SessionEventStore, *, m
     )
     await service.append_event(session, event)
 
-    raw_session = await store.get_session(session_id)
+    raw_session = await store.get_session(app_name, user_id, session_id)
     assert raw_session is not None
     assert "temp:scratch" not in raw_session["state"]
     assert "temp:create_seed" not in raw_session["state"]
@@ -428,22 +445,23 @@ async def assert_session_empty_state_roundtrip(store: SessionEventStore, *, mark
 
     created = await store.create_session(session_id, app_name, user_id, {})
     assert created["state"] == {}
-    fetched = await store.get_session(session_id)
+    fetched = await store.get_session(app_name, user_id, session_id)
     assert fetched is not None
     assert fetched["state"] == {}
 
     event = _event_record(
-        session_id=session_id,
         event_id="empty-event-1",
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_id,
         invocation_id="empty-inv-1",
-        author="user",
         timestamp=base_time,
         event_data={"content": {"parts": [{"text": "no state delta"}]}},
     )
-    updated = await store.append_event_and_update_state(event, session_id, {}, app_name=app_name, user_id=user_id)
+    updated = await store.append_event_and_update_state(event, app_name, user_id, session_id, {})
     assert updated["state"] == {}
 
-    after = await store.get_session(session_id)
+    after = await store.get_session(app_name, user_id, session_id)
     assert after is not None
     assert after["state"] == {}
 
@@ -464,15 +482,16 @@ async def assert_session_sibling_app_isolation(store: SessionEventStore, *, mark
     await store.create_session(session_b, app_b, user_id, {})
 
     event = _event_record(
-        session_id=session_a,
         event_id="sibling-app-event-1",
+        app_name=app_a,
+        user_id=user_id,
+        session_id=session_a,
         invocation_id="sibling-app-inv-1",
-        author="user",
         timestamp=base_time,
         event_data={"actions": {"state_delta": {"app:counter": 7, "turn": 1}}},
     )
     await store.append_event_and_update_state(
-        event, session_a, {"turn": 1}, app_name=app_a, user_id=user_id, app_state={"app:counter": 7}
+        event, app_a, user_id, session_a, {"turn": 1}, app_state={"app:counter": 7}
     )
 
     assert await store.get_app_state(app_a) == {"app:counter": 7}
@@ -492,15 +511,16 @@ async def assert_session_sibling_user_isolation(store: SessionEventStore, *, mar
     await store.create_session(session_b, app_name, user_b, {})
 
     event = _event_record(
-        session_id=session_a,
         event_id="sibling-user-event-1",
+        app_name=app_name,
+        user_id=user_a,
+        session_id=session_a,
         invocation_id="sibling-user-inv-1",
-        author="user",
         timestamp=base_time,
         event_data={"actions": {"state_delta": {"user:pref": "dark", "turn": 1}}},
     )
     await store.append_event_and_update_state(
-        event, session_a, {"turn": 1}, app_name=app_name, user_id=user_a, user_state={"user:pref": "dark"}
+        event, app_name, user_a, session_a, {"turn": 1}, user_state={"user:pref": "dark"}
     )
 
     assert await store.get_user_state(app_name, user_a) == {"user:pref": "dark"}
@@ -514,16 +534,16 @@ async def assert_session_table_lifecycle_contract(store: SessionEventStore, *, m
     session_id = _contract_key(marker, "lifecycle-session")
 
     await store.create_session(session_id, app_name, user_id, {"phase": "before"})
-    assert await store.get_session(session_id) is not None
+    assert await store.get_session(app_name, user_id, session_id) is not None
 
     await store.recreate_tables()
 
-    assert await store.get_session(session_id) is None
+    assert await store.get_session(app_name, user_id, session_id) is None
     recreated = await store.create_session(session_id, app_name, user_id, {"phase": "after"})
     assert recreated["state"] == {"phase": "after"}
 
     await store.drop_tables()
-    assert await store.get_session(session_id) is None
+    assert await store.get_session(app_name, user_id, session_id) is None
     await store.drop_tables()
     await store.recreate_tables()
 
@@ -539,20 +559,22 @@ async def assert_session_event_cleanup_contract(store: SessionEventStore, *, mar
     await store.create_session(session_id, app_name, user_id, {"cleanup": True})
     await store.append_event(
         _event_record(
-            session_id=session_id,
             event_id="cleanup-old-event",
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
             invocation_id="cleanup-old",
-            author="user",
             timestamp=old_time,
             event_data={"content": {"parts": [{"text": "old"}]}},
         )
     )
     await store.append_event(
         _event_record(
-            session_id=session_id,
             event_id="cleanup-new-event",
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
             invocation_id="cleanup-new",
-            author="user",
             timestamp=new_time,
             event_data={"content": {"parts": [{"text": "new"}]}},
         )
@@ -560,13 +582,13 @@ async def assert_session_event_cleanup_contract(store: SessionEventStore, *, mar
 
     deleted_events = await store.delete_expired_events(datetime(2026, 5, 5, tzinfo=timezone.utc))
     assert deleted_events == 1
-    remaining_events = await store.get_events(session_id)
+    remaining_events = await store.get_events(app_name, user_id, session_id)
     assert [event["invocation_id"] for event in remaining_events] == ["cleanup-new"]
 
     deleted_sessions = await store.delete_idle_sessions(datetime(2100, 1, 1, tzinfo=timezone.utc))
     assert deleted_sessions == 1
-    assert await store.get_session(session_id) is None
-    assert await store.get_events(session_id) == []
+    assert await store.get_session(app_name, user_id, session_id) is None
+    assert await store.get_events(app_name, user_id, session_id) == []
 
 
 async def assert_memory_store_contract(store: MemoryStore, *, marker: str) -> None:

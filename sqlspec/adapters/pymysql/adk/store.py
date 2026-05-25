@@ -68,18 +68,18 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
+        return await async_(self._get_session)(app_name, user_id, session_id, renew_for)
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
+        await async_(self._update_session_state)(app_name, user_id, session_id, state)
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
+        await async_(self._delete_session)(app_name, user_id, session_id)
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
@@ -88,30 +88,29 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
         return await async_(self._append_event_and_update_state)(
-            event_record,
-            session_id,
-            state,
-            app_name=app_name,
-            user_id=user_id,
-            app_state=app_state,
-            user_state=user_state,
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+        return await async_(self._get_events)(app_name, user_id, session_id, after_timestamp, limit)
 
     async def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
@@ -183,9 +182,9 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             event_data JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
@@ -288,17 +287,19 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.close()
             conn.commit()
 
-        result = self._get_session(session_id)
+        result = self._get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
 
-    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         try:
@@ -306,11 +307,11 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor = conn.cursor()
                 try:
                     if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-                        update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE id = %s"
-                        cursor.execute(update_sql, (session_id,))
+                        update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE app_name = %s AND user_id = %s AND id = %s"
+                        cursor.execute(update_sql, (app_name, user_id, session_id))
                         conn.commit()
 
-                    cursor.execute(sql, (session_id,))
+                    cursor.execute(sql, (app_name, user_id, session_id))
                     row = cursor.fetchone()
                 finally:
                     cursor.close()
@@ -318,12 +319,12 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 if row is None:
                     return None
 
-                session_id_val, app_name, user_id, state_json, create_time, update_time = row
+                session_id_val, app_name_val, user_id_val, state_json, create_time, update_time = row
 
                 return SessionRecord(
                     id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
+                    app_name=app_name_val,
+                    user_id=user_id_val,
                     state=from_json(state_json) if isinstance(state_json, str) else state_json,
                     create_time=create_time,
                     update_time=update_time,
@@ -333,30 +334,30 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 return None
             raise
 
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
-        SET state = %s
-        WHERE id = %s
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (state_json, session_id))
+                cursor.execute(sql, (state_json, app_name, user_id, session_id))
             finally:
                 cursor.close()
             conn.commit()
 
-    def _delete_session(self, session_id: str) -> None:
-        sql = f"DELETE FROM {self._session_table} WHERE id = %s"
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (session_id,))
+                cursor.execute(sql, (app_name, user_id, session_id))
             finally:
                 cursor.close()
             conn.commit()
@@ -407,40 +408,35 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
     def _append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically create an event and update session + scoped state.
-
-        MySQL doesn't support UPDATE...RETURNING; the UPDATE is followed by a
-        SELECT inside the same transaction so callers get the refreshed row
-        without acquiring a second connection.
-        """
+        """Atomically create an event and update session + scoped state."""
         event_data = event_record["event_data"]
         event_data_str = to_json(event_data) if not isinstance(event_data, str) else event_data
         state_json = to_json(state)
 
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
         update_sql = f"""
         UPDATE {self._session_table}
-        SET state = %s
-        WHERE id = %s
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         app_upsert_sql = f"""
@@ -461,25 +457,19 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.execute(
                     insert_sql,
                     (
+                        event_record["id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
-                        event_record["author"],
                         event_record["timestamp"],
                         event_data_str,
                     ),
                 )
-                cursor.execute(update_sql, (state_json, session_id))
-                cursor.execute(select_sql, (session_id,))
+                cursor.execute(update_sql, (state_json, app_name, user_id, session_id))
+                cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
                 if app_state:
-                    if app_name is None:
-                        msg = "app_name is required when app_state is provided."
-                        raise ValueError(msg)
                     cursor.execute(app_upsert_sql, (app_name, to_json(app_state)))
                 if user_state:
-                    if app_name is None or user_id is None:
-                        msg = "app_name and user_id are required when user_state is provided."
-                        raise ValueError(msg)
                     cursor.execute(user_upsert_sql, (app_name, user_id, to_json(user_state)))
             finally:
                 cursor.close()
@@ -505,7 +495,7 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
@@ -515,9 +505,9 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
                 cursor.execute(
                     sql,
                     (
+                        event_record["id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
-                        event_record["author"],
                         event_record["timestamp"],
                         event_data_str,
                     ),
@@ -527,32 +517,29 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
             conn.commit()
 
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        """List events for a session ordered by timestamp.
-
-        Args:
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-        """
-        where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
+        """List events for a session ordered by timestamp."""
+        where_clauses = ["s.app_name = %s", "s.user_id = %s", "e.session_id = %s"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > %s")
+            where_clauses.append("e.timestamp > %s")
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
         limit_clause = " LIMIT %s" if limit else ""
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
         if limit:
             params.append(limit)
@@ -568,11 +555,13 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
 
                 return [
                     EventRecord(
-                        session_id=row[0],
-                        invocation_id=row[1],
-                        author=row[2],
+                        id=row[0],
+                        session_id=row[1],
+                        invocation_id=row[2],
                         timestamp=row[3],
                         event_data=from_json(row[4]) if isinstance(row[4], str) else row[4],
+                        app_name=row[5],
+                        user_id=row[6],
                     )
                     for row in rows
                 ]

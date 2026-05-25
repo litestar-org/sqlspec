@@ -169,11 +169,13 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         )
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
-        """Get session by ID.
+        """Get session.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
             renew_for: If positive, touch update_time while reading.
 
@@ -187,18 +189,20 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         try:
             async with self._config.provide_connection() as conn:
                 await self._apply_pragmas(conn)
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-                    update_sql = f"UPDATE {self._session_table} SET update_time = ? WHERE id = ?"
-                    await conn.execute(update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), session_id))
+                    update_sql = f"UPDATE {self._session_table} SET update_time = ? WHERE app_name = ? AND user_id = ? AND id = ?"
+                    await conn.execute(
+                        update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), app_name, user_id, session_id)
+                    )
                     await conn.commit()
 
-                cursor = await conn.execute(sql, (session_id,))
+                cursor = await conn.execute(sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
 
                 if row is None:
@@ -217,10 +221,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return None
             raise
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
 
@@ -235,12 +241,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(sql, (state_json, now_julian, session_id))
+            await conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             await conn.commit()
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -295,43 +301,41 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return []
             raise
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
 
         Notes:
             Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = ?"
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(sql, (session_id,))
+            await conn.execute(sql, (app_name, user_id, session_id))
             await conn.commit()
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session.
 
         Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_data.
+            event_record: Event record.
 
         Notes:
             Uses Julian Day for timestamp.
             event_data dict is serialized to TEXT as event_data column.
         """
-        import uuid
-
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
-        event_id = str(uuid.uuid4())
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, author, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?)
         """
 
         async with self._config.provide_connection() as conn:
@@ -339,10 +343,9 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(
                 sql,
                 (
-                    event_id,
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     timestamp_julian,
                     event_data_json,
                 ),
@@ -352,33 +355,30 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
-        import uuid
-
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
-        event_id = str(uuid.uuid4())
 
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, author, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?)
         """
 
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
@@ -403,25 +403,18 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(
                 insert_sql,
                 (
-                    event_id,
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     timestamp_julian,
                     event_data_json,
                 ),
             )
-            cursor = await conn.execute(update_sql, (state_json, now_julian, session_id))
+            cursor = await conn.execute(update_sql, (state_json, now_julian, app_name, user_id, session_id))
             row = await cursor.fetchone()
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 await conn.execute(app_upsert_sql, (app_name, to_json(app_state), now_julian))
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 await conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
             await conn.commit()
 
@@ -439,11 +432,18 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session.
 
         Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
             limit: Maximum number of events to return.
@@ -455,21 +455,22 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             Uses index on (session_id, timestamp ASC).
             Parses event_data TEXT back to dict for event_data field.
         """
-        where_clauses = ["session_id = ?"]
-        params: list[Any] = [session_id]
+        where_clauses = ["s.app_name = ?", "s.user_id = ?", "e.session_id = ?"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > ?")
+            where_clauses.append("e.timestamp > ?")
             params.append(_datetime_to_julian(after_timestamp))
 
         where_clause = " AND ".join(where_clauses)
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, invocation_id, author, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
@@ -480,11 +481,13 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
                 return [
                     EventRecord(
+                        id=row[0],
                         session_id=row[1],
                         invocation_id=row[2],
-                        author=row[3],
-                        timestamp=_julian_to_datetime(row[4]),
-                        event_data=from_json(row[5]) if row[5] else {},
+                        timestamp=_julian_to_datetime(row[3]),
+                        event_data=from_json(row[4]) if row[4] else {},
+                        app_name=row[5],
+                        user_id=row[6],
                     )
                     for row in rows
                 ]
@@ -669,7 +672,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
             invocation_id TEXT,
-            author TEXT,
             timestamp REAL NOT NULL,
             event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE

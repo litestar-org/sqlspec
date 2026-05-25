@@ -113,28 +113,30 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             await cur.execute(query, params)
 
-        return await self.get_session(session_id)  # type: ignore[return-value]
+        return await self.get_session(app_name, user_id, session_id)  # type: ignore[return-value]
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             query = pg_sql.SQL("""
             UPDATE {table}
             SET update_time = CURRENT_TIMESTAMP
-            WHERE id = %s
+            WHERE app_name = %s AND user_id = %s AND id = %s
             RETURNING id, app_name, user_id, state, create_time, update_time
             """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id, session_id)
         else:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
             FROM {table}
-            WHERE id = %s
+            WHERE app_name = %s AND user_id = %s AND id = %s
             """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id, session_id)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
-                await cur.execute(query, (session_id,))
+                await cur.execute(query, params)
                 row = await cur.fetchone()
 
                 if row is None:
@@ -151,21 +153,23 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """).format(table=pg_sql.Identifier(self._session_table))
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(query, (Jsonb(state), session_id))
+            await cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
-    async def delete_session(self, session_id: str) -> None:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(query, (session_id,))
+            await cur.execute(query, (app_name, user_id, session_id))
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
@@ -207,7 +211,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
@@ -218,9 +222,9 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             await cur.execute(
                 query,
                 (
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     jsonb_value,
                 ),
@@ -229,24 +233,24 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         update_query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
 
@@ -273,24 +277,18 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             await cur.execute(
                 insert_query,
                 (
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     jsonb_value,
                 ),
             )
-            await cur.execute(update_query, (Jsonb(state), session_id))
+            await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
             row = await cur.fetchone()
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             await conn.commit()
 
@@ -308,30 +306,37 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
+        where_clauses = [pg_sql.SQL("s.app_name = %s"), pg_sql.SQL("s.user_id = %s"), pg_sql.SQL("e.session_id = %s")]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > %s")
+            where_clauses.append(pg_sql.SQL("e.timestamp > %s"))
             params.append(after_timestamp)
 
-        where_clause = " AND ".join(where_clauses)
+        where_clause = pg_sql.SQL(" AND ").join(where_clauses)
         if limit:
             params.append(limit)
 
         query = pg_sql.SQL(
             """
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {events_table} e
+        JOIN {session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
         ).format(
-            table=pg_sql.Identifier(self._events_table),
-            where_clause=pg_sql.SQL(where_clause),  # pyright: ignore[reportArgumentType]
-            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),  # pyright: ignore[reportArgumentType]
+            events_table=pg_sql.Identifier(self._events_table),
+            session_table=pg_sql.Identifier(self._session_table),
+            where_clause=where_clause,
+            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),
         )
 
         try:
@@ -341,11 +346,13 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
                 return [
                     EventRecord(
+                        id=row["id"],
                         session_id=row["session_id"],
                         invocation_id=row["invocation_id"],
-                        author=row["author"],
                         timestamp=row["timestamp"],
                         event_data=row["event_data"],
+                        app_name=row["app_name"],
+                        user_id=row["user_id"],
                     )
                     for row in rows
                 ]
@@ -480,9 +487,9 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def _get_create_events_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
@@ -583,18 +590,18 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return await async_(self._get_session)(session_id, renew_for)
+        return await async_(self._get_session)(app_name, user_id, session_id, renew_for)
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
+        await async_(self._update_session_state)(app_name, user_id, session_id, state)
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
+        await async_(self._delete_session)(app_name, user_id, session_id)
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
@@ -603,30 +610,29 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
         return await async_(self._append_event_and_update_state)(
-            event_record,
-            session_id,
-            state,
-            app_name=app_name,
-            user_id=user_id,
-            app_state=app_state,
-            user_state=user_state,
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+        return await async_(self._get_events)(app_name, user_id, session_id, after_timestamp, limit)
 
     async def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
@@ -693,9 +699,9 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     async def _get_create_events_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
@@ -789,30 +795,34 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             cur.execute(query, params)
 
-        result = self._get_session(session_id)
+        result = self._get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
 
-    def _get_session(self, session_id: str, renew_for: "int | timedelta | None" = None) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             query = pg_sql.SQL("""
             UPDATE {table}
             SET update_time = CURRENT_TIMESTAMP
-            WHERE id = %s
+            WHERE app_name = %s AND user_id = %s AND id = %s
             RETURNING id, app_name, user_id, state, create_time, update_time
             """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id, session_id)
         else:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
             FROM {table}
-            WHERE id = %s
+            WHERE app_name = %s AND user_id = %s AND id = %s
             """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id, session_id)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(query, (session_id,))
+                cur.execute(query, params)
                 row = cur.fetchone()
 
                 if row is None:
@@ -829,21 +839,23 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """).format(table=pg_sql.Identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(query, (Jsonb(state), session_id))
+            cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
-    def _delete_session(self, session_id: str) -> None:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE id = %s").format(table=pg_sql.Identifier(self._session_table))
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(query, (session_id,))
+            cur.execute(query, (app_name, user_id, session_id))
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
@@ -885,7 +897,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     def _insert_event(self, event_record: EventRecord) -> None:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
@@ -896,9 +908,9 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             cur.execute(
                 insert_query,
                 (
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     jsonb_value,
                 ),
@@ -908,24 +920,24 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     def _append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         update_query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=pg_sql.Identifier(self._session_table))
 
@@ -952,24 +964,18 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             cur.execute(
                 insert_query,
                 (
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     jsonb_value,
                 ),
             )
-            cur.execute(update_query, (Jsonb(state), session_id))
+            cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
             row = cur.fetchone()
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             conn.commit()
 
@@ -987,30 +993,37 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
+        where_clauses = [pg_sql.SQL("s.app_name = %s"), pg_sql.SQL("s.user_id = %s"), pg_sql.SQL("e.session_id = %s")]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > %s")
+            where_clauses.append(pg_sql.SQL("e.timestamp > %s"))
             params.append(after_timestamp)
 
-        where_clause = " AND ".join(where_clauses)
+        where_clause = pg_sql.SQL(" AND ").join(where_clauses)
         if limit:
             params.append(limit)
 
         query = pg_sql.SQL(
             """
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {events_table} e
+        JOIN {session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
         ).format(
-            table=pg_sql.Identifier(self._events_table),
-            where_clause=pg_sql.SQL(where_clause),  # pyright: ignore[reportArgumentType]
-            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),  # pyright: ignore[reportArgumentType]
+            events_table=pg_sql.Identifier(self._events_table),
+            session_table=pg_sql.Identifier(self._session_table),
+            where_clause=where_clause,
+            limit_clause=pg_sql.SQL(" LIMIT %s" if limit else ""),
         )
 
         try:
@@ -1020,11 +1033,13 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
 
                 return [
                     EventRecord(
+                        id=row["id"],
                         session_id=row["session_id"],
                         invocation_id=row["invocation_id"],
-                        author=row["author"],
                         timestamp=row["timestamp"],
                         event_data=row["event_data"],
+                        app_name=row["app_name"],
+                        user_id=row["user_id"],
                     )
                     for row in rows
                 ]

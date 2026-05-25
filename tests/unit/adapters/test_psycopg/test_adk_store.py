@@ -72,18 +72,21 @@ def test_sync_append_event_inserts_without_session_update() -> None:
     """append_event must insert a single event without writing session state."""
     store, cursor, connection = _build_store()
     event_record = {
+        "id": "event-1",
         "session_id": "session-1",
         "invocation_id": "",
-        "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
         "event_data": {"id": "event-1"},
+        "app_name": "app-1",
+        "user_id": "user-1",
     }
 
     store._append_event(event_record)  # type: ignore[arg-type]
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
-    assert params[0] == "session-1"
+    assert params[0] == "event-1"
+    assert params[1] == "session-1"
     assert isinstance(params[4], Jsonb)
     assert connection.commit_called
 
@@ -93,18 +96,20 @@ def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
     base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     rows = [
         {
+            "id": "event-1",
             "session_id": "session-1",
             "invocation_id": "",
-            "author": "assistant",
             "timestamp": base_time,
             "event_data": {"id": "event-2"},
+            "app_name": "app-1",
+            "user_id": "user-1",
         }
     ]
     store, cursor, _ = _build_store(rows)
 
-    result = store._get_events("session-1", after_timestamp=base_time, limit=1)
+    result = store._get_events("app-1", "user-1", "session-1", after_timestamp=base_time, limit=1)
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
-    assert params == ("session-1", base_time, 1)
+    assert params == ("app-1", "user-1", "session-1", base_time, 1)
     assert result[0]["event_data"]["id"] == "event-2"

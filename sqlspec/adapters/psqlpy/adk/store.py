@@ -78,28 +78,32 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 """
                 await conn.execute(sql, [session_id, app_name, user_id, state])
 
-        return await self.get_session(session_id)  # type: ignore[return-value]
+        res = await self.get_session(app_name, user_id, session_id)
+        if res is None:
+            msg = "Failed to retrieve created session."
+            raise RuntimeError(msg)
+        return res
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
-            WHERE id = $1
+            WHERE app_name = $1 AND user_id = $2 AND id = $3
             RETURNING id, app_name, user_id, state, create_time, update_time
             """
         else:
             sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE id = $1
-        """
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = $1 AND user_id = $2 AND id = $3
+            """
 
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-                result = await conn.fetch(sql, [session_id])
+                result = await conn.fetch(sql, [app_name, user_id, session_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
 
                 if not rows:
@@ -120,21 +124,21 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 return None
             raise
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
         UPDATE {self._session_table}
         SET state = $1, update_time = CURRENT_TIMESTAMP
-        WHERE id = $2
+        WHERE app_name = $2 AND user_id = $3 AND id = $4
         """
 
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(sql, [state, session_id])
+            await conn.execute(sql, [state, app_name, user_id, session_id])
 
-    async def delete_session(self, session_id: str) -> None:
-        sql = f"DELETE FROM {self._session_table} WHERE id = $1"
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = $1 AND user_id = $2 AND id = $3"
 
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            await conn.execute(sql, [session_id])
+            await conn.execute(sql, [app_name, user_id, session_id])
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         if user_id is None:
@@ -179,7 +183,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def append_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES ($1, $2, $3, $4, $5)
         """
 
@@ -187,9 +191,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await conn.execute(
                 sql,
                 [
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     event_record["event_data"],
                 ],
@@ -198,23 +202,23 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES ($1, $2, $3, $4, $5)
         """
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = $1, update_time = CURRENT_TIMESTAMP
-        WHERE id = $2
+        WHERE app_name = $2 AND user_id = $3 AND id = $4
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
         app_upsert_sql = f"""
@@ -236,24 +240,18 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await conn.execute(
                 insert_sql,
                 [
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     event_record["event_data"],
                 ],
             )
-            result = await conn.fetch(update_sql, [state, session_id])
+            result = await conn.fetch(update_sql, [state, app_name, user_id, session_id])
             rows: list[dict[str, Any]] = result.result() if result else []
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 await conn.execute(app_upsert_sql, [app_name, app_state])
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 await conn.execute(user_upsert_sql, [app_name, user_id, user_state])
 
         if not rows:
@@ -271,13 +269,18 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        where_clauses = ["session_id = $1"]
-        params: list[Any] = [session_id]
+        where_clauses = ["s.app_name = $1", "s.user_id = $2", "e.session_id = $3"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append(f"timestamp > ${len(params) + 1}")
+            where_clauses.append(f"e.timestamp > ${len(params) + 1}")
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
@@ -286,10 +289,11 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             params.append(limit)
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
@@ -299,11 +303,13 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
                 return [
                     EventRecord(
+                        id=row["id"],
                         session_id=row["session_id"],
                         invocation_id=row["invocation_id"],
-                        author=row["author"],
                         timestamp=row["timestamp"],
                         event_data=row["event_data"],
+                        app_name=row["app_name"],
+                        user_id=row["user_id"],
                     )
                     for row in rows
                 ]
@@ -452,9 +458,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def _get_create_events_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE

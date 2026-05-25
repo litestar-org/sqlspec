@@ -119,24 +119,20 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        return await self.get_session(session_id)  # type: ignore[return-value]
+        result = await self.get_session(app_name, user_id, session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     async def get_session(
-        self, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
-        """Get session by ID.
-
-        Args:
-            session_id: Session identifier.
-            renew_for: If positive, touch update_time while reading.
-
-        Returns:
-            Session record or None if not found.
-        """
+        """Get session by ID."""
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         try:
@@ -145,22 +141,22 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-                    update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE id = %s"
-                    await cursor.execute(update_sql, (session_id,))
+                    update_sql = f"UPDATE {self._session_table} SET update_time = UTC_TIMESTAMP(6) WHERE app_name = %s AND user_id = %s AND id = %s"
+                    await cursor.execute(update_sql, (app_name, user_id, session_id))
                     await conn.commit()
 
-                await cursor.execute(sql, (session_id,))
+                await cursor.execute(sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
 
                 if row is None:
                     return None
 
-                session_id_val, app_name, user_id, state_json, create_time, update_time = row
+                session_id_val, app_name_val, user_id_val, state_json, create_time, update_time = row
 
                 return SessionRecord(
                     id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
+                    app_name=app_name_val,
+                    user_id=user_id_val,
                     state=from_json(state_json) if isinstance(state_json, str) else state_json,
                     create_time=create_time,
                     update_time=update_time,
@@ -170,53 +166,36 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 return None
             raise
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
-
-        Args:
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-        """
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
         state_json = to_json(state)
 
         sql = f"""
         UPDATE {self._session_table}
-        SET state = %s
-        WHERE id = %s
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         async with (
             self._config.provide_connection() as conn,
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
-            await cursor.execute(sql, (state_json, session_id))
+            await cursor.execute(sql, (state_json, app_name, user_id, session_id))
             await conn.commit()
 
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
-
-        Args:
-            session_id: Session identifier.
-        """
-        sql = f"DELETE FROM {self._session_table} WHERE id = %s"
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and all associated events (cascade)."""
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
 
         async with (
             self._config.provide_connection() as conn,
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
-            await cursor.execute(sql, (session_id,))
+            await cursor.execute(sql, (app_name, user_id, session_id))
             await conn.commit()
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-        """
+        """List sessions for an app, optionally filtered by user."""
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -259,18 +238,13 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             raise
 
     async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session.
-
-        Args:
-            event_record: Event record with 5 keys (session_id, invocation_id,
-                author, timestamp, event_data).
-        """
+        """Append an event to a session."""
         event_data = event_record["event_data"]
         event_data_str = to_json(event_data) if not isinstance(event_data, str) else event_data
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
@@ -281,9 +255,9 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(
                 sql,
                 (
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     event_data_str,
                 ),
@@ -293,40 +267,35 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
     async def append_event_and_update_state(
         self,
         event_record: EventRecord,
+        app_name: str,
+        user_id: str,
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_name: "str | None" = None,
-        user_id: "str | None" = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update session + scoped state.
-
-        MySQL doesn't support UPDATE...RETURNING; we follow the UPDATE with a
-        SELECT inside the same transaction so callers get the refreshed row
-        in a single round-trip pair (no separate connection acquisition).
-        """
+        """Atomically append an event and update session + scoped state."""
         event_data = event_record["event_data"]
         event_data_str = to_json(event_data) if not isinstance(event_data, str) else event_data
         state_json = to_json(state)
 
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_data
+            id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s)
         """
 
         update_sql = f"""
         UPDATE {self._session_table}
-        SET state = %s
-        WHERE id = %s
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         app_upsert_sql = f"""
@@ -348,25 +317,19 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(
                 insert_sql,
                 (
+                    event_record["id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     event_record["timestamp"],
                     event_data_str,
                 ),
             )
-            await cursor.execute(update_sql, (state_json, session_id))
-            await cursor.execute(select_sql, (session_id,))
+            await cursor.execute(update_sql, (state_json, app_name, user_id, session_id))
+            await cursor.execute(select_sql, (app_name, user_id, session_id))
             row = await cursor.fetchone()
             if app_state:
-                if app_name is None:
-                    msg = "app_name is required when app_state is provided."
-                    raise ValueError(msg)
                 await cursor.execute(app_upsert_sql, (app_name, to_json(app_state)))
             if user_state:
-                if app_name is None or user_id is None:
-                    msg = "app_name and user_id are required when user_state is provided."
-                    raise ValueError(msg)
                 await cursor.execute(user_upsert_sql, (app_name, user_id, to_json(user_state)))
             await conn.commit()
 
@@ -385,33 +348,30 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        """Get events for a session.
-
-        Args:
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-        """
-        where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
+        """Get events for a session."""
+        where_clauses = ["s.app_name = %s", "s.user_id = %s", "e.session_id = %s"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > %s")
+            where_clauses.append("e.timestamp > %s")
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
@@ -424,11 +384,13 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
                 return [
                     EventRecord(
-                        session_id=row[0],
-                        invocation_id=row[1],
-                        author=row[2],
+                        id=row[0],
+                        session_id=row[1],
+                        invocation_id=row[2],
                         timestamp=row[3],
                         event_data=from_json(row[4]) if isinstance(row[4], str) else row[4],
+                        app_name=row[5],
+                        user_id=row[6],
                     )
                     for row in rows
                 ]
@@ -624,18 +586,12 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         Returns:
             SQL statement to create adk_event table with indexes.
-
-        Notes:
-            Post clean-break schema: 5 columns only.
-            - session_id, invocation_id, author: indexed scalars
-            - timestamp: microsecond-precision TIMESTAMP
-            - event_data: full Event as native JSON
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             event_data JSON NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,

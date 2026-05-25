@@ -125,7 +125,7 @@ class SQLSpecSessionService(BaseSessionService):
         Returns:
             Session object if found, None otherwise.
         """
-        record = await self._store.get_session(session_id, renew_for=renew_for)
+        record = await self._store.get_session(app_name, user_id, session_id, renew_for=renew_for)
 
         if not record:
             log_with_context(
@@ -151,7 +151,9 @@ class SQLSpecSessionService(BaseSessionService):
                 after_timestamp = datetime.fromtimestamp(config.after_timestamp, tz=timezone.utc)
             limit = config.num_recent_events
 
-        events = await self._store.get_events(session_id=session_id, after_timestamp=after_timestamp, limit=limit)
+        events = await self._store.get_events(
+            app_name=app_name, user_id=user_id, session_id=session_id, after_timestamp=after_timestamp, limit=limit
+        )
         log_with_context(
             logger,
             logging.DEBUG,
@@ -196,7 +198,7 @@ class SQLSpecSessionService(BaseSessionService):
             user_id: ID of the user.
             session_id: Session identifier.
         """
-        record = await self._store.get_session(session_id)
+        record = await self._store.get_session(app_name, user_id, session_id)
 
         if not record:
             log_with_context(
@@ -210,7 +212,7 @@ class SQLSpecSessionService(BaseSessionService):
             )
             return
 
-        await self._store.delete_session(session_id)
+        await self._store.delete_session(app_name, user_id, session_id)
         log_with_context(
             logger, logging.DEBUG, "adk.session.delete", app_name=app_name, session_id=session_id, deleted=True
         )
@@ -249,7 +251,9 @@ class SQLSpecSessionService(BaseSessionService):
         self._apply_temp_state(session, event)
         event = self._trim_temp_delta_state(event)
 
-        event_record = event_to_record(event=event, session_id=session.id)
+        event_record = event_to_record(
+            event=event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
+        )
 
         # Build durable state: current state minus temp keys, plus the
         # event's state delta (temp keys already stripped by _trim above).
@@ -259,7 +263,7 @@ class SQLSpecSessionService(BaseSessionService):
         app_state, user_state, session_state = split_scoped_state(durable_state)
 
         # --- Stale-session detection ---
-        current_record = await self._store.get_session(session.id)
+        current_record = await self._store.get_session(session.app_name, session.user_id, session.id)
         if current_record is None:
             msg = f"Session {session.id} not found."
             raise ValueError(msg)
@@ -282,10 +286,10 @@ class SQLSpecSessionService(BaseSessionService):
         # --- Persist event and all scoped state atomically ---
         updated_record = await self._store.append_event_and_update_state(
             event_record=event_record,
-            session_id=session.id,
-            state=session_state,
             app_name=session.app_name,
             user_id=session.user_id,
+            session_id=session.id,
+            state=session_state,
             app_state=app_state or None,
             user_state=user_state or None,
         )
