@@ -8,7 +8,6 @@ import pytest
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver, resolve_dialect_from_dbms_name
-from sqlspec.adapters.arrow_odbc import driver as driver_module
 from sqlspec.exceptions import SQLSpecError
 
 
@@ -110,7 +109,7 @@ def test_arrow_odbc_select_to_arrow_batches_returns_batches() -> None:
 
 def test_arrow_odbc_select_to_arrow_raises_mapped_driver_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """Native read failures should use SQLSpec's deferred exception mapping."""
-    monkeypatch.setattr(driver_module.ARROW_ODBC_MODULE, "Error", FakeOdbcError)
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
     connection = ErrorConnection()
     driver = ArrowOdbcDriver(cast("Any", connection), driver_features={"chunk_size": 2})
 
@@ -131,7 +130,7 @@ def test_arrow_odbc_bulk_insert_arrow_uses_from_table_to_db() -> None:
 
 def test_arrow_odbc_bulk_insert_arrow_raises_mapped_driver_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """Native write failures should not be swallowed by the deferred exception handler."""
-    monkeypatch.setattr(driver_module.ARROW_ODBC_MODULE, "Error", FakeOdbcError)
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
     connection = ErrorConnection()
     driver = ArrowOdbcDriver(cast("Any", connection), driver_features={"chunk_size": 10})
 
@@ -148,7 +147,7 @@ def test_arrow_odbc_config_connects_with_verified_keyword_names(monkeypatch: Any
         calls.append((connection_string, kwargs))
         return connection
 
-    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.config.ARROW_ODBC_MODULE.connect", fake_connect)
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", fake_connect)
 
     config = ArrowOdbcConfig(
         connection_config={
@@ -170,7 +169,7 @@ def test_arrow_odbc_session_release_allows_connections_without_close(monkeypatch
     connection = NoCloseConnection()
 
     monkeypatch.setattr(
-        "sqlspec.adapters.arrow_odbc.config.ARROW_ODBC_MODULE.connect", lambda *_args, **_kwargs: connection
+        "sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", lambda *_args, **_kwargs: connection
     )
 
     config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={ODBC Driver 18 for SQL Server};"})
@@ -184,7 +183,7 @@ def test_arrow_odbc_field_config_uses_driver_name_for_dialect(monkeypatch: Any) 
     connection = NoCloseConnection()
 
     monkeypatch.setattr(
-        "sqlspec.adapters.arrow_odbc.config.ARROW_ODBC_MODULE.connect", lambda *_args, **_kwargs: connection
+        "sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", lambda *_args, **_kwargs: connection
     )
 
     config = ArrowOdbcConfig(
