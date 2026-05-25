@@ -8,7 +8,8 @@ type coercion, error handling, and query job management.
 import io
 from typing import TYPE_CHECKING, Any, cast
 
-from google.cloud.exceptions import GoogleCloudError
+from google.cloud.bigquery import QueryJobConfig
+from google.cloud.exceptions import GoogleCloudError, NotFound
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
@@ -18,6 +19,7 @@ from sqlspec.adapters.bigquery.core import (
     build_load_job_telemetry,
     build_retry,
     collect_rows,
+    copy_job_config,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
@@ -46,7 +48,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from google.cloud.bigquery import QueryJob, QueryJobConfig
+    from google.cloud.bigquery import QueryJob
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
@@ -62,6 +64,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
+
+
+def _normalize_bigquery_dataset_name(dataset_name: str) -> str:
+    """Return a BigQuery dataset path without identifier quoting."""
+    return dataset_name.strip().replace("`", "").replace("`.`", ".")
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -283,6 +290,24 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def rollback(self) -> None:
         """Rollback transaction - BigQuery doesn't support transactions."""
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set BigQuery default dataset for migration query jobs."""
+        dataset_path = self._qualify_dataset_path(schema)
+        job_config = QueryJobConfig()
+        if self._default_query_job_config is not None:
+            copy_job_config(self._default_query_job_config, job_config)
+        job_config.default_dataset = dataset_path
+        self._default_query_job_config = job_config
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether a BigQuery dataset exists."""
+        dataset_path = self._qualify_dataset_path(schema)
+        try:
+            self.connection.get_dataset(dataset_path)
+        except NotFound:
+            return False
+        return True
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
@@ -534,6 +559,26 @@ class BigQueryDriver(SyncDriverAdapterBase):
             False - BigQuery has no transaction support.
         """
         return False
+
+    def _qualify_dataset_path(self, dataset_name: str) -> str:
+        """Return a project-qualified BigQuery dataset path."""
+        normalized = _normalize_bigquery_dataset_name(dataset_name)
+        if "." in normalized:
+            return normalized
+
+        project = str(getattr(self.connection, "project", "") or "")
+        if not project and self._default_query_job_config is not None:
+            default_dataset = self._default_query_job_config.default_dataset
+            if default_dataset is not None:
+                default_dataset_path = _normalize_bigquery_dataset_name(str(default_dataset))
+                if "." in default_dataset_path:
+                    project = default_dataset_path.split(".", 1)[0]
+
+        if not project:
+            msg = "BigQuery migration schemas require a configured project"
+            raise SQLSpecError(msg)
+
+        return f"{project}.{normalized}"
 
 
 register_driver_profile("bigquery", driver_profile)

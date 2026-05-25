@@ -40,6 +40,11 @@ logger = get_logger("sqlspec.adapters.duckdb")
 _type_converter = DuckDBOutputConverter()
 
 
+def _quote_duckdb_search_path(schema: str) -> str:
+    """Return a DuckDB string literal for SET search_path."""
+    return "'" + schema.replace("'", "''") + "'"
+
+
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling DuckDB database exceptions.
 
@@ -209,6 +214,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.Error as e:
             msg = f"Failed to rollback DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set DuckDB search_path for migration SQL."""
+        self.connection.execute(f"SET search_path = {_quote_duckdb_search_path(schema)}")
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether a DuckDB schema exists."""
+        result = self.connection.execute(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", [schema]
+        ).fetchone()
+        return result is not None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
