@@ -474,6 +474,15 @@ class BaseMigrationRunner(ABC):
         migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))
 
+    def _resolve_default_schema(self) -> str | None:
+        """Return the configured default schema for migration execution."""
+        config = self.context.config if self.context else None
+        migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
+        default_schema = migration_config.get("default_schema")
+        if isinstance(default_schema, str) and default_schema:
+            return default_schema
+        return None
+
 
 class SyncMigrationRunner(BaseMigrationRunner):
     """Synchronous migration runner with pure sync methods."""
@@ -571,8 +580,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 driver.begin()
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -581,6 +593,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
                     on_success(execution_time)
                 driver.commit()
             else:
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -674,8 +688,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 driver.begin()
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -684,6 +701,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
                     on_success(execution_time)
                 driver.commit()
             else:
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -901,8 +920,11 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 await driver.begin()
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -911,6 +933,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     await on_success(execution_time)
                 await driver.commit()
             else:
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -1004,8 +1028,11 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 await driver.begin()
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -1014,6 +1041,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     await on_success(execution_time)
                 await driver.commit()
             else:
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)

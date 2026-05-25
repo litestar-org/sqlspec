@@ -14,6 +14,7 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
+from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
@@ -650,6 +651,23 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
         self._last_command_error: Exception | None = None
         self._last_command_metrics: dict[str, float] | None = None
+
+    def _get_migration_config(self) -> "dict[str, Any]":
+        """Return migration config as a plain dictionary."""
+        return cast("dict[str, Any]", self.config.migration_config) or {}
+
+    def _resolve_default_schema(self) -> str | None:
+        """Return the configured default migration schema."""
+        default_schema = self._get_migration_config().get("default_schema")
+        if isinstance(default_schema, str) and default_schema:
+            return default_schema
+        return None
+
+    def _resolve_tracker_schema(self) -> str | None:
+        """Return tracker schema only for adapters that support schema-qualified migration tables."""
+        if not bool(getattr(self.config, "supports_migration_schemas", False)):
+            return None
+        return _resolve_tracker_schema(self._get_migration_config())
 
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.

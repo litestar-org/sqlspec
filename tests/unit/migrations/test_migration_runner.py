@@ -12,15 +12,59 @@ Tests for MigrationRunner core functionality including:
 import time
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations import runner as runner_module
 from sqlspec.migrations.base import BaseMigrationRunner
+from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import SQLFileLoader as MigrationSQLFileLoader
-from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+
+
+class _RunnerConfig:
+    supports_transactional_ddl = True
+
+    def __init__(self, migration_config: dict[str, Any]) -> None:
+        self.migration_config = migration_config
+
+
+class _SyncMigrationLoader:
+    def get_up_sql(self, _file_path: Path) -> list[str]:
+        return ["CREATE TABLE example (id INTEGER)"]
+
+    def get_down_sql(self, _file_path: Path) -> list[str]:
+        return ["DROP TABLE example"]
+
+
+class _AsyncMigrationLoader:
+    async def get_up_sql(self, _file_path: Path) -> list[str]:
+        return ["CREATE TABLE example (id INTEGER)"]
+
+    async def get_down_sql(self, _file_path: Path) -> list[str]:
+        return ["DROP TABLE example"]
+
+
+def _migration(file_path: Path, loader: Any) -> dict[str, Any]:
+    return {
+        "version": "0001",
+        "file_path": file_path,
+        "loader": loader,
+        "has_upgrade": True,
+        "has_downgrade": True,
+    }
+
+
+def _sync_runner(tmp_path: Path, migration_config: dict[str, Any]) -> SyncMigrationRunner:
+    context = MigrationContext(config=_RunnerConfig(migration_config))
+    return SyncMigrationRunner(tmp_path, {}, context, {})
+
+
+def _async_runner(tmp_path: Path, migration_config: dict[str, Any]) -> AsyncMigrationRunner:
+    context = MigrationContext(config=_RunnerConfig(migration_config))
+    return AsyncMigrationRunner(tmp_path, {}, context, {})
 
 
 def create_test_migration_runner(migrations_path: Path = Path("/test")) -> BaseMigrationRunner:
@@ -113,6 +157,83 @@ def _write_basic_sql(path: Path, version: str, body: str = "SELECT 1;") -> None:
 {body}
 """.strip()
     )
+
+
+def test_sync_execute_upgrade_sets_migration_schema_after_begin(tmp_path: Path) -> None:
+    """Configured migration schemas should be applied inside the migration transaction."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = Mock()
+
+    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+
+    assert driver.mock_calls[:4] == [
+        call.begin(),
+        call.set_migration_session_schema("app_schema"),
+        call.execute_script("CREATE TABLE example (id INTEGER)"),
+        call.commit(),
+    ]
+
+
+def test_sync_execute_upgrade_skips_migration_schema_when_unset(tmp_path: Path) -> None:
+    """Back-compat path should not call the schema hook when default_schema is unset."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {})
+    driver = Mock()
+
+    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+
+    driver.set_migration_session_schema.assert_not_called()
+
+
+def test_sync_execute_downgrade_sets_migration_schema_after_begin(tmp_path: Path) -> None:
+    """Downgrades should use the same schema setup order as upgrades."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = Mock()
+
+    runner.execute_downgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+
+    assert driver.mock_calls[:4] == [
+        call.begin(),
+        call.set_migration_session_schema("app_schema"),
+        call.execute_script("DROP TABLE example"),
+        call.commit(),
+    ]
+
+
+@pytest.mark.anyio
+async def test_async_execute_upgrade_sets_migration_schema_after_begin(tmp_path: Path) -> None:
+    """Async migrations should await the schema hook inside the transaction."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = AsyncMock()
+
+    await runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
+
+    assert driver.mock_calls[:4] == [
+        call.begin(),
+        call.set_migration_session_schema("app_schema"),
+        call.execute_script("CREATE TABLE example (id INTEGER)"),
+        call.commit(),
+    ]
+
+
+@pytest.mark.anyio
+async def test_async_execute_upgrade_skips_migration_schema_when_unset(tmp_path: Path) -> None:
+    """Async back-compat path should not call the schema hook when default_schema is unset."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {})
+    driver = AsyncMock()
+
+    await runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
+
+    driver.set_migration_session_schema.assert_not_called()
 
 
 def test_load_migration_metadata_uses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

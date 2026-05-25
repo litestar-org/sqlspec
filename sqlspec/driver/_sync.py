@@ -152,6 +152,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         logger.debug("migration.schema.noop", extra={"schema": schema, "driver": type(self).__name__})
 
+    def has_schema(self, schema: str) -> bool:
+        """Return whether the schema exists for migration validation.
+
+        Args:
+            schema: Schema name to validate.
+
+        Returns:
+            True when the adapter does not provide schema validation.
+        """
+        logger.debug("migration.schema.validation.noop", extra={"schema": schema, "driver": type(self).__name__})
+        return True
+
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS - The Execution Engine
     # ─────────────────────────────────────────────────────────────────────────────
