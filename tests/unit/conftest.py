@@ -42,26 +42,26 @@ class TestAiosqliteDriver(AiosqliteDriver):
 def sqlite_sync_driver() -> Generator[TestSqliteDriver, None, None]:
     """Fixture for a real SQLite sync driver using in-memory database."""
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-    conn.execute("INSERT INTO users (name) VALUES ('test'), ('example')")
-    conn.commit()
-
-    driver = TestSqliteDriver(conn)
-    yield driver
-    conn.close()
+    try:
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO users (name) VALUES ('test'), ('example')")
+        conn.commit()
+        yield TestSqliteDriver(conn)
+    finally:
+        conn.close()
 
 
 @pytest.fixture
 async def aiosqlite_async_driver() -> AsyncGenerator[TestAiosqliteDriver, None]:
     """Fixture for a real aiosqlite async driver using in-memory database."""
     conn = await aiosqlite.connect(":memory:")
-    await conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-    await conn.execute("INSERT INTO users (name) VALUES ('test'), ('example')")
-    await conn.commit()
-
-    driver = TestAiosqliteDriver(conn)
-    yield driver
-    await conn.close()
+    try:
+        await conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        await conn.execute("INSERT INTO users (name) VALUES ('test'), ('example')")
+        await conn.commit()
+        yield TestAiosqliteDriver(conn)
+    finally:
+        await conn.close()
 
 
 __all__ = (

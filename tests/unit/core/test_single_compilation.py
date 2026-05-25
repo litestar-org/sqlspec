@@ -171,12 +171,14 @@ class TestPerformanceOverhead:
         with tempfile.TemporaryDirectory() as d:
             # Raw sqlite3
             conn = sqlite3.connect(f"{d}/raw.db")
-            conn.execute("CREATE TABLE t (id INT)")
-            start = time.perf_counter()
-            for i in range(ROWS):
-                conn.execute("INSERT INTO t VALUES (?)", (i,))
-            raw_time = time.perf_counter() - start
-            conn.close()
+            try:
+                conn.execute("CREATE TABLE t (id INT)")
+                start = time.perf_counter()
+                for i in range(ROWS):
+                    conn.execute("INSERT INTO t VALUES (?)", (i,))
+                raw_time = time.perf_counter() - start
+            finally:
+                conn.close()
 
             # SQLSpec
             spec = SQLSpec()

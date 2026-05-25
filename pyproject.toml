@@ -399,6 +399,14 @@ filterwarnings = [
   "ignore:PROCEDURE .* does not exist:Warning",
   "ignore::Warning:aiomysql.cursors",
   "ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning",
+  # coverage 7.x stores per-process coverage data in sqlite. Those
+  # connections are GC'd non-deterministically by Python (often during
+  # xdist worker shutdown), surfacing tracebacks at random sites in
+  # stdlib/xdist/sqlglot. Tracemalloc confirms allocation in
+  # execnet/coverage code, not ours. Suppress the message globally.
+  "ignore:unclosed database:ResourceWarning",
+  # Same warning when pytest's unraisable-exception hook re-emits it.
+  "ignore:.*unclosed database.*:pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
   "xdist_group: pin tests sharing state to the same xdist worker (registered to silence PytestUnknownMarkWarning when xdist isn't actively loaded)",

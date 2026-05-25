@@ -307,12 +307,14 @@ def test_adapter_script_execution_counts(statement_config_for_adapter: Statement
     assert statement_as_script.is_script is True
 
     connection = sqlite3.connect(":memory:")
-    sqlite_config = StatementConfig(
-        enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
-    )
-    driver = SqliteDriver(connection, sqlite_config)
-    split_statements = driver.split_script_statements(script, sqlite_config, strip_trailing_semicolon=True)
-    connection.close()
+    try:
+        sqlite_config = StatementConfig(
+            enable_caching=False, parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        )
+        driver = SqliteDriver(connection, sqlite_config)
+        split_statements = driver.split_script_statements(script, sqlite_config, strip_trailing_semicolon=True)
+    finally:
+        connection.close()
 
     non_empty_statements = [stmt for stmt in split_statements if stmt.strip()]
     assert len(non_empty_statements) == script_statements
