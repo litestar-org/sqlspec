@@ -2,22 +2,9 @@ name: Tests And Linting
 
 on:
   pull_request:
-    # paths-ignore skips this workflow entirely when only the listed paths
-    # change. Negation (!docs/examples/**) re-includes paths that DO need
-    # CI — docs/examples/** is in pytest testpaths and runs as integration
-    # tests, so it must trigger the workflow even though it lives under
-    # docs/.
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - '!docs/examples/**'
   push:
     branches:
       - main
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - '!docs/examples/**'
 
 # Cancel in-flight runs of this workflow on the same ref when a newer
 # commit lands. Saves runner minutes during a churn of PR pushes. Not
@@ -27,7 +14,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      ci_required: ${{ steps.scope.outputs.ci_required }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect CI scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ci_required=true
+          base_sha=""
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base_sha="$PR_BASE_SHA"
+          elif [ -n "${PUSH_BEFORE_SHA:-}" ] && [[ ! "$PUSH_BEFORE_SHA" =~ ^0+$ ]]; then
+            base_sha="$PUSH_BEFORE_SHA"
+          fi
+
+          if [ -n "$base_sha" ] && git cat-file -e "$base_sha^{commit}" && git cat-file -e "$HEAD_SHA^{commit}"; then
+            changed_files="$(git diff --name-only "$base_sha" "$HEAD_SHA")"
+            if [ -n "$changed_files" ]; then
+              ci_required=false
+              while IFS= read -r path; do
+                [ -z "$path" ] && continue
+                case "$path" in
+                  docs/examples|docs/examples/*)
+                    ci_required=true
+                    break
+                    ;;
+                  docs/*)
+                    ;;
+                  *.md)
+                    case "$path" in
+                      */*)
+                        ci_required=true
+                        break
+                        ;;
+                    esac
+                    ;;
+                  *)
+                    ci_required=true
+                    break
+                    ;;
+                esac
+              done <<< "$changed_files"
+            fi
+          fi
+
+          echo "ci_required=$ci_required" >> "$GITHUB_OUTPUT"
+          echo "ci_required=$ci_required"
+
   quality:
+    needs: [ci-scope]
+    if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -90,6 +142,8 @@ jobs:
   # entire matrix (fail-fast: true) AND prevents integration jobs from
   # ever starting via `needs:` below.
   test-unit:
+    needs: [ci-scope]
+    if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-latest
     strategy:
       # fail-fast: true — matrix dimension is Python version only.
@@ -150,7 +204,8 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   test-integration:
-    needs: [test-unit]
+    needs: [ci-scope, test-unit]
+    if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -336,9 +391,10 @@ jobs:
 
   build-docs:
     needs:
+      - ci-scope
       - quality
       - test-unit
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -358,3 +414,58 @@ jobs:
 
       - name: Build docs
         run: uv run make docs
+
+  ci-required:
+    needs:
+      - ci-scope
+      - quality
+      - test-unit
+      - test-integration
+      - build-docs
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required CI result
+        env:
+          SCOPE_RESULT: ${{ needs.ci-scope.result }}
+          CI_REQUIRED: ${{ needs.ci-scope.outputs.ci_required }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          UNIT_RESULT: ${{ needs.test-unit.result }}
+          INTEGRATION_RESULT: ${{ needs.test-integration.result }}
+          DOCS_RESULT: ${{ needs.build-docs.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "$SCOPE_RESULT" != "success" ]; then
+            echo "::error::SCOPE_RESULT was $SCOPE_RESULT"
+            exit 1
+          fi
+
+          if [ "$CI_REQUIRED" = "false" ]; then
+            echo "Heavy CI intentionally skipped for docs-only or root markdown changes."
+            exit 0
+          fi
+
+          if [ "$CI_REQUIRED" != "true" ]; then
+            echo "::error::CI_REQUIRED was '$CI_REQUIRED'"
+            exit 1
+          fi
+
+          failed=0
+
+          for check in QUALITY_RESULT UNIT_RESULT INTEGRATION_RESULT; do
+            result="${!check}"
+            if [ "$result" != "success" ]; then
+              echo "::error::$check was $result"
+              failed=1
+            fi
+          done
+
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$DOCS_RESULT" != "success" ]; then
+            echo "::error::DOCS_RESULT was $DOCS_RESULT"
+            failed=1
+          fi
+
+          exit "$failed"
