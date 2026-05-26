@@ -17,7 +17,7 @@ pytestmark = pytest.mark.spanner
 
 def test_dml_in_read_only_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
     """Test that DML in read-only session raises SQLConversionError."""
-    with spanner_config.provide_session() as session:
+    with spanner_config.provide_read_session() as session:
         with pytest.raises(SQLConversionError, match="Cannot execute DML"):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
@@ -79,7 +79,7 @@ def test_execute_many_in_read_only_session(spanner_config: SpannerSyncConfig, te
         {"id": str(uuid4()), "name": "User 2", "email": "u2@example.com", "age": 25},
     ]
 
-    with spanner_config.provide_session() as session:
+    with spanner_config.provide_read_session() as session:
         with pytest.raises(SQLConversionError, match="execute_many requires"):
             session.execute_many(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)", parameters
