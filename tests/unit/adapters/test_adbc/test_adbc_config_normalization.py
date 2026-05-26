@@ -121,6 +121,57 @@ def test_connection_config_dict_flattens_db_kwargs_for_non_bigquery() -> None:
     assert resolved["foo"] == "bar"
 
 
+def test_non_flightsql_connection_config_shapes_are_stable() -> None:
+    """Pin non-FlightSQL connection normalization shapes."""
+    cases = (
+        (
+            {
+                "driver_name": "postgres",
+                "uri": "postgresql://example.invalid/db",
+                "db_kwargs": {"sslmode": "disable"},
+            },
+            {"uri": "postgresql://example.invalid/db", "sslmode": "disable"},
+        ),
+        (
+            {
+                "driver_name": "duckdb",
+                "uri": "duckdb:///tmp/sqlspec.duckdb",
+                "db_kwargs": {"read_only": False},
+            },
+            {"path": "/tmp/sqlspec.duckdb", "read_only": False},
+        ),
+        (
+            {
+                "driver_name": "sqlite",
+                "uri": "sqlite:///tmp/sqlspec.sqlite",
+                "db_kwargs": {"timeout": 30},
+            },
+            {"uri": "/tmp/sqlspec.sqlite", "timeout": 30},
+        ),
+        (
+            {
+                "driver_name": "bigquery",
+                "project_id": "test-project",
+                "dataset_id": "test_dataset",
+                "token": "token",
+                "db_kwargs": {"user_agent": "sqlspec-tests"},
+            },
+            {
+                "db_kwargs": {
+                    "user_agent": "sqlspec-tests",
+                    "project_id": "test-project",
+                    "dataset_id": "test_dataset",
+                    "token": "token",
+                }
+            },
+        ),
+    )
+
+    for connection_config, expected in cases:
+        config = AdbcConfig(connection_config=connection_config)
+        assert _get_connection_config_dict(config) == expected
+
+
 def test_gizmosql_default_dialect_is_duckdb() -> None:
     """Default GizmoSQL connections to DuckDB dialect."""
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
