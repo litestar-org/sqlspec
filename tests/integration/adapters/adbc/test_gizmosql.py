@@ -23,11 +23,7 @@ GizmoSQLSessionCase: TypeAlias = tuple[AdbcDriver, str]
 GizmoSQLConfigCase: TypeAlias = tuple[AdbcConfig, str]
 
 
-@pytest.fixture(
-    params=[
-        pytest.param(("adbc_gizmosql_session", "duckdb"), id="duckdb"),
-    ],
-)
+@pytest.fixture(params=[pytest.param(("adbc_gizmosql_session", "duckdb"), id="duckdb")])
 def gizmosql_session_case(request: pytest.FixtureRequest) -> GizmoSQLSessionCase:
     """Return a GizmoSQL session and expected backend dialect."""
 
@@ -39,7 +35,7 @@ def gizmosql_session_case(request: pytest.FixtureRequest) -> GizmoSQLSessionCase
     params=[
         pytest.param(("adbc_gizmosql_config", "duckdb"), id="duckdb"),
         pytest.param(("adbc_gizmosql_sqlite_config", "sqlite"), id="sqlite"),
-    ],
+    ]
 )
 def gizmosql_config_case(request: pytest.FixtureRequest) -> GizmoSQLConfigCase:
     """Return a GizmoSQL config and expected backend dialect."""
