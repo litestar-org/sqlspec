@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from adbc_driver_flightsql import DatabaseOptions
+
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_name_from_config
 
@@ -203,3 +205,139 @@ def test_gizmosql_supported_parameter_styles() -> None:
     # GizmoSQL (DuckDB backend) should support multiple styles
     supported = config.statement_config.parameter_config.supported_parameter_styles
     assert ParameterStyle.QMARK in supported
+
+
+def test_gizmosql_auth_fields_move_into_db_kwargs() -> None:
+    """Move GizmoSQL username and password into FlightSQL db_kwargs."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "username": "gizmo",
+            "password": "secret",
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["username"] == "gizmo"
+    assert resolved["db_kwargs"]["password"] == "secret"
+    assert "username" not in resolved
+    assert "password" not in resolved
+
+
+def test_gizmosql_tls_skip_verify_true_moves_into_db_kwargs() -> None:
+    """Move true TLS skip-verify into FlightSQL db_kwargs as a string."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "tls_skip_verify": True,
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"][DatabaseOptions.TLS_SKIP_VERIFY.value] == "true"
+    assert "tls_skip_verify" not in resolved
+
+
+def test_gizmosql_tls_skip_verify_false_moves_into_db_kwargs() -> None:
+    """Move false TLS skip-verify into FlightSQL db_kwargs as a string."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "tls_skip_verify": False,
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"][DatabaseOptions.TLS_SKIP_VERIFY.value] == "false"
+    assert "tls_skip_verify" not in resolved
+
+
+def test_gizmosql_authorization_header_moves_into_db_kwargs() -> None:
+    """Move authorization header into the FlightSQL-specific db_kwargs key."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "authorization_header": "Bearer token",
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"][DatabaseOptions.AUTHORIZATION_HEADER.value] == "Bearer token"
+    assert "authorization_header" not in resolved
+
+
+def test_gizmosql_user_supplied_db_kwargs_take_precedence() -> None:
+    """Preserve explicit FlightSQL db_kwargs over lifted top-level aliases."""
+    tls_key = DatabaseOptions.TLS_SKIP_VERIFY.value
+    auth_key = DatabaseOptions.AUTHORIZATION_HEADER.value
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "username": "top-user",
+            "password": "top-password",
+            "tls_skip_verify": True,
+            "authorization_header": "Bearer top",
+            "db_kwargs": {
+                "username": "db-user",
+                "password": "db-password",
+                tls_key: "false",
+                auth_key: "Bearer db",
+            },
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["username"] == "db-user"
+    assert resolved["db_kwargs"]["password"] == "db-password"
+    assert resolved["db_kwargs"][tls_key] == "false"
+    assert resolved["db_kwargs"][auth_key] == "Bearer db"
+    assert "username" not in resolved
+    assert "password" not in resolved
+    assert "tls_skip_verify" not in resolved
+    assert "authorization_header" not in resolved
+
+
+def test_gizmosql_backend_is_not_forwarded_to_flightsql() -> None:
+    """Do not forward sqlspec-internal GizmoSQL backend selection."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "gizmosql_backend": "sqlite",
+            "username": "gizmo",
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["username"] == "gizmo"
+    assert "gizmosql_backend" not in resolved
+
+
+def test_flightsql_alias_auth_fields_move_into_db_kwargs() -> None:
+    """Move FlightSQL alias auth fields into db_kwargs."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "flightsql",
+            "uri": "grpc+tls://localhost:31337",
+            "username": "flight",
+            "tls_skip_verify": True,
+        }
+    )
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["username"] == "flight"
+    assert resolved["db_kwargs"][DatabaseOptions.TLS_SKIP_VERIFY.value] == "true"
+    assert "username" not in resolved
+    assert "tls_skip_verify" not in resolved
