@@ -310,6 +310,18 @@ class AdbcDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(f'SET search_path TO {quoted_schema}, "$user", public')
 
+    def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        self.set_migration_session_schema(schema)
+
+    def reset_migration_session_schema(self) -> None:
+        """Reset PostgreSQL search path after non-transactional migration SQL."""
+        if not self._is_postgres:
+            super().reset_migration_session_schema()
+            return
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("RESET search_path")
+
     def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists when using ADBC PostgreSQL."""
         if not self._is_postgres:

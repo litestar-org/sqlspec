@@ -265,9 +265,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             config: The SQLSpec configuration.
         """
         super().__init__(config)
-        self.tracker = config.migration_tracker_type(
-            self.version_table, version_table_schema=self._resolve_tracker_schema()
-        )
+        self.tracker = self._create_tracker()
 
         # Create context with extension configurations
         context = MigrationContext.from_config(config)
@@ -1205,9 +1203,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             config: The SQLSpec configuration.
         """
         super().__init__(config)
-        self.tracker = config.migration_tracker_type(
-            self.version_table, version_table_schema=self._resolve_tracker_schema()
-        )
+        self.tracker = self._create_tracker()
 
         # Create context with extension configurations
         context = MigrationContext.from_config(config)

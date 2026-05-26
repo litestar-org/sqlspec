@@ -1131,6 +1131,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     _migration_config: "dict[str, Any] | MigrationConfig"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
+    migration_tracker_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     supports_transactional_ddl: "ClassVar[bool]" = False

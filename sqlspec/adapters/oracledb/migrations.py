@@ -181,7 +181,12 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
         """
         try:
-            columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
+            if self.version_table_schema:
+                columns_data = driver.data_dictionary.get_columns(
+                    driver, self.version_table_name.upper(), schema=self.version_table_schema.upper()
+                )
+            else:
+                columns_data = driver.data_dictionary.get_columns(driver, self.version_table_name)
             existing_columns = {str(row["column_name"]).upper() for row in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 
@@ -377,7 +382,12 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
         """
         try:
-            columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
+            if self.version_table_schema:
+                columns_data = await driver.data_dictionary.get_columns(
+                    driver, self.version_table_name.upper(), schema=self.version_table_schema.upper()
+                )
+            else:
+                columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)
             existing_columns = {str(row["column_name"]).upper() for row in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 

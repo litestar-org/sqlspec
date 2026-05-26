@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit coverage for PostgreSQL migration schema hooks."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
+from sqlspec.migrations.commands import SyncMigrationCommands
 
 
 class FakeAsyncpgConnection:
@@ -117,6 +119,17 @@ async def test_asyncpg_migration_schema_hooks() -> None:
 
 
 @pytest.mark.anyio
+async def test_asyncpg_non_transactional_migration_schema_hooks() -> None:
+    connection = FakeAsyncpgConnection()
+    driver = AsyncpgDriver(connection)  # type: ignore[arg-type]
+
+    await driver.set_migration_non_transactional_schema("tenant")
+    await driver.reset_migration_session_schema()
+
+    assert connection.executed == [('SET search_path TO "tenant", "$user", public', ()), ("RESET search_path", ())]
+
+
+@pytest.mark.anyio
 async def test_psqlpy_migration_schema_hooks() -> None:
     connection = FakePsqlpyConnection()
     driver = PsqlpyDriver(connection)  # type: ignore[arg-type]
@@ -129,6 +142,17 @@ async def test_psqlpy_migration_schema_hooks() -> None:
         ("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", ["missing"]),
     ]
     assert PsqlpyConfig.supports_migration_schemas is True
+
+
+@pytest.mark.anyio
+async def test_psqlpy_non_transactional_migration_schema_hooks() -> None:
+    connection = FakePsqlpyConnection()
+    driver = PsqlpyDriver(connection)  # type: ignore[arg-type]
+
+    await driver.set_migration_non_transactional_schema("tenant")
+    await driver.reset_migration_session_schema()
+
+    assert connection.executed == [('SET search_path TO "tenant", "$user", public', None), ("RESET search_path", None)]
 
 
 @pytest.mark.anyio
@@ -153,6 +177,16 @@ def test_psycopg_sync_migration_schema_hooks() -> None:
     assert PsycopgSyncConfig.supports_migration_schemas is True
 
 
+def test_psycopg_sync_non_transactional_migration_schema_hooks() -> None:
+    cursor = FakeSyncCursor()
+    driver = PsycopgSyncDriver(FakePsycopgSyncConnection(cursor))  # type: ignore[arg-type]
+
+    driver.set_migration_non_transactional_schema("tenant")
+    driver.reset_migration_session_schema()
+
+    assert cursor.executed == [('SET search_path TO "tenant", "$user", public', None), ("RESET search_path", None)]
+
+
 @pytest.mark.anyio
 async def test_psycopg_async_migration_schema_hooks() -> None:
     cursor = FakeAsyncCursor()
@@ -168,6 +202,17 @@ async def test_psycopg_async_migration_schema_hooks() -> None:
     assert PsycopgAsyncConfig.supports_migration_schemas is True
 
 
+@pytest.mark.anyio
+async def test_psycopg_async_non_transactional_migration_schema_hooks() -> None:
+    cursor = FakeAsyncCursor()
+    driver = PsycopgAsyncDriver(FakePsycopgAsyncConnection(cursor))  # type: ignore[arg-type]
+
+    await driver.set_migration_non_transactional_schema("tenant")
+    await driver.reset_migration_session_schema()
+
+    assert cursor.executed == [('SET search_path TO "tenant", "$user", public', None), ("RESET search_path", None)]
+
+
 def test_adbc_postgres_migration_schema_hooks() -> None:
     cursor = FakeSyncCursor()
     driver = AdbcDriver(FakeAdbcConnection(cursor))  # type: ignore[arg-type]
@@ -179,6 +224,16 @@ def test_adbc_postgres_migration_schema_hooks() -> None:
         ('SET search_path TO "tenant", "$user", public', None),
         ("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", ["tenant"]),
     ]
+
+
+def test_adbc_postgres_non_transactional_migration_schema_hooks() -> None:
+    cursor = FakeSyncCursor()
+    driver = AdbcDriver(FakeAdbcConnection(cursor))  # type: ignore[arg-type]
+
+    driver.set_migration_non_transactional_schema("tenant")
+    driver.reset_migration_session_schema()
+
+    assert cursor.executed == [('SET search_path TO "tenant", "$user", public', None), ("RESET search_path", None)]
 
 
 def test_adbc_non_postgres_migration_schema_hooks_are_noops() -> None:
@@ -197,3 +252,20 @@ def test_adbc_config_supports_migration_schemas_for_postgres_only() -> None:
 
     assert pg_config.supports_migration_schemas is True
     assert sqlite_config.supports_migration_schemas is False
+
+
+def test_adbc_postgres_cached_migration_commands_resolve_tracker_schema(tmp_path: Path) -> None:
+    pg_config = AdbcConfig(
+        connection_config={"uri": "postgresql://example.invalid/db"},
+        migration_config={
+            "script_location": str(tmp_path),
+            "default_schema": "app_schema",
+            "version_table_schema": "history_schema",
+        },
+    )
+
+    commands = pg_config.get_migration_commands()
+
+    assert isinstance(commands, SyncMigrationCommands)
+    assert commands.tracker.version_table_schema == "history_schema"
+    assert commands.tracker.version_table == "history_schema.ddl_migrations"

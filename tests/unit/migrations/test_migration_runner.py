@@ -199,6 +199,42 @@ def test_sync_execute_downgrade_sets_migration_schema_after_begin(tmp_path: Path
     ]
 
 
+def test_sync_execute_upgrade_sets_and_resets_non_transactional_schema(tmp_path: Path) -> None:
+    """Non-transactional migrations need session-level schema setup and cleanup."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = Mock()
+
+    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=False)
+
+    assert driver.mock_calls[:3] == [
+        call.set_migration_non_transactional_schema("app_schema"),
+        call.execute_script("CREATE TABLE example (id INTEGER)"),
+        call.reset_migration_session_schema(),
+    ]
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
+
+
+def test_sync_execute_downgrade_sets_and_resets_non_transactional_schema(tmp_path: Path) -> None:
+    """Non-transactional downgrades should clean up session-level schema state."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = Mock()
+
+    runner.execute_downgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=False)
+
+    assert driver.mock_calls[:3] == [
+        call.set_migration_non_transactional_schema("app_schema"),
+        call.execute_script("DROP TABLE example"),
+        call.reset_migration_session_schema(),
+    ]
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
+
+
 @pytest.mark.anyio
 async def test_async_execute_upgrade_sets_migration_schema_after_begin(tmp_path: Path) -> None:
     """Async migrations should await the schema hook inside the transaction."""
@@ -215,6 +251,44 @@ async def test_async_execute_upgrade_sets_migration_schema_after_begin(tmp_path:
         call.execute_script("CREATE TABLE example (id INTEGER)"),
         call.commit(),
     ]
+
+
+@pytest.mark.anyio
+async def test_async_execute_upgrade_sets_and_resets_non_transactional_schema(tmp_path: Path) -> None:
+    """Async non-transactional migrations need session-level schema setup and cleanup."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = AsyncMock()
+
+    await runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=False)
+
+    assert driver.mock_calls[:3] == [
+        call.set_migration_non_transactional_schema("app_schema"),
+        call.execute_script("CREATE TABLE example (id INTEGER)"),
+        call.reset_migration_session_schema(),
+    ]
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_async_execute_downgrade_sets_and_resets_non_transactional_schema(tmp_path: Path) -> None:
+    """Async non-transactional downgrades should clean up session-level schema state."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = AsyncMock()
+
+    await runner.execute_downgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=False)
+
+    assert driver.mock_calls[:3] == [
+        call.set_migration_non_transactional_schema("app_schema"),
+        call.execute_script("DROP TABLE example"),
+        call.reset_migration_session_schema(),
+    ]
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
 
 
 @pytest.mark.anyio

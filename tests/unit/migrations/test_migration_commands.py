@@ -20,6 +20,7 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
 @pytest.fixture
@@ -235,6 +236,46 @@ class SchemaAwareSqliteConfig(SqliteConfig):
 
 class SchemaAwareAiosqliteConfig(AiosqliteConfig):
     supports_migration_schemas = True
+
+
+class LegacySyncMigrationTracker(SyncMigrationTracker):
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+        super().__init__(version_table_name)
+
+
+class LegacyAsyncMigrationTracker(AsyncMigrationTracker):
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+        super().__init__(version_table_name)
+
+
+class LegacyTrackerSqliteConfig(SqliteConfig):
+    migration_tracker_type = LegacySyncMigrationTracker
+
+
+class LegacyTrackerAiosqliteConfig(AiosqliteConfig):
+    migration_tracker_type = LegacyAsyncMigrationTracker
+
+
+def test_sync_commands_keep_legacy_tracker_constructor_shape_without_schema(tmp_path: Path) -> None:
+    config = LegacyTrackerSqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path)}
+    )
+
+    commands = SyncMigrationCommands(config)
+
+    assert isinstance(commands.tracker, LegacySyncMigrationTracker)
+    assert commands.tracker.version_table == "ddl_migrations"
+
+
+def test_async_commands_keep_legacy_tracker_constructor_shape_without_schema(tmp_path: Path) -> None:
+    config = LegacyTrackerAiosqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path)}
+    )
+
+    commands = AsyncMigrationCommands(config)
+
+    assert isinstance(commands.tracker, LegacyAsyncMigrationTracker)
+    assert commands.tracker.version_table == "ddl_migrations"
 
 
 def test_sync_commands_pass_resolved_tracker_schema_when_supported(tmp_path: Path) -> None:

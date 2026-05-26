@@ -152,6 +152,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         logger.debug("migration.schema.noop", extra={"schema": schema, "driver": type(self).__name__})
 
+    def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the default schema for non-transactional migration SQL when supported.
+
+        Args:
+            schema: Schema requested for the current migration session.
+        """
+        self.set_migration_session_schema(schema)
+
+    def reset_migration_session_schema(self) -> None:
+        """Reset migration schema state after a non-transactional migration."""
+        logger.debug("migration.schema.reset.noop", extra={"driver": type(self).__name__})
+
     def has_schema(self, schema: str) -> bool:
         """Return whether the schema exists for migration validation.
 

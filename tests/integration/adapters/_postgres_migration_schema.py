@@ -36,6 +36,22 @@ def down():
     (migration_dir / "0001_create_unqualified_table.py").write_text(migration_content)
 
 
+def write_non_transactional_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+    """Write a SQL migration that creates an unqualified table without a transaction."""
+    migration_content = f"""
+-- transactional: false
+-- name: migrate-0001-up
+CREATE TABLE {table_name} (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+-- name: migrate-0001-down
+DROP TABLE IF EXISTS {table_name};
+""".strip()
+    (migration_dir / "0001_create_unqualified_table.sql").write_text(migration_content)
+
+
 def create_schema_sql(schema: str) -> str:
     """Return PostgreSQL CREATE SCHEMA SQL for a trusted test identifier."""
     return f"CREATE SCHEMA {quote_migration_identifier(schema)}"

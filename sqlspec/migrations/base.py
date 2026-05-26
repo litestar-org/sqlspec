@@ -669,6 +669,13 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             return None
         return _resolve_tracker_schema(self._get_migration_config())
 
+    def _create_tracker(self) -> Any:
+        """Create the configured migration tracker without breaking legacy constructors."""
+        tracker_schema = self._resolve_tracker_schema()
+        if tracker_schema is None:
+            return self.config.migration_tracker_type(self.version_table)
+        return self.config.migration_tracker_type(self.version_table, version_table_schema=tracker_schema)
+
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.
 

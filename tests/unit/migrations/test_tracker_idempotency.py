@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -56,6 +56,40 @@ def test_sync_tracker_keeps_bare_table_sql_without_schema() -> None:
 
     assert tracker.version_table == "ddl_migrations"
     assert "history.ddl_migrations" not in str(tracker._get_create_table_sql())  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sync_tracker_introspects_bare_table_name_with_schema() -> None:
+    """Qualified tracker SQL should not leak into data-dictionary table-name arguments."""
+    tracker = SyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="history")
+    driver = Mock()
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": column.name}
+        for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.data_dictionary.get_columns.assert_called_once_with(driver, "ddl_migrations", schema="history")
+    driver.execute.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_async_tracker_introspects_bare_table_name_with_schema() -> None:
+    """Async qualified tracker SQL should keep introspection table/schema separate."""
+    tracker = AsyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="history")
+    driver = MagicMock()
+    driver.data_dictionary.get_columns = AsyncMock(
+        return_value=[
+            {"column_name": column.name}
+            for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+        ]
+    )
+    driver.execute = AsyncMock()
+
+    await tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.data_dictionary.get_columns.assert_awaited_once_with(driver, "ddl_migrations", schema="history")
+    driver.execute.assert_not_awaited()
 
 
 def test_oracle_tracker_uppercases_qualified_tracking_table() -> None:

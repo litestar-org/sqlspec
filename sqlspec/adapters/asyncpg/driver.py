@@ -234,6 +234,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         quoted_schema = quote_migration_identifier(schema)
         await self.connection.execute(f'SET LOCAL search_path TO {quoted_schema}, "$user", public')
 
+    async def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        quoted_schema = quote_migration_identifier(schema)
+        await self.connection.execute(f'SET search_path TO {quoted_schema}, "$user", public')
+
+    async def reset_migration_session_schema(self) -> None:
+        """Reset the PostgreSQL search path after non-transactional migration SQL."""
+        await self.connection.execute("RESET search_path")
+
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
         return bool(

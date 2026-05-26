@@ -347,6 +347,19 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
+    def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        quoted_schema = quote_migration_identifier(schema)
+        sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(sql)
+
+    def reset_migration_session_schema(self) -> None:
+        """Reset the PostgreSQL search path after non-transactional migration SQL."""
+        sql = cast("LiteralString", "RESET search_path")  # type: ignore[redundant-cast]
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(sql)
+
     def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
         with self.with_cursor(self.connection) as cursor:
@@ -814,6 +827,19 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Set the PostgreSQL search path for migration SQL."""
         quoted_schema = quote_migration_identifier(schema)
         sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(sql)
+
+    async def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        quoted_schema = quote_migration_identifier(schema)
+        sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(sql)
+
+    async def reset_migration_session_schema(self) -> None:
+        """Reset the PostgreSQL search path after non-transactional migration SQL."""
+        sql = cast("LiteralString", "RESET search_path")  # type: ignore[redundant-cast]
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 

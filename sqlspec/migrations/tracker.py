@@ -52,7 +52,12 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         """
         console = Console()
         try:
-            columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
+            if self.version_table_schema:
+                columns_data = driver.data_dictionary.get_columns(
+                    driver, self.version_table_name, schema=self.version_table_schema
+                )
+            else:
+                columns_data = driver.data_dictionary.get_columns(driver, self.version_table_name)
             if not columns_data:
                 log_with_context(
                     logger,
@@ -429,7 +434,12 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """
         console = Console()
         try:
-            columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
+            if self.version_table_schema:
+                columns_data = await driver.data_dictionary.get_columns(
+                    driver, self.version_table_name, schema=self.version_table_schema
+                )
+            else:
+                columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)
             if not columns_data:
                 log_with_context(
                     logger,
