@@ -68,22 +68,18 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     if memory_store_class is not None:
         memory_store = memory_store_class(config=context.config)
         statements.extend(memory_store._get_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
-        log_with_context(
-            logger, logging.DEBUG, "adk.migration.reset.memory.drop", table_name=memory_store.memory_table
-        )
+        log_with_context(logger, logging.DEBUG, "adk.migration.reset.memory.drop", table_name=memory_store.memory_table)
 
     statements.extend(store_instance._get_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
 
-    statements.extend(
-        [
-            await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
-            await store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
-            await store_instance._get_create_app_states_table_sql(),  # pyright: ignore[reportPrivateUsage]
-            await store_instance._get_create_user_states_table_sql(),  # pyright: ignore[reportPrivateUsage]
-            await store_instance._get_create_metadata_table_sql(),  # pyright: ignore[reportPrivateUsage]
-            await store_instance._get_seed_metadata_sql(),  # pyright: ignore[reportPrivateUsage]
-        ]
-    )
+    statements.extend([
+        await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_app_states_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_user_states_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_metadata_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_seed_metadata_sql(),  # pyright: ignore[reportPrivateUsage]
+    ])
 
     if _is_memory_enabled(context) and memory_store_class is not None:
         memory_store = memory_store_class(config=context.config)

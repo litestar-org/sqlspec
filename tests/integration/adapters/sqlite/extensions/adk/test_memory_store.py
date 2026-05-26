@@ -96,9 +96,7 @@ async def test_sqlite_memory_store_disabled_lifecycle() -> None:
         await store.create_tables()
 
         with config.provide_connection() as conn:
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory",)
-            )
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory",))
             row = cursor.fetchone()
 
         assert row is None
