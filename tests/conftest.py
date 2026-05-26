@@ -28,6 +28,7 @@ pytest_plugins = [
     "pytest_databases.docker.bigquery",
     "pytest_databases.docker.spanner",
     "pytest_databases.docker.cockroachdb",
+    "pytest_databases.docker.gizmosql",
 ]
 
 pytestmark = pytest.mark.anyio
