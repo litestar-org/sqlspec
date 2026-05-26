@@ -27,6 +27,54 @@ Driver
    :members:
    :show-inheritance:
 
+Connecting to GizmoSQL
+======================
+
+GizmoSQL uses the Flight SQL ADBC driver. SQLSpec accepts ``driver_name="gizmosql"``
+as a shorthand for ``adbc_driver_flightsql.dbapi.connect`` and keeps the default
+parameter style at qmark placeholders.
+
+.. code-block:: python
+
+   from sqlspec.adapters.adbc import AdbcConfig
+
+   config = AdbcConfig(
+       connection_config={
+           "driver_name": "gizmosql",
+           "uri": "grpc+tls://localhost:31337",
+           "username": "admin",
+           "password": "secret",
+           "tls_skip_verify": True,
+           "gizmosql_backend": "duckdb",
+       }
+   )
+
+``username``, ``password``, ``tls_skip_verify``, and ``authorization_header`` are
+translated into Flight SQL ``db_kwargs``. Explicit values in ``db_kwargs`` take
+precedence, which lets production deployments pass certificate material without
+SQLSpec rewriting it:
+
+.. code-block:: python
+
+   secure_config = AdbcConfig(
+       connection_config={
+           "driver_name": "gizmosql",
+           "uri": "grpc+tls://gizmosql.example.com:31337",
+           "db_kwargs": {
+               "username": "admin",
+               "password": "secret",
+               "adbc.flight.sql.client_option.tls_root_certs": "/etc/certs/ca.pem",
+               "adbc.flight.sql.client_option.mtls_cert_chain": "/etc/certs/client.pem",
+               "adbc.flight.sql.client_option.mtls_private_key": "/etc/certs/client.key",
+           },
+       }
+   )
+
+Set ``gizmosql_backend="sqlite"`` when connecting to a SQLite-backed GizmoSQL
+server so runtime dialect detection resolves to SQLite instead of DuckDB. Local
+integration tests can use the ``pytest-databases`` GizmoSQL fixture; see
+``tests/integration/adapters/adbc/conftest.py`` for the canonical fixture wiring.
+
 PostgreSQL Extension Dialects
 =============================
 
