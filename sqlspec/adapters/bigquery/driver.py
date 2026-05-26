@@ -20,7 +20,6 @@ from sqlspec.adapters.bigquery.core import (
     collect_rows,
     create_mapped_exception,
     default_statement_config,
-    detect_emulator,
     driver_profile,
     is_simple_insert,
     normalize_script_rowcount,
@@ -103,7 +102,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_json_serializer",
         "_literal_inliner",
         "_type_converter",
-        "_using_emulator",
     )
     dialect = "bigquery"
 
@@ -132,9 +130,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
-        self._using_emulator = detect_emulator(connection)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
-        self._job_retry = build_retry(self._job_retry_deadline, self._using_emulator)
+        self._job_retry = build_retry(self._job_retry_deadline)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS

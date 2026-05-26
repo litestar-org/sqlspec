@@ -3,7 +3,6 @@
 import datetime
 import importlib
 import io
-import os
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
@@ -57,7 +56,6 @@ __all__ = (
     "create_mapped_exception",
     "create_parameters",
     "default_statement_config",
-    "detect_emulator",
     "driver_profile",
     "extract_insert_table",
     "is_simple_insert",
@@ -335,27 +333,6 @@ def _inline_bigquery_literals(
     return str(transformed_expression.sql(dialect="bigquery"))
 
 
-def detect_emulator(connection: "BigQueryConnection") -> bool:
-    """Detect whether the BigQuery client targets an emulator endpoint."""
-    emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP")
-    if emulator_host:
-        return True
-
-    try:
-        inner_connection = cast("Any", connection)._connection
-    except AttributeError:
-        inner_connection = None
-    if inner_connection is None:
-        return False
-    try:
-        api_base_url = inner_connection.API_BASE_URL
-    except AttributeError:
-        api_base_url = ""
-    if not api_base_url:
-        return False
-    return "googleapis.com" not in api_base_url
-
-
 def _should_retry_bigquery_job(exception: Exception) -> bool:
     """Return True when a BigQuery job exception is safe to retry."""
     if not isinstance(exception, GoogleCloudError):
@@ -381,10 +358,8 @@ def _should_retry_bigquery_job(exception: Exception) -> bool:
     return False
 
 
-def build_retry(deadline: float, using_emulator: bool) -> "Retry | None":
+def build_retry(deadline: float) -> "Retry":
     """Build retry policy for job restarts based on error reason codes."""
-    if using_emulator:
-        return None
     return Retry(predicate=_should_retry_bigquery_job, deadline=deadline)
 
 
