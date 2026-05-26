@@ -13,7 +13,6 @@ Configuration:
 """
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.adapters.bigquery.core import is_emulator_active_from_env
 from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("BigQueryEventQueueStore",)
@@ -75,13 +74,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         return "CURRENT_TIMESTAMP()"
 
     def _table_clause(self) -> str:
-        """Return BigQuery CLUSTER BY clause for query optimization.
-
-        Omitted when running against the BigQuery emulator, which rejects
-        CLUSTER BY on the events table.
-        """
-        if is_emulator_active_from_env():
-            return ""
+        """Return BigQuery CLUSTER BY clause for query optimization."""
         return " CLUSTER BY channel, status, available_at"
 
     def _build_create_table_sql(self) -> str:

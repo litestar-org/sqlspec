@@ -60,7 +60,6 @@ __all__ = (
     "detect_emulator",
     "driver_profile",
     "extract_insert_table",
-    "is_emulator_active_from_env",
     "is_simple_insert",
     "normalize_script_rowcount",
     "resolve_column_names",
@@ -336,18 +335,10 @@ def _inline_bigquery_literals(
     return str(transformed_expression.sql(dialect="bigquery"))
 
 
-def is_emulator_active_from_env() -> bool:
-    """Return True if a BigQuery emulator endpoint is set via environment.
-
-    Cheap env-only check for code paths that do not have a connection
-    handle yet (e.g. events store DDL builders constructed from config).
-    """
-    return bool(os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP"))
-
-
 def detect_emulator(connection: "BigQueryConnection") -> bool:
     """Detect whether the BigQuery client targets an emulator endpoint."""
-    if is_emulator_active_from_env():
+    emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST") or os.getenv("BIGQUERY_EMULATOR_HOST_HTTP")
+    if emulator_host:
         return True
 
     try:
