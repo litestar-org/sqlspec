@@ -88,14 +88,23 @@ class SQLSpecSessionService(BaseSessionService):
             state = {}
 
         persisted_state = filter_temp_state(state)
-        app_state, user_state, session_state = split_scoped_state(persisted_state)
+        app_state_delta, user_state_delta, session_state = split_scoped_state(persisted_state)
+        current_app_state = await self._store.get_app_state(app_name)
+        current_user_state = await self._store.get_user_state(app_name, user_id)
+
+        app_state = dict(current_app_state or {})
+        if app_state_delta:
+            app_state.update(app_state_delta)
+        user_state = dict(current_user_state or {})
+        if user_state_delta:
+            user_state.update(user_state_delta)
 
         record = await self._store.create_session(
             session_id=session_id, app_name=app_name, user_id=user_id, state=session_state
         )
-        if app_state:
+        if app_state_delta:
             await self._store.upsert_app_state(app_name, app_state)
-        if user_state:
+        if user_state_delta:
             await self._store.upsert_user_state(app_name, user_id, user_state)
         record["state"] = merge_scoped_state(record["state"], app_state, user_state)
         log_with_context(
@@ -255,13 +264,6 @@ class SQLSpecSessionService(BaseSessionService):
             event=event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
         )
 
-        # Build durable state: current state minus temp keys, plus the
-        # event's state delta (temp keys already stripped by _trim above).
-        durable_state = filter_temp_state(session.state)
-        if event.actions and event.actions.state_delta:
-            durable_state.update(event.actions.state_delta)
-        app_state, user_state, session_state = split_scoped_state(durable_state)
-
         # --- Stale-session detection ---
         current_record = await self._store.get_session(session.app_name, session.user_id, session.id)
         if current_record is None:
@@ -284,20 +286,30 @@ class SQLSpecSessionService(BaseSessionService):
             raise ValueError(msg)
 
         state_delta = (event.actions.state_delta if event.actions else None) or {}
+        app_state_delta, user_state_delta, session_state_delta = split_scoped_state(filter_temp_state(state_delta))
 
-        if not state_delta:
-            await self._store.append_event(event_record)
-            updated_record = current_record
-        else:
-            updated_record = await self._store.append_event_and_update_state(
-                event_record=event_record,
-                app_name=session.app_name,
-                user_id=session.user_id,
-                session_id=session.id,
-                state=session_state,
-                app_state=app_state or None,
-                user_state=user_state or None,
-            )
+        session_state = dict(current_record["state"])
+        session_state.update(session_state_delta)
+
+        app_state = None
+        if app_state_delta:
+            app_state = dict(await self._store.get_app_state(session.app_name) or {})
+            app_state.update(app_state_delta)
+
+        user_state = None
+        if user_state_delta:
+            user_state = dict(await self._store.get_user_state(session.app_name, session.user_id) or {})
+            user_state.update(user_state_delta)
+
+        updated_record = await self._store.append_event_and_update_state(
+            event_record=event_record,
+            app_name=session.app_name,
+            user_id=session.user_id,
+            session_id=session.id,
+            state=session_state,
+            app_state=app_state,
+            user_state=user_state,
+        )
         updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
         # Use the returned record directly — saves a round-trip vs a follow-up get_session().

@@ -306,10 +306,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         and the updated session record is returned in the same round-trip so
         callers don't need a follow-up read.
 
-        When ``app_state`` is provided (non-None), it is upserted into the
-        ``app_state_table`` for ``app_name``.  When ``user_state`` is provided,
-        it is upserted into the ``user_state_table`` for ``(app_name, user_id)``.
-        Empty dicts are treated as "no scoped delta" and skipped.
+        When ``app_state`` is provided (non-None), it is a full merged
+        app-scoped snapshot to replace/upsert for ``app_name``. When
+        ``user_state`` is provided, it is a full merged user-scoped snapshot to
+        replace/upsert for ``(app_name, user_id)``. ``None`` means that scope
+        was untouched by the event and must not be written.
 
         Args:
             event_record: Event record to store.
@@ -318,8 +319,10 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             session_id: Session identifier whose state should be updated.
             state: Post-append durable session-scoped state snapshot
                 (``temp:`` keys already stripped by the service layer).
-            app_state: App-scoped state delta (``app:*`` keys) to upsert atomically.
-            user_state: User-scoped state delta (``user:*`` keys) to upsert atomically.
+            app_state: Full app-scoped state snapshot (``app:*`` keys) to
+                upsert atomically, or ``None`` when untouched.
+            user_state: Full user-scoped state snapshot (``user:*`` keys) to
+                upsert atomically, or ``None`` when untouched.
 
         Returns:
             The updated SessionRecord reflecting the new state and update_time.

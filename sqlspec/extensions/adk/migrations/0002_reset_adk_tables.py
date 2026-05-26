@@ -8,7 +8,7 @@ is recreated only when memory is enabled for the current config.
 """
 
 import logging
-from typing import TYPE_CHECKING, NoReturn, cast
+from typing import TYPE_CHECKING, Final, NoReturn, cast
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk._config_utils import (
@@ -26,6 +26,9 @@ if TYPE_CHECKING:
 logger = get_logger("sqlspec.migrations.adk.reset")
 
 __all__ = ("down", "up")
+
+MIN_DROP_TABLE_TOKENS: Final = 3
+MIN_DROP_TABLE_IF_EXISTS_TOKENS: Final = 5
 
 
 def _raise_missing_config() -> NoReturn:
@@ -55,22 +58,61 @@ def _is_memory_enabled(context: "MigrationContext | None") -> bool:
     return _is_adk_memory_migration_enabled(context.config)
 
 
+def _is_spanner_store(store_instance: "BaseAsyncADKStore") -> bool:
+    return getattr(store_instance, "connector_name", None) == "spanner"
+
+
+def _spanner_existing_tables(context: "MigrationContext") -> "set[str]":
+    if context.config is None:
+        _raise_missing_config()
+    database = context.config.get_database()
+    return {table.table_id for table in database.list_tables()}
+
+
+def _drop_table_name(statement: str) -> str | None:
+    tokens = statement.strip().split()
+    if len(tokens) >= MIN_DROP_TABLE_TOKENS and tokens[0].upper() == "DROP" and tokens[1].upper() == "TABLE":
+        if (
+            len(tokens) >= MIN_DROP_TABLE_IF_EXISTS_TOKENS
+            and tokens[2].upper() == "IF"
+            and tokens[3].upper() == "EXISTS"
+        ):
+            return tokens[4]
+        return tokens[2]
+    return None
+
+
+def _filter_existing_table_drops(statements: "list[str]", existing_tables: "set[str] | None") -> "list[str]":
+    if existing_tables is None:
+        return statements
+    return [statement for statement in statements if (_drop_table_name(statement) in existing_tables)]
+
+
+def _filter_memory_drops(statements: "list[str]", memory_table: str, existing_tables: "set[str] | None") -> "list[str]":
+    if existing_tables is None or memory_table in existing_tables:
+        return statements
+    return []
+
+
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
     if context is None or context.config is None:
         _raise_missing_config()
 
     store_class = _get_store_class(context)
     store_instance = store_class(config=context.config)
+    existing_tables = _spanner_existing_tables(context) if _is_spanner_store(store_instance) else None
 
     statements: list[str] = []
 
     memory_store_class = _get_memory_store_class(context)
     if memory_store_class is not None:
         memory_store = memory_store_class(config=context.config)
-        statements.extend(memory_store._get_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
+        memory_drops = memory_store._get_drop_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
+        statements.extend(_filter_memory_drops(memory_drops, memory_store.memory_table, existing_tables))
         log_with_context(logger, logging.DEBUG, "adk.migration.reset.memory.drop", table_name=memory_store.memory_table)
 
-    statements.extend(store_instance._get_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
+    drop_statements = store_instance._get_drop_tables_sql()  # pyright: ignore[reportPrivateUsage]
+    statements.extend(_filter_existing_table_drops(drop_statements, existing_tables))
 
     statements.extend([
         await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
@@ -100,15 +142,18 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
         _raise_missing_config()
 
     statements: list[str] = []
+    store_class = _get_store_class(context)
+    store_instance = store_class(config=context.config)
+    existing_tables = _spanner_existing_tables(context) if _is_spanner_store(store_instance) else None
 
     if _is_memory_enabled(context):
         memory_store_class = _get_memory_store_class(context)
         if memory_store_class is not None:
             memory_store = memory_store_class(config=context.config)
-            statements.extend(memory_store._get_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
+            memory_drops = memory_store._get_drop_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
+            statements.extend(_filter_memory_drops(memory_drops, memory_store.memory_table, existing_tables))
 
-    store_class = _get_store_class(context)
-    store_instance = store_class(config=context.config)
-    statements.extend(store_instance._get_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
+    drop_statements = store_instance._get_drop_tables_sql()  # pyright: ignore[reportPrivateUsage]
+    statements.extend(_filter_existing_table_drops(drop_statements, existing_tables))
 
     return statements

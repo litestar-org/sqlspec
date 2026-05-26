@@ -39,8 +39,10 @@ persistence. Durable keys are split into three buckets:
 - Unprefixed keys are written to the session row.
 
 ``append_event_and_update_state()`` remains the store-level atomic boundary for
-the event row and the session row. The scoped app/user writes are routed by the
-service through the dedicated scoped-state store hooks.
+the event row and the session row. When an event delta touches ``app:`` or
+``user:`` keys, the service reads the latest scoped row, overlays the delta, and
+passes the full merged scoped snapshot to the store. Untouched scopes are passed
+as ``None`` so replace-style stores do not drop existing shared keys.
 
 Read Behavior
 =============

@@ -261,10 +261,13 @@ session mutations. It atomically:
 
 1. Inserts the event record into the events table.
 2. Updates the session-scoped durable state in the sessions table.
+3. Optionally replaces touched app/user scoped snapshots.
 
 Both operations succeed together or fail together within a single database
-transaction. App/user scoped state writes are routed separately by the session
-service through the dedicated scoped-state hooks.
+transaction. The service passes ``app_state`` and ``user_state`` only when an
+event delta touches those scopes. When provided, each value is the full merged
+snapshot for that scope, not the raw delta, because adapter stores commonly use
+replace/upsert semantics.
 
 .. code-block:: python
 
@@ -273,6 +276,8 @@ service through the dedicated scoped-state hooks.
        event_record=event_record,
        session_id=session.id,
        state=session_state,  # temp/app/user keys already stripped
+       app_state=merged_app_state,  # None if the event did not touch app:* keys
+       user_state=merged_user_state,  # None if the event did not touch user:* keys
    )
 
 **Why this matters:**

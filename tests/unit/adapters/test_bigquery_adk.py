@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -33,7 +34,7 @@ def test_bigquery_adk_store_instantiates_with_defaults() -> None:
     assert store.metadata_table == "adk_metadata"
     assert store._dataset_qualifier == "test_dataset."
     assert store._lookup_window_days == 30
-    assert store._require_partition_filter is True
+    assert store._require_partition_filter is False
     assert store._partition_expiration_days is None
 
 
@@ -49,14 +50,21 @@ def test_bigquery_adk_store_derives_partition_expiration_from_retention() -> Non
     assert store._partition_expiration_days == 30
 
 
-def test_bigquery_adk_session_ddl_is_partitioned_and_clustered() -> None:
+def test_bigquery_adk_store_honours_explicit_partition_filter_opt_in() -> None:
+    """Partition filters are opt-in because BigQuery DML rejects unfiltered partitioned table touches."""
+    store = _make_store({"bigquery": {"require_partition_filter": True}})
+
+    assert store._require_partition_filter is True
+
+
+def test_bigquery_adk_session_ddl_is_partitioned_and_clustered_without_filter_by_default() -> None:
     """Sessions table DDL has DATE partitioning + clustering on app_name/user_id."""
     store = _make_store()
     ddl = asyncio.run(store._get_create_sessions_table_sql())
     assert "PARTITION BY DATE(create_time)" in ddl
     assert "CLUSTER BY app_name, user_id, id" in ddl
     assert "test_dataset.adk_session" in ddl
-    assert "require_partition_filter = TRUE" in ddl
+    assert "require_partition_filter = TRUE" not in ddl
 
 
 def test_bigquery_adk_events_ddl_clusters_on_session_id() -> None:
@@ -66,6 +74,43 @@ def test_bigquery_adk_events_ddl_clusters_on_session_id() -> None:
     assert "PARTITION BY DATE(timestamp)" in ddl
     assert "CLUSTER BY session_id" in ddl
     assert "test_dataset.adk_event" in ddl
+
+
+def test_bigquery_adk_event_ttl_applies_only_to_event_partitions() -> None:
+    """Session partitions must not inherit event TTL expiration."""
+    store = _make_store({"retention": {"event_ttl_seconds": 86400 * 30}})
+
+    session_ddl = asyncio.run(store._get_create_sessions_table_sql())
+    event_ddl = asyncio.run(store._get_create_events_table_sql())
+
+    assert "partition_expiration_days" not in session_ddl
+    assert "partition_expiration_days = 30" in event_ddl
+
+
+def test_bigquery_adk_explicit_partition_filter_adds_query_predicates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in partition-filter mode adds broad predicates to partitioned table DML."""
+    store = _make_store({"bigquery": {"require_partition_filter": True}})
+    statements: list[str] = []
+
+    def capture(_store: BigQueryADKStore, sql: str, parameters: Any = None) -> list[dict[str, Any]]:
+        statements.append(sql)
+        return []
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+
+    store._get_session("app", "user", "session")
+    store._update_session_touch("app", "user", "session")
+    store._update_session_state("app", "user", "session", {"turn": 1})
+    store._delete_session("app", "user", "session")
+    store._get_events("app", "user", "session")
+    store._delete_expired_events(datetime.now(timezone.utc))
+    store._delete_idle_sessions(datetime.now(timezone.utc))
+
+    assert any("FROM test_dataset.adk_session" in sql and "create_time IS NOT NULL" in sql for sql in statements)
+    assert any("UPDATE test_dataset.adk_session" in sql and "create_time IS NOT NULL" in sql for sql in statements)
+    assert any("DELETE FROM test_dataset.adk_session" in sql and "create_time IS NOT NULL" in sql for sql in statements)
+    assert any("FROM test_dataset.adk_event" in sql and "timestamp IS NOT NULL" in sql for sql in statements)
+    assert any("DELETE FROM test_dataset.adk_event" in sql and "timestamp IS NOT NULL" in sql for sql in statements)
 
 
 def test_bigquery_adk_scoped_state_ddl_clustered() -> None:

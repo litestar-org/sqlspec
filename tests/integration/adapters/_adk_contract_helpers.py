@@ -16,6 +16,7 @@ __all__ = (
     "assert_session_event_store_contract",
     "assert_session_get_session_renewal_contract",
     "assert_session_scoped_state_contract",
+    "assert_session_service_event_only_touch_contract",
     "assert_session_sibling_app_isolation",
     "assert_session_sibling_user_isolation",
     "assert_session_table_lifecycle_contract",
@@ -327,6 +328,11 @@ async def assert_session_scoped_state_contract(store: SessionEventStore, *, mark
     assert fetched_b is not None
     assert fetched_b.state == {"app:counter": 1, "user:theme": "dark"}
 
+    session_c = await service.create_session(
+        app_name=app_name, user_id=user_id, session_id=_contract_key(marker, "scoped-session-c"), state={}
+    )
+    assert session_c.state == {"app:counter": 1, "user:theme": "dark"}
+
     fetched_other_user = await service.get_session(
         app_name=app_name, user_id=other_user_id, session_id=other_user_session.id
     )
@@ -434,6 +440,44 @@ async def assert_session_temp_state_not_persisted(store: SessionEventStore, *, m
     assert "temp:scratch" not in fetched.state
     assert "temp:create_seed" not in fetched.state
     assert fetched.state == {"turn": 1}
+
+
+async def assert_session_service_event_only_touch_contract(store: SessionEventStore, *, marker: str) -> None:
+    """Assert service-level message-only events persist and touch update_time."""
+    from google.adk.events.event import Event
+    from google.adk.events.event_actions import EventActions
+
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    app_name = _contract_key(marker, "event-only-app")
+    user_id = _contract_key(marker, "event-only-user")
+    session_id = _contract_key(marker, "event-only-session")
+
+    created = await service.create_session(
+        app_name=app_name, user_id=user_id, session_id=session_id, state={"phase": "created"}
+    )
+    session = await service.get_session(app_name=app_name, user_id=user_id, session_id=created.id)
+    assert session is not None
+    original_update_time = session.last_update_time
+    await asyncio.sleep(0.02)
+
+    event = Event(
+        invocation_id=_contract_key(marker, "event-only-invocation"),
+        author="model",
+        timestamp=datetime.now(timezone.utc).timestamp(),
+        actions=EventActions(state_delta={}),
+    )
+
+    await service.append_event(session, event)
+
+    raw_session = await store.get_session(app_name, user_id, session_id)
+    assert raw_session is not None
+    assert raw_session["state"] == {"phase": "created"}
+    assert _as_utc(raw_session["update_time"]).timestamp() > original_update_time
+    assert session.last_update_time > original_update_time
+
+    events = await store.get_events(app_name, user_id, session_id)
+    assert len(events) == 1
+    assert events[0]["invocation_id"] == event.invocation_id
 
 
 async def assert_session_empty_state_roundtrip(store: SessionEventStore, *, marker: str) -> None:

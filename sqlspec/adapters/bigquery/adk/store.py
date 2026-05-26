@@ -16,8 +16,8 @@ Layout decisions:
 
 When ``ADKConfig.bigquery.session_lookup_window_days`` is set, list reads constrain
 ``create_time`` so partitioned scans stay cheap. ``ADKConfig.retention.event_ttl_seconds``
-maps to ``partition_expiration_days`` on the events table when ``require_partition_filter``
-is enabled. JSON is stored using BigQuery's native ``JSON`` type.
+maps to ``partition_expiration_days`` on the events table only. JSON is stored
+using BigQuery's native ``JSON`` type.
 """
 
 import math
@@ -64,7 +64,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         self._partition_expiration_days: int | None = (
             max(1, math.ceil(int(ttl_seconds) / 86400)) if ttl_seconds else None
         )
-        self._require_partition_filter: bool = bool(bigquery_config.get("require_partition_filter", True))
+        self._require_partition_filter: bool = bool(bigquery_config.get("require_partition_filter", False))
 
         dataset_id = config.connection_config.get("dataset_id")
         self._dataset_qualifier: str = f"{dataset_id}." if dataset_id else ""
@@ -72,6 +72,13 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
     def _qualified(self, table: str) -> str:
         """Return the dataset-qualified table identifier when available."""
         return f"{self._dataset_qualifier}{table}"
+
+    def _partition_filter(self, column: str, *, alias: str | None = None) -> str:
+        """Return a broad partition predicate for opt-in require_partition_filter mode."""
+        if not self._require_partition_filter:
+            return ""
+        qualified_column = f"{alias}.{column}" if alias else column
+        return f" AND {qualified_column} IS NOT NULL"
 
     # ------------------------------------------------------------------
     # Session CRUD
@@ -210,6 +217,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._qualified(self._session_table)}
         WHERE app_name = @app_name AND user_id = @user_id AND id = @id
+          {self._partition_filter("create_time").strip()}
         LIMIT 1
         """
         rows = self._run_query(
@@ -238,6 +246,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         UPDATE {self._qualified(self._session_table)}
         SET update_time = CURRENT_TIMESTAMP()
         WHERE app_name = @app_name AND user_id = @user_id AND id = @id
+          {self._partition_filter("create_time").strip()}
         """
         self._run_query(
             sql,
@@ -253,6 +262,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         UPDATE {self._qualified(self._session_table)}
         SET state = @state, update_time = CURRENT_TIMESTAMP()
         WHERE app_name = @app_name AND user_id = @user_id AND id = @id
+          {self._partition_filter("create_time").strip()}
         """
         self._run_query(
             sql,
@@ -295,8 +305,14 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         return records
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        events_sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE session_id = @id"
-        sessions_sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE app_name = @app_name AND user_id = @user_id AND id = @id"
+        events_sql = (
+            f"DELETE FROM {self._qualified(self._events_table)} "
+            f"WHERE session_id = @id{self._partition_filter('timestamp')}"
+        )
+        sessions_sql = (
+            f"DELETE FROM {self._qualified(self._session_table)} "
+            f"WHERE app_name = @app_name AND user_id = @user_id AND id = @id{self._partition_filter('create_time')}"
+        )
         self._run_query(events_sql, [self._query_param("id", session_id)])
         self._run_query(
             sessions_sql,
@@ -359,6 +375,8 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         FROM {self._qualified(self._events_table)} e
         JOIN {self._qualified(self._session_table)} s ON e.session_id = s.id
         WHERE s.app_name = @app_name AND s.user_id = @user_id AND e.session_id = @session_id
+          {self._partition_filter("timestamp", alias="e").strip()}
+          {self._partition_filter("create_time", alias="s").strip()}
         """
         params = [
             self._query_param("app_name", app_name),
@@ -387,14 +405,20 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
         ]
 
     def _delete_expired_events(self, before: datetime) -> int:
-        sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE timestamp < @before"
+        sql = (
+            f"DELETE FROM {self._qualified(self._events_table)} "
+            f"WHERE timestamp < @before{self._partition_filter('timestamp')}"
+        )
         # BigQuery jobs don't expose affected-rows reliably across all versions;
         # callers treat the count as best-effort and may consult job statistics if needed.
         self._run_query(sql, [self._query_param("before", before, bq_type="TIMESTAMP")])
         return 0
 
     def _delete_idle_sessions(self, updated_before: datetime) -> int:
-        sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE update_time < @before"
+        sql = (
+            f"DELETE FROM {self._qualified(self._session_table)} "
+            f"WHERE update_time < @before{self._partition_filter('create_time')}"
+        )
         self._run_query(sql, [self._query_param("before", updated_before, bq_type="TIMESTAMP")])
         return 0
 
@@ -470,11 +494,11 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
     # DDL
     # ------------------------------------------------------------------
 
-    def _partition_options(self) -> str:
+    def _partition_options(self, *, include_expiration: bool = False) -> str:
         parts: list[str] = []
         if self._require_partition_filter:
             parts.append("require_partition_filter = TRUE")
-        if self._partition_expiration_days is not None:
+        if include_expiration and self._partition_expiration_days is not None:
             parts.append(f"partition_expiration_days = {self._partition_expiration_days}")
         return f"\nOPTIONS({', '.join(parts)})" if parts else ""
 
@@ -502,7 +526,7 @@ class BigQueryADKStore(BaseAsyncADKStore[BigQueryConfig]):
             event_data JSON
         )
         PARTITION BY DATE(timestamp)
-        CLUSTER BY session_id, id{self._partition_options()}
+        CLUSTER BY session_id, id{self._partition_options(include_expiration=True)}
         """
 
     async def _get_create_app_states_table_sql(self) -> str:

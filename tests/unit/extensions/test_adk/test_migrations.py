@@ -36,6 +36,75 @@ def _index_of(statements: "list[str]", needle: str) -> int:
     raise AssertionError(msg)
 
 
+class _Table:
+    def __init__(self, table_id: str) -> None:
+        self.table_id = table_id
+
+
+class _SpannerDatabase:
+    def __init__(self, table_ids: "list[str]") -> None:
+        self._table_ids = table_ids
+        self.list_tables_calls = 0
+
+    def list_tables(self) -> "list[_Table]":
+        self.list_tables_calls += 1
+        return [_Table(table_id) for table_id in self._table_ids]
+
+
+class _SpannerConfig:
+    extension_config = {"adk": {"enable_memory": False}}
+
+    def __init__(self, database: _SpannerDatabase) -> None:
+        self._database = database
+
+    def get_database(self) -> _SpannerDatabase:
+        return self._database
+
+
+class _SpannerDropStore:
+    connector_name = "spanner"
+
+    def __init__(self, config: _SpannerConfig) -> None:
+        self._config = config
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        return "CREATE TABLE adk_session"
+
+    async def _get_create_events_table_sql(self) -> str:
+        return "CREATE TABLE adk_event"
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        return "CREATE TABLE adk_app_state"
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return "CREATE TABLE adk_user_state"
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return "CREATE TABLE adk_metadata"
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return "INSERT INTO adk_metadata"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        return [
+            "DROP TABLE adk_metadata",
+            "DROP TABLE adk_user_state",
+            "DROP TABLE adk_app_state",
+            "DROP TABLE adk_event",
+            "DROP TABLE adk_session",
+        ]
+
+
+class _SpannerMemoryDropStore:
+    memory_table = "adk_memory"
+
+    def __init__(self, config: _SpannerConfig) -> None:
+        self._config = config
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        return ["DROP INDEX idx_adk_memory_session", "DROP TABLE adk_memory"]
+
+
 async def test_0001_up_is_noop_with_context() -> None:
     assert await migration_0001.up(_build_context()) == []
 
@@ -106,6 +175,57 @@ async def test_0002_up_with_no_memory_store_class_skips_memory_branch_entirely(m
     assert any("DROP TABLE IF EXISTS adk_session" in stmt for stmt in statements)
     assert any("CREATE TABLE IF NOT EXISTS adk_session" in stmt for stmt in statements)
     assert any("INSERT INTO adk_metadata" in stmt for stmt in statements)
+
+
+async def test_0002_up_spanner_fresh_database_skips_missing_table_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    database = _SpannerDatabase([])
+    context = MigrationContext(config=_SpannerConfig(database))  # type: ignore[arg-type]
+    monkeypatch.setattr(migration_0002, "_get_store_class", lambda _context: _SpannerDropStore)
+    monkeypatch.setattr(migration_0002, "_get_memory_store_class", lambda _context: None)
+
+    statements = await migration_0002.up(context)
+
+    assert database.list_tables_calls == 1
+    assert all("DROP TABLE" not in statement for statement in statements)
+    assert statements[:6] == [
+        "CREATE TABLE adk_session",
+        "CREATE TABLE adk_event",
+        "CREATE TABLE adk_app_state",
+        "CREATE TABLE adk_user_state",
+        "CREATE TABLE adk_metadata",
+        "INSERT INTO adk_metadata",
+    ]
+
+
+async def test_0002_up_spanner_existing_database_keeps_fk_safe_drop_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    database = _SpannerDatabase(["adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_metadata"])
+    context = MigrationContext(config=_SpannerConfig(database))  # type: ignore[arg-type]
+    monkeypatch.setattr(migration_0002, "_get_store_class", lambda _context: _SpannerDropStore)
+    monkeypatch.setattr(migration_0002, "_get_memory_store_class", lambda _context: None)
+
+    statements = await migration_0002.up(context)
+
+    drops = [statement for statement in statements if statement.startswith("DROP TABLE")]
+    assert drops == [
+        "DROP TABLE adk_metadata",
+        "DROP TABLE adk_user_state",
+        "DROP TABLE adk_app_state",
+        "DROP TABLE adk_event",
+        "DROP TABLE adk_session",
+    ]
+
+
+async def test_0002_up_spanner_memory_drops_are_grouped_by_existing_memory_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _SpannerDatabase(["adk_memory"])
+    context = MigrationContext(config=_SpannerConfig(database))  # type: ignore[arg-type]
+    monkeypatch.setattr(migration_0002, "_get_store_class", lambda _context: _SpannerDropStore)
+    monkeypatch.setattr(migration_0002, "_get_memory_store_class", lambda _context: _SpannerMemoryDropStore)
+
+    statements = await migration_0002.up(context)
+
+    assert statements[:2] == ["DROP INDEX idx_adk_memory_session", "DROP TABLE adk_memory"]
 
 
 async def test_0002_down_with_memory_enabled_drops_memory_then_new_tables() -> None:

@@ -1,7 +1,7 @@
 """Unit tests for SQLSpecSessionService.
 
 Covers the durable-state write contract:
-- append_event routes to append_event_and_update_state (or append_event on no-op)
+- append_event routes all non-partial events to append_event_and_update_state
 - temp: keys are stripped before persisting session state
 - partial events are not persisted
 - create_session strips temp: keys from initial state
@@ -46,6 +46,8 @@ class MockStore:
         self.create_session_calls: list[dict[str, Any]] = []
         self.upsert_app_state_calls: list[dict[str, Any]] = []
         self.upsert_user_state_calls: list[dict[str, Any]] = []
+        self.get_app_state_calls: list[str] = []
+        self.get_user_state_calls: list[dict[str, str]] = []
         self.app_state: dict[str, Any] | None = None
         self.user_state: dict[str, Any] | None = None
 
@@ -135,9 +137,11 @@ class MockStore:
         return []
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        self.get_app_state_calls.append(app_name)
         return self.app_state
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        self.get_user_state_calls.append({"app_name": app_name, "user_id": user_id})
         return self.user_state
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
@@ -313,18 +317,54 @@ async def test_append_event_strips_temp_state_delta_from_persisted_state() -> No
 
 @pytest.mark.anyio
 async def test_append_event_routes_scoped_state_to_app_and_user_tables() -> None:
-    """app:* and user:* state is not stored in the per-session state blob."""
+    """Scoped event deltas are merged with latest scoped rows before replacement."""
     store = MockStore()
+    store._session_record["state"] = {"regular": "v0"}
+    store.app_state = {"app:counter": 1, "app:kept": "yes"}
+    store.user_state = {"user:theme": "light", "user:kept": "yes"}
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
-    session = _make_session(state={"regular": "v0", "app:counter": 1, "user:theme": "light"})
+    session = _make_session(
+        state={
+            "regular": "v0",
+            "app:counter": "stale",
+            "app:kept": "stale",
+            "user:theme": "stale",
+            "user:kept": "stale",
+        }
+    )
     event = _make_event(state_delta={"regular": "v1", "app:counter": 2, "user:theme": "dark"})
 
     await service.append_event(session, event)
 
     persisted_state = store.append_event_and_update_state_calls[-1]["state"]
     assert persisted_state == {"regular": "v1"}
-    assert store.upsert_app_state_calls[-1] == {"app_name": "app", "state": {"app:counter": 2}}
-    assert store.upsert_user_state_calls[-1] == {"app_name": "app", "user_id": "u1", "state": {"user:theme": "dark"}}
+    assert store.upsert_app_state_calls[-1] == {"app_name": "app", "state": {"app:counter": 2, "app:kept": "yes"}}
+    assert store.upsert_user_state_calls[-1] == {
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"user:theme": "dark", "user:kept": "yes"},
+    }
+
+
+@pytest.mark.anyio
+async def test_append_event_session_only_delta_does_not_write_stale_scoped_state() -> None:
+    """Merged in-memory scoped state is ignored unless the event delta touches that scope."""
+    store = MockStore()
+    store._session_record["state"] = {"regular": "stored"}
+    store.app_state = {"app:counter": 1}
+    store.user_state = {"user:theme": "dark"}
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"regular": "loaded", "app:counter": "stale", "user:theme": "stale"})
+    event = _make_event(state_delta={"regular": "updated"})
+
+    await service.append_event(session, event)
+
+    last_call = store.append_event_and_update_state_calls[-1]
+    assert last_call["state"] == {"regular": "updated"}
+    assert last_call["app_state"] is None
+    assert last_call["user_state"] is None
+    assert store.upsert_app_state_calls == []
+    assert store.upsert_user_state_calls == []
 
 
 @pytest.mark.anyio
@@ -401,16 +441,21 @@ async def test_append_event_returns_the_event() -> None:
 
 @pytest.mark.anyio
 async def test_append_event_skips_update_when_state_delta_empty() -> None:
-    """When event.actions.state_delta is empty, the session UPDATE is skipped."""
+    """Event-only appends still touch the session row through the atomic path."""
     store = MockStore()
+    store._session_record["state"] = {"key": "v"}
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session(state={"key": "v"})
     event = _make_event(state_delta={})
 
     await service.append_event(session, event)
 
-    assert len(store.append_event_calls) == 1, "no-op delta must route to append_event (event-only insert)"
-    assert not store.append_event_and_update_state_called, "no-op delta must NOT trigger append_event_and_update_state"
+    assert store.append_event_calls == [], "service-level events must use append_event_and_update_state"
+    assert store.append_event_and_update_state_called
+    last_call = store.append_event_and_update_state_calls[-1]
+    assert last_call["state"] == {"key": "v"}
+    assert last_call["app_state"] is None
+    assert last_call["user_state"] is None
 
 
 @pytest.mark.anyio
@@ -429,7 +474,7 @@ async def test_append_event_runs_full_path_when_state_delta_present() -> None:
 
 @pytest.mark.anyio
 async def test_append_event_noop_event_record_carries_full_schema() -> None:
-    """The event_record sent to append_event on the no-op path carries the full key set."""
+    """The event_record sent on the event-only path carries the full key set."""
     store = MockStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session()
@@ -437,8 +482,7 @@ async def test_append_event_noop_event_record_carries_full_schema() -> None:
 
     await service.append_event(session, event)
 
-    assert len(store.append_event_calls) == 1
-    event_record = store.append_event_calls[0]
+    event_record = store.append_event_and_update_state_calls[-1]["event_record"]
     assert set(event_record.keys()) == {
         "id",
         "app_name",
@@ -452,15 +496,18 @@ async def test_append_event_noop_event_record_carries_full_schema() -> None:
 
 @pytest.mark.anyio
 async def test_append_event_noop_does_not_advance_last_update_time() -> None:
-    """On no-op, session.last_update_time matches the pre-append storage timestamp."""
+    """Event-only appends advance session.last_update_time."""
     store = MockStore()
+    original_update_time = datetime.now(timezone.utc) - timedelta(seconds=10)
+    store._session_record["update_time"] = original_update_time
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session(state={"key": "v"})
+    session.last_update_time = original_update_time.timestamp()
     event = _make_event(state_delta={})
 
     await service.append_event(session, event)
 
-    assert session.last_update_time == store._session_record["update_time"].timestamp()
+    assert session.last_update_time > original_update_time.timestamp()
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +542,50 @@ async def test_create_session_routes_initial_user_scoped_state() -> None:
     persisted_state = store.create_session_calls[0]["state"]
     assert persisted_state == {"x": 1}
     assert store.upsert_user_state_calls[-1] == {"app_name": "app", "user_id": "u1", "state": {"user:theme": "dark"}}
+
+
+@pytest.mark.anyio
+async def test_create_session_empty_state_returns_existing_scoped_state() -> None:
+    """state={} still returns the shared app/user state visible to the new session."""
+    store = MockStore()
+    store.app_state = {"app:counter": 3}
+    store.user_state = {"user:theme": "dark"}
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    session = await service.create_session(app_name="app", user_id="u1", state={})
+
+    assert store.create_session_calls[0]["state"] == {}
+    assert store.upsert_app_state_calls == []
+    assert store.upsert_user_state_calls == []
+    assert session.state == {"app:counter": 3, "user:theme": "dark"}
+
+
+@pytest.mark.anyio
+async def test_create_session_merges_initial_scoped_subset_over_existing_rows() -> None:
+    """Initial scoped keys replace only their keys in the existing scoped snapshots."""
+    store = MockStore()
+    store.app_state = {"app:counter": 1, "app:kept": "yes"}
+    store.user_state = {"user:theme": "light", "user:kept": "yes"}
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    session = await service.create_session(
+        app_name="app", user_id="u1", state={"regular": "seed", "app:counter": 2, "user:theme": "dark"}
+    )
+
+    assert store.create_session_calls[0]["state"] == {"regular": "seed"}
+    assert store.upsert_app_state_calls[-1] == {"app_name": "app", "state": {"app:counter": 2, "app:kept": "yes"}}
+    assert store.upsert_user_state_calls[-1] == {
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"user:theme": "dark", "user:kept": "yes"},
+    }
+    assert session.state == {
+        "regular": "seed",
+        "app:counter": 2,
+        "app:kept": "yes",
+        "user:theme": "dark",
+        "user:kept": "yes",
+    }
 
 
 @pytest.mark.anyio

@@ -24,10 +24,11 @@ V2 — Skip no-op session UPDATE
 
 Status: planned.
 
-When ``event.actions.state_delta`` is empty (and no scoped-state delta is
-provided), the store skips the session ``UPDATE`` and instead bumps
-``update_time`` via a lightweight ``UPDATE ... SET update_time = CURRENT_TIMESTAMP``
-or omits the bump entirely depending on the freshness contract.
+When ``event.actions.state_delta`` is empty, the service still routes the event
+through ``append_event_and_update_state()`` so ``update_time`` advances for
+message-only/tool events. A future store-level optimization may narrow that
+write to a lightweight ``UPDATE ... SET update_time = CURRENT_TIMESTAMP`` while
+preserving the same freshness contract.
 
 V3 — Generated columns from JSON
 ---------------------------------

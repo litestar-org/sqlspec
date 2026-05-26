@@ -15,6 +15,7 @@ from tests.integration.adapters._adk_contract_helpers import (
     assert_session_event_store_contract,
     assert_session_get_session_renewal_contract,
     assert_session_scoped_state_contract,
+    assert_session_service_event_only_touch_contract,
     assert_session_sibling_app_isolation,
     assert_session_sibling_user_isolation,
     assert_session_table_lifecycle_contract,
@@ -125,6 +126,15 @@ async def test_aiosqlite_session_temp_state_not_persisted(tmp_path: Path) -> Non
     config, store = await _build_store(tmp_path)
     try:
         await assert_session_temp_state_not_persisted(store, marker="aiosqlite")
+    finally:
+        await config.close_pool()
+
+
+async def test_aiosqlite_session_service_event_only_touch_contract(tmp_path: Path) -> None:
+    """AioSQLite service-level event-only appends advance update_time."""
+    config, store = await _build_store(tmp_path)
+    try:
+        await assert_session_service_event_only_touch_contract(store, marker="aiosqlite")
     finally:
         await config.close_pool()
 
