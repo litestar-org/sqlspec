@@ -148,7 +148,7 @@ test = [
   "pytest>=8.0.0",
 
   "pytest-cov>=5.0.0",
-  "pytest-databases[postgres,oracle,bigquery,spanner]>=0.18.0",
+  "pytest-databases[postgres,oracle,bigquery,spanner]>=0.19.0",
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
