@@ -165,3 +165,44 @@ async def test_asyncpg_data_dictionary_topology_and_fks(asyncpg_async_driver: "A
             DROP TABLE IF EXISTS {orders_table} CASCADE;
             DROP TABLE IF EXISTS {users_table} CASCADE;
         """)
+
+
+@pytest.mark.asyncpg
+async def test_asyncpg_data_dictionary_get_columns(asyncpg_async_driver: "AsyncpgDriver") -> None:
+    """Exercise get_columns(table=...) end-to-end (regression for #361)."""
+    import uuid
+
+    table_name = f"dd_cols_{uuid.uuid4().hex[:8]}"
+    schema_name = "public"
+
+    await asyncpg_async_driver.execute_script(f"""
+        CREATE TABLE {table_name} (
+            id SERIAL PRIMARY KEY,
+            label TEXT NOT NULL,
+            status VARCHAR(20) DEFAULT 'pending',
+            note TEXT
+        );
+    """)
+
+    try:
+        cols = await asyncpg_async_driver.data_dictionary.get_columns(
+            asyncpg_async_driver, table=table_name, schema=schema_name
+        )
+        by_name = {c["column_name"]: c for c in cols}
+        assert set(by_name) >= {"id", "label", "status", "note"}
+
+        assert by_name["label"]["is_nullable"] == "NO"
+        assert by_name["note"]["is_nullable"] == "YES"
+
+        status_default = by_name["status"].get("column_default")
+        assert status_default is not None
+        assert "pending" in status_default
+    finally:
+        await asyncpg_async_driver.execute_script(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+
+
+@pytest.mark.asyncpg
+async def test_asyncpg_data_dictionary_get_columns_by_schema(asyncpg_async_driver: "AsyncpgDriver") -> None:
+    """Exercise get_columns(schema=...) without a table filter (regression for #361)."""
+    cols = await asyncpg_async_driver.data_dictionary.get_columns(asyncpg_async_driver, schema="pg_catalog")
+    assert len(cols) > 0
