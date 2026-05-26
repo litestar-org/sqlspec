@@ -125,7 +125,7 @@ def spanner_write_session(spanner_config: "SpannerSyncConfig") -> "Generator[Spa
 @pytest.fixture
 def spanner_read_session(spanner_config: "SpannerSyncConfig") -> "Generator[SpannerSyncDriver, None, None]":
     """Read-only session for SELECT operations."""
-    with spanner_config.provide_session() as session:
+    with spanner_config.provide_read_session() as session:
         yield session
 
 

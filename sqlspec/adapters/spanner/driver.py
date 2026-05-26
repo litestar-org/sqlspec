@@ -27,6 +27,12 @@ from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriver
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
+_READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
+    "Cannot execute DML in a read-only Snapshot context. "
+    "SpannerSyncConfig.provide_session() opens a write-capable Transaction by default; "
+    "the current session must have been opened via SpannerSyncConfig.provide_read_session()."
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -160,8 +166,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
-        msg = "Cannot execute DML in a read-only Snapshot context."
-        raise SQLConversionError(msg)
+        raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
 
     def dispatch_execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         if not supports_batch_update(cursor):
@@ -210,8 +215,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             is_select = stmt.upper().strip().startswith("SELECT")
             coerced_params = self._coerce_params(script_params)
             if not is_select and not is_transaction:
-                msg = "Cannot execute DML in a read-only Snapshot context."
-                raise SQLConversionError(msg)
+                raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
                 writer.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
