@@ -173,7 +173,15 @@ def detect_dialect(connection: Any, logger: Any | None = None) -> str:
     try:
         driver_info = connection.adbc_get_info()
         vendor_name = driver_info.get("vendor_name", "").lower()
+        vendor_version = driver_info.get("vendor_version", "").lower()
         driver_name = driver_info.get("driver_name", "").lower()
+
+        if "gizmosql" in vendor_name:
+            if "sqlite" in vendor_version:
+                return "sqlite"
+            if "duckdb" in vendor_version:
+                return "duckdb"
+            return "duckdb"
 
         for dialect, patterns in DIALECT_PATTERNS.items():
             for pattern in patterns:

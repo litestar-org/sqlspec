@@ -48,11 +48,7 @@ def xdist_gizmosql_isolation_level() -> "XdistIsolationLevel":
 
 
 def _gizmosql_db_kwargs(username: str, password: str) -> "dict[str, str]":
-    return {
-        "username": username,
-        "password": password,
-        DatabaseOptions.TLS_SKIP_VERIFY.value: "true",
-    }
+    return {"username": username, "password": password, DatabaseOptions.TLS_SKIP_VERIFY.value: "true"}
 
 
 def _gizmosql_connection_config(service: "GizmoSQLService", *, backend: str) -> "dict[str, Any]":
@@ -67,9 +63,13 @@ def _gizmosql_connection_config(service: "GizmoSQLService", *, backend: str) -> 
 
 
 def _prepare_gizmosql_test_table(session: "AdbcDriver") -> None:
-    session.execute_script(
+    try:
+        session.execute("DROP TABLE IF EXISTS test_table_adbc")
+    except Exception:
+        pass
+    session.execute(
         """
-            CREATE TABLE IF NOT EXISTS test_table_adbc (
+            CREATE TABLE test_table_adbc (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 value INTEGER DEFAULT 0,
@@ -78,14 +78,12 @@ def _prepare_gizmosql_test_table(session: "AdbcDriver") -> None:
         """
     )
     session.execute("DELETE FROM test_table_adbc")
+    session.commit()
 
 
 @pytest.fixture(scope="session")
 def gizmosql_sqlite_service(
-    docker_service: "DockerService",
-    gizmosql_image: str,
-    gizmosql_username: str,
-    gizmosql_password: str,
+    docker_service: "DockerService", gizmosql_image: str, gizmosql_username: str, gizmosql_password: str
 ) -> "Generator[GizmoSQLService, None, None]":
     """Run a second GizmoSQL container using the SQLite backend."""
 
@@ -93,10 +91,9 @@ def gizmosql_sqlite_service(
         try:
             uri = f"grpc+tls://{service.host}:{service.port}"
             db_kwargs = _gizmosql_db_kwargs(gizmosql_username, gizmosql_password)
-            with flightsql.connect(uri=uri, db_kwargs=db_kwargs, autocommit=True) as conn, conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                result = cur.fetchone()
-                return result is not None and result[0] == 1
+            with flightsql.connect(uri=uri, db_kwargs=db_kwargs, autocommit=True) as conn:
+                vendor_version = conn.adbc_get_info().get("vendor_version", "").lower()
+                return "sqlite" in vendor_version
         except Exception:
             return False
 
@@ -139,9 +136,7 @@ def adbc_gizmosql_connection_config(gizmosql_service: "GizmoSQLService") -> "dic
 
 
 @pytest.fixture(scope="session")
-def adbc_gizmosql_config(
-    adbc_gizmosql_connection_config: "dict[str, Any]",
-) -> "Generator[AdbcConfig, None, None]":
+def adbc_gizmosql_config(adbc_gizmosql_connection_config: "dict[str, Any]") -> "Generator[AdbcConfig, None, None]":
     """Provide an ADBC config targeting DuckDB-backed GizmoSQL."""
 
     config = AdbcConfig(connection_config=dict(adbc_gizmosql_connection_config))
@@ -181,9 +176,7 @@ def adbc_gizmosql_sqlite_config(
 
 
 @pytest.fixture(scope="function")
-def adbc_gizmosql_sqlite_session(
-    adbc_gizmosql_sqlite_config: "AdbcConfig",
-) -> "Generator[AdbcDriver, None, None]":
+def adbc_gizmosql_sqlite_session(adbc_gizmosql_sqlite_config: "AdbcConfig") -> "Generator[AdbcDriver, None, None]":
     """Create a SQLite-backed GizmoSQL ADBC session."""
 
     with adbc_gizmosql_sqlite_config.provide_session() as session:

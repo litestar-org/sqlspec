@@ -125,27 +125,15 @@ def test_non_flightsql_connection_config_shapes_are_stable() -> None:
     """Pin non-FlightSQL connection normalization shapes."""
     cases = (
         (
-            {
-                "driver_name": "postgres",
-                "uri": "postgresql://example.invalid/db",
-                "db_kwargs": {"sslmode": "disable"},
-            },
+            {"driver_name": "postgres", "uri": "postgresql://example.invalid/db", "db_kwargs": {"sslmode": "disable"}},
             {"uri": "postgresql://example.invalid/db", "sslmode": "disable"},
         ),
         (
-            {
-                "driver_name": "duckdb",
-                "uri": "duckdb:///tmp/sqlspec.duckdb",
-                "db_kwargs": {"read_only": False},
-            },
+            {"driver_name": "duckdb", "uri": "duckdb:///tmp/sqlspec.duckdb", "db_kwargs": {"read_only": False}},
             {"path": "/tmp/sqlspec.duckdb", "read_only": False},
         ),
         (
-            {
-                "driver_name": "sqlite",
-                "uri": "sqlite:///tmp/sqlspec.sqlite",
-                "db_kwargs": {"timeout": 30},
-            },
+            {"driver_name": "sqlite", "uri": "sqlite:///tmp/sqlspec.sqlite", "db_kwargs": {"timeout": 30}},
             {"uri": "/tmp/sqlspec.sqlite", "timeout": 30},
         ),
         (
@@ -280,11 +268,7 @@ def test_gizmosql_auth_fields_move_into_db_kwargs() -> None:
 def test_gizmosql_tls_skip_verify_true_moves_into_db_kwargs() -> None:
     """Move true TLS skip-verify into FlightSQL db_kwargs as a string."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "uri": "grpc+tls://localhost:31337",
-            "tls_skip_verify": True,
-        }
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "tls_skip_verify": True}
     )
 
     resolved = _get_connection_config_dict(config)
@@ -296,11 +280,7 @@ def test_gizmosql_tls_skip_verify_true_moves_into_db_kwargs() -> None:
 def test_gizmosql_tls_skip_verify_false_moves_into_db_kwargs() -> None:
     """Move false TLS skip-verify into FlightSQL db_kwargs as a string."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "uri": "grpc+tls://localhost:31337",
-            "tls_skip_verify": False,
-        }
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "tls_skip_verify": False}
     )
 
     resolved = _get_connection_config_dict(config)
@@ -337,12 +317,7 @@ def test_gizmosql_user_supplied_db_kwargs_take_precedence() -> None:
             "password": "top-password",
             "tls_skip_verify": True,
             "authorization_header": "Bearer top",
-            "db_kwargs": {
-                "username": "db-user",
-                "password": "db-password",
-                tls_key: "false",
-                auth_key: "Bearer db",
-            },
+            "db_kwargs": {"username": "db-user", "password": "db-password", tls_key: "false", auth_key: "Bearer db"},
         }
     )
 
