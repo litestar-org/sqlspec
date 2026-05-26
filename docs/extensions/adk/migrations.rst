@@ -81,9 +81,9 @@ note the following schema changes:
   store ``app:`` and ``user:`` scoped keys. Raw ``adk_session.state`` rows now
   contain only session-scoped keys; ``SQLSpecSessionService.get_session()``
   returns the merged ADK view.
-- **Internal metadata table**: New ``adk_internal_metadata`` table seeded with
+- **Internal metadata table**: New ``adk_metadata`` table seeded with
   ``schema_version = 1``.
-- **Artifact table**: New table (``adk_artifact_versions``) for artifact
+- **Artifact table**: New table (``adk_artifact``) for artifact
   metadata. Create this table when enabling the artifact service.
 - **BigQuery**: Treated as an analytics-replica backend. Use Spanner or a
   PostgreSQL-family adapter for latency-sensitive live session state.

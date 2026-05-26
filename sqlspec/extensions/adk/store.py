@@ -79,7 +79,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         - events_table: Events table name (default: "adk_event")
         - app_state_table: App-scoped state table name (default: "adk_app_state")
         - user_state_table: User-scoped state table name (default: "adk_user_state")
-        - metadata_table: Internal metadata table name (default: "adk_internal_metadata")
+        - metadata_table: Internal metadata table name (default: "adk_metadata")
         - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
@@ -106,7 +106,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             - events_table: Events table name (default: "adk_event")
             - app_state_table: App-scoped state table name (default: "adk_app_state")
             - user_state_table: User-scoped state table name (default: "adk_user_state")
-            - metadata_table: Internal metadata table name (default: "adk_internal_metadata")
+            - metadata_table: Internal metadata table name (default: "adk_metadata")
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config

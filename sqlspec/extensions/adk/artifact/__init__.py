@@ -18,7 +18,7 @@ Example:
         connection_config={"dsn": "postgresql://..."},
         extension_config={
             "adk": {
-                "artifact_table": "adk_artifact_versions",
+                "artifact_table": "adk_artifact",
             }
         }
     )

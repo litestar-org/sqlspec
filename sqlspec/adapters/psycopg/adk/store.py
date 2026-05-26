@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg import errors
 from psycopg import sql as pg_sql
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
@@ -110,7 +111,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             """).format(table=pg_sql.Identifier(self._session_table))
             params = (session_id, app_name, user_id, Jsonb(state))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, params)
 
         return await self.get_session(app_name, user_id, session_id)  # type: ignore[return-value]
@@ -135,7 +136,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, params)
                 row = await cur.fetchone()
 
@@ -160,7 +161,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """).format(table=pg_sql.Identifier(self._session_table))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -168,7 +169,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             table=pg_sql.Identifier(self._session_table)
         )
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (app_name, user_id, session_id))
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -190,7 +191,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             params = (app_name, user_id)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, params)
                 rows = await cur.fetchall()
 
@@ -218,7 +219,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 query,
                 (
@@ -273,7 +274,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 insert_query,
                 (
@@ -340,7 +341,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
 
@@ -365,7 +366,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, (before,))
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -378,7 +379,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, (updated_before,))
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -391,7 +392,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, (app_name,))
                 row = await cur.fetchone()
                 return row["state"] if row is not None else None
@@ -404,7 +405,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, (app_name, user_id))
                 row = await cur.fetchone()
                 return row["state"] if row is not None else None
@@ -420,7 +421,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             update_time = CURRENT_TIMESTAMP
         """).format(table=pg_sql.Identifier(self._app_state_table))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (app_name, Jsonb(state)))
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
@@ -432,7 +433,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             update_time = CURRENT_TIMESTAMP
         """).format(table=pg_sql.Identifier(self._user_state_table))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (app_name, user_id, Jsonb(state)))
 
     async def get_metadata(self, key: str) -> "str | None":
@@ -441,7 +442,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, (key,))
                 row = await cur.fetchone()
                 return row["value"] if row is not None else None
@@ -455,7 +456,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         """).format(table=pg_sql.Identifier(self._metadata_table))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (key, value))
 
     async def _get_create_sessions_table_sql(self) -> str:
@@ -792,7 +793,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             """).format(table=pg_sql.Identifier(self._session_table))
             params = (session_id, app_name, user_id, Jsonb(state))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, params)
 
         result = self._get_session(app_name, user_id, session_id)
@@ -821,7 +822,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 row = cur.fetchone()
 
@@ -846,7 +847,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """).format(table=pg_sql.Identifier(self._session_table))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -854,7 +855,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             table=pg_sql.Identifier(self._session_table)
         )
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (app_name, user_id, session_id))
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -876,7 +877,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             params = (app_name, user_id)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 rows = cur.fetchall()
 
@@ -904,7 +905,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 insert_query,
                 (
@@ -960,7 +961,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 insert_query,
                 (
@@ -1027,7 +1028,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
@@ -1052,7 +1053,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, (before,))
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1065,7 +1066,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, (updated_before,))
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1078,7 +1079,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, (app_name,))
                 row = cur.fetchone()
                 return row["state"] if row is not None else None
@@ -1091,7 +1092,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, (app_name, user_id))
                 row = cur.fetchone()
                 return row["state"] if row is not None else None
@@ -1107,7 +1108,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             update_time = CURRENT_TIMESTAMP
         """).format(table=pg_sql.Identifier(self._app_state_table))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (app_name, Jsonb(state)))
             conn.commit()
 
@@ -1120,7 +1121,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
             update_time = CURRENT_TIMESTAMP
         """).format(table=pg_sql.Identifier(self._user_state_table))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (app_name, user_id, Jsonb(state)))
             conn.commit()
 
@@ -1130,7 +1131,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, (key,))
                 row = cur.fetchone()
                 return row["value"] if row is not None else None
@@ -1144,7 +1145,7 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         """).format(table=pg_sql.Identifier(self._metadata_table))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (key, value))
             conn.commit()
 
@@ -1204,7 +1205,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=pg_sql.Identifier(self._memory_table))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             for entry in entries:
                 if self._owner_id_column_name:
                     await cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
@@ -1241,7 +1242,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             table=pg_sql.Identifier(self._memory_table)
         )
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, (session_id,))
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1254,7 +1255,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql)
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1313,7 +1314,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
         params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -1333,7 +1334,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
         params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -1452,7 +1453,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=pg_sql.Identifier(self._memory_table))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             for entry in entries:
                 if self._owner_id_column_name:
                     cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
@@ -1498,7 +1499,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table))
         params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
@@ -1518,7 +1519,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
         params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
@@ -1529,7 +1530,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             table=pg_sql.Identifier(self._memory_table)
         )
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, (session_id,))
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1542,7 +1543,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
         """
         ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql)
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 

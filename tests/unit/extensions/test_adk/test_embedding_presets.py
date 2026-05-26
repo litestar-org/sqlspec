@@ -55,9 +55,14 @@ def test_resolve_with_explicit_precision_and_normalize() -> None:
     assert resolved.normalize is False
 
 
-def test_resolve_empty_config_raises_with_preset_table() -> None:
-    with pytest.raises(ImproperConfigurationError, match="gemini-embedding-002"):
-        resolve_embedding_config(None)
+def test_resolve_empty_config_falls_back_to_default_gemini_preset() -> None:
+    resolved = resolve_embedding_config(None)
+    assert resolved.preset is not None
+    assert resolved.preset.name == "gemini-embedding-002"
+    assert resolved.source == "default"
+    assert resolved.dim == 1536
+    assert resolved.precision == "float32"
+    assert resolved.normalize is True
 
 
 def test_resolve_unknown_preset_lists_available_presets() -> None:

@@ -65,20 +65,12 @@ async def test_cockroach_asyncpg_session_table_lifecycle_contract(
     await assert_session_table_lifecycle_contract(cockroach_asyncpg_adk_store, marker="cockroach-asyncpg")
 
 
-@pytest.mark.xfail(
-    reason="sqlspec-7rbl: cockroach_asyncpg multi-statement tx hits multiple_active_portals limitation; tracked separately",
-    strict=False,
-)
 async def test_cockroach_asyncpg_session_scoped_state_contract(
     cockroach_asyncpg_adk_store: CockroachAsyncpgADKStore,
 ) -> None:
     await assert_session_scoped_state_contract(cockroach_asyncpg_adk_store, marker="cockroach-asyncpg")
 
 
-@pytest.mark.xfail(
-    reason="sqlspec-7rbl: cockroach_asyncpg multi-statement tx hits multiple_active_portals limitation; tracked separately",
-    strict=False,
-)
 async def test_cockroach_asyncpg_session_atomic_scoped_write_contract(
     cockroach_asyncpg_adk_store: CockroachAsyncpgADKStore,
 ) -> None:
@@ -97,20 +89,12 @@ async def test_cockroach_asyncpg_session_empty_state_roundtrip(
     await assert_session_empty_state_roundtrip(cockroach_asyncpg_adk_store, marker="cockroach-asyncpg")
 
 
-@pytest.mark.xfail(
-    reason="sqlspec-7rbl: cockroach_asyncpg multi-statement tx hits multiple_active_portals limitation; tracked separately",
-    strict=False,
-)
 async def test_cockroach_asyncpg_session_sibling_app_isolation(
     cockroach_asyncpg_adk_store: CockroachAsyncpgADKStore,
 ) -> None:
     await assert_session_sibling_app_isolation(cockroach_asyncpg_adk_store, marker="cockroach-asyncpg")
 
 
-@pytest.mark.xfail(
-    reason="sqlspec-7rbl: cockroach_asyncpg multi-statement tx hits multiple_active_portals limitation; tracked separately",
-    strict=False,
-)
 async def test_cockroach_asyncpg_session_sibling_user_isolation(
     cockroach_asyncpg_adk_store: CockroachAsyncpgADKStore,
 ) -> None:

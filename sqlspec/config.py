@@ -498,688 +498,107 @@ class SanicConfig(TypedDict):
     """Framework name for SQLCommenter attributes. Default: 'sanic'."""
 
 
-class ADKPartitionConfig(TypedDict):
-    """Configuration for table partitioning and sharding strategies.
-
-    Controls how ADK tables are partitioned across backends that support it.
-    Backends without native partitioning support ignore these settings.
-
-    Example:
-        extension_config={
-            "adk": {
-                "partitioning": {
-                    "strategy": "range",
-                    "partition_key": "created_at",
-                    "interval": "month",
-                }
-            }
-        }
-    """
-
-    strategy: NotRequired[Literal["range", "list", "hash"]]
-    """Partitioning strategy. Default: None (no partitioning).
-
-    - range: Partition by range of values (e.g., time-based)
-    - list: Partition by discrete value lists
-    - hash: Partition by hash of the partition key
-
-    Supported by: PostgreSQL, MySQL 8+, Oracle, Spanner.
-    Ignored by: SQLite, DuckDB.
-    """
-
-    partition_key: NotRequired[str]
-    """Column name used as the partition key.
-
-    For range partitioning with time-based data, this is typically a timestamp column
-    like 'created_at'. For hash partitioning, this is typically the primary key.
-    """
-
-    session_partition_key: NotRequired[str]
-    """Session-table partition key override for adapters that create separate ADK tables."""
-
-    events_partition_key: NotRequired[str]
-    """Event-table partition key override for adapters that create separate ADK tables."""
-
-    memory_partition_key: NotRequired[str]
-    """Memory-table partition key override for adapters that create separate ADK tables."""
-
-    interval: NotRequired[str]
-    """Partition interval for range partitioning.
-
-    Examples: 'day', 'week', 'month', 'year'.
-    Only meaningful when strategy is 'range'.
-    """
-
-    partition_count: NotRequired[int]
-    """Number of hash partitions for adapters that support hash-partitioned ADK tables."""
-
-    initial_less_than: NotRequired[str]
-    """Initial range-partition upper bound for adapters that require a seed partition."""
-
-
-class ADKRetentionConfig(TypedDict):
-    """Configuration for data retention and TTL policies.
-
-    Controls automatic cleanup of expired data. Backends with native TTL support
-    (CockroachDB Row-Level TTL, Spanner Row Deletion Policy) use database-level
-    enforcement. Others fall back to application-level sweep queries.
-
-    Example:
-        extension_config={
-            "adk": {
-                "retention": {
-                    "session_ttl_seconds": 86400,
-                    "event_ttl_seconds": 604800,
-                    "memory_ttl_seconds": 0,
-                }
-            }
-        }
-    """
-
-    session_ttl_seconds: NotRequired[int]
-    """TTL for session records in seconds. Default: 0 (no expiry).
-
-    When set, sessions older than this threshold are eligible for cleanup.
-    Backends with native TTL (CockroachDB, Spanner) enforce this at the database level.
-    Others require application-level cleanup via periodic sweep.
-    """
-
-    event_ttl_seconds: NotRequired[int]
-    """TTL for event records in seconds. Default: 0 (no expiry).
-
-    When set, events older than this threshold are eligible for cleanup.
-    """
-
-    memory_ttl_seconds: NotRequired[int]
-    """TTL for memory entries in seconds. Default: 0 (no expiry).
-
-    When set, memory entries older than this threshold are eligible for cleanup.
-    """
-
-    sweep_interval_seconds: NotRequired[int]
-    """Interval between application-level cleanup sweeps in seconds. Default: 3600 (1 hour).
-
-    Only used when the backend does not support native TTL enforcement.
-    Set to 0 to disable automatic sweeps (manual cleanup only).
-    """
-
-
-class ADKCompressionConfig(TypedDict):
-    """Configuration for table-level compression.
-
-    Controls compression of ADK table storage. Support and algorithms vary by backend.
-
-    Example:
-        extension_config={
-            "adk": {
-                "compression": {
-                    "enabled": True,
-                    "algorithm": "zstd",
-                }
-            }
-        }
-    """
-
-    enabled: NotRequired[bool]
-    """Enable table compression. Default: False.
-
-    When True, adapters that support table-level compression will apply it
-    during table creation.
-    """
-
-    algorithm: NotRequired[str]
-    """Compression algorithm name. Backend-specific.
-
-    Examples:
-        - PostgreSQL (with TOAST): 'pglz', 'lz4' (PG14+)
-        - MySQL/InnoDB: 'zlib'
-        - Oracle: 'basic', 'oltp', 'query_high', 'archive_high'
-        - DuckDB: 'zstd', 'snappy'
-
-    When omitted, the backend default is used.
-    """
-
-    level: NotRequired[int]
-    """Compression level (where supported). Higher levels trade CPU for space savings.
-
-    Valid ranges depend on the algorithm and backend.
-    """
-
-
-class ADKSqliteOptimizationConfig(TypedDict):
-    """SQLite-specific PRAGMA optimization settings.
-
-    Controls SQLite performance tuning parameters applied at connection time.
-    These settings are ignored by non-SQLite adapters.
-
-    Example:
-        extension_config={
-            "adk": {
-                "sqlite_optimization": {
-                    "cache_size": -64000,
-                    "mmap_size": 31457280,
-                    "journal_size_limit": 67108864,
-                }
-            }
-        }
-    """
-
-    cache_size: NotRequired[int]
-    """SQLite page cache size. Default: -64000 (64 MB, negative means KiB).
-
-    Larger caches reduce disk I/O for read-heavy workloads.
-    Negative values specify size in KiB; positive values specify page count.
-    """
-
-    mmap_size: NotRequired[int]
-    """SQLite memory-mapped I/O size in bytes. Default: 31457280 (30 MB).
-
-    Enables memory-mapped I/O for faster reads. Set to 0 to disable.
-    """
-
-    journal_size_limit: NotRequired[int]
-    """SQLite journal file size limit in bytes. Default: 67108864 (64 MB).
-
-    Limits the size of the WAL or rollback journal file.
-    Prevents unbounded journal growth in write-heavy workloads.
-    """
-
-
-ADKOptimizationMode: TypeAlias = Literal["auto", "enable", "disable"]
-"""Tri-state optimization control used by ADK capability negotiation."""
-
-
-class ADKSchemaConfig(TypedDict):
-    """Shared ADK schema naming and migration controls."""
-
-    session_table: NotRequired[str]
-    events_table: NotRequired[str]
-    memory_table: NotRequired[str]
-    artifact_table: NotRequired[str]
-    app_state_table: NotRequired[str]
-    user_state_table: NotRequired[str]
-    metadata_table: NotRequired[str]
-    owner_id_column: NotRequired[str]
-    schema_version: NotRequired[int]
-    payload_versions: NotRequired["ADKPayloadVersionsConfig"]
-    include_sessions_migration: NotRequired[bool]
-    include_memory_migration: NotRequired[bool]
-    include_artifact_migration: NotRequired[bool]
-
-
-class ADKSearchConfig(TypedDict):
-    """Shared ADK search configuration."""
-
-    strategy: NotRequired[Literal["auto", "like", "fts", "vector"]]
-    use_fts: NotRequired[bool]
-    language: NotRequired[str]
-    max_results: NotRequired[int]
-
-
-class ADKPayloadVersionsConfig(TypedDict):
-    """Shared ADK payload version pinning."""
-
-    event: NotRequired[int]
-    state: NotRequired[int]
-    memory: NotRequired[int]
-    artifact: NotRequired[int]
-
-
-class ADKIndexingConfig(TypedDict):
-    """Shared ADK index lifecycle controls."""
-
-    generated_columns: NotRequired[ADKOptimizationMode]
-    covering_indexes: NotRequired[ADKOptimizationMode]
-    search_indexes: NotRequired[ADKOptimizationMode]
-    json_indexes: NotRequired[ADKOptimizationMode]
-    vector_indexes: NotRequired[ADKOptimizationMode]
-
-
-class ADKTableOptionsConfig(TypedDict):
-    """Shared ADK table and index option attachment points."""
-
-    sessions: NotRequired[str]
-    events: NotRequired[str]
-    memory: NotRequired[str]
-    artifacts: NotRequired[str]
-    app_states: NotRequired[str]
-    user_states: NotRequired[str]
-    metadata: NotRequired[str]
-    expires_index: NotRequired[str]
-
-
-class ADKLifecycleConfig(TypedDict):
-    """Shared ADK lifecycle controls for backend DDL chapters."""
-
-    partitioning: NotRequired[ADKPartitionConfig]
-    retention: NotRequired[ADKRetentionConfig]
-    indexing: NotRequired[ADKIndexingConfig]
-    compression: NotRequired[ADKCompressionConfig]
-    table_options: NotRequired[ADKTableOptionsConfig]
-
-
-class ADKCapabilityConfig(TypedDict):
-    """Shared ADK capability detection overrides."""
-
-    overrides: NotRequired[dict[str, ADKOptimizationMode]]
-
-
-class ADKMemoryConfig(TypedDict):
-    """Shared ADK memory configuration."""
-
-    enabled: NotRequired[bool]
-    table: NotRequired[str]
-    max_results: NotRequired[int]
-    search: NotRequired[ADKSearchConfig]
-
-
-class ADKArtifactConfig(TypedDict):
-    """Shared ADK artifact configuration."""
-
-    table: NotRequired[str]
-    storage_uri: NotRequired[str]
-
-
-class ADKOptimizationConfig(TypedDict):
-    """Shared ADK data-model optimization controls."""
-
-    generated_columns: NotRequired[ADKOptimizationMode]
-    null_encoded_empty_state: NotRequired[ADKOptimizationMode]
-    skip_noop_session_update: NotRequired[ADKOptimizationMode]
-    append_only_event_partitioning: NotRequired[ADKOptimizationMode]
-    covering_indexes: NotRequired[ADKOptimizationMode]
-    duckdb_struct_events: NotRequired[ADKOptimizationMode]
-    spanner_commit_timestamp_pk_suffix: NotRequired[ADKOptimizationMode]
-    alloydb_columnar_autopromote: NotRequired[ADKOptimizationMode]
-
-
-class ADKOracleConfig(TypedDict):
-    """Oracle-specific ADK capability settings."""
-
-    in_memory: NotRequired[bool]
-    session_table_options: NotRequired[str]
-    events_table_options: NotRequired[str]
-    memory_table_options: NotRequired[str]
-    compression: NotRequired[ADKCompressionConfig]
-    partitioning: NotRequired[ADKPartitionConfig]
-
-
-class ADKSpannerConfig(TypedDict):
-    """Spanner-specific ADK capability settings."""
-
-    shard_count: NotRequired[int]
-    interleave_events_in_sessions: NotRequired[bool]
-    session_table_options: NotRequired[str]
-    events_table_options: NotRequired[str]
-    memory_table_options: NotRequired[str]
-
-
-class ADKADBCConfig(TypedDict):
-    """ADBC-specific ADK capability settings."""
-
-    dialect: NotRequired[str]
-    table_options: NotRequired[str]
-
-
-class ADKBigQueryConfig(TypedDict):
-    """BigQuery-specific ADK capability settings."""
-
-    dataset: NotRequired[str]
-    partition_expiration_days: NotRequired[int]
-    clustering_fields: NotRequired[tuple[str, ...] | list[str]]
-    table_options: NotRequired[str]
-
-
 class ADKConfig(TypedDict):
-    """Configuration options for ADK session and memory store extension.
+    """Configuration options for ADK session, memory, and artifact storage.
 
-    All fields are optional with sensible defaults. Use in extension_config["adk"]:
-
-    Configuration supports three deployment scenarios:
-    1. SQLSpec manages everything (runtime + migrations)
-    2. SQLSpec runtime only (external migration tools like Alembic/Flyway)
-    3. Selective features (sessions OR memory, not both)
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "memory_table": "my_memories",
-                    "memory_use_fts": True,
-                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
-                }
-            }
-        )
-
-    Notes:
-        This TypedDict provides type safety for extension config but is not required.
-        You can use plain dicts as well.
+    Use in ``extension_config["adk"]``. All fields are optional. Adapters read only
+    the keys they understand and ignore the rest; adapter-specific knobs (``in_memory``,
+    ``shard_count``, ``*_table_options``, ``partitioning``, ``compression``, ``retention``)
+    follow the same pattern as ``EventsConfig.in_memory``.
     """
-
-    schema: NotRequired[ADKSchemaConfig]
-    """Shared schema naming, owner binding, and migration controls."""
-
-    memory: NotRequired[ADKMemoryConfig]
-    """Shared memory enablement and result-limit controls."""
-
-    search: NotRequired[ADKSearchConfig]
-    """Shared search strategy and language controls."""
-
-    payloads: NotRequired[ADKPayloadVersionsConfig]
-    """Shared payload version pins."""
-
-    lifecycle: NotRequired[ADKLifecycleConfig]
-    """Shared lifecycle controls for partitioning, retention, indexing, compression, and table options."""
-
-    capabilities: NotRequired[ADKCapabilityConfig]
-    """Shared detected capability overrides."""
-
-    artifact: NotRequired[ADKArtifactConfig]
-    """Shared artifact metadata and storage URI controls."""
-
-    optimizations: NotRequired[ADKOptimizationConfig]
-    """Shared optimization negotiation controls."""
-
-    oracle: NotRequired[ADKOracleConfig]
-    """Oracle-specific ADK capability settings."""
-
-    spanner: NotRequired[ADKSpannerConfig]
-    """Spanner-specific ADK capability settings."""
-
-    adbc: NotRequired[ADKADBCConfig]
-    """ADBC-specific ADK capability settings."""
-
-    bigquery: NotRequired[ADKBigQueryConfig]
-    """BigQuery-specific ADK capability settings."""
 
     enable_sessions: NotRequired[bool]
-    """Enable session store at runtime. Default: True.
-
-    When False: session service unavailable, session store operations disabled.
-    Independent of migration control - can use externally-managed tables.
-    """
+    """Enable session store at runtime. Defaults to True."""
 
     enable_memory: NotRequired[bool]
-    """Enable memory store at runtime. Default: True.
-
-    When False: memory service unavailable, memory store operations disabled.
-    Independent of migration control - can use externally-managed tables.
-    """
+    """Enable memory store at runtime. Defaults to True."""
 
     include_sessions_migration: NotRequired[bool]
-    """Include session tables in SQLSpec migrations. Default: True.
-
-    When False: session migration DDL skipped (use external migration tools).
-    Decoupled from enable_sessions - allows external table management with SQLSpec runtime.
-    """
+    """Include session tables in SQLSpec migrations. Defaults to True."""
 
     include_memory_migration: NotRequired[bool]
-    """Include memory tables in SQLSpec migrations. Default: True.
-
-    When False: memory migration DDL skipped (use external migration tools).
-    Decoupled from enable_memory - allows external table management with SQLSpec runtime.
-    """
+    """Include memory tables in SQLSpec migrations. Defaults to True."""
 
     session_table: NotRequired[str]
-    """Name of the sessions table. Default: 'adk_session'
-
-    Examples:
-        "agent_sessions"
-        "my_app_sessions"
-        "tenant_acme_sessions"
-    """
+    """Sessions table name. Defaults to ``"adk_session"``."""
 
     events_table: NotRequired[str]
-    """Name of the events table. Default: 'adk_event'
-
-    Examples:
-        "agent_events"
-        "my_app_events"
-        "tenant_acme_events"
-    """
+    """Events table name. Defaults to ``"adk_event"``."""
 
     app_state_table: NotRequired[str]
-    """Name of the app-scoped state table. Default: 'adk_app_state'."""
+    """App-scoped state table name. Defaults to ``"adk_app_state"``."""
 
     user_state_table: NotRequired[str]
-    """Name of the user-scoped state table. Default: 'adk_user_state'."""
+    """User-scoped state table name. Defaults to ``"adk_user_state"``."""
 
     metadata_table: NotRequired[str]
-    """Name of the internal ADK metadata table. Default: 'adk_internal_metadata'."""
+    """Internal ADK metadata table name. Defaults to ``"adk_metadata"``."""
 
     memory_table: NotRequired[str]
-    """Name of the memory entries table. Default: 'adk_memory_entries'
-
-    Examples:
-        "agent_memories"
-        "my_app_memories"
-        "tenant_acme_memories"
-    """
+    """Memory entries table name. Defaults to ``"adk_memory"``."""
 
     artifact_table: NotRequired[str]
-    """Name of the artifact versions table. Default: 'adk_artifact_versions'
-
-    Examples:
-        "agent_artifacts"
-        "my_app_artifact_versions"
-    """
+    """Artifact versions table name. Defaults to ``"adk_artifact"``."""
 
     artifact_storage_uri: NotRequired[str]
-    """Base URI for artifact content storage.
+    """Storage backend reference for artifact binary content.
 
-    Points to a ``sqlspec/storage/`` backend where artifact binary content
-    is stored.  Can be a direct URI (``s3://bucket/path``, ``file:///path``)
-    or a registered alias in the storage registry.
+    Forwarded to :meth:`sqlspec.storage.StorageRegistry.get`. Accepts either:
 
-    Examples:
-        "s3://my-bucket/adk-artifacts/"
-        "file:///var/data/artifacts/"
-        "gcs://my-gcs-bucket/artifacts/"
+    - A direct URI: ``"s3://my-bucket/adk/"``, ``"file:///var/data/adk/"``, ``"gs://bucket/adk/"``.
+    - A registered alias: ``"artifacts"`` — register via
+      ``storage_registry.register_alias("artifacts", "s3://my-bucket/adk/", ...)`` to keep
+      backend-specific kwargs (credentials, base_path, fsspec/obstore overrides) out of the
+      ADK config.
     """
 
     memory_use_fts: NotRequired[bool]
-    """Enable full-text search when supported. Default: False.
-
-    When True, adapters will use their native FTS capabilities where available:
-    - PostgreSQL: to_tsvector/to_tsquery with GIN index
-    - SQLite: FTS5 virtual table
-    - DuckDB: FTS extension with match_bm25
-    - Oracle: CONTAINS() with CTXSYS.CONTEXT index
-    - Spanner: TOKENIZE_FULLTEXT with search index
-    - MySQL: MATCH...AGAINST with FULLTEXT index
-
-    When False, adapters use simple LIKE/ILIKE queries (works without indexes).
-    """
+    """Use the backend's native full-text search when supported. Defaults to False."""
 
     memory_max_results: NotRequired[int]
-    """Maximum number of results for memory search queries. Default: 20.
-
-    Limits the number of memory entries returned by search_memory().
-    Can be overridden per-query via the limit parameter.
-    """
+    """Default ``limit`` for ``search_memory``. Defaults to 20."""
 
     owner_id_column: NotRequired[str]
-    """Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity.
+    """Optional owner-ID column DDL for multi-tenancy.
 
-    Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]"
+    Appended to the ``adk_session`` and ``adk_memory`` tables only. Other ADK tables
+    skip it by design: ``adk_event`` cascades through its sessions FK, ``adk_app_state``
+    and ``adk_user_state`` are already scoped through their primary keys, and
+    ``adk_metadata`` is internal kv. BigQuery is the lone exception — its analytics-
+    replica DDL ignores ``owner_id_column`` entirely; use the BigQuery
+    ``clustering_fields`` / ``partitioning`` knobs for tenant-scoped layout instead.
 
-    The entire definition is passed through to DDL verbatim. We only parse
-    the column name (first word) for use in INSERT/SELECT statements.
-
-    This column is added to both session and memory tables for consistent
-    multi-tenant isolation.
-
-    Supports:
-        - Foreign key constraints: REFERENCES table(column)
-        - Nullable or NOT NULL
-        - CASCADE options: ON DELETE CASCADE, ON UPDATE CASCADE
-        - Dialect-specific options (DEFERRABLE, ENABLE VALIDATE, etc.)
-        - Plain columns without FK (just extra column storage)
-
-    Examples:
-        PostgreSQL with UUID FK:
-            "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
-
-        MySQL with BIGINT FK:
-            "user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT"
-
-        Oracle with NUMBER FK:
-            "user_id NUMBER(10) REFERENCES users(id) ENABLE VALIDATE"
-
-        SQLite with INTEGER FK:
-            "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
-
-        Nullable FK (optional relationship):
-            "workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL"
-
-        No FK (just extra column):
-            "organization_name VARCHAR(128) NOT NULL"
-
-        Deferred constraint (PostgreSQL):
-            "user_id UUID REFERENCES users(id) DEFERRABLE INITIALLY DEFERRED"
-
-    Notes:
-        - Column name (first word) is extracted for INSERT/SELECT queries
-        - Rest of definition is passed through to CREATE TABLE DDL
-        - Database validates the DDL syntax (fail-fast on errors)
-        - Works with all database dialects (PostgreSQL, MySQL, SQLite, Oracle, etc.)
+    Format: ``"column_name TYPE [NOT NULL] [REFERENCES table(col) ...]"``. The full
+    fragment is forwarded to ``CREATE TABLE`` verbatim; only the first token (column
+    name) is parsed for use in INSERT/SELECT statements.
     """
 
     in_memory: NotRequired[bool]
-    """Enable in-memory table storage (Oracle-specific). Default: False.
-
-    When enabled, tables are created with the INMEMORY clause for Oracle Database,
-    which stores table data in columnar format in memory for faster query performance.
-
-    This is an Oracle-specific feature that requires:
-        - Oracle Database 12.1.0.2 or higher
-        - Database In-Memory option license (Enterprise Edition)
-        - Sufficient INMEMORY_SIZE configured in the database instance
-
-    Other database adapters ignore this setting.
-
-    Examples:
-        Oracle with in-memory enabled:
-            config = OracleAsyncConfig(
-                connection_config={"dsn": "oracle://..."},
-                extension_config={
-                    "adk": {
-                        "in_memory": True
-                    }
-                }
-            )
-
-    Notes:
-        - Improves query performance for analytics (10-100x faster)
-        - Tables created with INMEMORY clause
-        - Requires Oracle Database In-Memory option license
-        - Ignored by non-Oracle adapters
-    """
+    """Enable Oracle's ``INMEMORY`` clause for ADK tables. Ignored by other adapters."""
 
     shard_count: NotRequired[int]
-    """Optional hash shard count for session/event tables to reduce hotspotting.
-
-    When set (>1), adapters that support computed shard columns will create a
-    generated shard_id using MOD(FARM_FINGERPRINT(primary_key), shard_count) and
-    include it in the primary key and filters. Ignored by adapters that do not
-    support computed shards.
-    """
+    """Hash shard count for adapters that support computed shard columns (Spanner)."""
 
     session_table_options: NotRequired[str]
-    """Adapter-specific table OPTIONS/clauses for the sessions table.
-
-    Passed verbatim when supported (e.g., Spanner columnar/tiered storage). Ignored by
-    adapters without table OPTIONS support.
-    """
+    """Verbatim ``OPTIONS`` clause for the sessions table (Oracle, Spanner). Ignored elsewhere."""
 
     events_table_options: NotRequired[str]
-    """Adapter-specific table OPTIONS/clauses for the events table."""
+    """Verbatim ``OPTIONS`` clause for the events table (Oracle, Spanner). Ignored elsewhere."""
 
     memory_table_options: NotRequired[str]
-    """Adapter-specific table OPTIONS/clauses for the memory table."""
+    """Verbatim ``OPTIONS`` clause for the memory table (Oracle, Spanner). Ignored elsewhere."""
 
     expires_index_options: NotRequired[str]
-    """Adapter-specific options for the expires/index used in ADK stores."""
+    """Verbatim options for the expires index (Spanner). Ignored elsewhere."""
 
-    # --- Capability-based configuration (Chapter 2: schema-capability-config) ---
+    partitioning: NotRequired["dict[str, Any]"]
+    """Table partitioning configuration. Consumed by Oracle (hash/range only)."""
 
-    fts_language: NotRequired[str]
-    """Language configuration for full-text search indexing. Default: 'english'.
+    compression: NotRequired["dict[str, Any]"]
+    """Table compression configuration. Consumed by Oracle."""
 
-    Controls the language dictionary/stemmer used by FTS implementations:
-    - PostgreSQL: to_tsvector/to_tsquery language parameter
-    - SQLite FTS5: tokenizer language for unicode61/porter
-    - MySQL: FULLTEXT parser language (with ngram for CJK on 5.7.6+)
-    - Oracle: CTXSYS.CONTEXT lexer language
-    - Spanner: TOKENIZE_FULLTEXT language parameter
-    - DuckDB: FTS stemmer language
-
-    Only takes effect when ``memory_use_fts`` is True.
-
-    Common values: 'english', 'simple', 'german', 'french', 'spanish',
-    'portuguese', 'italian', 'dutch', 'russian', 'chinese', 'japanese', 'korean'.
-
-    Notes:
-        Available languages vary by backend. Backends that do not support the
-        specified language will fall back to 'simple' or 'english'.
-    """
-
-    schema_version: NotRequired[int]
-    """Explicit schema version for ADK tables. Default: None (auto-detect).
-
-    When set, locks the ADK schema to a specific version. This is useful for:
-    - Preventing automatic schema upgrades in production
-    - Pinning to a known-good schema during testing
-    - Coordinating schema changes across multiple application instances
-
-    When None, the ADK extension auto-detects the current schema version
-    and applies any pending upgrades during initialization.
-
-    Notes:
-        Schema versions are monotonically increasing integers managed by
-        the ADK extension migration system. Setting this to a version
-        lower than the current database schema will raise a configuration
-        error at startup.
-    """
-
-    partitioning: NotRequired[ADKPartitionConfig]
-    """Table partitioning configuration. Default: None (no partitioning).
-
-    Controls how ADK tables are partitioned for improved query performance
-    and data management at scale. See ``ADKPartitionConfig`` for options.
-
-    Supported by: PostgreSQL, MySQL 8+, Oracle, Spanner.
-    Ignored by: SQLite, DuckDB.
-    """
-
-    retention: NotRequired[ADKRetentionConfig]
-    """Data retention and TTL configuration. Default: None (no automatic cleanup).
-
-    Controls automatic expiry and cleanup of old session, event, and memory data.
-    See ``ADKRetentionConfig`` for options.
-
-    Backends with native TTL (CockroachDB, Spanner) use database-level enforcement.
-    Others fall back to application-level sweep queries.
-    """
-
-    compression: NotRequired[ADKCompressionConfig]
-    """Table compression configuration. Default: None (no compression).
-
-    Controls table-level compression for ADK tables.
-    See ``ADKCompressionConfig`` for options.
-    """
-
-    sqlite_optimization: NotRequired[ADKSqliteOptimizationConfig]
-    """SQLite-specific PRAGMA optimization settings. Default: None (SQLite defaults).
-
-    Controls SQLite performance tuning parameters. Ignored by non-SQLite adapters.
-    See ``ADKSqliteOptimizationConfig`` for options.
-    """
+    retention: NotRequired["dict[str, Any]"]
+    """Data retention / TTL configuration. Consumed by Spanner and BigQuery."""
 
 
 class EventsConfig(TypedDict):

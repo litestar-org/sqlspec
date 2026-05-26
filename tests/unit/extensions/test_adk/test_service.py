@@ -1,7 +1,7 @@
-"""Unit tests for SQLSpecSessionService — state persistence fix.
+"""Unit tests for SQLSpecSessionService.
 
-Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
-- append_event calls append_event_and_update_state (not the old append_event)
+Covers the durable-state write contract:
+- append_event routes to append_event_and_update_state (or append_event on no-op)
 - temp: keys are stripped before persisting session state
 - partial events are not persisted
 - create_session strips temp: keys from initial state
@@ -37,18 +37,19 @@ class MockStore:
     """
 
     def __init__(self) -> None:
-        # Track calls to the new combined method
         self.append_event_and_update_state_calls: list[dict[str, Any]] = []
         self.append_event_and_update_state_called = False
+        self.append_event_calls: list[Any] = []
         self.get_session_calls = 0
         self.get_session_call_args: list[dict[str, Any]] = []
 
-        # Track calls to create_session
         self.create_session_calls: list[dict[str, Any]] = []
         self.upsert_app_state_calls: list[dict[str, Any]] = []
         self.upsert_user_state_calls: list[dict[str, Any]] = []
         self.app_state: dict[str, Any] | None = None
         self.user_state: dict[str, Any] | None = None
+
+        self.config = type("_Cfg", (), {"extension_config": {"adk": {}}})()
 
         # Provide a get_session that returns a minimal session record
         self._session_record = {
@@ -63,11 +64,11 @@ class MockStore:
     async def append_event_and_update_state(
         self,
         event_record: Any,
-        session_id: str,
-        state: "dict[str, Any]",
+        app_name: "str | None" = None,
+        user_id: "str | None" = None,
+        session_id: "str | None" = None,
+        state: "dict[str, Any] | None" = None,
         *,
-        app_name: str | None = None,
-        user_id: str | None = None,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> "dict[str, Any]":
@@ -89,26 +90,32 @@ class MockStore:
             self.user_state = user_state
         # Return the updated SessionRecord — caller no longer needs a follow-up get_session().
         updated = dict(self._session_record)
-        updated["state"] = state
+        updated["state"] = state if state is not None else {}
         updated["update_time"] = datetime.now(timezone.utc)
         self._session_record = updated
         return updated
 
     async def get_session(
-        self, session_id: str, *, renew_for: int | timedelta | None = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
     ) -> "dict[str, Any] | None":
         self.get_session_calls += 1
-        self.get_session_call_args.append({"session_id": session_id, "renew_for": renew_for})
+        self.get_session_call_args.append({
+            "app_name": app_name,
+            "user_id": user_id,
+            "session_id": session_id,
+            "renew_for": renew_for,
+        })
         return self._session_record
 
     async def create_session(
-        self, *, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> "dict[str, Any]":
         self.create_session_calls.append({
             "session_id": session_id,
             "app_name": app_name,
             "user_id": user_id,
             "state": state,
+            "owner_id": owner_id,
         })
         return {
             "id": session_id,
@@ -119,11 +126,12 @@ class MockStore:
             "update_time": datetime.now(timezone.utc),
         }
 
-    # Old method — should NOT be called by the new service
     async def append_event(self, event_record: Any) -> None:
-        raise AssertionError("append_event (old method) must not be called — use append_event_and_update_state")
+        self.append_event_calls.append(event_record)
 
-    async def get_events(self, *, session_id: str, after_timestamp: Any = None, limit: Any = None) -> list:
+    async def get_events(
+        self, app_name: str, user_id: str, session_id: str, after_timestamp: Any = None, limit: Any = None
+    ) -> list:
         return []
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
@@ -140,10 +148,10 @@ class MockStore:
         self.upsert_user_state_calls.append({"app_name": app_name, "user_id": user_id, "state": state})
         self.user_state = state
 
-    async def list_sessions(self, *, app_name: str, user_id: "str | None" = None) -> list:
+    async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> list:
         return []
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         pass
 
 
@@ -187,7 +195,12 @@ async def test_get_session_forwards_renew_for_to_store() -> None:
     session = await service.get_session(app_name="app", user_id="u1", session_id="s1", renew_for=renew_for)
 
     assert session is not None
-    assert store.get_session_call_args[0] == {"session_id": "s1", "renew_for": renew_for}
+    assert store.get_session_call_args[0] == {
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "renew_for": renew_for,
+    }
 
 
 @pytest.mark.anyio
@@ -270,7 +283,7 @@ async def test_append_event_strips_temp_from_persisted_state() -> None:
     store = MockStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session(state={"key": "v", "temp:transient": "should_not_persist"})
-    event = _make_event()
+    event = _make_event(state_delta={"key": "v"})
 
     await service.append_event(session, event)
 
@@ -336,7 +349,7 @@ async def test_append_event_passes_correct_session_id_to_store() -> None:
     store = MockStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session(session_id="my-unique-session-id")
-    event = _make_event()
+    event = _make_event(state_delta={"key": "v"})
 
     await service.append_event(session, event)
 
@@ -345,18 +358,26 @@ async def test_append_event_passes_correct_session_id_to_store() -> None:
 
 
 @pytest.mark.anyio
-async def test_append_event_event_record_has_5_keys() -> None:
-    """The event_record passed to the store has exactly 5 keys (new schema)."""
+async def test_append_event_event_record_keys_match_full_event_schema() -> None:
+    """The event_record passed to the store carries the full-event JSON schema."""
     store = MockStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session()
-    event = _make_event()
+    event = _make_event(state_delta={"key": "v"})
 
     await service.append_event(session, event)
 
     last_call = store.append_event_and_update_state_calls[-1]
     event_record = last_call["event_record"]
-    assert set(event_record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_data"}
+    assert set(event_record.keys()) == {
+        "id",
+        "app_name",
+        "user_id",
+        "session_id",
+        "invocation_id",
+        "timestamp",
+        "event_data",
+    }
 
 
 @pytest.mark.anyio
@@ -365,12 +386,81 @@ async def test_append_event_returns_the_event() -> None:
     store = MockStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session()
-    event = _make_event(author="model")
+    event = _make_event(author="model", state_delta={"k": "v"})
 
     result = await service.append_event(session, event)
 
     assert result is not None
     assert result.author == "model"
+
+
+# ---------------------------------------------------------------------------
+# No-op state delta handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_append_event_skips_update_when_state_delta_empty() -> None:
+    """When event.actions.state_delta is empty, the session UPDATE is skipped."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"key": "v"})
+    event = _make_event(state_delta={})
+
+    await service.append_event(session, event)
+
+    assert len(store.append_event_calls) == 1, "no-op delta must route to append_event (event-only insert)"
+    assert not store.append_event_and_update_state_called, "no-op delta must NOT trigger append_event_and_update_state"
+
+
+@pytest.mark.anyio
+async def test_append_event_runs_full_path_when_state_delta_present() -> None:
+    """When event.actions.state_delta is non-empty, take the full atomic path."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"key": "v0"})
+    event = _make_event(state_delta={"key": "v1"})
+
+    await service.append_event(session, event)
+
+    assert store.append_event_and_update_state_called
+    assert store.append_event_calls == [], "non-empty delta must NOT take the no-op event-only path"
+
+
+@pytest.mark.anyio
+async def test_append_event_noop_event_record_carries_full_schema() -> None:
+    """The event_record sent to append_event on the no-op path carries the full key set."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session()
+    event = _make_event(state_delta={})
+
+    await service.append_event(session, event)
+
+    assert len(store.append_event_calls) == 1
+    event_record = store.append_event_calls[0]
+    assert set(event_record.keys()) == {
+        "id",
+        "app_name",
+        "user_id",
+        "session_id",
+        "invocation_id",
+        "timestamp",
+        "event_data",
+    }
+
+
+@pytest.mark.anyio
+async def test_append_event_noop_does_not_advance_last_update_time() -> None:
+    """On no-op, session.last_update_time matches the pre-append storage timestamp."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"key": "v"})
+    event = _make_event(state_delta={})
+
+    await service.append_event(session, event)
+
+    assert session.last_update_time == store._session_record["update_time"].timestamp()
 
 
 # ---------------------------------------------------------------------------
@@ -466,13 +556,10 @@ class StaleDetectionStore(MockStore):
         self._stale_timestamp = stale_timestamp
 
     async def get_session(
-        self, session_id: str, *, renew_for: int | timedelta | None = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
     ) -> "dict[str, Any] | None":
         record = dict(self._session_record)
         if self._stale_marker or self._stale_timestamp:
-            # Simulate a storage-side update by advancing update_time
-            from datetime import timedelta
-
             record["update_time"] = record["update_time"] + timedelta(seconds=10)  # type: ignore[operator]
         return record
 
@@ -481,7 +568,7 @@ class MissingSessionStore(MockStore):
     """Mock store where the session disappears between load and append."""
 
     async def get_session(
-        self, session_id: str, *, renew_for: int | timedelta | None = None
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
     ) -> "dict[str, Any] | None":
         return None
 

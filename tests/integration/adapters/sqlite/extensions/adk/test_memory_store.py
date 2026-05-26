@@ -97,7 +97,7 @@ async def test_sqlite_memory_store_disabled_lifecycle() -> None:
 
         with config.provide_connection() as conn:
             cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory_entries",)
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory",)
             )
             row = cursor.fetchone()
 

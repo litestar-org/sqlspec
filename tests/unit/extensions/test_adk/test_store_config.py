@@ -280,11 +280,9 @@ def test_session_store_contract_declares_schema_parity_hooks() -> None:
 def test_session_store_resolves_schema_parity_table_names() -> None:
     store = _AsyncSessionStore(
         _Config({
-            "schema": {
-                "app_state_table": "agent_app_states",
-                "user_state_table": "agent_user_states",
-                "metadata_table": "agent_metadata",
-            }
+            "app_state_table": "agent_app_states",
+            "user_state_table": "agent_user_states",
+            "metadata_table": "agent_metadata",
         })
     )
 
@@ -300,15 +298,16 @@ def test_session_store_uses_singular_default_table_names() -> None:
     assert store.events_table == "adk_event"
     assert store.app_state_table == "adk_app_state"
     assert store.user_state_table == "adk_user_state"
-    assert store.metadata_table == "adk_internal_metadata"
+    assert store.metadata_table == "adk_metadata"
 
 
 @pytest.mark.anyio
 async def test_adk_migration_up_includes_schema_parity_tables(monkeypatch: pytest.MonkeyPatch) -> None:
-    migration = __import__("sqlspec.extensions.adk.migrations.0001_create_adk_tables", fromlist=["up"])
+    migration = __import__("sqlspec.extensions.adk.migrations.0002_reset_adk_tables", fromlist=["up"])
     context = type("MigrationContext", (), {"config": _Config()})()
 
     monkeypatch.setattr(migration, "_get_store_class", lambda _context: _MigrationSessionStore)
+    monkeypatch.setattr(migration, "_get_memory_store_class", lambda _context: None)
     monkeypatch.setattr(migration, "_is_memory_enabled", lambda _context: False)
 
     statements = await migration.up(context)
@@ -326,7 +325,7 @@ async def test_adk_migration_up_includes_schema_parity_tables(monkeypatch: pytes
 @pytest.mark.parametrize("field", ["app_state_table", "user_state_table", "metadata_table"])
 def test_session_store_validates_schema_parity_table_names(field: str) -> None:
     with pytest.raises(ValueError, match="Invalid table name"):
-        _AsyncSessionStore(_Config({"schema": {field: "invalid-name"}}))
+        _AsyncSessionStore(_Config({field: "invalid-name"}))
 
 
 def test_session_store_contract_get_session_accepts_renew_for_kwarg() -> None:

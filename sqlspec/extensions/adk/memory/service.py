@@ -49,7 +49,7 @@ class SQLSpecMemoryService(BaseMemoryService):
             connection_config={"dsn": "postgresql://..."},
             extension_config={
                 "adk": {
-                    "memory_table": "adk_memory_entries",
+                    "memory_table": "adk_memory",
                     "memory_use_fts": True,
                 }
             }

@@ -101,7 +101,7 @@ async def test_aiosqlite_memory_store_disabled_lifecycle() -> None:
 
         async with config.provide_connection() as conn:
             cursor = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory_entries",)
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ("adk_memory",)
             )
             row = await cursor.fetchone()
 

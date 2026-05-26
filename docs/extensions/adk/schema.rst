@@ -234,7 +234,7 @@ Internal Metadata Table
 The metadata table stores ADK schema metadata used by migrations and future
 schema-version dispatch.
 
-Default name: ``adk_internal_metadata``
+Default name: ``adk_metadata``
 
 .. list-table::
    :header-rows: 1
@@ -290,7 +290,7 @@ Memory Table
 The memory table stores long-term context entries that agents can search and
 reference across sessions.
 
-Default name: ``adk_memory_entries``
+Default name: ``adk_memory``
 
 .. list-table::
    :header-rows: 1
@@ -333,7 +333,7 @@ Concrete artifact metadata stores use this table shape to store versioning
 metadata for binary artifacts. Content bytes are stored separately in object
 storage; this table tracks ownership, versioning, and canonical URIs.
 
-Default name: ``adk_artifact_versions``
+Default name: ``adk_artifact``
 
 .. list-table::
    :header-rows: 1
@@ -386,8 +386,8 @@ All table names are configurable:
                "events_table": "my_event",             # default: "adk_event"
                "app_state_table": "my_app_state",      # default: "adk_app_state"
                "user_state_table": "my_user_state",    # default: "adk_user_state"
-               "metadata_table": "my_adk_metadata",    # default: "adk_internal_metadata"
-               "memory_table": "my_memory",            # default: "adk_memory_entries"
+               "metadata_table": "my_adk_metadata",    # default: "adk_metadata"
+               "memory_table": "my_memory",            # default: "adk_memory"
                "artifact_table": "my_artifacts",       # artifact metadata stores
            }
        },

@@ -226,11 +226,11 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["timestamp"],
                 event_record["event_data"],
             )
-            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
             if app_state:
                 await conn.execute(app_upsert_sql, app_name, app_state)
             if user_state:
                 await conn.execute(user_upsert_sql, app_name, user_id, user_state)
+            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."

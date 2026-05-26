@@ -1,12 +1,4 @@
-"""Unit tests for ADK session/event converters and scoped state helpers.
-
-Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
-- EventRecord has exactly 5 keys (session_id, invocation_id, author, timestamp, event_data)
-- event_to_record takes only (event, session_id), not (event, session_id, app_name, user_id)
-- record_to_event uses Event.model_validate for full round-trip fidelity
-- filter_temp_state, split_scoped_state, merge_scoped_state for scoped state handling
-- session_to_record strips temp: keys from state
-"""
+"""Unit tests for ADK session/event converters and scoped state helpers."""
 
 import importlib.util
 from datetime import datetime, timezone

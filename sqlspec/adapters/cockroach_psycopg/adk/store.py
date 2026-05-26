@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from psycopg import errors
 from psycopg import sql as pg_sql
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
@@ -109,7 +110,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             """
             params = (session_id, app_name, user_id, state_json)
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), params)
             await conn.commit()
 
@@ -139,7 +140,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             params = (app_name, user_id, session_id)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), params)
                 row = await cur.fetchone()
 
@@ -164,14 +165,14 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
             await conn.commit()
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), (app_name, user_id, session_id))
             await conn.commit()
 
@@ -194,7 +195,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             params = (app_name, user_id)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), params)
                 rows = await cur.fetchall()
 
@@ -222,7 +223,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 sql.encode(),
                 (
@@ -275,7 +276,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 insert_sql.encode(),
                 (
@@ -335,7 +336,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             params.append(limit)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), tuple(params))
                 rows = await cur.fetchall()
 
@@ -358,7 +359,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (before,))
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -369,7 +370,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (updated_before,))
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -380,7 +381,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (app_name,))
                 row = await cur.fetchone()
                 return row["state"] if row is not None else None
@@ -391,7 +392,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (app_name, user_id))
                 row = await cur.fetchone()
                 return row["state"] if row is not None else None
@@ -404,7 +405,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         VALUES (%s, %s, CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), (app_name, Jsonb(state)))
             await conn.commit()
 
@@ -414,7 +415,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
             await conn.commit()
 
@@ -422,7 +423,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (key,))
                 row = await cur.fetchone()
                 return row["value"] if row is not None else None
@@ -435,7 +436,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         VALUES (%s, %s)
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), (key, value))
             await conn.commit()
 
@@ -772,7 +773,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             """
             params = (session_id, app_name, user_id, state_json)
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), params)
             conn.commit()
 
@@ -802,7 +803,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             params = (app_name, user_id, session_id)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), params)
                 row = cur.fetchone()
 
@@ -827,14 +828,14 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
             conn.commit()
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), (app_name, user_id, session_id))
             conn.commit()
 
@@ -857,7 +858,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             params = (app_name, user_id)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), params)
                 rows = cur.fetchall()
 
@@ -915,7 +916,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 insert_sql.encode(),
                 (
@@ -957,7 +958,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 sql.encode(),
                 (
@@ -998,7 +999,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
             params.append(limit)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), tuple(params))
                 rows = cur.fetchall()
 
@@ -1021,7 +1022,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (before,))
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1032,7 +1033,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (updated_before,))
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1043,7 +1044,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (app_name,))
                 row = cur.fetchone()
                 return row["state"] if row is not None else None
@@ -1054,7 +1055,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (app_name, user_id))
                 row = cur.fetchone()
                 return row["state"] if row is not None else None
@@ -1067,7 +1068,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         VALUES (%s, %s, CURRENT_TIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), (app_name, Jsonb(state)))
             conn.commit()
 
@@ -1077,7 +1078,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
             conn.commit()
 
@@ -1085,7 +1086,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (key,))
                 row = cur.fetchone()
                 return row["value"] if row is not None else None
@@ -1098,7 +1099,7 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
         VALUES (%s, %s)
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), (key, value))
             conn.commit()
 
@@ -1155,7 +1156,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=pg_sql.Identifier(self._memory_table))
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             for entry in entries:
                 if self._owner_id_column_name:
                     await cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
@@ -1199,7 +1200,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         params = (app_name, user_id, search_param, effective_limit)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), params)
                 rows = await cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
@@ -1214,7 +1215,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), (session_id,))
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1228,7 +1229,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         DELETE FROM {self._memory_table}
         WHERE inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'
         """
-        async with self._config.provide_connection() as conn, conn.cursor() as cur:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode())
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1380,7 +1381,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=pg_sql.Identifier(self._memory_table))
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             for entry in entries:
                 if self._owner_id_column_name:
                     cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
@@ -1422,7 +1423,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
         params = (app_name, user_id, search_param, effective_limit)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), params)
                 rows = cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
@@ -1437,7 +1438,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), (session_id,))
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -1451,7 +1452,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
         DELETE FROM {self._memory_table}
         WHERE inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'
         """
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode())
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0

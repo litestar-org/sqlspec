@@ -47,7 +47,7 @@ async def asyncpg_adk_store(postgres_service: "PostgresService") -> "AsyncGenera
             await conn.execute("DROP TABLE IF EXISTS adk_session CASCADE")
             await conn.execute("DROP TABLE IF EXISTS adk_user_state CASCADE")
             await conn.execute("DROP TABLE IF EXISTS adk_app_state CASCADE")
-            await conn.execute("DROP TABLE IF EXISTS adk_internal_metadata CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS adk_metadata CASCADE")
     finally:
         if config.connection_instance:
             await config.close_pool()

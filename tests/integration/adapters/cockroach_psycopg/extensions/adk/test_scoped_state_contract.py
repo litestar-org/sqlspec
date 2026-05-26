@@ -19,15 +19,7 @@ from tests.integration.adapters._adk_contract_helpers import (
     assert_session_temp_state_not_persisted,
 )
 
-pytestmark = [
-    pytest.mark.xdist_group("cockroachdb"),
-    pytest.mark.cockroachdb,
-    pytest.mark.integration,
-    pytest.mark.xfail(
-        reason="sqlspec-xqnf: CockroachPsycopgAsyncADKStore inherits psycopg dict-row bug; tracked separately",
-        strict=False,
-    ),
-]
+pytestmark = [pytest.mark.xdist_group("cockroachdb"), pytest.mark.cockroachdb, pytest.mark.integration]
 
 
 @pytest.fixture(scope="session")

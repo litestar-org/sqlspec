@@ -86,8 +86,5 @@ async def test_psqlpy_session_sibling_user_isolation(psqlpy_adk_store: PsqlpyADK
     await assert_session_sibling_user_isolation(psqlpy_adk_store, marker="psqlpy")
 
 
-@pytest.mark.xfail(
-    reason="sqlspec-8cyp: PsqlpyADKStore.get_session does not catch UndefinedTable; tracked separately", strict=False
-)
 async def test_psqlpy_session_table_lifecycle_contract(psqlpy_adk_store: PsqlpyADKStore) -> None:
     await assert_session_table_lifecycle_contract(psqlpy_adk_store, marker="psqlpy")

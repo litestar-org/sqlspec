@@ -328,8 +328,8 @@ All backends are configured through ``extension_config["adk"]``:
                "events_table": "adk_event",
                "app_state_table": "adk_app_state",
                "user_state_table": "adk_user_state",
-               "metadata_table": "adk_internal_metadata",
-               "memory_table": "adk_memory_entries",
+               "metadata_table": "adk_metadata",
+               "memory_table": "adk_memory",
                "memory_use_fts": True,
                "owner_id_column": "tenant_id INTEGER NOT NULL",
            }

@@ -42,7 +42,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
 
     Notes:
         Configuration is read from config.extension_config["adk"]:
-        - artifact_table: Artifact versions table name (default: "adk_artifact_versions")
+        - artifact_table: Artifact versions table name (default: "adk_artifact")
     """
 
     __slots__ = ("_artifact_table", "_config")

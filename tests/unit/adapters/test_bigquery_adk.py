@@ -30,7 +30,7 @@ def test_bigquery_adk_store_instantiates_with_defaults() -> None:
     assert store.events_table == "adk_event"
     assert store.app_state_table == "adk_app_state"
     assert store.user_state_table == "adk_user_state"
-    assert store.metadata_table == "adk_internal_metadata"
+    assert store.metadata_table == "adk_metadata"
     assert store._dataset_qualifier == "test_dataset."
     assert store._lookup_window_days == 30
     assert store._require_partition_filter is True
@@ -38,7 +38,7 @@ def test_bigquery_adk_store_instantiates_with_defaults() -> None:
 
 
 def test_bigquery_adk_store_honours_session_lookup_window() -> None:
-    """ADKBigQueryConfig.session_lookup_window_days is propagated."""
+    """``bigquery.session_lookup_window_days`` from ``extension_config['adk']`` is propagated."""
     store = _make_store({"bigquery": {"session_lookup_window_days": 7}})
     assert store._lookup_window_days == 7
 

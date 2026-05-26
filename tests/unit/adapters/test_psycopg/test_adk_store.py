@@ -38,7 +38,7 @@ class _DummyConnection:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    def cursor(self) -> _DummyCursor:
+    def cursor(self, row_factory: Any = None) -> _DummyCursor:
         return self._cursor
 
     def commit(self) -> None:

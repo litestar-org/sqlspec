@@ -868,7 +868,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             database="app.db",
             extension_config={
                 "adk": {
-                    "memory_table": "adk_memory_entries",
+                    "memory_table": "adk_memory",
                     "memory_use_fts": False,
                     "memory_max_results": 20,
                 }
@@ -896,7 +896,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         Notes:
             Configuration is read from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
+            - memory_table: Memory table name (default: "adk_memory")
             - memory_use_fts: Enable full-text search when supported (default: False)
             - memory_max_results: Max search results (default: 20)
             - owner_id_column: Optional owner FK column DDL (default: None)

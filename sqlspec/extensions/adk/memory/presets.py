@@ -2,7 +2,7 @@
 
 Resolution order (highest priority first):
 
-1. ``embedding_dimension`` explicit override on ``ADKMemoryConfig``
+1. ``embedding_dimension`` explicit override on the ``memory`` block
 2. ``embedding_preset`` name resolved against :data:`EMBEDDING_PRESETS`
 3. Raise ``ADKConfigError`` with the preset table referenced in the error message.
 
@@ -17,6 +17,7 @@ from typing import Final, NoReturn
 from sqlspec.exceptions import ImproperConfigurationError
 
 __all__ = (
+    "DEFAULT_EMBEDDING_PRESET",
     "EMBEDDING_PRESETS",
     "EmbeddingPreset",
     "ResolvedEmbeddingConfig",
@@ -119,18 +120,23 @@ def register_embedding_preset(name: str, preset: EmbeddingPreset) -> None:
     EMBEDDING_PRESETS[name] = preset
 
 
+DEFAULT_EMBEDDING_PRESET: Final[str] = "gemini-embedding-002"
+
+
 def resolve_embedding_config(memory_config: "dict[str, object] | None") -> ResolvedEmbeddingConfig:
-    """Resolve an :class:`ResolvedEmbeddingConfig` from an ``ADKMemoryConfig`` mapping.
+    """Resolve a :class:`ResolvedEmbeddingConfig` from an ADK memory config mapping.
 
     Args:
         memory_config: ``extension_config["adk"]["memory"]`` mapping.
 
     Returns:
-        Resolved embedding configuration.
+        Resolved embedding configuration. Falls back to
+        :data:`DEFAULT_EMBEDDING_PRESET` when neither ``embedding_dimension`` nor
+        ``embedding_preset`` is supplied.
 
     Raises:
-        ImproperConfigurationError: When neither ``embedding_dimension`` nor
-            ``embedding_preset`` is supplied, or the named preset is unknown.
+        ImproperConfigurationError: When the named preset is unknown or
+            ``embedding_dimension`` is not an int.
     """
     config = memory_config or {}
     preset_name = config.get("embedding_preset")
@@ -158,29 +164,22 @@ def resolve_embedding_config(memory_config: "dict[str, object] | None") -> Resol
             preset=preset,
         )
 
-    if preset is not None:
-        return ResolvedEmbeddingConfig(
-            dim=preset.dim,
-            precision=str(explicit_precision) if explicit_precision else preset.precision,
-            normalize=bool(explicit_normalize) if explicit_normalize is not None else preset.normalize,
-            source="embedding_preset",
-            preset=preset,
-        )
+    if preset is None:
+        preset = EMBEDDING_PRESETS[DEFAULT_EMBEDDING_PRESET]
+        source = "default"
+    else:
+        source = "embedding_preset"
 
-    _raise_unresolved()
-    return None
+    return ResolvedEmbeddingConfig(
+        dim=preset.dim,
+        precision=str(explicit_precision) if explicit_precision else preset.precision,
+        normalize=bool(explicit_normalize) if explicit_normalize is not None else preset.normalize,
+        source=source,
+        preset=preset,
+    )
 
 
 def _raise_unknown_preset(name: str) -> NoReturn:
     available = ", ".join(sorted(EMBEDDING_PRESETS))
     msg = f"Unknown embedding preset {name!r}. Available presets: {available}"
-    raise ImproperConfigurationError(msg)
-
-
-def _raise_unresolved() -> NoReturn:
-    available = ", ".join(sorted(EMBEDDING_PRESETS))
-    msg = (
-        "ADK memory store requires either embedding_dimension or embedding_preset "
-        f"to be set in extension_config['adk']['memory']. Available presets: {available}"
-    )
     raise ImproperConfigurationError(msg)

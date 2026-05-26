@@ -123,7 +123,7 @@ async def test_spanner_memory_insert_entries_writes_clean_break_record() -> None
     assert inserted == 1
     statements = run_write.call_args.args[0]
     sql, params, _types = statements[0]
-    assert "INSERT INTO adk_memory_entries" in sql
+    assert "INSERT INTO adk_memory" in sql
     assert params["content_json"] == '{"text":"hello"}'
     assert params["metadata_json"] == '{"source":"unit"}'
     assert params["inserted_at"] is timestamp

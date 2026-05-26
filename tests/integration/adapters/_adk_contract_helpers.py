@@ -673,3 +673,5 @@ async def assert_memory_store_contract(store: MemoryStore, *, marker: str) -> No
     fresh_results = await store.search_entries("fresh", app_name, user_id, limit=10)
     assert len(fresh_results) == 1
     assert fresh_results[0]["event_id"] == fresh_record["event_id"]
+
+
