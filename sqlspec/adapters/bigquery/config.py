@@ -164,7 +164,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
     connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
     supports_transactional_ddl: ClassVar[bool] = False
-    supports_migration_schemas: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True

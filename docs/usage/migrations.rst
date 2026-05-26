@@ -78,10 +78,9 @@ Configuring a Default Schema
 ----------------------------
 
 Use ``migration_config["default_schema"]`` when migration SQL should run
-against a pre-existing schema or dataset without qualifying every table in each
-migration file. SQLSpec validates the schema before creating the tracker table
-or applying DDL, then configures the migration session before each migration is
-executed.
+against a pre-existing schema without qualifying every table in each migration
+file. SQLSpec validates the schema before creating the tracker table or applying
+DDL, then configures the migration session before each migration is executed.
 
 Use ``migration_config["version_table_schema"]`` when the migration tracker
 table should live somewhere different from the objects managed by migrations.
@@ -103,9 +102,9 @@ uses the adapter's normal default namespace.
         },
     )
 
-The operator must create the target schema or dataset before running
-migrations. The migration role also needs the database-specific privileges to
-create objects there. For PostgreSQL, that usually means ``USAGE`` and
+The operator must create the target schema before running migrations. The
+migration role also needs the database-specific privileges to create objects
+there. For PostgreSQL, that usually means ``USAGE`` and
 ``CREATE`` on the target schema, plus permission to create or update the
 tracker table.
 
@@ -122,8 +121,6 @@ Adapter support:
      - Uses ``ALTER SESSION SET CURRENT_SCHEMA`` and validates Oracle users.
    * - ``duckdb``
      - Uses ``SET search_path`` and validates ``information_schema.schemata``.
-   * - ``bigquery``
-     - Treats schemas as datasets and sets the BigQuery job ``default_dataset``.
    * - ``sqlite``, ``aiosqlite``, ``asyncmy``
      - Accept the setting as an explicit no-op and log that default schemas are unsupported.
    * - ADBC SQL Server

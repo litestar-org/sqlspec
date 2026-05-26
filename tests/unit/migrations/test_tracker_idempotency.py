@@ -108,7 +108,9 @@ def test_sync_driver_migration_schema_hook_logs_noop(caplog: pytest.LogCaptureFi
 
     SyncDriverAdapterBase.set_migration_session_schema(object(), "app_schema")  # type: ignore[arg-type]
 
-    assert any(record.getMessage() == "migration.schema.noop" for record in caplog.records)
+    records = [record for record in caplog.records if record.getMessage() == "migration.schema.noop"]
+    assert records
+    assert getattr(records[0], "extra_fields") == {"schema": "app_schema", "driver": "object"}
 
 
 @pytest.mark.anyio
@@ -118,7 +120,9 @@ async def test_async_driver_migration_schema_hook_logs_noop(caplog: pytest.LogCa
 
     await AsyncDriverAdapterBase.set_migration_session_schema(object(), "app_schema")  # type: ignore[arg-type]
 
-    assert any(record.getMessage() == "migration.schema.noop" for record in caplog.records)
+    records = [record for record in caplog.records if record.getMessage() == "migration.schema.noop"]
+    assert records
+    assert getattr(records[0], "extra_fields") == {"schema": "app_schema", "driver": "object"}
 
 
 def test_sync_update_version_record_idempotent_when_already_updated() -> None:
