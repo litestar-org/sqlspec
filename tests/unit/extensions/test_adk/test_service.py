@@ -647,11 +647,11 @@ async def test_append_event_updates_inmemory_after_persist() -> None:
         async def append_event_and_update_state(
             self,
             event_record: Any,
-            session_id: str,
-            state: Any,
+            app_name: "str | None" = None,
+            user_id: "str | None" = None,
+            session_id: "str | None" = None,
+            state: "dict[str, Any] | None" = None,
             *,
-            app_name: str | None = None,
-            user_id: str | None = None,
             app_state: "dict[str, Any] | None" = None,
             user_state: "dict[str, Any] | None" = None,
         ) -> "dict[str, Any]":
