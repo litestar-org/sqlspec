@@ -86,11 +86,16 @@ class AdbcSessionContext:
         self._driver: AdbcDriver | None = None
 
     def __enter__(self) -> "AdbcDriver":
+        from sqlspec.adapters.adbc.core import resolve_dialect_name
         from sqlspec.adapters.adbc.driver import AdbcDriver
 
         self._connection = self._acquire_connection()
+        resolved_dialect = resolve_dialect_name(self._statement_config.dialect) or None
         self._driver = AdbcDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection,
+            statement_config=self._statement_config,
+            driver_features=self._driver_features,
+            dialect=resolved_dialect,
         )
         return self._prepare_driver(self._driver)
 
