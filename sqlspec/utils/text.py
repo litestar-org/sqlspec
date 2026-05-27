@@ -9,7 +9,15 @@ import re
 import unicodedata
 from functools import lru_cache
 
-__all__ = ("camelize", "kebabize", "pascalize", "quote_identifier", "slugify", "snake_case")
+__all__ = (
+    "camelize",
+    "kebabize",
+    "pascalize",
+    "quote_backtick_identifier",
+    "quote_identifier",
+    "slugify",
+    "snake_case",
+)
 
 
 _SLUGIFY_REMOVE_NON_ALPHANUMERIC = re.compile(r"[^\w]+", re.UNICODE)
@@ -128,3 +136,20 @@ def quote_identifier(identifier: str) -> str:
         Double-quoted, escape-safe identifier.
     """
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def quote_backtick_identifier(identifier: str) -> str:
+    """Quote a SQL identifier with backtick escaping (MySQL family).
+
+    Wraps the value in backticks and escapes any embedded backtick by
+    doubling it (`` ` `` -> `` `` ``). Used by MySQL-family adapters
+    (asyncmy, aiomysql, mysqlconnector, pymysql) where the backtick is
+    the dialect's identifier delimiter.
+
+    Args:
+        identifier: SQL identifier (schema, table, column, ...).
+
+    Returns:
+        Backtick-quoted, escape-safe identifier.
+    """
+    return "`" + identifier.replace("`", "``") + "`"

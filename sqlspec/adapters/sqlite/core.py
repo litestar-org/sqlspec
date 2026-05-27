@@ -21,6 +21,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlite_error
 
@@ -66,11 +67,6 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _quote_sqlite_identifier(identifier: str) -> str:
-    normalized = identifier.replace('"', '""')
-    return f'"{normalized}"'
-
-
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
@@ -78,13 +74,13 @@ def format_identifier(identifier: str) -> str:
         raise SQLSpecError(msg)
 
     if "." not in cleaned:
-        return _quote_sqlite_identifier(cleaned)
+        return quote_identifier(cleaned)
 
-    return ".".join(_quote_sqlite_identifier(part) for part in cleaned.split(".") if part)
+    return ".".join(quote_identifier(part) for part in cleaned.split(".") if part)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+    column_clause = ", ".join(quote_identifier(column) for column in columns)
     placeholders = ", ".join("?" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
