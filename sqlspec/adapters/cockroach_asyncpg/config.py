@@ -131,6 +131,7 @@ class CockroachAsyncpgConfig(
     driver_type: "ClassVar[type[CockroachAsyncpgDriver]]" = CockroachAsyncpgDriver
     connection_type: "ClassVar[type[CockroachAsyncpgConnection]]" = CockroachAsyncpgConnection  # type: ignore[assignment]
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True

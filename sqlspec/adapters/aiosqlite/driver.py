@@ -23,7 +23,6 @@ from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
@@ -47,8 +46,6 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
-
-logger = get_logger(__name__)
 
 
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
@@ -183,17 +180,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         except aiosqlite.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
-
-    async def set_migration_session_schema(self, schema: str) -> None:
-        """Ignore migration default schema for aiosqlite."""
-        await super().set_migration_session_schema(schema)
-        logger.debug("%s driver does not support default schemas; ignoring default_schema=%r", "aiosqlite", schema)
-
-    async def has_schema(self, schema: str) -> bool:
-        """Return True because SQLite has no separate schema namespace."""
-        await super().has_schema(schema)
-        logger.debug("%s driver does not support default schemas; accepting default_schema=%r", "aiosqlite", schema)
-        return True
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""

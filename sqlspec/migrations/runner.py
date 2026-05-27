@@ -15,6 +15,7 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
+from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -477,11 +478,8 @@ class BaseMigrationRunner(ABC):
     def _resolve_default_schema(self) -> str | None:
         """Return the configured default schema for migration execution."""
         config = self.context.config if self.context else None
-        migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
-        default_schema = migration_config.get("default_schema")
-        if isinstance(default_schema, str) and default_schema:
-            return default_schema
-        return None
+        migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None))
+        return _resolve_default_schema(migration_config)
 
 
 class SyncMigrationRunner(BaseMigrationRunner):

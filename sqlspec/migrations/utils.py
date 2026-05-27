@@ -18,9 +18,33 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase
 
-__all__ = ("create_migration_file", "drop_all", "get_author", "quote_migration_identifier", "resolve_tracker_schema")
+__all__ = (
+    "create_migration_file",
+    "drop_all",
+    "get_author",
+    "quote_migration_identifier",
+    "resolve_default_schema",
+    "resolve_tracker_schema",
+)
 
 logger = get_logger(__name__)
+
+
+def resolve_default_schema(migration_config: "Mapping[str, Any] | None") -> str | None:
+    """Resolve the configured default migration schema.
+
+    Args:
+        migration_config: Migration configuration mapping.
+
+    Returns:
+        Default schema string when configured, otherwise ``None``.
+    """
+    if not migration_config:
+        return None
+    default_schema = migration_config.get("default_schema")
+    if isinstance(default_schema, str) and default_schema:
+        return default_schema
+    return None
 
 
 def resolve_tracker_schema(migration_config: "Mapping[str, Any] | None") -> str | None:
@@ -37,10 +61,7 @@ def resolve_tracker_schema(migration_config: "Mapping[str, Any] | None") -> str 
     version_table_schema = migration_config.get("version_table_schema")
     if isinstance(version_table_schema, str) and version_table_schema:
         return version_table_schema
-    default_schema = migration_config.get("default_schema")
-    if isinstance(default_schema, str) and default_schema:
-        return default_schema
-    return None
+    return resolve_default_schema(migration_config)
 
 
 def quote_migration_identifier(identifier: str) -> str:

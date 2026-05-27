@@ -241,17 +241,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    async def set_migration_session_schema(self, schema: str) -> None:
-        """Ignore migration default schema for asyncmy."""
-        await super().set_migration_session_schema(schema)
-        logger.debug("%s driver does not support default schemas; ignoring default_schema=%r", "asyncmy", schema)
-
-    async def has_schema(self, schema: str) -> bool:
-        """Return True because asyncmy does not manage migration default schemas."""
-        await super().has_schema(schema)
-        logger.debug("%s driver does not support default schemas; accepting default_schema=%r", "asyncmy", schema)
-        return True
-
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         """Create cursor context manager for the connection.
 

@@ -51,7 +51,6 @@ from sqlspec.driver import (
     hash_stack_operations,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
-from sqlspec.migrations.utils import quote_migration_identifier
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.type_guards import has_pipeline_capability
@@ -85,6 +84,29 @@ __all__ = (
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: int = 23
+ORACLE_QUOTED_IDENTIFIER_MIN_LENGTH: int = 2
+
+
+def _normalize_oracle_schema_name(schema: str) -> str:
+    """Return the Oracle schema name used for metadata lookup.
+
+    Preserves case for explicitly quoted identifiers (``"my_schema"``) and
+    uppercases unquoted identifiers per Oracle's normalization rules.
+    """
+    stripped = schema.strip()
+    if (
+        len(stripped) >= ORACLE_QUOTED_IDENTIFIER_MIN_LENGTH
+        and stripped.startswith('"')
+        and stripped.endswith('"')
+    ):
+        return stripped[1:-1].replace('""', '"')
+    return stripped.upper()
+
+
+def _quote_oracle_schema_identifier(schema: str) -> str:
+    """Quote an Oracle schema identifier for ALTER SESSION statements."""
+    normalized = _normalize_oracle_schema_name(schema)
+    return '"' + normalized.replace('"', '""') + '"'
 
 
 class _CompiledStackOperation(NamedTuple):
@@ -449,15 +471,15 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set Oracle CURRENT_SCHEMA for migration SQL."""
-        quoted_schema = quote_migration_identifier(schema.strip().upper())
+        quoted_schema = _quote_oracle_schema_identifier(schema)
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
 
     def has_schema(self, schema: str) -> bool:
         """Return whether an Oracle schema/user exists."""
-        schema_name = schema.strip()
+        schema_name = _normalize_oracle_schema_name(schema)
         with self.with_cursor(self.connection) as cursor:
-            cursor.execute("SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": schema_name})
+            cursor.execute("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": schema_name})
             return cursor.fetchone() is not None
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
@@ -960,16 +982,16 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set Oracle CURRENT_SCHEMA for migration SQL."""
-        quoted_schema = quote_migration_identifier(schema.strip().upper())
+        quoted_schema = _quote_oracle_schema_identifier(schema)
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether an Oracle schema/user exists."""
-        schema_name = schema.strip()
+        schema_name = _normalize_oracle_schema_name(schema)
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(
-                "SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": schema_name}
+                "SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": schema_name}
             )
             row = await cursor.fetchone()
             return row is not None

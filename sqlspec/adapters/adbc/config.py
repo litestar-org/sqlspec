@@ -225,7 +225,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self._paradedb_available: bool | None = None
 
         dialect = resolve_dialect_from_config(self.connection_config)
-        object.__setattr__(self, "supports_migration_schemas", is_postgres_dialect(dialect))
 
         if statement_config is None:
             statement_config = get_statement_config(dialect)
@@ -243,6 +242,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             observability_config=observability_config,
             **kwargs,
         )
+
+    @property
+    def supports_migration_schemas(self) -> bool:  # type: ignore[override]
+        """Migration schema support is only available for PostgreSQL-backed ADBC drivers."""
+        return is_postgres_dialect(resolve_dialect_from_config(self.connection_config))
 
     def create_connection(self) -> AdbcConnection:
         """Create and return a new connection using the specified driver.

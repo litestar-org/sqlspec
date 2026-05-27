@@ -10,10 +10,12 @@ from mypy_extensions import mypyc_attr
 from rich.console import Console
 
 from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
+from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
+from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
 from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
@@ -45,14 +47,29 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
 
+        ``version_table_name`` may include a ``"schema.table"`` prefix for adapters
+        that historically embedded the schema in the table name. When both that
+        prefix and ``version_table_schema`` are supplied and agree, the prefix is
+        stripped so the qualified table is not double-prefixed.
+
         Args:
             version_table_name: Name of the table to track migrations.
             version_table_schema: Optional schema that stores the tracking table.
         """
-        self.version_table_name = version_table_name
-        self.version_table_schema = version_table_schema
-        self.version_table = self._qualify_version_table(version_table_name, version_table_schema)
+        bare_name, embedded_schema = self._split_version_table(version_table_name)
+        resolved_schema = version_table_schema or embedded_schema
+        self.version_table_name = bare_name
+        self.version_table_schema = resolved_schema
+        self.version_table = self._qualify_version_table(bare_name, resolved_schema)
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+
+    @staticmethod
+    def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
+        """Split a ``schema.table`` value into (table, schema)."""
+        if "." not in version_table_name:
+            return version_table_name, None
+        schema, _, table = version_table_name.rpartition(".")
+        return table, schema or None
 
     def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
         """Return the tracker table name, qualified with schema when configured."""
@@ -658,14 +675,26 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
 
     def _resolve_default_schema(self) -> str | None:
         """Return the configured default migration schema."""
-        default_schema = self._get_migration_config().get("default_schema")
-        if isinstance(default_schema, str) and default_schema:
-            return default_schema
-        return None
+        return _resolve_default_schema(self._get_migration_config())
+
+    def _config_supports_schemas(self) -> bool:
+        """Return whether the bound config opts into schema-aware migrations."""
+        return bool(getattr(self.config, "supports_migration_schemas", False))
+
+    def _require_schema_support(self, default_schema: str) -> None:
+        """Raise when ``default_schema`` is configured for an unsupported adapter."""
+        if self._config_supports_schemas():
+            return
+        adapter = type(self.config).__name__
+        msg = (
+            f"{adapter} does not support migration default schemas; "
+            f"remove default_schema={default_schema!r} from migration_config."
+        )
+        raise MigrationError(msg)
 
     def _resolve_tracker_schema(self) -> str | None:
         """Return tracker schema only for adapters that support schema-qualified migration tables."""
-        if not bool(getattr(self.config, "supports_migration_schemas", False)):
+        if not self._config_supports_schemas():
             return None
         return _resolve_tracker_schema(self._get_migration_config())
 

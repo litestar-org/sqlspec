@@ -10,7 +10,6 @@ Tests focused on MigrationCommands class behavior including:
 - Command routing and parameter passing
 """
 
-import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -302,9 +301,12 @@ def test_async_commands_pass_resolved_tracker_schema_when_supported(tmp_path: Pa
     assert commands.tracker.version_table == "history_schema.ddl_migrations"
 
 
-def test_sync_validate_migration_schema_raises_for_missing_schema(sync_config: SqliteConfig) -> None:
-    sync_config.set_migration_config({"default_schema": "missing_schema"})
-    commands = SyncMigrationCommands(sync_config)
+def test_sync_validate_migration_schema_raises_for_missing_schema(tmp_path: Path) -> None:
+    config = SchemaAwareSqliteConfig(
+        connection_config={"database": str(tmp_path / "db.sqlite")},
+        migration_config={"default_schema": "missing_schema"},
+    )
+    commands = SyncMigrationCommands(config)
     driver = MagicMock()
     driver.has_schema.return_value = False
 
@@ -314,9 +316,12 @@ def test_sync_validate_migration_schema_raises_for_missing_schema(sync_config: S
     driver.has_schema.assert_called_once_with("missing_schema")
 
 
-async def test_async_validate_migration_schema_raises_for_missing_schema(async_config: AiosqliteConfig) -> None:
-    async_config.set_migration_config({"default_schema": "missing_schema"})
-    commands = AsyncMigrationCommands(async_config)
+async def test_async_validate_migration_schema_raises_for_missing_schema(tmp_path: Path) -> None:
+    config = SchemaAwareAiosqliteConfig(
+        connection_config={"database": str(tmp_path / "db.sqlite")},
+        migration_config={"default_schema": "missing_schema"},
+    )
+    commands = AsyncMigrationCommands(config)
     driver = AsyncMock()
     driver.has_schema.return_value = False
 
@@ -326,36 +331,28 @@ async def test_async_validate_migration_schema_raises_for_missing_schema(async_c
     driver.has_schema.assert_awaited_once_with("missing_schema")
 
 
-def test_sqlite_default_schema_noop_migration_succeeds(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
-    migration_file = migrations_dir / "0001_schema_noop.sql"
-    migration_file.write_text(
-        """
--- name: migrate-0001-up
-CREATE TABLE schema_noop_example (id INTEGER PRIMARY KEY);
+def test_sync_validate_migration_schema_raises_when_adapter_does_not_support_it(sync_config: SqliteConfig) -> None:
+    sync_config.set_migration_config({"default_schema": "any_schema"})
+    commands = SyncMigrationCommands(sync_config)
+    driver = MagicMock()
 
--- name: migrate-0001-down
-DROP TABLE schema_noop_example;
-""".strip(),
-        encoding="utf-8",
-    )
-    config = SqliteConfig(
-        connection_config={"database": str(tmp_path / "db.sqlite")},
-        migration_config={"script_location": str(migrations_dir), "default_schema": "ignored_schema"},
-    )
-    commands = SyncMigrationCommands(config)
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        commands._validate_migration_schema(driver)
 
-    with caplog.at_level(logging.DEBUG, logger="sqlspec.driver"):
-        commands.upgrade(echo=False)
+    driver.has_schema.assert_not_called()
 
-    assert any(record.getMessage() == "migration.schema.noop" for record in caplog.records)
-    assert commands.tracker.version_table == "ddl_migrations"
-    with config.provide_session() as driver:
-        result = driver.select_value(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", ["schema_noop_example"]
-        )
-    assert result == "schema_noop_example"
+
+async def test_async_validate_migration_schema_raises_when_adapter_does_not_support_it(
+    async_config: AiosqliteConfig,
+) -> None:
+    async_config.set_migration_config({"default_schema": "any_schema"})
+    commands = AsyncMigrationCommands(async_config)
+    driver = AsyncMock()
+
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        await commands._validate_migration_schema(driver)
+
+    driver.has_schema.assert_not_called()
 
 
 def test_sync_migration_commands_init_creates_directory(tmp_path: Path, sync_config: SqliteConfig) -> None:

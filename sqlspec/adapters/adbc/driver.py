@@ -297,14 +297,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Set the PostgreSQL search path for migration SQL when using ADBC PostgreSQL."""
         if not self._is_postgres:
             super().set_migration_session_schema(schema)
-            if self._dialect_name in {"mssql", "sqlserver", "tsql"}:
-                logger.debug(
-                    "SQL Server schema support not yet implemented for ADBC; configure default schema at the "
-                    "user/login level; ignoring default_schema=%r",
-                    schema,
-                )
-            else:
-                logger.debug("%s driver does not support default schemas; ignoring default_schema=%r", "ADBC", schema)
             return
         quoted_schema = quote_migration_identifier(schema)
         with self.with_cursor(self.connection) as cursor:
@@ -325,16 +317,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists when using ADBC PostgreSQL."""
         if not self._is_postgres:
-            super().has_schema(schema)
-            if self._dialect_name in {"mssql", "sqlserver", "tsql"}:
-                logger.debug(
-                    "SQL Server schema support not yet implemented for ADBC; configure default schema at the "
-                    "user/login level; accepting default_schema=%r",
-                    schema,
-                )
-            else:
-                logger.debug("%s driver does not support default schemas; accepting default_schema=%r", "ADBC", schema)
-            return True
+            return super().has_schema(schema)
         with self.with_cursor(self.connection) as cursor:
             cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", parameters=[schema])
             return cursor.fetchone() is not None

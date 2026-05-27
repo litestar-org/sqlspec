@@ -63,9 +63,22 @@ def test_oracle_sync_migration_schema_hooks() -> None:
 
     assert cursor.executed == [
         ('ALTER SESSION SET CURRENT_SCHEMA = "TENANT"', None),
-        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": "tenant"}),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "TENANT"}),
     ]
     assert OracleSyncConfig.supports_migration_schemas is True
+
+
+def test_oracle_sync_preserves_quoted_identifier_case() -> None:
+    cursor = FakeSyncCursor()
+    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
+
+    driver.set_migration_session_schema('"mixedCase"')
+    assert driver.has_schema('"mixedCase"') is True
+
+    assert cursor.executed == [
+        ('ALTER SESSION SET CURRENT_SCHEMA = "mixedCase"', None),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "mixedCase"}),
+    ]
 
 
 @pytest.mark.anyio
@@ -78,7 +91,7 @@ async def test_oracle_async_migration_schema_hooks() -> None:
 
     assert cursor.executed == [
         ('ALTER SESSION SET CURRENT_SCHEMA = "TENANT"', None),
-        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": "tenant"}),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "TENANT"}),
     ]
     assert OracleAsyncConfig.supports_migration_schemas is True
 
