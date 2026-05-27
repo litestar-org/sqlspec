@@ -51,9 +51,9 @@ from sqlspec.driver import (
     hash_stack_operations,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
-from sqlspec.migrations.utils import quote_migration_identifier
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
@@ -448,17 +448,20 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def set_migration_session_schema(self, schema: str) -> None:
-        """Set Oracle CURRENT_SCHEMA for migration SQL."""
-        quoted_schema = quote_migration_identifier(schema.strip().upper())
+        """Set Oracle CURRENT_SCHEMA for migration SQL.
+
+        The schema is quoted verbatim; callers must pass the literal stored
+        identifier (typically uppercase for unquoted-created users; the exact
+        case for users created with quoted identifiers).
+        """
+        quoted_schema = quote_identifier(schema.strip())
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
 
     def has_schema(self, schema: str) -> bool:
-        """Return whether an Oracle schema/user exists."""
+        """Return whether an Oracle schema/user exists (literal-case match)."""
         with self.with_cursor(self.connection) as cursor:
-            cursor.execute(
-                "SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": schema.strip()}
-            )
+            cursor.execute("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": schema.strip()})
             return cursor.fetchone() is not None
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
@@ -960,16 +963,21 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def set_migration_session_schema(self, schema: str) -> None:
-        """Set Oracle CURRENT_SCHEMA for migration SQL."""
-        quoted_schema = quote_migration_identifier(schema.strip().upper())
+        """Set Oracle CURRENT_SCHEMA for migration SQL.
+
+        The schema is quoted verbatim; callers must pass the literal stored
+        identifier (typically uppercase for unquoted-created users; the exact
+        case for users created with quoted identifiers).
+        """
+        quoted_schema = quote_identifier(schema.strip())
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
 
     async def has_schema(self, schema: str) -> bool:
-        """Return whether an Oracle schema/user exists."""
+        """Return whether an Oracle schema/user exists (literal-case match)."""
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(
-                "SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": schema.strip()}
+                "SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": schema.strip()}
             )
             row = await cursor.fetchone()
             return row is not None

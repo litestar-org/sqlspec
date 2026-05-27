@@ -28,10 +28,10 @@ from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
-from sqlspec.migrations.utils import quote_migration_identifier
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -298,7 +298,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         if not self._is_postgres:
             super().set_migration_session_schema(schema)
             return
-        quoted_schema = quote_migration_identifier(schema)
+        quoted_schema = quote_identifier(schema)
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(f'SET search_path TO {quoted_schema}, "$user", public')
 

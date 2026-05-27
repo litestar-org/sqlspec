@@ -58,14 +58,27 @@ def test_oracle_sync_migration_schema_hooks() -> None:
     cursor = FakeSyncCursor()
     driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
 
-    driver.set_migration_session_schema("tenant")
-    assert driver.has_schema("tenant") is True
+    driver.set_migration_session_schema("TENANT")
+    assert driver.has_schema("TENANT") is True
 
     assert cursor.executed == [
         ('ALTER SESSION SET CURRENT_SCHEMA = "TENANT"', None),
-        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": "tenant"}),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "TENANT"}),
     ]
     assert OracleSyncConfig.supports_migration_schemas is True
+
+
+def test_oracle_sync_preserves_mixed_case_identifier() -> None:
+    cursor = FakeSyncCursor()
+    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
+
+    driver.set_migration_session_schema("MixedCase")
+    assert driver.has_schema("MixedCase") is True
+
+    assert cursor.executed == [
+        ('ALTER SESSION SET CURRENT_SCHEMA = "MixedCase"', None),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "MixedCase"}),
+    ]
 
 
 @pytest.mark.anyio
@@ -73,12 +86,12 @@ async def test_oracle_async_migration_schema_hooks() -> None:
     cursor = FakeAsyncCursor()
     driver = OracleAsyncDriver(FakeAsyncConnection(cursor))  # type: ignore[arg-type]
 
-    await driver.set_migration_session_schema("tenant")
-    assert await driver.has_schema("tenant") is True
+    await driver.set_migration_session_schema("TENANT")
+    assert await driver.has_schema("TENANT") is True
 
     assert cursor.executed == [
         ('ALTER SESSION SET CURRENT_SCHEMA = "TENANT"', None),
-        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = UPPER(:schema_name)", {"schema_name": "tenant"}),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "TENANT"}),
     ]
     assert OracleAsyncConfig.supports_migration_schemas is True
 

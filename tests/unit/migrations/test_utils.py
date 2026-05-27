@@ -22,9 +22,9 @@ from sqlspec.migrations.utils import (
     _get_system_username,
     create_migration_file,
     get_author,
-    quote_migration_identifier,
     resolve_tracker_schema,
 )
+from sqlspec.utils.text import quote_identifier
 
 
 def _callable_author(_: Any | None = None) -> str:
@@ -284,8 +284,8 @@ def test_resolve_tracker_schema_returns_none_without_schema_config() -> None:
     assert resolve_tracker_schema({}) is None
 
 
-def test_quote_migration_identifier_escapes_embedded_quotes() -> None:
-    assert quote_migration_identifier('tenant_"one"') == '"tenant_""one"""'
+def test_quote_identifier_escapes_embedded_quotes() -> None:
+    assert quote_identifier('tenant_"one"') == '"tenant_""one"""'
 
 
 def test_create_migration_file_uses_custom_sql_template(tmp_path: Path) -> None:

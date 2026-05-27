@@ -32,8 +32,8 @@ from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.migrations.utils import quote_migration_identifier
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -222,12 +222,12 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
-        quoted_schema = quote_migration_identifier(schema)
+        quoted_schema = quote_identifier(schema)
         await self.connection.execute(f'SET LOCAL search_path TO {quoted_schema}, "$user", public')
 
     async def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
-        quoted_schema = quote_migration_identifier(schema)
+        quoted_schema = quote_identifier(schema)
         await self.connection.execute(f'SET search_path TO {quoted_schema}, "$user", public')
 
     async def reset_migration_session_schema(self) -> None:

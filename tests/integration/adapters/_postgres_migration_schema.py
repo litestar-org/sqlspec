@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from sqlspec.migrations.utils import quote_migration_identifier
+from sqlspec.utils.text import quote_identifier
 
 ParamStyle = Literal["numeric", "pyformat"]
 
@@ -54,12 +54,12 @@ DROP TABLE IF EXISTS {table_name};
 
 def create_schema_sql(schema: str) -> str:
     """Return PostgreSQL CREATE SCHEMA SQL for a trusted test identifier."""
-    return f"CREATE SCHEMA {quote_migration_identifier(schema)}"
+    return f"CREATE SCHEMA {quote_identifier(schema)}"
 
 
 def drop_schema_sql(schema: str) -> str:
     """Return PostgreSQL DROP SCHEMA SQL for a trusted test identifier."""
-    return f"DROP SCHEMA IF EXISTS {quote_migration_identifier(schema)} CASCADE"
+    return f"DROP SCHEMA IF EXISTS {quote_identifier(schema)} CASCADE"
 
 
 def table_exists_sql(style: ParamStyle) -> str:

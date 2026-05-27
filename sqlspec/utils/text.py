@@ -9,7 +9,7 @@ import re
 import unicodedata
 from functools import lru_cache
 
-__all__ = ("camelize", "kebabize", "pascalize", "slugify", "snake_case")
+__all__ = ("camelize", "kebabize", "pascalize", "quote_identifier", "slugify", "snake_case")
 
 
 _SLUGIFY_REMOVE_NON_ALPHANUMERIC = re.compile(r"[^\w]+", re.UNICODE)
@@ -107,3 +107,24 @@ def snake_case(string: str) -> str:
     s = s.lower()
     s = s.strip("_")
     return _SNAKE_CASE_MULTIPLE_UNDERSCORES.sub("_", s)
+
+
+def quote_identifier(identifier: str) -> str:
+    """Quote a SQL identifier with double-quote escaping.
+
+    Wraps the value in double quotes and escapes any embedded double quote
+    per the SQL standard (``"`` -> ``""``). Used to safely interpolate
+    identifier-shaped values (schemas, tables, columns) into SQL where
+    bind parameters are not allowed (DDL identifiers, ``SET`` commands).
+
+    Dialect-aware case-folding (Oracle uppercases unquoted identifiers,
+    PostgreSQL lowercases them) is a separate concern; callers must
+    pre-normalize when binding identifier values into metadata queries.
+
+    Args:
+        identifier: SQL identifier (schema, table, column, ...).
+
+    Returns:
+        Double-quoted, escape-safe identifier.
+    """
+    return '"' + identifier.replace('"', '""') + '"'

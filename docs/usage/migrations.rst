@@ -143,9 +143,10 @@ opt in raises ``MigrationError`` before any DDL is issued.
        the resolved dialect is PostgreSQL-compatible.
    * - ``oracledb`` (sync and async)
      - Supported
-     - ``ALTER SESSION SET CURRENT_SCHEMA``; validates ``ALL_USERS``. Quoted
-       identifiers preserve case; unquoted identifiers are uppercased per
-       Oracle's normalization rules.
+     - ``ALTER SESSION SET CURRENT_SCHEMA``; validates ``ALL_USERS``. The
+       schema is matched verbatim, so callers must pass the literal stored
+       identifier — typically uppercase for users created unquoted, the
+       exact case for users created with quoted identifiers.
    * - ``duckdb``
      - Supported
      - ``SET search_path``; validates ``information_schema.schemata``.

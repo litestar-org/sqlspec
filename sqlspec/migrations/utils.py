@@ -22,7 +22,6 @@ __all__ = (
     "create_migration_file",
     "drop_all",
     "get_author",
-    "quote_migration_identifier",
     "resolve_default_schema",
     "resolve_tracker_schema",
 )
@@ -62,18 +61,6 @@ def resolve_tracker_schema(migration_config: "Mapping[str, Any] | None") -> str 
     if isinstance(version_table_schema, str) and version_table_schema:
         return version_table_schema
     return resolve_default_schema(migration_config)
-
-
-def quote_migration_identifier(identifier: str) -> str:
-    """Quote a SQL identifier for migration schema/session commands.
-
-    Args:
-        identifier: SQL identifier to quote.
-
-    Returns:
-        Double-quoted identifier with embedded double quotes escaped.
-    """
-    return '"' + identifier.replace('"', '""') + '"'
 
 
 def create_migration_file(
