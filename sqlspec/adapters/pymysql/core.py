@@ -21,6 +21,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_backtick_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount
 
@@ -117,23 +118,18 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _quote_mysql_identifier(identifier: str) -> str:
-    normalized = identifier.replace("`", "``")
-    return f"`{normalized}`"
-
-
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = [part for part in cleaned.split(".") if part]
-    formatted = ".".join(_quote_mysql_identifier(part) for part in parts)
-    return formatted or _quote_mysql_identifier(cleaned)
+    formatted = ".".join(quote_backtick_identifier(part) for part in parts)
+    return formatted or quote_backtick_identifier(cleaned)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(_quote_mysql_identifier(column) for column in columns)
+    column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 

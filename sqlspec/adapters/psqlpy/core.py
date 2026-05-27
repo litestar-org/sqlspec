@@ -32,6 +32,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
 
@@ -567,20 +568,15 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     return _create_postgres_error(error, SQLSpecError, "database error")
 
 
-def _quote_identifier(identifier: str) -> str:
-    normalized = identifier.replace('"', '""')
-    return f'"{normalized}"'
-
-
 def format_table_identifier(identifier: str) -> str:
     schema_name, table_name = split_schema_and_table(identifier)
     if schema_name:
-        return f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
-    return _quote_identifier(table_name)
+        return f"{quote_identifier(schema_name)}.{quote_identifier(table_name)}"
+    return quote_identifier(table_name)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(_quote_identifier(column) for column in columns)
+    column_clause = ", ".join(quote_identifier(column) for column in columns)
     placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
     return f"INSERT INTO {format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 

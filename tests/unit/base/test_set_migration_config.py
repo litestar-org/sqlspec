@@ -44,9 +44,16 @@ def test_set_migration_config_with_typed_dict() -> None:
     """set_migration_config works with MigrationConfig TypedDict values."""
     from sqlspec.config import MigrationConfig
 
-    mc: MigrationConfig = {"script_location": "alembic", "enabled": True}
+    mc: MigrationConfig = {
+        "script_location": "alembic",
+        "enabled": True,
+        "default_schema": "app_schema",
+        "version_table_schema": "migration_schema",
+    }
     config = SqliteConfig(connection_config={"database": ":memory:"})
     config.set_migration_config(mc)
 
     assert config.migration_config["script_location"] == "alembic"
     assert config.migration_config["enabled"] is True
+    assert config.migration_config["default_schema"] == "app_schema"
+    assert config.migration_config["version_table_schema"] == "migration_schema"

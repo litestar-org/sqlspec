@@ -30,6 +30,15 @@ def test_insert_with_table_in_constructor() -> None:
     assert "price" in stmt.parameters
 
 
+def test_insert_preserves_schema_qualified_table() -> None:
+    """INSERT column handling should keep schema-qualified table targets intact."""
+    query = sql.insert("history.ddl_migrations").columns("version_num").values("0001")
+    stmt = query.build()
+
+    assert '"history"."ddl_migrations"' in stmt.sql
+    assert stmt.parameters["version_num"] == "0001"
+
+
 def test_insert_values_from_dict() -> None:
     """Test INSERT using values_from_dict method (deprecated; emits DeprecationWarning)."""
     data = {"id": 1, "name": "John", "status": "active"}

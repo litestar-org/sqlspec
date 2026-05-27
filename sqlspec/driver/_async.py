@@ -1,5 +1,6 @@
 """Asynchronous driver protocol implementation."""
 
+import logging
 from abc import abstractmethod
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
@@ -27,7 +28,7 @@ from sqlspec.driver._storage_helpers import stringify_storage_target
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
 
 if TYPE_CHECKING:
@@ -162,6 +163,40 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             Data dictionary instance for metadata queries
 
         """
+
+    async def set_migration_session_schema(self, schema: str) -> None:
+        """Set the default schema for migration SQL when supported.
+
+        Args:
+            schema: Schema requested for the current migration session.
+        """
+        log_with_context(logger, logging.DEBUG, "migration.schema.noop", schema=schema, driver=type(self).__name__)
+
+    async def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the default schema for non-transactional migration SQL when supported.
+
+        Args:
+            schema: Schema requested for the current migration session.
+        """
+        await self.set_migration_session_schema(schema)
+
+    async def reset_migration_session_schema(self) -> None:
+        """Reset migration schema state after a non-transactional migration."""
+        log_with_context(logger, logging.DEBUG, "migration.schema.reset.noop", driver=type(self).__name__)
+
+    async def has_schema(self, schema: str) -> bool:
+        """Return whether the schema exists for migration validation.
+
+        Args:
+            schema: Schema name to validate.
+
+        Returns:
+            True when the adapter does not provide schema validation.
+        """
+        log_with_context(
+            logger, logging.DEBUG, "migration.schema.validation.noop", schema=schema, driver=type(self).__name__
+        )
+        return True
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS - The Execution Engine

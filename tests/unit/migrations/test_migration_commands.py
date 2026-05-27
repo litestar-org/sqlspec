@@ -11,13 +11,15 @@ Tests focused on MigrationCommands class behavior including:
 """
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
 @pytest.fixture
@@ -225,6 +227,132 @@ def test_async_migration_commands_initialization(async_config: AiosqliteConfig) 
     assert commands.config == async_config
     assert hasattr(commands, "tracker")
     assert hasattr(commands, "runner")
+
+
+class SchemaAwareSqliteConfig(SqliteConfig):
+    supports_migration_schemas = True
+
+
+class SchemaAwareAiosqliteConfig(AiosqliteConfig):
+    supports_migration_schemas = True
+
+
+class LegacySyncMigrationTracker(SyncMigrationTracker):
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+        super().__init__(version_table_name)
+
+
+class LegacyAsyncMigrationTracker(AsyncMigrationTracker):
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+        super().__init__(version_table_name)
+
+
+class LegacyTrackerSqliteConfig(SqliteConfig):
+    migration_tracker_type = LegacySyncMigrationTracker
+
+
+class LegacyTrackerAiosqliteConfig(AiosqliteConfig):
+    migration_tracker_type = LegacyAsyncMigrationTracker
+
+
+def test_sync_commands_keep_legacy_tracker_constructor_shape_without_schema(tmp_path: Path) -> None:
+    config = LegacyTrackerSqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path)}
+    )
+
+    commands = SyncMigrationCommands(config)
+
+    assert isinstance(commands.tracker, LegacySyncMigrationTracker)
+    assert commands.tracker.version_table == "ddl_migrations"
+
+
+def test_async_commands_keep_legacy_tracker_constructor_shape_without_schema(tmp_path: Path) -> None:
+    config = LegacyTrackerAiosqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path)}
+    )
+
+    commands = AsyncMigrationCommands(config)
+
+    assert isinstance(commands.tracker, LegacyAsyncMigrationTracker)
+    assert commands.tracker.version_table == "ddl_migrations"
+
+
+def test_sync_commands_pass_resolved_tracker_schema_when_supported(tmp_path: Path) -> None:
+    config = SchemaAwareSqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(tmp_path), "default_schema": "app_schema"},
+    )
+
+    commands = SyncMigrationCommands(config)
+
+    assert commands.tracker.version_table_schema == "app_schema"
+    assert commands.tracker.version_table == "app_schema.ddl_migrations"
+
+
+def test_async_commands_pass_resolved_tracker_schema_when_supported(tmp_path: Path) -> None:
+    config = SchemaAwareAiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(tmp_path), "version_table_schema": "history_schema"},
+    )
+
+    commands = AsyncMigrationCommands(config)
+
+    assert commands.tracker.version_table_schema == "history_schema"
+    assert commands.tracker.version_table == "history_schema.ddl_migrations"
+
+
+def test_sync_validate_migration_schema_raises_for_missing_schema(tmp_path: Path) -> None:
+    config = SchemaAwareSqliteConfig(
+        connection_config={"database": str(tmp_path / "db.sqlite")},
+        migration_config={"default_schema": "missing_schema"},
+    )
+    commands = SyncMigrationCommands(config)
+    driver = MagicMock()
+    driver.has_schema.return_value = False
+
+    with pytest.raises(MigrationError, match="Configured schema 'missing_schema' does not exist"):
+        commands._validate_migration_schema(driver)
+
+    driver.has_schema.assert_called_once_with("missing_schema")
+
+
+async def test_async_validate_migration_schema_raises_for_missing_schema(tmp_path: Path) -> None:
+    config = SchemaAwareAiosqliteConfig(
+        connection_config={"database": str(tmp_path / "db.sqlite")},
+        migration_config={"default_schema": "missing_schema"},
+    )
+    commands = AsyncMigrationCommands(config)
+    driver = AsyncMock()
+    driver.has_schema.return_value = False
+
+    with pytest.raises(MigrationError, match="Configured schema 'missing_schema' does not exist"):
+        await commands._validate_migration_schema(driver)
+
+    driver.has_schema.assert_awaited_once_with("missing_schema")
+
+
+def test_sync_validate_migration_schema_raises_when_adapter_does_not_support_it(sync_config: SqliteConfig) -> None:
+    sync_config.set_migration_config({"default_schema": "any_schema"})
+    commands = SyncMigrationCommands(sync_config)
+    driver = MagicMock()
+
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        commands._validate_migration_schema(driver)
+
+    driver.has_schema.assert_not_called()
+
+
+async def test_async_validate_migration_schema_raises_when_adapter_does_not_support_it(
+    async_config: AiosqliteConfig,
+) -> None:
+    async_config.set_migration_config({"default_schema": "any_schema"})
+    commands = AsyncMigrationCommands(async_config)
+    driver = AsyncMock()
+
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        await commands._validate_migration_schema(driver)
+
+    driver.has_schema.assert_not_called()
 
 
 def test_sync_migration_commands_init_creates_directory(tmp_path: Path, sync_config: SqliteConfig) -> None:

@@ -144,6 +144,12 @@ class MigrationConfig(TypedDict):
     version_table_name: NotRequired[str]
     """Name of the table used to track applied migrations. Defaults to 'sqlspec_migrations'."""
 
+    default_schema: NotRequired[str]
+    """Schema applied to migration sessions before user migration SQL runs, when supported by the adapter."""
+
+    version_table_schema: NotRequired[str]
+    """Schema that stores the migration tracking table. Defaults to default_schema when omitted."""
+
     project_root: NotRequired[str]
     """Path to the project root directory. Used for relative path resolution."""
 
@@ -1125,11 +1131,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     _migration_config: "dict[str, Any] | MigrationConfig"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
+    migration_tracker_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = False
+    supports_migration_schemas: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     requires_staging_for_load: "ClassVar[bool]" = False

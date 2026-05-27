@@ -17,7 +17,14 @@ import pytest
 
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.migrations.templates import TemplateValidationError
-from sqlspec.migrations.utils import _get_git_config, _get_system_username, create_migration_file, get_author
+from sqlspec.migrations.utils import (
+    _get_git_config,
+    _get_system_username,
+    create_migration_file,
+    get_author,
+    resolve_tracker_schema,
+)
+from sqlspec.utils.text import quote_identifier
 
 
 def _callable_author(_: Any | None = None) -> str:
@@ -259,6 +266,26 @@ def test_create_migration_file_respects_default_format(tmp_path: Path) -> None:
     )
 
     assert file_path.suffix == ".py"
+
+
+def test_resolve_tracker_schema_prefers_version_table_schema() -> None:
+    migration_config = {"default_schema": "app_schema", "version_table_schema": "history_schema"}
+
+    assert resolve_tracker_schema(migration_config) == "history_schema"
+
+
+def test_resolve_tracker_schema_defaults_to_default_schema() -> None:
+    migration_config = {"default_schema": "app_schema"}
+
+    assert resolve_tracker_schema(migration_config) == "app_schema"
+
+
+def test_resolve_tracker_schema_returns_none_without_schema_config() -> None:
+    assert resolve_tracker_schema({}) is None
+
+
+def test_quote_identifier_escapes_embedded_quotes() -> None:
+    assert quote_identifier('tenant_"one"') == '"tenant_""one"""'
 
 
 def test_create_migration_file_uses_custom_sql_template(tmp_path: Path) -> None:

@@ -10,10 +10,13 @@ from mypy_extensions import mypyc_attr
 from rich.console import Console
 
 from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
+from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
+from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
+from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
@@ -39,16 +42,47 @@ logger = get_logger("sqlspec.migrations.base")
 class BaseMigrationTracker(ABC, Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    __slots__ = ("_output_policy", "version_table")
+    __slots__ = ("_output_policy", "version_table", "version_table_name", "version_table_schema")
 
-    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+    def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
+
+        ``version_table_name`` may include a ``"schema.table"`` prefix for adapters
+        that historically embedded the schema in the table name. When both that
+        prefix and ``version_table_schema`` are supplied and agree, the prefix is
+        stripped so the qualified table is not double-prefixed.
 
         Args:
             version_table_name: Name of the table to track migrations.
+            version_table_schema: Optional schema that stores the tracking table.
         """
-        self.version_table = version_table_name
+        bare_name, embedded_schema = self._split_version_table(version_table_name)
+        resolved_schema = version_table_schema or embedded_schema
+        self.version_table_name = bare_name
+        self.version_table_schema = resolved_schema
+        self.version_table = self._qualify_version_table(bare_name, resolved_schema)
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+
+    @staticmethod
+    def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
+        """Split a ``schema.table`` value into (table, schema)."""
+        if "." not in version_table_name:
+            return version_table_name, None
+        schema, _, table = version_table_name.rpartition(".")
+        return table, schema or None
+
+    def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
+        """Return the tracker table name, qualified with schema when configured."""
+        if version_table_schema:
+            return f"{version_table_schema}.{version_table_name}"
+        return version_table_name
+
+    def _get_create_table_builder(self) -> CreateTable:
+        """Return a CREATE TABLE builder for the tracker table."""
+        builder = sql.create_table(self.version_table_name)
+        if self.version_table_schema:
+            builder.in_schema(self.version_table_schema)
+        return builder
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
@@ -79,8 +113,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL builder object for table creation.
         """
         return (
-            sql
-            .create_table(self.version_table)
+            self
+            ._get_create_table_builder()
             .if_not_exists()
             .column("version_num", "VARCHAR(32)", primary_key=True)
             .column("version_type", "VARCHAR(16)")
@@ -634,6 +668,42 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
         self._last_command_error: Exception | None = None
         self._last_command_metrics: dict[str, float] | None = None
+
+    def _get_migration_config(self) -> "dict[str, Any]":
+        """Return migration config as a plain dictionary."""
+        return cast("dict[str, Any]", self.config.migration_config) or {}
+
+    def _resolve_default_schema(self) -> str | None:
+        """Return the configured default migration schema."""
+        return _resolve_default_schema(self._get_migration_config())
+
+    def _config_supports_schemas(self) -> bool:
+        """Return whether the bound config opts into schema-aware migrations."""
+        return bool(getattr(self.config, "supports_migration_schemas", False))
+
+    def _require_schema_support(self, default_schema: str) -> None:
+        """Raise when ``default_schema`` is configured for an unsupported adapter."""
+        if self._config_supports_schemas():
+            return
+        adapter = type(self.config).__name__
+        msg = (
+            f"{adapter} does not support migration default schemas; "
+            f"remove default_schema={default_schema!r} from migration_config."
+        )
+        raise MigrationError(msg)
+
+    def _resolve_tracker_schema(self) -> str | None:
+        """Return tracker schema only for adapters that support schema-qualified migration tables."""
+        if not self._config_supports_schemas():
+            return None
+        return _resolve_tracker_schema(self._get_migration_config())
+
+    def _create_tracker(self) -> Any:
+        """Create the configured migration tracker without breaking legacy constructors."""
+        tracker_schema = self._resolve_tracker_schema()
+        if tracker_schema is None:
+            return self.config.migration_tracker_type(self.version_table)
+        return self.config.migration_tracker_type(self.version_table, version_table_schema=tracker_schema)
 
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.

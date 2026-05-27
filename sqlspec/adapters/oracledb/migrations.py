@@ -38,6 +38,22 @@ class OracleMigrationTrackerMixin:
     __slots__ = ()
 
     version_table: str
+    version_table_name: str
+    version_table_schema: str | None
+
+    def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
+        """Return Oracle tracker table name, uppercasing qualified identifiers."""
+        if version_table_schema:
+            return f"{version_table_schema.upper()}.{version_table_name.upper()}"
+        return version_table_name
+
+    def _get_create_table_builder(self) -> CreateTable:
+        """Return an Oracle CREATE TABLE builder for the tracker table."""
+        table_name = self.version_table_name.upper() if self.version_table_schema else self.version_table_name
+        builder = sql.create_table(table_name)
+        if self.version_table_schema:
+            builder.in_schema(self.version_table_schema.upper())
+        return builder
 
     def _get_create_table_sql(self) -> CreateTable:
         """Get Oracle-specific SQL builder for creating the tracking table.
@@ -51,8 +67,8 @@ class OracleMigrationTrackerMixin:
             SQL builder object for Oracle table creation.
         """
         return (
-            sql
-            .create_table(self.version_table)
+            self
+            ._get_create_table_builder()
             .column("version_num", "VARCHAR2(32)", primary_key=True)
             .column("version_type", "VARCHAR2(16)")
             .column("execution_sequence", "INTEGER")
@@ -119,18 +135,6 @@ class OracleMigrationTrackerMixin:
         """
         return sql.select('COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS "next_seq"').from_(self.version_table)
 
-    def _get_existing_columns_sql(self) -> str:
-        """Get SQL to query existing columns in the tracking table.
-
-        Returns:
-            Raw SQL string for Oracle's USER_TAB_COLUMNS query.
-        """
-        return f"""
-            SELECT column_name
-            FROM user_tab_columns
-            WHERE table_name = '{self.version_table.upper()}'
-        """
-
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
 
@@ -161,7 +165,12 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
         """
         try:
-            columns_data = driver.data_dictionary.get_columns(driver, self.version_table)
+            if self.version_table_schema:
+                columns_data = driver.data_dictionary.get_columns(
+                    driver, self.version_table_name.upper(), schema=self.version_table_schema.upper()
+                )
+            else:
+                columns_data = driver.data_dictionary.get_columns(driver, self.version_table_name)
             existing_columns = {str(row["column_name"]).upper() for row in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 
@@ -357,7 +366,12 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
         """
         try:
-            columns_data = await driver.data_dictionary.get_columns(driver, self.version_table)
+            if self.version_table_schema:
+                columns_data = await driver.data_dictionary.get_columns(
+                    driver, self.version_table_name.upper(), schema=self.version_table_schema.upper()
+                )
+            else:
+                columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)
             existing_columns = {str(row["column_name"]).upper() for row in columns_data}
             missing_columns = self._detect_missing_columns(existing_columns)
 

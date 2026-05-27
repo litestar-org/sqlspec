@@ -15,6 +15,7 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
+from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -474,6 +475,12 @@ class BaseMigrationRunner(ABC):
         migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))
 
+    def _resolve_default_schema(self) -> str | None:
+        """Return the configured default schema for migration execution."""
+        config = self.context.config if self.context else None
+        migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None))
+        return _resolve_default_schema(migration_config)
+
 
 class SyncMigrationRunner(BaseMigrationRunner):
     """Synchronous migration runner with pure sync methods."""
@@ -571,8 +578,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 driver.begin()
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -581,12 +591,18 @@ class SyncMigrationRunner(BaseMigrationRunner):
                     on_success(execution_time)
                 driver.commit()
             else:
-                for sql_statement in upgrade_sql_list:
-                    if sql_statement.strip():
-                        driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    on_success(execution_time)
+                try:
+                    if default_schema:
+                        driver.set_migration_non_transactional_schema(default_schema)
+                    for sql_statement in upgrade_sql_list:
+                        if sql_statement.strip():
+                            driver.execute_script(sql_statement)
+                    execution_time = int((time.perf_counter() - start_time) * 1000)
+                    if on_success:
+                        on_success(execution_time)
+                finally:
+                    if default_schema:
+                        driver.reset_migration_session_schema()
         except Exception as exc:
             if use_transaction:
                 driver.rollback()
@@ -674,8 +690,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 driver.begin()
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -684,12 +703,18 @@ class SyncMigrationRunner(BaseMigrationRunner):
                     on_success(execution_time)
                 driver.commit()
             else:
-                for sql_statement in downgrade_sql_list:
-                    if sql_statement.strip():
-                        driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    on_success(execution_time)
+                try:
+                    if default_schema:
+                        driver.set_migration_non_transactional_schema(default_schema)
+                    for sql_statement in downgrade_sql_list:
+                        if sql_statement.strip():
+                            driver.execute_script(sql_statement)
+                    execution_time = int((time.perf_counter() - start_time) * 1000)
+                    if on_success:
+                        on_success(execution_time)
+                finally:
+                    if default_schema:
+                        driver.reset_migration_session_schema()
         except Exception as exc:
             if use_transaction:
                 driver.rollback()
@@ -901,8 +926,11 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 await driver.begin()
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
                 for sql_statement in upgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -911,12 +939,18 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     await on_success(execution_time)
                 await driver.commit()
             else:
-                for sql_statement in upgrade_sql_list:
-                    if sql_statement.strip():
-                        await driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    await on_success(execution_time)
+                try:
+                    if default_schema:
+                        await driver.set_migration_non_transactional_schema(default_schema)
+                    for sql_statement in upgrade_sql_list:
+                        if sql_statement.strip():
+                            await driver.execute_script(sql_statement)
+                    execution_time = int((time.perf_counter() - start_time) * 1000)
+                    if on_success:
+                        await on_success(execution_time)
+                finally:
+                    if default_schema:
+                        await driver.reset_migration_session_schema()
         except Exception as exc:
             if use_transaction:
                 await driver.rollback()
@@ -1004,8 +1038,11 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
+            default_schema = self._resolve_default_schema()
             if use_transaction:
                 await driver.begin()
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
                 for sql_statement in downgrade_sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -1014,12 +1051,18 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     await on_success(execution_time)
                 await driver.commit()
             else:
-                for sql_statement in downgrade_sql_list:
-                    if sql_statement.strip():
-                        await driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    await on_success(execution_time)
+                try:
+                    if default_schema:
+                        await driver.set_migration_non_transactional_schema(default_schema)
+                    for sql_statement in downgrade_sql_list:
+                        if sql_statement.strip():
+                            await driver.execute_script(sql_statement)
+                    execution_time = int((time.perf_counter() - start_time) * 1000)
+                    if on_success:
+                        await on_success(execution_time)
+                finally:
+                    if default_schema:
+                        await driver.reset_migration_session_schema()
         except Exception as exc:
             if use_transaction:
                 await driver.rollback()

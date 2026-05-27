@@ -23,6 +23,7 @@ from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
@@ -209,6 +210,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.Error as e:
             msg = f"Failed to rollback DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set DuckDB search_path for migration SQL."""
+        self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether a DuckDB schema exists."""
+        result = self.connection.execute(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", [schema]
+        ).fetchone()
+        return result is not None
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.

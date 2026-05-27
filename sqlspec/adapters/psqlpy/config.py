@@ -191,6 +191,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True

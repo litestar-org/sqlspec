@@ -111,8 +111,8 @@ class InsertValuesMixin:
 
         if columns:
             identifiers = [exp.to_identifier(col) if isinstance(col, str) else col for col in columns]
-            table_name = current_this.this
-            current_expr.set("this", exp.Schema(this=table_name, expressions=identifiers))
+            table_expression = current_this.this if isinstance(current_this, exp.Schema) else current_this
+            current_expr.set("this", exp.Schema(this=table_expression.copy(), expressions=identifiers))
         elif isinstance(current_this, exp.Schema):
             table_name = current_this.this
             current_expr.set("this", exp.Table(this=table_name))

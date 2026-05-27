@@ -1,10 +1,14 @@
-"""Unit tests for idempotent update_version_record behavior."""
+"""Unit tests for migration tracker behavior."""
 
+import logging
 from typing import Any
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from sqlspec.adapters.oracledb.migrations import OracleSyncMigrationTracker
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
@@ -23,6 +27,101 @@ def test_sync_update_version_record_success() -> None:
     update_sql = str(update_call[0][0])
     assert "UPDATE" in update_sql
     assert "ddl_migrations" in update_sql
+
+
+def test_sync_tracker_qualifies_table_sql_when_schema_is_configured() -> None:
+    """The base tracker should render the tracking table in the configured schema."""
+    tracker = SyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="history")
+
+    assert tracker.version_table == "history.ddl_migrations"
+    rendered_statements = [
+        str(tracker._get_create_table_sql()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_current_version_sql()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_applied_migrations_sql()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_next_execution_sequence_sql()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_record_migration_sql("0001", "sequential", 1, "init", 10, "abc", "tester")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_remove_migration_sql("0001")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_update_version_sql("20250101000000", "0001", "sequential")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_delete_versions_sql(["0001"])),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_record_squashed_migration_sql("0002", "sequential", 2, "squash", 0, "def", "tester", "0001")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._get_check_column_exists_sql()),  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    assert all('"history"."ddl_migrations"' in statement for statement in rendered_statements)
+
+
+def test_sync_tracker_keeps_bare_table_sql_without_schema() -> None:
+    """Existing migration tracker SQL should stay unqualified by default."""
+    tracker = SyncMigrationTracker(version_table_name="ddl_migrations")
+
+    assert tracker.version_table == "ddl_migrations"
+    assert "history.ddl_migrations" not in str(tracker._get_create_table_sql())  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sync_tracker_introspects_bare_table_name_with_schema() -> None:
+    """Qualified tracker SQL should not leak into data-dictionary table-name arguments."""
+    tracker = SyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="history")
+    driver = Mock()
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": column.name}
+        for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.data_dictionary.get_columns.assert_called_once_with(driver, "ddl_migrations", schema="history")
+    driver.execute.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_async_tracker_introspects_bare_table_name_with_schema() -> None:
+    """Async qualified tracker SQL should keep introspection table/schema separate."""
+    tracker = AsyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="history")
+    driver = MagicMock()
+    driver.data_dictionary.get_columns = AsyncMock(
+        return_value=[
+            {"column_name": column.name}
+            for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+        ]
+    )
+    driver.execute = AsyncMock()
+
+    await tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.data_dictionary.get_columns.assert_awaited_once_with(driver, "ddl_migrations", schema="history")
+    driver.execute.assert_not_awaited()
+
+
+def test_oracle_tracker_uppercases_qualified_tracking_table() -> None:
+    """Oracle tracker should qualify migration table names using Oracle's uppercase convention."""
+    tracker = OracleSyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="app_owner")
+
+    assert tracker.version_table == "APP_OWNER.DDL_MIGRATIONS"
+    assert tracker.version_table_schema == "app_owner"
+    assert tracker.version_table_name == "ddl_migrations"
+
+
+def test_sync_driver_migration_schema_hook_logs_noop(caplog: pytest.LogCaptureFixture) -> None:
+    """Base sync drivers should accept migration schema configuration as a no-op hook."""
+    caplog.set_level(logging.DEBUG, logger="sqlspec.driver")
+
+    SyncDriverAdapterBase.set_migration_session_schema(object(), "app_schema")  # type: ignore[arg-type]
+
+    records = [record for record in caplog.records if record.getMessage() == "migration.schema.noop"]
+    assert records
+    assert getattr(records[0], "extra_fields") == {"schema": "app_schema", "driver": "object"}
+
+
+@pytest.mark.anyio
+async def test_async_driver_migration_schema_hook_logs_noop(caplog: pytest.LogCaptureFixture) -> None:
+    """Base async drivers should accept migration schema configuration as a no-op hook."""
+    caplog.set_level(logging.DEBUG, logger="sqlspec.driver")
+
+    await AsyncDriverAdapterBase.set_migration_session_schema(object(), "app_schema")  # type: ignore[arg-type]
+
+    records = [record for record in caplog.records if record.getMessage() == "migration.schema.noop"]
+    assert records
+    assert getattr(records[0], "extra_fields") == {"schema": "app_schema", "driver": "object"}
 
 
 def test_sync_update_version_record_idempotent_when_already_updated() -> None:

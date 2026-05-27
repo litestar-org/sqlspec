@@ -57,6 +57,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_guards import is_readable
 
 if TYPE_CHECKING:
@@ -338,6 +339,32 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         except Exception as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for migration SQL."""
+        quoted_schema = quote_identifier(schema)
+        sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(sql)
+
+    def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        quoted_schema = quote_identifier(schema)
+        sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(sql)
+
+    def reset_migration_session_schema(self) -> None:
+        """Reset the PostgreSQL search path after non-transactional migration SQL."""
+        sql = cast("LiteralString", "RESET search_path")  # type: ignore[redundant-cast]
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(sql)
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether a PostgreSQL schema exists."""
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (schema,))
+            return cursor.fetchone() is not None
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         """Create context manager for PostgreSQL cursor."""
@@ -795,6 +822,33 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         except Exception as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    async def set_migration_session_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for migration SQL."""
+        quoted_schema = quote_identifier(schema)
+        sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(sql)
+
+    async def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        quoted_schema = quote_identifier(schema)
+        sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(sql)
+
+    async def reset_migration_session_schema(self) -> None:
+        """Reset the PostgreSQL search path after non-transactional migration SQL."""
+        sql = cast("LiteralString", "RESET search_path")  # type: ignore[redundant-cast]
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(sql)
+
+    async def has_schema(self, schema: str) -> bool:
+        """Return whether a PostgreSQL schema exists."""
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (schema,))
+            row = await cursor.fetchone()
+            return row is not None
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         """Create async context manager for PostgreSQL cursor."""

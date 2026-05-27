@@ -37,6 +37,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
@@ -227,6 +228,26 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         except asyncpg.PostgresError as e:
             msg = f"Failed to rollback async transaction: {e}"
             raise SQLSpecError(msg) from e
+
+    async def set_migration_session_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for migration SQL."""
+        quoted_schema = quote_identifier(schema)
+        await self.connection.execute(f'SET LOCAL search_path TO {quoted_schema}, "$user", public')
+
+    async def set_migration_non_transactional_schema(self, schema: str) -> None:
+        """Set the PostgreSQL search path for non-transactional migration SQL."""
+        quoted_schema = quote_identifier(schema)
+        await self.connection.execute(f'SET search_path TO {quoted_schema}, "$user", public')
+
+    async def reset_migration_session_schema(self) -> None:
+        """Reset the PostgreSQL search path after non-transactional migration SQL."""
+        await self.connection.execute("RESET search_path")
+
+    async def has_schema(self, schema: str) -> bool:
+        """Return whether a PostgreSQL schema exists."""
+        return bool(
+            await self.connection.fetchval("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", schema)
+        )
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         """Create context manager for AsyncPG cursor."""

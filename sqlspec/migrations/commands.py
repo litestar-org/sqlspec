@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sqlspec.builder import sql
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
@@ -264,7 +265,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             config: The SQLSpec configuration.
         """
         super().__init__(config)
-        self.tracker = config.migration_tracker_type(self.version_table)
+        self.tracker = self._create_tracker()
 
         # Create context with extension configurations
         context = MigrationContext.from_config(config)
@@ -278,6 +279,16 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             runtime=self._runtime,
             description_hints=self._template_settings.description_hints,
         )
+
+    def _validate_migration_schema(self, driver: Any) -> None:
+        """Validate the configured migration schema exists before issuing DDL."""
+        default_schema = self._resolve_default_schema()
+        if default_schema is None:
+            return
+        self._require_schema_support(default_schema)
+        if not driver.has_schema(default_schema):
+            msg = f"Configured schema '{default_schema}' does not exist"
+            raise MigrationError(msg)
 
     def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
@@ -708,6 +719,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
 
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
@@ -846,6 +858,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
                 applied = self.tracker.get_applied_migrations(driver)
                 if runtime is not None:
@@ -1191,7 +1204,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             config: The SQLSpec configuration.
         """
         super().__init__(config)
-        self.tracker = config.migration_tracker_type(self.version_table)
+        self.tracker = self._create_tracker()
 
         # Create context with extension configurations
         context = MigrationContext.from_config(config)
@@ -1205,6 +1218,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             runtime=self._runtime,
             description_hints=self._template_settings.description_hints,
         )
+
+    async def _validate_migration_schema(self, driver: Any) -> None:
+        """Validate the configured migration schema exists before issuing DDL."""
+        default_schema = self._resolve_default_schema()
+        if default_schema is None:
+            return
+        self._require_schema_support(default_schema)
+        if not await driver.has_schema(default_schema):
+            msg = f"Configured schema '{default_schema}' does not exist"
+            raise MigrationError(msg)
 
     async def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
@@ -1635,6 +1658,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             async with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
@@ -1775,6 +1799,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             async with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
                 applied = await self.tracker.get_applied_migrations(driver)
