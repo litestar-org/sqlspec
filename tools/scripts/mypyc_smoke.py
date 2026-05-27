@@ -7,7 +7,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
-__all__ = ("SMOKE_IMPORTS", "SmokeImport", "is_compiled_module", "main", "run_smoke")
+__all__ = ("SMOKE_IMPORTS", "SmokeImport", "is_compiled_module", "main", "run_construction_checks", "run_smoke")
 
 COMPILED_SUFFIXES = (".so", ".pyd")
 
@@ -100,6 +100,76 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     return results
 
 
+def _check_litestar_filter_construction(*, require_compiled: bool) -> dict[str, Any]:
+    """Construct every paired-annotation Litestar filter provider (issue #475).
+
+    The originally reported failure — ``UnboundLocalError: local variable
+    "before_annotation" referenced before assignment`` — only fires when
+    ``_BeforeAfterFilterProvider.__init__`` runs under a mypyc-compiled wheel.
+    Plain imports do not trigger it, so this check invokes
+    ``create_filter_dependencies`` with a config that drives every provider
+    class with two ``Annotated`` locals: ``_BeforeAfterFilterProvider`` (twice,
+    via ``created_at`` and ``updated_at``), ``_LimitOffsetFilterProvider``,
+    ``_SearchFilterProvider``, and ``_OrderByProvider``.
+    """
+    result: dict[str, Any] = {
+        "name": "litestar_filter_construction",
+        "module": "sqlspec.extensions.litestar.providers",
+        "attribute": "create_filter_dependencies",
+        "imported": False,
+        "compiled": False,
+        "compiled_required": require_compiled,
+        "error": None,
+        "skipped": False,
+        "skip_reason": None,
+    }
+    try:
+        providers = importlib.import_module("sqlspec.extensions.litestar.providers")
+    except ModuleNotFoundError as exc:
+        if _is_missing_optional_dependency(exc.name or "", "litestar"):
+            result["skipped"] = True
+            result["skip_reason"] = "optional dependency missing: litestar"
+            return result
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(providers)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+
+    config = providers.FilterConfig(
+        created_at=True,
+        updated_at=True,
+        pagination_type="limit_offset",
+        pagination_size=25,
+        search=["name", "email"],
+        search_ignore_case=True,
+        sort_field=["created_at", "name"],
+        sort_order="asc",
+    )
+    try:
+        deps = providers.create_filter_dependencies(config)
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    expected = {"created_filter", "updated_filter", "limit_offset_filter", "search_filter", "order_by_filter"}
+    missing = sorted(expected - deps.keys())
+    if missing:
+        result["error"] = f"create_filter_dependencies returned without expected keys: {missing}"
+    return result
+
+
+def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
+    """Run construction-time smoke checks for compiled provider classes."""
+    return [_check_litestar_filter_construction(require_compiled=require_compiled)]
+
+
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         result
@@ -133,6 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     results = run_smoke(require_compiled=args.require_compiled)
+    results.extend(run_construction_checks(require_compiled=args.require_compiled))
     if args.json:
         json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
