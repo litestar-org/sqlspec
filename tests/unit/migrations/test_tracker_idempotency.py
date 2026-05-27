@@ -97,9 +97,8 @@ def test_oracle_tracker_uppercases_qualified_tracking_table() -> None:
     tracker = OracleSyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="app_owner")
 
     assert tracker.version_table == "APP_OWNER.DDL_MIGRATIONS"
-    existing_columns_sql = tracker._get_existing_columns_sql()  # pyright: ignore[reportPrivateUsage]
-    assert "WHERE table_name = 'DDL_MIGRATIONS'" in existing_columns_sql
-    assert "AND owner = 'APP_OWNER'" in existing_columns_sql
+    assert tracker.version_table_schema == "app_owner"
+    assert tracker.version_table_name == "ddl_migrations"
 
 
 def test_sync_driver_migration_schema_hook_logs_noop(caplog: pytest.LogCaptureFixture) -> None:

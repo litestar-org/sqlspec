@@ -27,7 +27,7 @@ def test_duckdb_migration_schema_hooks() -> None:
     assert driver.has_schema("tenant") is True
 
     assert connection.executed == [
-        ("SET search_path = 'tenant'", None),
+        ('SET search_path = "tenant"', None),
         ("SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", ["tenant"]),
     ]
     assert DuckDBConfig.supports_migration_schemas is True
@@ -40,10 +40,10 @@ def test_duckdb_has_schema_returns_false_for_missing_schema() -> None:
     assert driver.has_schema("missing") is False
 
 
-def test_duckdb_migration_schema_escapes_search_path_literal() -> None:
+def test_duckdb_migration_schema_escapes_quoted_identifier() -> None:
     connection = FakeDuckDBConnection()
     driver = DuckDBDriver(connection)  # type: ignore[arg-type]
 
-    driver.set_migration_session_schema("tenant's")
+    driver.set_migration_session_schema('tenant"s')
 
-    assert connection.executed == [("SET search_path = 'tenant''s'", None)]
+    assert connection.executed == [('SET search_path = "tenant""s"', None)]

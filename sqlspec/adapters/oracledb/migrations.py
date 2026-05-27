@@ -135,22 +135,6 @@ class OracleMigrationTrackerMixin:
         """
         return sql.select('COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS "next_seq"').from_(self.version_table)
 
-    def _get_existing_columns_sql(self) -> str:
-        """Get SQL to query existing columns in the tracking table.
-
-        Returns:
-            Raw SQL string for Oracle's USER_TAB_COLUMNS query.
-        """
-        table_name = self.version_table_name.upper()
-        owner_filter = ""
-        if self.version_table_schema:
-            owner_filter = f"\n              AND owner = '{self.version_table_schema.upper()}'"
-        return f"""
-            SELECT column_name
-            FROM all_tab_columns
-            WHERE table_name = '{table_name}'{owner_filter}
-        """
-
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
 

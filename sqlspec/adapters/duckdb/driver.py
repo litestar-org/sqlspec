@@ -23,6 +23,7 @@ from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
@@ -38,11 +39,6 @@ __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSess
 logger = get_logger("sqlspec.adapters.duckdb")
 
 _type_converter = DuckDBOutputConverter()
-
-
-def _quote_duckdb_search_path(schema: str) -> str:
-    """Return a DuckDB string literal for SET search_path."""
-    return "'" + schema.replace("'", "''") + "'"
 
 
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
@@ -217,7 +213,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set DuckDB search_path for migration SQL."""
-        self.connection.execute(f"SET search_path = {_quote_duckdb_search_path(schema)}")
+        self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
 
     def has_schema(self, schema: str) -> bool:
         """Return whether a DuckDB schema exists."""
