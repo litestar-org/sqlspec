@@ -89,8 +89,10 @@ class AdbcDriver(SyncDriverAdapterBase):
         connection: "AdbcConnection",
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
+        *,
+        dialect: "str | None" = None,
     ) -> None:
-        self._detected_dialect = detect_dialect(connection, logger)
+        self._detected_dialect = detect_dialect(connection, logger, fallback_dialect=dialect)
 
         if statement_config is None:
             base_config = get_statement_config(self._detected_dialect)
@@ -256,7 +258,15 @@ class AdbcDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> None:
-        """Begin database transaction."""
+        """Begin database transaction.
+
+        ADBC SQLite holds an implicit transaction after the first DML and
+        rejects an explicit ``BEGIN`` with "cannot start a transaction
+        within a transaction." On that dialect this is a no-op; the
+        implicit transaction is closed by ``commit()`` / ``rollback()``.
+        """
+        if self._dialect_name == "sqlite":
+            return
         try:
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("BEGIN")

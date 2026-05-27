@@ -153,7 +153,7 @@ def test_execute_many_requires_write_session(spanner_config: SpannerSyncConfig, 
     """Test that execute_many fails on read-only Snapshot."""
     parameters = [{"id": str(uuid4()), "name": "Fail", "email": "fail@example.com", "age": 30}]
 
-    with spanner_config.provide_session() as session:
+    with spanner_config.provide_read_session() as session:
         with pytest.raises(SQLConversionError, match="execute_many requires"):
             session.execute_many(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)", parameters

@@ -157,12 +157,15 @@ _BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "to
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
-def detect_dialect(connection: Any, logger: Any | None = None) -> str:
+def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_dialect: "str | None" = None) -> str:
     """Detect database dialect from ADBC driver information.
 
     Args:
         connection: ADBC connection with driver metadata.
         logger: Optional logger for diagnostics.
+        fallback_dialect: Pre-resolved dialect from config (e.g. from
+            ``resolve_dialect_from_config``). Used when introspection
+            yields no match, before defaulting to ``postgres``.
 
     Returns:
         Detected dialect name, defaulting to ``postgres``.
@@ -181,6 +184,11 @@ def detect_dialect(connection: Any, logger: Any | None = None) -> str:
     except Exception as exc:
         if logger is not None:
             logger.debug("Dialect detection failed: %s", exc)
+
+    if fallback_dialect:
+        if logger is not None:
+            logger.debug("Dialect from connection_config: %s (introspection yielded no match)", fallback_dialect)
+        return fallback_dialect
 
     if logger is not None:
         logger.warning("Could not determine dialect from driver info. Defaulting to 'postgres'.")

@@ -1,12 +1,20 @@
 """Unit tests for Litestar filter providers (issue #405)."""
 
+import datetime
 import inspect
 from typing import Any
 
 import pytest
 from litestar.exceptions import ValidationException
 
-from sqlspec.core import InCollectionFilter, NotInCollectionFilter, OrderByFilter
+from sqlspec.core import (
+    BeforeAfterFilter,
+    InCollectionFilter,
+    LimitOffsetFilter,
+    NotInCollectionFilter,
+    OrderByFilter,
+    SearchFilter,
+)
 from sqlspec.extensions.litestar.providers import (
     FieldNameType,
     FilterConfig,
@@ -86,6 +94,49 @@ def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
     assert isinstance(result, NotInCollectionFilter)
     assert result.field_name == "status"
     assert list(result.values) == ["deleted", "archived"]  # type: ignore[arg-type]
+
+
+def test_compiled_annotation_pair_providers_build_and_call() -> None:
+    """Providers with paired annotation locals instantiate and call under compiled builds."""
+    before = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    after = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    deps = _create_statement_filters(
+        FilterConfig(
+            created_at=True,
+            updated_at=True,
+            pagination_type="limit_offset",
+            pagination_size=25,
+            search=["name", "email"],
+            search_ignore_case=True,
+            sort_field=["created_at", "name"],
+            sort_order="asc",
+        )
+    )
+
+    created_filter = deps["created_filter"].dependency(created_at_before=before, created_at_after=after)
+    updated_filter = deps["updated_filter"].dependency(updated_at_before=before, updated_at_after=after)
+    limit_offset_filter = deps["limit_offset_filter"].dependency(current_page=3, page_size=10)
+    search_filter = deps["search_filter"].dependency(search_string="alice", ignore_case=False)
+    order_by_filter = deps["order_by_filter"].dependency(field_name="name", sort_order="desc")
+
+    assert isinstance(created_filter, BeforeAfterFilter)
+    assert created_filter.field_name == "created_at"
+    assert created_filter.before == before
+    assert created_filter.after == after
+    assert isinstance(updated_filter, BeforeAfterFilter)
+    assert updated_filter.field_name == "updated_at"
+    assert updated_filter.before == before
+    assert updated_filter.after == after
+    assert isinstance(limit_offset_filter, LimitOffsetFilter)
+    assert limit_offset_filter.limit == 10
+    assert limit_offset_filter.offset == 20
+    assert isinstance(search_filter, SearchFilter)
+    assert search_filter.field_name == {"name", "email"}
+    assert search_filter.value == "alice"
+    assert search_filter.ignore_case is False
+    assert isinstance(order_by_filter, OrderByFilter)
+    assert order_by_filter.field_name == "name"
+    assert order_by_filter.sort_order == "desc"
 
 
 def test_aggregate_function_includes_in_filter() -> None:

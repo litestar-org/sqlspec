@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.47.0"
+version = "0.48.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -148,7 +148,7 @@ test = [
   "pytest>=8.0.0",
 
   "pytest-cov>=5.0.0",
-  "pytest-databases[postgres,oracle,bigquery,spanner]>=0.18.0",
+  "pytest-databases[postgres,oracle,bigquery,spanner]>=0.19.0",
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
@@ -191,6 +191,7 @@ packages = ["sqlspec"]
 # Standalone `uv run mypyc ...` generates a setuptools setup.py in the repo root.
 # Keep that smoke build from auto-discovering ignored scratch directories.
 packages = []
+
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
@@ -291,7 +292,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.47.0"
+current_version = "0.48.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

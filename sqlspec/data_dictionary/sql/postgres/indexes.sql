@@ -5,7 +5,7 @@ SELECT
     t.relname as table_name,
     ix.indisunique as is_unique,
     ix.indisprimary as is_primary,
-    array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) as columns
+    array_agg(a.attname::text ORDER BY array_position(ix.indkey, a.attnum)) as columns
 FROM
     pg_class t,
     pg_class i,
@@ -34,7 +34,7 @@ SELECT
     t.relname as table_name,
     ix.indisunique as is_unique,
     ix.indisprimary as is_primary,
-    array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) as columns
+    array_agg(a.attname::text ORDER BY array_position(ix.indkey, a.attnum)) as columns
 FROM
     pg_class t,
     pg_class i,

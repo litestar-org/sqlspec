@@ -29,6 +29,14 @@ if TYPE_CHECKING:
 
 __all__ = ("SpannerConnectionParams", "SpannerDriverFeatures", "SpannerPoolParams", "SpannerSyncConfig")
 
+_DEFAULT_SESSION_TRANSACTION: bool = True
+"""Default ``transaction`` flag for ``provide_session`` / ``provide_connection``.
+
+``True`` yields a write-capable :class:`Transaction` context matching every
+other sqlspec adapter. Read-only :class:`Snapshot` contexts are available via
+:meth:`SpannerSyncConfig.provide_read_session`. Pulled into a module-level
+constant so an eventual ``SpannerAsyncConfig`` can import the same default."""
+
 
 class SpannerConnectionParams(TypedDict):
     """Spanner connection parameters."""
@@ -278,27 +286,38 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self._client = None
         self._database = None
 
-    def provide_connection(self, *args: Any, transaction: "bool" = False, **kwargs: Any) -> "SpannerConnectionContext":
-        """Yield a Snapshot (default) or Transaction context from the configured pool.
+    def provide_connection(
+        self, *args: Any, transaction: "bool" = _DEFAULT_SESSION_TRANSACTION, **kwargs: Any
+    ) -> "SpannerConnectionContext":
+        """Yield a Transaction (default) or Snapshot context from the configured pool.
 
         Args:
             *args: Additional positional arguments (unused, for interface compatibility).
-            transaction: If True, yields a Transaction context that supports
-                execute_update() for DML statements. If False (default), yields
+            transaction: If True (default), yields a Transaction context that
+                supports execute_update() for DML statements. If False, yields
                 a read-only Snapshot context for SELECT queries.
             **kwargs: Additional keyword arguments (unused, for interface compatibility).
         """
         return SpannerConnectionContext(self, transaction=transaction)
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, transaction: "bool" = False, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
+        **kwargs: Any,
     ) -> "SpannerSessionContext":
         """Provide a Spanner driver session context manager.
+
+        Returns a write-capable Transaction session by default, matching every
+        other sqlspec adapter. Pass ``transaction=False`` or use
+        :meth:`provide_read_session` to obtain a read-only Snapshot session.
 
         Args:
             *args: Additional arguments.
             statement_config: Optional statement configuration override.
-            transaction: Whether to use a transaction.
+            transaction: Whether to use a Transaction (True, default) or
+                Snapshot (False).
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -318,17 +337,18 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def provide_write_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "SpannerSessionContext":
-        """Provide a Spanner driver write session context manager.
-
-        Args:
-            *args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A Spanner driver write session context manager.
-        """
+        """Provide a write-capable Spanner session (alias for :meth:`provide_session`)."""
         return self.provide_session(*args, statement_config=statement_config, transaction=True, **kwargs)
+
+    def provide_read_session(
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+    ) -> "SpannerSessionContext":
+        """Provide a read-only Snapshot Spanner session.
+
+        Use for query workloads that benefit from Spanner's snapshot reads.
+        For DDL/DML, use :meth:`provide_session` (write-capable by default).
+        """
+        return self.provide_session(*args, statement_config=statement_config, transaction=False, **kwargs)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerSyncConfig types.

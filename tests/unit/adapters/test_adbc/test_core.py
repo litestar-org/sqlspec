@@ -130,3 +130,27 @@ def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
     )
 
     assert prepared == [(1, 2)]
+
+
+def test_detect_dialect_uses_fallback_when_introspection_returns_unknown() -> None:
+    """detect_dialect honors fallback_dialect when GetInfo yields no pattern match."""
+
+    conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "", "driver_name": ""})
+    result = adbc_core.detect_dialect(conn, fallback_dialect="sqlite")
+    assert result == "sqlite"
+
+
+def test_detect_dialect_still_defaults_to_postgres_without_fallback() -> None:
+    """Without fallback_dialect, the legacy 'default to postgres' path still fires."""
+
+    conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "", "driver_name": ""})
+    result = adbc_core.detect_dialect(conn, fallback_dialect=None)
+    assert result == "postgres"
+
+
+def test_detect_dialect_introspection_match_beats_fallback() -> None:
+    """An introspection match always wins over the fallback signal."""
+
+    conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "duckdb", "driver_name": ""})
+    result = adbc_core.detect_dialect(conn, fallback_dialect="sqlite")
+    assert result == "duckdb"
