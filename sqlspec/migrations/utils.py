@@ -18,13 +18,7 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase
 
-__all__ = (
-    "create_migration_file",
-    "drop_all",
-    "get_author",
-    "resolve_default_schema",
-    "resolve_tracker_schema",
-)
+__all__ = ("create_migration_file", "drop_all", "get_author", "resolve_default_schema", "resolve_tracker_schema")
 
 logger = get_logger(__name__)
 
