@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.48.1"
+version = "0.48.2"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -193,7 +193,6 @@ packages = ["sqlspec"]
 packages = []
 
 
-
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
 enable-by-default = false
@@ -242,8 +241,6 @@ include = [
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
-  "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter providers avoid nested dependency functions
-  "sqlspec/extensions/litestar/providers.py",      # Litestar filter providers precompute dynamic signatures
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_payload.py",         # Event JSON payload codec helpers
   "sqlspec/extensions/adk/_types.py",              # ADK session/event record types
@@ -293,7 +290,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.48.1"
+current_version = "0.48.2"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
