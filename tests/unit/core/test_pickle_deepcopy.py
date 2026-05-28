@@ -107,9 +107,7 @@ def test_typed_parameter_deepcopy_pickle_roundtrip() -> None:
 
 
 def test_parameter_info_deepcopy_pickle_roundtrip() -> None:
-    pi = ParameterInfo(
-        name="x", style=ParameterStyle.NAMED_COLON, position=0, ordinal=0, placeholder_text=":x"
-    )
+    pi = ParameterInfo(name="x", style=ParameterStyle.NAMED_COLON, position=0, ordinal=0, placeholder_text=":x")
     deep = copy.deepcopy(pi)
     assert deep.name == pi.name
     assert deep.style == pi.style
@@ -127,9 +125,7 @@ def test_parameter_style_config_deepcopy_pickle_roundtrip() -> None:
 
 
 def test_parameter_profile_deepcopy_pickle_roundtrip() -> None:
-    pi = ParameterInfo(
-        name="x", style=ParameterStyle.NAMED_COLON, position=0, ordinal=0, placeholder_text=":x"
-    )
+    pi = ParameterInfo(name="x", style=ParameterStyle.NAMED_COLON, position=0, ordinal=0, placeholder_text=":x")
     pp = ParameterProfile([pi])
     deep = copy.deepcopy(pp)
     assert deep.named_parameters == pp.named_parameters

@@ -154,14 +154,18 @@ class StatementFilter(ABC):
             return f"expr_{str(hash(name)).replace('-', '')[:8]}"
         return name.replace(".", "_")
 
-    @abstractmethod
     def _reconstruction_args(self) -> "tuple[Any, ...]":
         """Return the positional ``__init__`` args needed to rebuild this filter.
 
-        Used by :meth:`__reduce__` to support :mod:`copy` and :mod:`pickle`
-        without depending on slot-walking, which mypyc strips from
-        compiled classes.
+        Subclasses must override this to support :func:`copy.deepcopy` and :mod:`pickle`.
+        The default raises only when reconstruction is actually attempted, so filters
+        that never need to be copied or pickled don't pay an implementation cost.
         """
+        msg = (
+            f"{type(self).__name__} does not implement _reconstruction_args(); "
+            "override it to support copy.deepcopy and pickle"
+        )
+        raise NotImplementedError(msg)
 
     def __reduce__(self) -> "tuple[Any, ...]":
         """Reconstruct via ``cls(*ctor_args)`` — works on mypyc native classes."""
