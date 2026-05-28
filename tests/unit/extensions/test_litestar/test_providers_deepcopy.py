@@ -34,30 +34,35 @@ def _discover_provider_classes() -> "list[type[Any]]":
     for name, cls in inspect.getmembers(litestar_providers, inspect.isclass):
         if not name.startswith("_") or name.startswith("__"):
             continue
-        if not hasattr(cls, "__mypyc_attrs__"):
+        if not name.endswith("Provider"):
+            continue
+        if cls.__module__ != litestar_providers.__name__:
             continue
         classes.append(cls)
     return classes
 
 
+def _state_attrs(inst: Any) -> "tuple[str, ...]":
+    mypyc_attrs = getattr(type(inst), "__mypyc_attrs__", None)
+    if mypyc_attrs is not None:
+        return tuple(mypyc_attrs)
+    return tuple(k for k in vars(inst) if not k.startswith("__"))
+
+
 def _build(cls: "type[Any]") -> Any:
     factory = _FACTORIES.get(cls.__name__)
     if factory is None:
-        msg = (
-            f"No factory registered for {cls.__name__}. Add an entry to "
-            "_FACTORIES at the top of this test module."
-        )
+        msg = f"No factory registered for {cls.__name__}. Add an entry to _FACTORIES at the top of this test module."
         raise AssertionError(msg)
     return factory(cls)
 
 
-def _assert_mypyc_attrs_equal(left: Any, right: Any) -> None:
-    for attr in type(left).__mypyc_attrs__:
+def _assert_state_equal(left: Any, right: Any) -> None:
+    for attr in _state_attrs(left):
         left_value = getattr(left, attr)
         right_value = getattr(right, attr)
         assert left_value == right_value, (
-            f"{type(left).__name__}.{attr} diverged after round-trip: "
-            f"{left_value!r} != {right_value!r}"
+            f"{type(left).__name__}.{attr} diverged after round-trip: {left_value!r} != {right_value!r}"
         )
 
 
@@ -67,7 +72,7 @@ def test_provider_deepcopy_roundtrip(cls: "type[Any]") -> None:
     out = copy.deepcopy(inst)
     assert out is not inst
     assert type(out) is type(inst)
-    _assert_mypyc_attrs_equal(inst, out)
+    _assert_state_equal(inst, out)
 
 
 @pytest.mark.parametrize("cls", _discover_provider_classes(), ids=lambda c: c.__name__)
@@ -76,7 +81,7 @@ def test_provider_pickle_roundtrip(cls: "type[Any]") -> None:
     out = pickle.loads(pickle.dumps(inst))
     assert out is not inst
     assert type(out) is type(inst)
-    _assert_mypyc_attrs_equal(inst, out)
+    _assert_state_equal(inst, out)
 
 
 def test_factory_registry_covers_all_discovered_classes() -> None:
