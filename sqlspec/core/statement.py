@@ -122,6 +122,25 @@ PROCESSED_STATE_SLOTS: Final = (
     "is_many",
 )
 
+SQL_SLOTS: Final = (
+    "_compiled_from_cache",
+    "_dialect",
+    "_filters",
+    "_hash",
+    "_is_cache_direct",
+    "_is_many",
+    "_is_script",
+    "_named_parameters",
+    "_original_parameters",
+    "_pooled",
+    "_positional_parameters",
+    "_processed_state",
+    "_raw_expression",
+    "_raw_sql",
+    "_sql_param_counters",
+    "_statement_config",
+)
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ProcessedState:
@@ -167,6 +186,27 @@ class ProcessedState:
     def __hash__(self) -> int:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""
+        return (
+            ProcessedState,
+            (
+                self.compiled_sql,
+                self.execution_parameters,
+                self.parsed_expression,
+                self.operation_type,
+                self.input_named_parameters,
+                self.applied_wrap_types,
+                self.filter_hash,
+                self.parameter_fingerprint,
+                self.parameter_casts,
+                self.validation_errors,
+                self.parameter_profile,
+                self.operation_profile,
+                self.is_many,
+            ),
+        )
+
     def reset(self) -> None:
         """Reset processing state for reuse."""
         self.compiled_sql = ""
@@ -193,24 +233,7 @@ class SQL:
     and various execution modes including batch operations.
     """
 
-    __slots__ = (
-        "_compiled_from_cache",
-        "_dialect",
-        "_filters",
-        "_hash",
-        "_is_cache_direct",
-        "_is_many",
-        "_is_script",
-        "_named_parameters",
-        "_original_parameters",
-        "_pooled",
-        "_positional_parameters",
-        "_processed_state",
-        "_raw_expression",
-        "_raw_sql",
-        "_sql_param_counters",
-        "_statement_config",
-    )
+    __slots__ = SQL_SLOTS
 
     # Type annotation for mypyc compatibility
     _sql_param_counters: "dict[str, int]"
@@ -296,6 +319,21 @@ class SQL:
             Default StatementConfig instance
         """
         return get_default_config()
+
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via the public ctor with stored raw SQL, parameters, and filters."""
+        return (
+            _rebuild_sql,
+            (
+                self._raw_sql,
+                self._original_parameters,
+                tuple(self._filters),
+                self._statement_config,
+                self._is_many,
+                self._is_script,
+                dict(self._named_parameters),
+            ),
+        )
 
     def reset(self) -> None:
         """Reset SQL object for reuse in pooling scenarios."""
@@ -1780,6 +1818,34 @@ class StatementConfig:
             ))
         return self._hash_cache
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""
+        return (
+            StatementConfig,
+            (
+                self.parameter_config,
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_column_pruning,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.parameter_converter,
+                self.parameter_validator,
+                self.dialect,
+                self.execution_mode,
+                self.execution_args,
+                self.output_transformer,
+                self._user_statement_transformers,
+                self.enable_sqlcommenter,
+                self.sqlcommenter_attributes,
+                self.sqlcommenter_enable_traceparent,
+                self.sqlcommenter_enable_context,
+            ),
+        )
+
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""
         field_strs = [
@@ -1860,6 +1926,26 @@ def get_default_parameter_config() -> ParameterStyleConfig:
     return ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
     )
+
+
+def _rebuild_sql(
+    raw_sql: str,
+    original_parameters: "tuple[Any, ...]",
+    filters: "tuple[Any, ...]",
+    statement_config: "StatementConfig",
+    is_many: bool,
+    is_script: bool,
+    named_parameters: "dict[str, Any]",
+) -> "SQL":
+    """Reconstruct a SQL instance from pickled / deepcopied state."""
+    new_sql = SQL(raw_sql, *original_parameters, statement_config=statement_config, is_many=is_many)
+    if filters:
+        new_sql._filters.extend(filters)
+    if named_parameters:
+        new_sql._named_parameters.update(named_parameters)
+    if is_script:
+        new_sql._is_script = True
+    return new_sql
 
 
 Statement: TypeAlias = str | exp.Expr | SQL
