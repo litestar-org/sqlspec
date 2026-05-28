@@ -173,12 +173,12 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
     },
     "sqlspec/extensions/fastapi/providers.py": {
-        "classification": "compile_now",
-        "reason": "Framework provider surface now uses module-level callable providers with precomputed dynamic signatures.",
+        "classification": "keep_interpreted",
+        "reason": "Compiled providers crash on copy.deepcopy via mypyc native cls.__new__ -> __init__() chain; providers precompute signatures once per FilterConfig and are cached in dep_cache, so the mypyc win is boot-only.",
     },
     "sqlspec/extensions/litestar/providers.py": {
-        "classification": "compile_now",
-        "reason": "Framework provider surface now uses module-level callable providers with precomputed dynamic signatures.",
+        "classification": "keep_interpreted",
+        "reason": "Compiled providers crash on copy.deepcopy via mypyc native cls.__new__ -> __init__() chain; providers precompute signatures once per FilterConfig and are cached in dep_cache, so the mypyc win is boot-only.",
     },
     "sqlspec/migrations/commands.py": {
         "classification": "keep_interpreted",
