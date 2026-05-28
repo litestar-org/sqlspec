@@ -73,6 +73,57 @@ Used when a function is known to return only named (not positional) parameters.
 This is narrower than :data:`ConvertedParameters` and excludes ``list``, ``tuple``, and ``None``.
 """
 
+TYPED_PARAMETER_SLOTS = ("_hash", "original_type", "semantic_name", "value")
+PARAMETER_INFO_SLOTS = ("name", "ordinal", "placeholder_text", "position", "style")
+PARAMETER_STYLE_CONFIG_SLOTS = (
+    "_hash_cache",
+    "allow_mixed_parameter_styles",
+    "ast_transformer",
+    "default_execution_parameter_style",
+    "default_parameter_style",
+    "has_native_list_expansion",
+    "json_deserializer",
+    "json_serializer",
+    "needs_static_script_compilation",
+    "output_transformer",
+    "preserve_original_params_for_many",
+    "preserve_parameter_format",
+    "strict_named_parameters",
+    "supported_execution_parameter_styles",
+    "supported_parameter_styles",
+    "type_coercion_map",
+)
+DRIVER_PARAMETER_PROFILE_SLOTS = (
+    "allow_mixed_parameter_styles",
+    "custom_type_coercions",
+    "default_ast_transformer",
+    "default_dialect",
+    "default_execution_style",
+    "default_output_transformer",
+    "default_style",
+    "extras",
+    "has_native_list_expansion",
+    "json_serializer_strategy",
+    "name",
+    "needs_static_script_compilation",
+    "preserve_original_params_for_many",
+    "preserve_parameter_format",
+    "statement_kwargs",
+    "strict_named_parameters",
+    "supported_execution_styles",
+    "supported_styles",
+)
+PARAMETER_PROFILE_SLOTS = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
+PARAMETER_PROCESSING_RESULT_SLOTS = (
+    "applied_wrap_types",
+    "input_named_parameters",
+    "parameter_profile",
+    "parameters",
+    "parsed_expression",
+    "sql",
+    "sqlglot_sql",
+)
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterStyle(str, Enum):
@@ -94,7 +145,7 @@ class ParameterStyle(str, Enum):
 class TypedParameter:
     """Wrapper that preserves original parameter type information."""
 
-    __slots__ = ("_hash", "original_type", "semantic_name", "value")
+    __slots__ = TYPED_PARAMETER_SLOTS
 
     def __init__(self, value: Any, original_type: "type | None" = None, semantic_name: "str | None" = None) -> None:
         self.value = value
@@ -120,6 +171,10 @@ class TypedParameter:
     def __repr__(self) -> str:
         name_part = f", semantic_name='{self.semantic_name}'" if self.semantic_name else ""
         return f"TypedParameter({self.value!r}, original_type={self.original_type.__name__}{name_part})"
+
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via ``TypedParameter(value, original_type, semantic_name)``."""
+        return (TypedParameter, (self.value, self.original_type, self.semantic_name))
 
 
 class _TupleAdapter:
@@ -174,7 +229,7 @@ def _(value: bytes, semantic_name: "str | None" = None) -> "TypedParameter":
 class ParameterInfo:
     """Metadata describing a single detected SQL parameter."""
 
-    __slots__ = ("name", "ordinal", "placeholder_text", "position", "style")
+    __slots__ = PARAMETER_INFO_SLOTS
 
     def __init__(
         self, name: "str | None", style: "ParameterStyle", position: int, ordinal: int, placeholder_text: str
@@ -193,29 +248,16 @@ class ParameterInfo:
             ")"
         )
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via ``ParameterInfo(name, style, position, ordinal, placeholder_text)``."""
+        return (ParameterInfo, (self.name, self.style, self.position, self.ordinal, self.placeholder_text))
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterStyleConfig:
     """Configuration describing parameter behaviour for a statement."""
 
-    __slots__ = (
-        "_hash_cache",
-        "allow_mixed_parameter_styles",
-        "ast_transformer",
-        "default_execution_parameter_style",
-        "default_parameter_style",
-        "has_native_list_expansion",
-        "json_deserializer",
-        "json_serializer",
-        "needs_static_script_compilation",
-        "output_transformer",
-        "preserve_original_params_for_many",
-        "preserve_parameter_format",
-        "strict_named_parameters",
-        "supported_execution_parameter_styles",
-        "supported_parameter_styles",
-        "type_coercion_map",
-    )
+    __slots__ = PARAMETER_STYLE_CONFIG_SLOTS
 
     def __init__(
         self,
@@ -289,6 +331,33 @@ class ParameterStyleConfig:
 
         return hash(self)
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""
+        return (
+            ParameterStyleConfig,
+            (
+                self.default_parameter_style,
+                tuple(self.supported_parameter_styles),
+                (
+                    tuple(self.supported_execution_parameter_styles)
+                    if self.supported_execution_parameter_styles is not None
+                    else None
+                ),
+                self.default_execution_parameter_style,
+                dict(self.type_coercion_map),
+                self.has_native_list_expansion,
+                self.needs_static_script_compilation,
+                self.allow_mixed_parameter_styles,
+                self.preserve_parameter_format,
+                self.preserve_original_params_for_many,
+                self.output_transformer,
+                self.ast_transformer,
+                self.json_serializer,
+                self.json_deserializer,
+                self.strict_named_parameters,
+            ),
+        )
+
     def replace(self, **overrides: Any) -> "ParameterStyleConfig":
         data: dict[str, Any] = {
             "default_parameter_style": self.default_parameter_style,
@@ -347,26 +416,7 @@ class ParameterStyleConfig:
 class DriverParameterProfile:
     """Immutable adapter profile describing parameter defaults."""
 
-    __slots__ = (
-        "allow_mixed_parameter_styles",
-        "custom_type_coercions",
-        "default_ast_transformer",
-        "default_dialect",
-        "default_execution_style",
-        "default_output_transformer",
-        "default_style",
-        "extras",
-        "has_native_list_expansion",
-        "json_serializer_strategy",
-        "name",
-        "needs_static_script_compilation",
-        "preserve_original_params_for_many",
-        "preserve_parameter_format",
-        "statement_kwargs",
-        "strict_named_parameters",
-        "supported_execution_styles",
-        "supported_styles",
-    )
+    __slots__ = DRIVER_PARAMETER_PROFILE_SLOTS
 
     def __init__(
         self,
@@ -412,12 +462,38 @@ class DriverParameterProfile:
         self.default_dialect = default_dialect
         self.statement_kwargs = MappingProxyType(dict(statement_kwargs)) if statement_kwargs else MappingProxyType({})
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""
+        return (
+            DriverParameterProfile,
+            (
+                self.name,
+                self.default_style,
+                tuple(self.supported_styles),
+                self.default_execution_style,
+                tuple(self.supported_execution_styles) if self.supported_execution_styles is not None else None,
+                self.has_native_list_expansion,
+                self.preserve_parameter_format,
+                self.needs_static_script_compilation,
+                self.allow_mixed_parameter_styles,
+                self.preserve_original_params_for_many,
+                self.json_serializer_strategy,
+                dict(self.custom_type_coercions),
+                self.default_output_transformer,
+                self.default_ast_transformer,
+                dict(self.extras),
+                self.default_dialect,
+                dict(self.statement_kwargs),
+                self.strict_named_parameters,
+            ),
+        )
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProfile:
     """Aggregate metadata describing detected parameters."""
 
-    __slots__ = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
+    __slots__ = PARAMETER_PROFILE_SLOTS
     named_parameters: tuple[str, ...]
     reused_ordinals: tuple[int, ...]
     styles: tuple[str, ...]
@@ -472,20 +548,16 @@ class ParameterProfile:
     def is_empty(self) -> bool:
         return not self._parameters
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via ``ParameterProfile(parameters)`` — fully rebuilds derived state."""
+        return (ParameterProfile, (self._parameters,))
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProcessingResult:
     """Return container for parameter processing output."""
 
-    __slots__ = (
-        "applied_wrap_types",
-        "input_named_parameters",
-        "parameter_profile",
-        "parameters",
-        "parsed_expression",
-        "sql",
-        "sqlglot_sql",
-    )
+    __slots__ = PARAMETER_PROCESSING_RESULT_SLOTS
 
     def __init__(
         self,
@@ -519,6 +591,21 @@ class ParameterProcessingResult:
             return self.parameters
         msg = "ParameterProcessingResult exposes exactly two positional items"
         raise IndexError(msg)
+
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""
+        return (
+            ParameterProcessingResult,
+            (
+                self.sql,
+                self.parameters,
+                self.parameter_profile,
+                self.sqlglot_sql,
+                self.parsed_expression,
+                self.input_named_parameters,
+                self.applied_wrap_types,
+            ),
+        )
 
 
 def is_iterable_parameters(obj: Any) -> bool:

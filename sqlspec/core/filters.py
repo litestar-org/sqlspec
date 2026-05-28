@@ -154,6 +154,33 @@ class StatementFilter(ABC):
             return f"expr_{str(hash(name)).replace('-', '')[:8]}"
         return name.replace(".", "_")
 
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        """Return the positional ``__init__`` args needed to rebuild this filter.
+
+        Subclasses must override this to support :func:`copy.deepcopy` and :mod:`pickle`.
+        The default raises only when reconstruction is actually attempted, so filters
+        that never need to be copied or pickled don't pay an implementation cost.
+        """
+        msg = (
+            f"{type(self).__name__} does not implement _reconstruction_args(); "
+            "override it to support copy.deepcopy and pickle"
+        )
+        raise NotImplementedError(msg)
+
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via ``cls(*ctor_args)`` — works on mypyc native classes."""
+        return (type(self), self._reconstruction_args())
+
+    def __eq__(self, other: object) -> bool:
+        """Compare filters by their cache key for round-trip and deduplication checks."""
+        if not isinstance(other, StatementFilter):
+            return NotImplemented
+        return self.get_cache_key() == other.get_cache_key()
+
+    def __hash__(self) -> int:
+        """Hash via the canonical filter key so unhashable members are normalized."""
+        return hash(_canonical_filter_key(self))
+
     @abstractmethod
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return a cache key for this filter's configuration.
@@ -245,6 +272,9 @@ class BeforeAfterFilter(StatementFilter):
         """Return cache key for this filter configuration."""
         return ("BeforeAfterFilter", self.field_name, self.before, self.after)
 
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name, self._before, self._after)
+
 
 class OnBeforeAfterFilter(StatementFilter):
     """Filter for inclusive datetime range queries.
@@ -330,6 +360,9 @@ class OnBeforeAfterFilter(StatementFilter):
         """Return cache key for this filter configuration."""
         return ("OnBeforeAfterFilter", self.field_name, self.on_or_before, self.on_or_after)
 
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name, self._on_or_before, self._on_or_after)
+
 
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
     """Base class for collection-based filters that support ANY operations."""
@@ -404,6 +437,9 @@ class InAnyFilter(StatementFilter, ABC, Generic[T]):
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return (self._cache_key_name, self.field_name, values_tuple)
+
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name, self._values)
 
 
 class InCollectionFilter(InAnyFilter[T]):
@@ -529,6 +565,9 @@ class LimitOffsetFilter(PaginationFilter):
         """Return cache key for this filter configuration."""
         return ("LimitOffsetFilter", self.limit, self.offset)
 
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._limit, self._offset)
+
 
 class OrderByFilter(StatementFilter):
     """Filter for ORDER BY clauses.
@@ -586,6 +625,9 @@ class OrderByFilter(StatementFilter):
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("OrderByFilter", self.field_name, self.sort_order)
+
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name, self._sort_order)
 
 
 class SearchFilter(StatementFilter):
@@ -712,6 +754,9 @@ class SearchFilter(StatementFilter):
             field_names = self.field_name
         return ("SearchFilter", field_names, self.value, self.ignore_case)
 
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name, self._value, self._ignore_case)
+
 
 class NullFilter(StatementFilter):
     """Filter for IS NULL queries.
@@ -744,6 +789,9 @@ class NullFilter(StatementFilter):
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("NullFilter", self.field_name)
+
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name,)
 
 
 class NotNullFilter(StatementFilter):
@@ -778,6 +826,9 @@ class NotNullFilter(StatementFilter):
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
         return ("NotNullFilter", self.field_name)
+
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name,)
 
 
 class NotInSearchFilter(SearchFilter):
