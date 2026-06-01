@@ -476,7 +476,7 @@ def test_sql_lazy_processing_not_triggered_initially() -> None:
 
 
 @requires_interpreted
-def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
+def test_raw_sql_access_does_not_trigger_processing() -> None:
     """Test accessing raw_sql returns raw SQL without processing."""
     stmt = SQL("SELECT * FROM users")
     with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
@@ -502,14 +502,6 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
         )
         assert compiled_sql == "SELECT * FROM users"
         assert params == []
-
-
-def test_sql_property_warns_and_returns_raw_sql() -> None:
-    """Deprecated sql property preserves behavior while pointing callers to raw_sql."""
-    stmt = SQL("SELECT * FROM users")
-    with pytest.warns(DeprecationWarning, match="raw_sql"):
-        sql_result = stmt.sql
-    assert sql_result == stmt.raw_sql
 
 
 @requires_interpreted

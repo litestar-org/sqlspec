@@ -826,6 +826,10 @@ class QueryBuilder(ABC):
         if self.enable_optimization and isinstance(statement_expression, exp.Expr):
             statement_expression = self._optimize_expression(statement_expression)
 
+        target_dialect = dialect_override or safe_query.dialect
+        if self._is_oracle_dialect(target_dialect) and isinstance(statement_expression, exp.Expr):
+            statement_expression = self._unquote_identifiers_for_oracle(statement_expression)
+
         kwargs, parameters = self._extract_statement_parameters(safe_query.parameters)
 
         if config is None:

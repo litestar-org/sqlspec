@@ -1,6 +1,8 @@
 """Unit tests for build() and to_sql() dialect override parameter."""
 
 from sqlspec import sql
+from sqlspec.builder import Column
+from sqlspec.core import StatementConfig
 
 
 def test_build_with_default_dialect() -> None:
@@ -131,6 +133,24 @@ def test_build_multiple_dialect_overrides() -> None:
         assert "SELECT" in result.sql
         assert "products" in result.sql.lower()
         assert result.parameters == {"category": "electronics"}
+
+
+def test_oracle_to_statement_compile_uses_unquoted_identifiers() -> None:
+    """Oracle expression-backed statements should not quote implicit lowercase identifiers."""
+    statement_config = StatementConfig(dialect="oracle")
+    statement = (
+        sql
+        .select("content", Column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+        .from_("vector_docs_oracledb_async")
+        .order_by("distance")
+        .to_statement(statement_config)
+    )
+
+    compiled_sql, _parameters = statement.compile()
+
+    assert "FROM vector_docs_oracledb_async vector_docs_oracledb_async" in compiled_sql
+    assert '"vector_docs_oracledb_async"' not in compiled_sql
+    assert "VECTOR_DISTANCE(vector_docs_oracledb_async.embedding" in compiled_sql
 
 
 def test_to_sql_dialect_override_with_complex_query() -> None:

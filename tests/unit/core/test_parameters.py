@@ -348,10 +348,11 @@ def test_build_statement_config_helper_tuple_strategy_override() -> None:
 def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
     """Null parameters should render as literals and shrink parameter list."""
     expression = sqlglot.parse_one("INSERT INTO test VALUES ($1, $2)", dialect="postgres")
-    with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
-        (modified_expression, cleaned_params) = replace_null_parameters_with_literals(
-            expression, (42, None), dialect="postgres"
-        )
+    validator = ParameterValidator()
+    parameter_profile = ParameterProfile(validator.extract_parameters(expression.sql(dialect="postgres")))
+    (modified_expression, cleaned_params) = replace_null_parameters_with_literals(
+        expression, (42, None), dialect="postgres", parameter_profile=parameter_profile
+    )
     assert modified_expression.sql(dialect="postgres") == "INSERT INTO test VALUES ($1, NULL)"
     assert cleaned_params == (42,)
 
@@ -359,10 +360,11 @@ def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
 def test_replace_null_parameters_with_literals_named_bigquery() -> None:
     """Named parameters should inline NULL literals and drop None values."""
     expression = sqlglot.parse_one("INSERT INTO test VALUES (@id, @desc)", dialect="bigquery")
-    with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
-        (modified_expression, cleaned_params) = replace_null_parameters_with_literals(
-            expression, {"id": 1, "desc": None}, dialect="bigquery"
-        )
+    validator = ParameterValidator()
+    parameter_profile = ParameterProfile(validator.extract_parameters(expression.sql(dialect="bigquery")))
+    (modified_expression, cleaned_params) = replace_null_parameters_with_literals(
+        expression, {"id": 1, "desc": None}, dialect="bigquery", parameter_profile=parameter_profile
+    )
     assert modified_expression.sql(dialect="bigquery") == "INSERT INTO test VALUES (@id, NULL)"
     assert cleaned_params == {"id": 1}
 
@@ -405,6 +407,7 @@ def test_get_driver_profile_missing_raises() -> None:
 def test_mssql_python_parameter_profile_registered() -> None:
     """mssql_python should register a qmark default profile with pyformat support."""
     pytest.importorskip("mssql_python")
+    import_module("sqlspec.adapters.mssql_python")
 
     profile = get_driver_profile("mssql_python")
     assert profile.default_dialect == "tsql"
@@ -1143,18 +1146,11 @@ def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterP
     assert result.parameters == [19.99]
 
 
-def test_replace_null_parameters_without_profile_emits_deprecation_warning() -> None:
-    """No-profile NULL pruning warns about the fallback AST round trip."""
+def test_replace_null_parameters_without_profile_raises() -> None:
+    """No-profile NULL pruning rejects non-empty parameters."""
     expression = sqlglot.parse_one("SELECT * FROM t WHERE id = $1", dialect="postgres")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with pytest.raises(SQLSpecError, match="requires parameter_profile"):
         replace_null_parameters_with_literals(expression, (42,), dialect="postgres")
-    deprecation_warnings = [warning for warning in caught if issubclass(warning.category, DeprecationWarning)]
-    assert deprecation_warnings
-    assert any(
-        "round-trip" in str(warning.message).lower() or "parameter_profile" in str(warning.message)
-        for warning in deprecation_warnings
-    )
 
 
 def test_replace_null_parameters_with_profile_emits_no_warning() -> None:
@@ -1808,8 +1804,11 @@ def test_converted_parameters_transformers_null_pruning(processor: ParameterProc
     sql = "SELECT * FROM table WHERE id = ? AND name = ?"
     parameters = [1, None]
     expression = sqlglot.parse_one(sql, dialect="postgres")
-    with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
-        (_transformed_expr, transformed_params) = replace_null_parameters_with_literals(expression, parameters)
+    validator = ParameterValidator()
+    parameter_profile = ParameterProfile(validator.extract_parameters(sql))
+    (_transformed_expr, transformed_params) = replace_null_parameters_with_literals(
+        expression, parameters, parameter_profile=parameter_profile
+    )
     assert transformed_params is not None
     assert isinstance(transformed_params, (list, tuple))
     assert len(transformed_params) == 1

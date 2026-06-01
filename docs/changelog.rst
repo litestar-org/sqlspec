@@ -26,19 +26,63 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   ``IndexMetadata``, ``TableMetadata``, ``VersionInfo``, and
   ``VersionCacheResult`` are no longer exported from ``sqlspec.typing`` or
   ``sqlspec.core``.
-* Removed modernization compatibility shims for ``SQL.sql``,
+* Removed modernization compatibility shims and deprecated helpers. Use
+  ``SQL.raw_sql`` instead of ``SQL.sql``,
+  ``CorrelationContext.context()`` instead of
   ``sqlspec.utils.correlation.correlation_context()``,
-  ``resolve_mssql_default_schema()``, and Oracle
-  ``requires_session_callback()``. Removed deprecated
-  ``Insert.values_from_dict()``, ``Insert.values_from_dicts()``,
-  ``reset_cache_stats()``, and the no-profile
-  ``replace_null_parameters_with_literals()`` AST fallback. Use
-  ``SQL.raw_sql``, ``CorrelationContext.context()``,
-  ``MSSQL_CONFIG.default_schema``, the always-on Oracle session callback path,
-  ``Insert.values_from()``, ``Insert.values_from_many()``,
-  ``clear_all_caches()`` or ``reset_stats_only()``, and explicit
-  ``parameter_profile`` values instead.
-* Performance cleanup tightened several compatibility-sensitive contracts:
+  ``MSSQL_CONFIG.default_schema`` instead of
+  ``resolve_mssql_default_schema()``, ``Insert.values_from()`` and
+  ``Insert.values_from_many()`` instead of ``Insert.values_from_dict()`` and
+  ``Insert.values_from_dicts()``, ``clear_all_caches()`` or
+  ``reset_stats_only()`` instead of ``reset_cache_stats()`` or
+  ``SQLSpec.reset_cache_stats()``, and ``len(cache)`` instead of
+  ``LRUCache.size()``. Oracle session callbacks are now always installed, so
+  ``requires_session_callback()`` was removed.
+* Removed filter compatibility APIs. ``PaginationFilter`` and
+  ``create_filters()`` are gone, ``LimitOffsetFilter`` now subclasses
+  ``StatementFilter``, and ``OrderByFilter`` rejects invalid ``sort_order``
+  values instead of silently coercing them to ``asc``.
+* Tightened parameter and serializer helpers. ``ParameterStyleConfig.hash()``
+  was removed in favor of ``hash(config)``.
+  ``build_null_pruning_transform()`` and
+  ``replace_null_parameters_with_literals()`` no longer accept ``validator=``
+  and require an explicit ``parameter_profile`` for non-empty parameter sets.
+  ``build_time_iso_converter()`` was replaced by the shared
+  ``time_iso_convert`` helper.
+* Operation/result semantics changed. ``OperationType`` no longer includes
+  ``UNKNOWN``; parse fallback now uses ``COMMAND``. ``SQLResult`` operation
+  helpers now use canonical operation values directly, and
+  ``create_sql_result()`` exposes explicit keyword arguments instead of
+  accepting arbitrary ``**kwargs``.
+* ``SQLFileLoader.get_sql()`` now compiles named statements on lookup and
+  returns the cached ``SQL`` object for repeated normalized names until
+  ``clear_cache()`` is called.
+* Result and adapter internals dropped importable compatibility helpers:
+  ``sqlspec.core.result._io`` and its ``rows_to_pandas()`` /
+  ``rows_to_polars()`` helpers, ``ArrowOdbcTypeConverter``, ``BQ_TYPE_MAP``,
+  ``DuckDBOutputConverter.convert_duckdb_value()``,
+  ``DuckDBOutputConverter.prepare_duckdb_parameter()``, and
+  ``psqlpy.normalize_scalar_parameter()``.
+* Oracle cleanup removed ``OracleVectorType`` and the legacy
+  ``OracleOutputConverter.detect_json_storage_type()``,
+  ``OracleOutputConverter.format_datetime_for_oracle()``,
+  ``OracleOutputConverter.handle_large_lob()``, and
+  ``OracleOutputConverter.convert_oracle_value()`` helper methods.
+* Migration internals moved. ``BaseMigrationRunner`` is no longer exported from
+  ``sqlspec.migrations.base``; import it from
+  ``sqlspec.migrations.runner`` if subclassing migration runners.
+* PyMySQL no longer unwraps ``connection_config["extra"]`` into raw driver
+  keyword arguments; pass driver kwargs directly in ``connection_config``.
+* Several public implementation classes are now marked ``@final`` for
+  typing/mypyc correctness. Downstream subclasses of these classes will fail
+  static type checking. Affected classes include driver/converter internals
+  such as ``AdbcDriver``, ``AdbcExceptionHandler``,
+  ``BigQueryOutputConverter``, ``DuckDBOutputConverter``,
+  ``SpannerOutputConverter``, builder wrapper/factory types,
+  ``JoinBuilder``, ``SQLFactory``, ``OperationProfile``, ``CompiledSQL``,
+  ``SQLProcessor``, dialect config classes, ``CachedQuery``, ``QueryCache``,
+  event message/queue types, and ``MigrationVersion``.
+* Performance cleanup tightened additional compatibility-sensitive contracts:
   storage ``backend_type`` is a class attribute, parameter builders expose
   ``generate_unique_parameter_name()``, statement observers are protocol based,
   and legacy aliases such as ``BackendNotRegisteredError`` were removed.
@@ -73,6 +117,9 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   SQL-facing snake-case fields while preserving the configured field allowlist.
 * Hardened BigQuery emulator handling for simple inserts and unsupported bulk
   load paths.
+* Preserved Oracle implicit identifier casing for expression-backed query
+  builder statements, fixing ``FOR UPDATE``, vector-distance, and migration
+  tracker queries against unquoted Oracle objects.
 
 **Performance:**
 
