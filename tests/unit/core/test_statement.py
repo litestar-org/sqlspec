@@ -15,6 +15,7 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
+import logging
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -100,6 +101,15 @@ def test_statement_config_replace_invalid_attribute() -> None:
 
     with pytest.raises(TypeError, match="'invalid_attr' is not a field"):
         config.replace(invalid_attr="value")
+
+
+@pytest.mark.parametrize("private_field", ["_fingerprint_cache", "_hash_cache", "_is_frozen"])
+def test_statement_config_replace_rejects_private_fields(private_field: str) -> None:
+    """Test StatementConfig.replace() rejects private cache fields."""
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+
+    with pytest.raises(TypeError, match=f"{private_field!r} is not a field"):
+        config.replace(**{private_field: "value"})
 
 
 def test_statement_config_hash_equality() -> None:
@@ -1055,6 +1065,47 @@ def test_sql_has_errors_property_compatibility() -> None:
         validation_errors=["Error: Invalid syntax"],
     )
     assert stmt.has_errors is True
+
+
+def test_sql_has_errors_does_not_copy_validation_errors() -> None:
+    """Test SQL.has_errors reads validation state without copying."""
+
+    class CopyTrackingList(list[str]):
+        def __init__(self, values: list[str]) -> None:
+            super().__init__(values)
+            self.copy_calls = 0
+
+        def copy(self) -> list[str]:
+            self.copy_calls += 1
+            return super().copy()
+
+    errors = CopyTrackingList(["boom"])
+    stmt = SQL("SELECT * FROM invalid")
+    stmt._processed_state = ProcessedState(compiled_sql="", execution_parameters=None, validation_errors=errors)
+
+    assert stmt.has_errors is True
+    assert errors.copy_calls == 0
+
+
+def test_handle_compile_failure_no_stderr(capfd: pytest.CaptureFixture[str]) -> None:
+    """Test compile failure fallback does not write directly to stderr."""
+    stmt = SQL("SELECT 1")
+
+    state = stmt._handle_compile_failure(RuntimeError("simulated pipeline failure"))
+    captured = capfd.readouterr()
+
+    assert captured.err == ""
+    assert "simulated pipeline failure" in state.validation_errors
+
+
+def test_handle_compile_failure_logs_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """Test compile failure fallback logs through the statement logger."""
+    stmt = SQL("SELECT 1")
+
+    with caplog.at_level(logging.DEBUG, logger="sqlspec.core.statement"):
+        stmt._handle_compile_failure(RuntimeError("check debug log"))
+
+    assert any("check debug log" in record.message for record in caplog.records)
 
 
 @requires_interpreted

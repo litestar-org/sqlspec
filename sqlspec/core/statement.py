@@ -106,6 +106,29 @@ SQL_CONFIG_SLOTS: Final = (
     "_is_frozen",
 )
 
+_PUBLIC_CONFIG_FIELDS: Final = frozenset((
+    "dialect",
+    "enable_analysis",
+    "enable_caching",
+    "enable_column_pruning",
+    "enable_expression_simplification",
+    "enable_parameter_type_wrapping",
+    "enable_parsing",
+    "enable_sqlcommenter",
+    "enable_transformations",
+    "enable_validation",
+    "execution_mode",
+    "execution_args",
+    "output_transformer",
+    "sqlcommenter_attributes",
+    "sqlcommenter_enable_context",
+    "sqlcommenter_enable_traceparent",
+    "statement_transformers",
+    "parameter_config",
+    "parameter_converter",
+    "parameter_validator",
+))
+
 PROCESSED_STATE_SLOTS: Final = (
     "compiled_sql",
     "execution_parameters",
@@ -597,7 +620,9 @@ class SQL:
     @property
     def has_errors(self) -> bool:
         """Check if there are validation errors."""
-        return len(self.validation_errors) > 0
+        if self._processed_state is Empty:
+            return False
+        return bool(self._processed_state.validation_errors)
 
     def returns_rows(self) -> bool:
         """Check if statement returns rows.
@@ -860,10 +885,7 @@ class SQL:
         return state
 
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
-        import traceback
-
-        traceback.print_exc()
-        logger.debug("Processing failed, using fallback: %s", error)
+        logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
         params = self._named_parameters or self._positional_parameters
         return self._build_processed_state(
             compiled_sql=self._raw_sql,
@@ -1769,7 +1791,7 @@ class StatementConfig:
             New StatementConfig instance with updated attributes
         """
         for key in kwargs:
-            if key not in SQL_CONFIG_SLOTS:
+            if key not in _PUBLIC_CONFIG_FIELDS:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 

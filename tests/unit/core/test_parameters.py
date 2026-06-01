@@ -794,6 +794,60 @@ def test_parameter_style_config_hash() -> None:
     assert config1.hash() != config3.hash()
 
 
+def test_parameter_style_config_hash_differs_for_different_output_transformers() -> None:
+    """Test different output transformer callables produce different hashes."""
+
+    def transformer_a(sql: str, params: Any) -> tuple[str, Any]:
+        return sql, params
+
+    def transformer_b(sql: str, params: Any) -> tuple[str, Any]:
+        return sql.upper(), params
+
+    config_a = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer_a)
+    config_b = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer_b)
+
+    assert hash(config_a) != hash(config_b)
+
+
+def test_parameter_style_config_hash_same_for_same_output_transformer_reference() -> None:
+    """Test shared output transformer references produce the same hash."""
+
+    def transformer(sql: str, params: Any) -> tuple[str, Any]:
+        return sql, params
+
+    config_a = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer)
+    config_b = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer)
+
+    assert hash(config_a) == hash(config_b)
+
+
+def test_parameter_style_config_hash_differs_for_different_ast_transformers() -> None:
+    """Test different AST transformer callables produce different hashes."""
+
+    def transformer_a(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
+        return expr, params
+
+    def transformer_b(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
+        return expr, params
+
+    config_a = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer_a)
+    config_b = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer_b)
+
+    assert hash(config_a) != hash(config_b)
+
+
+def test_parameter_style_config_hash_same_for_same_ast_transformer_reference() -> None:
+    """Test shared AST transformer references produce the same hash."""
+
+    def transformer(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
+        return expr, params
+
+    config_a = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer)
+    config_b = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer)
+
+    assert hash(config_a) == hash(config_b)
+
+
 @pytest.fixture
 def validator() -> ParameterValidator:
     """Create a ParameterValidator instance."""
@@ -1202,6 +1256,41 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
 
     assert isinstance(result.parameters, list)
     assert result.parameters == [5]
+
+
+def test_coerce_parameter_types_returns_decimal_scalar(processor: "ParameterProcessor") -> None:
+    """Test scalar type coercion results are preserved."""
+    result = processor._coerce_parameter_types(Decimal("3.14"), {Decimal: float})  # pyright: ignore[reportPrivateUsage]
+
+    assert result == 3.14
+    assert isinstance(result, float)
+
+
+def test_coerce_parameter_types_returns_custom_scalar(processor: "ParameterProcessor") -> None:
+    """Test custom scalar coercion results are preserved."""
+
+    class CustomValue:
+        pass
+
+    result = processor._coerce_parameter_types(  # pyright: ignore[reportPrivateUsage]
+        CustomValue(), {CustomValue: lambda value: "coerced"}
+    )
+
+    assert result == "coerced"
+
+
+def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterProcessor") -> None:
+    """Test process() does not discard a coerced scalar parameter."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={Decimal: float},
+    )
+
+    result = processor.process("SELECT * FROM prices WHERE amount = ?", Decimal("19.99"), config, wrap_types=False)
+
+    assert result.parameters == [19.99]
 
 
 def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:

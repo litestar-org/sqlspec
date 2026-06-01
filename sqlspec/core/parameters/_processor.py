@@ -565,7 +565,7 @@ class ParameterProcessor:
             return cast("ConvertedParameters", result)
         if result_type is tuple:
             return cast("ConvertedParameters", result)
-        return None
+        return cast("ConvertedParameters", result)
 
     def _store_cached_result(
         self, cache_key: Any | None, result: "ParameterProcessingResult"
@@ -1155,6 +1155,8 @@ class ParameterProcessor:
                 return sql, dict(parameters), None
             if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
                 return sql, list(parameters), None
+            if len(param_info) == 1:
+                return sql, [parameters], None
             return sql, None, None
 
         target_style = self._select_execution_style(original_styles, config)

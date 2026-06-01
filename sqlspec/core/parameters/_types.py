@@ -41,19 +41,20 @@ ParameterPayload: TypeAlias = "ParameterMapping | ParameterSequence | object | N
 """Type alias for parameter payloads accepted by the processing pipeline."""
 
 
-ConvertedParameters: TypeAlias = "dict[str, Any] | list[Any] | tuple[Any, ...] | None"
+ConvertedParameters: TypeAlias = "dict[str, Any] | list[Any] | tuple[Any, ...] | object | None"
 """Type alias for parameters after conversion to driver-consumable format.
 
 This type represents the concrete output of parameter conversion functions.
 Unlike :data:`ParameterPayload` (which represents inputs and can include abstract
-Mapping/Sequence types), :data:`ConvertedParameters` only includes concrete types
-that database drivers can directly consume.
+Mapping/Sequence types), :data:`ConvertedParameters` includes concrete container
+types and scalar objects that database drivers can directly consume.
 
 The union includes:
 
 - ``dict[str, Any]``: Named parameters (e.g., ``{"name": "Alice", "age": 30}``)
 - ``list[Any]``: Positional parameters as list (e.g., ``["Alice", 30]``)
 - ``tuple[Any, ...]``: Positional parameters as tuple (e.g., ``("Alice", 30)``)
+- ``object``: Scalar parameter payloads after type coercion (e.g., ``3.14``)
 - ``None``: When parameters are statically embedded in SQL string
 """
 
@@ -310,12 +311,12 @@ class ParameterStyleConfig:
                 tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
                 self.has_native_list_expansion,
                 self.preserve_original_params_for_many,
-                bool(self.output_transformer),
+                id(self.output_transformer) if self.output_transformer else None,
                 self.needs_static_script_compilation,
                 self.allow_mixed_parameter_styles,
                 self.preserve_parameter_format,
                 self.strict_named_parameters,
-                bool(self.ast_transformer),
+                id(self.ast_transformer) if self.ast_transformer else None,
                 self.json_serializer,
                 self.json_deserializer,
             )
