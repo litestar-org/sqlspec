@@ -17,8 +17,6 @@ if TYPE_CHECKING:
 
     from sqlspec.dialects.spanner import Spangres, Spanner
 
-SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
-
 __all__ = (
     "VectorDistance",
     "has_vector_distance_ancestor",
@@ -31,6 +29,8 @@ __all__ = (
     "render_vector_distance_postgres",
     "vector_distance_metric",
 )
+
+SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
 
 _VECTOR_DISTANCE_META_KEY: Final[str] = "sqlspec_vector_distance_metric"
 _OperatorTransform = Callable[[Any, exp.Operator], str]

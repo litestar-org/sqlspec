@@ -34,12 +34,6 @@ from sqlspec.utils.type_guards import (
     is_expression,
     is_iterable_parameters,
 )
-
-BETWEEN_BOUND_COUNT = 2
-PAIR_LENGTH = 2
-TRIPLE_LENGTH = 3
-
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -66,6 +60,10 @@ __all__ = (
     "WhereClauseMixin",
     "WindowFunctionBuilder",
 )
+
+BETWEEN_BOUND_COUNT = 2
+PAIR_LENGTH = 2
+TRIPLE_LENGTH = 3
 
 
 def is_explicitly_quoted(identifier: Any) -> bool:

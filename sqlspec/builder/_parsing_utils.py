@@ -19,6 +19,16 @@ from sqlspec.utils.type_guards import (
     has_parameter_builder,
 )
 
+__all__ = (
+    "extract_expression",
+    "extract_sql_object_expression",
+    "parse_column_expression",
+    "parse_condition_expression",
+    "parse_order_expression",
+    "parse_table_expression",
+    "to_expression",
+)
+
 ALIAS_PARTS_EXPECTED_COUNT = 2
 
 
@@ -282,14 +292,3 @@ def to_expression(value: Any) -> exp.Expr:
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
-
-
-__all__ = (
-    "extract_expression",
-    "extract_sql_object_expression",
-    "parse_column_expression",
-    "parse_condition_expression",
-    "parse_order_expression",
-    "parse_table_expression",
-    "to_expression",
-)

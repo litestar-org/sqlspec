@@ -15,6 +15,13 @@ if TYPE_CHECKING:
 
     from sqlspec.core.statement import StatementConfig
 
+__all__ = (
+    "StatementPipelineRegistry",
+    "compile_with_pipeline",
+    "get_statement_pipeline_metrics",
+    "reset_statement_pipeline_cache",
+)
+
 DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
 DEFAULT_PIPELINE_CACHE_SIZE: Final[int] = 1000
 DEFAULT_PIPELINE_PARSE_CACHE_SIZE: Final[int] = 5000
@@ -347,11 +354,3 @@ def configure_statement_pipeline_cache(cache_size: int, parse_cache_size: int, c
 
 def get_statement_pipeline_metrics() -> "list[dict[str, Any]]":
     return _PIPELINE_REGISTRY.metrics()
-
-
-__all__ = (
-    "StatementPipelineRegistry",
-    "compile_with_pipeline",
-    "get_statement_pipeline_metrics",
-    "reset_statement_pipeline_cache",
-)
