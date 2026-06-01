@@ -14,9 +14,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
     from sqlspec.extensions.adk import MemoryRecord
 
+__all__ = ("AdbcADKMemoryStore", "AdbcADKStore")
+
 logger = get_logger("sqlspec.adapters.adbc.adk.store")
 
-__all__ = ("AdbcADKMemoryStore", "AdbcADKStore")
 
 DIALECT_POSTGRESQL: Final = "postgresql"
 DIALECT_SQLITE: Final = "sqlite"

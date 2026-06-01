@@ -6,7 +6,9 @@ JSON fixture file loading with compression support.
 """
 
 import gzip
+import importlib
 import json
+import sys
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -436,6 +438,16 @@ async def test_write_fixture_async_custom_backend(mock_registry: Mock) -> None:
     # Verify storage backend was called correctly
     mock_registry.get.assert_called_once_with("gcs://bucket", custom_param="async_value")
     mock_storage.write_text_async.assert_called_once()
+
+
+async def test_write_fixture_async_imports_without_anyio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setitem(sys.modules, "anyio", None)
+    sys.modules.pop("sqlspec.utils.fixtures", None)
+
+    fixtures_module = importlib.import_module("sqlspec.utils.fixtures")
+    await fixtures_module.write_fixture_async(str(tmp_path), "without_anyio", {"ok": True})
+
+    assert (tmp_path / "without_anyio.json").exists()
 
 
 def test_write_read_roundtrip(tmp_path: Path) -> None:

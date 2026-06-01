@@ -22,6 +22,8 @@ if not TYPE_CHECKING:
     CockroachAsyncpgConnection = PoolConnectionProxy
     CockroachAsyncpgPool = Pool
 
+__all__ = ("CockroachAsyncpgConnection", "CockroachAsyncpgPool", "CockroachAsyncpgSessionContext")
+
 
 class CockroachAsyncpgSessionContext:
     """Async context manager for CockroachDB AsyncPG sessions."""
@@ -68,6 +70,3 @@ class CockroachAsyncpgSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("CockroachAsyncpgConnection", "CockroachAsyncpgPool", "CockroachAsyncpgSessionContext")

@@ -22,9 +22,9 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
-logger = get_logger("sqlspec.events.postgres")
-
 __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_backend")
+
+logger = get_logger("sqlspec.events.postgres")
 
 
 def _extract_event_id(payload: "str | None") -> "str | None":

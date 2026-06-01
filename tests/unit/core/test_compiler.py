@@ -14,8 +14,8 @@ Test Coverage:
 8. Performance characteristics - Compilation speed and efficiency testing
 """
 
-import logging
 import inspect
+import logging
 import threading
 import time
 from collections import OrderedDict

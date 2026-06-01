@@ -94,9 +94,6 @@ from sqlspec.builder._update import Update
 from sqlspec.builder._vector_distance import VectorDistance
 from sqlspec.exceptions import SQLBuilderError
 
-# Register temporal query SQL generators on module import
-register_version_generators()
-
 __all__ = (
     "AggregateExpression",
     "AlterTable",
@@ -179,3 +176,6 @@ __all__ = (
     "sql",
     "to_expression",
 )
+
+# Register temporal query SQL generators on module import
+register_version_generators()

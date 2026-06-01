@@ -12,9 +12,10 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.pymysql.config import PyMysqlConfig
 
+__all__ = ("PyMysqlStore",)
+
 logger = get_logger("sqlspec.adapters.pymysql.litestar.store")
 
-__all__ = ("PyMysqlStore",)
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 

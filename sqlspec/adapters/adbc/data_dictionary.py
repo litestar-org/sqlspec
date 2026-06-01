@@ -23,11 +23,11 @@ from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
-__all__ = ("AdbcDataDictionary",)
-
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import SQL
+
+__all__ = ("AdbcDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

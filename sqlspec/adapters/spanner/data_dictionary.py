@@ -7,10 +7,10 @@ from mypy_extensions import mypyc_attr
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
-__all__ = ("SpannerDataDictionary",)
-
 if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
+
+__all__ = ("SpannerDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

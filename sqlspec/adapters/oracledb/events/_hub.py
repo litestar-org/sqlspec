@@ -21,9 +21,9 @@ from sqlspec.utils.logging import get_logger, log_with_context
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
-logger = get_logger("sqlspec.adapters.oracledb.events.hub")
-
 __all__ = ("OracleAsyncAQHub", "OracleSyncAQHub")
+
+logger = get_logger("sqlspec.adapters.oracledb.events.hub")
 
 
 _AQ_AVAILABLE = False

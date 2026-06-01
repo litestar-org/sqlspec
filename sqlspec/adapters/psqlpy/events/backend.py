@@ -23,10 +23,10 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
+__all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
+
 
 logger = get_logger("sqlspec.events.psqlpy")
-
-__all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
 
 def _extract_event_id(payload: "str | None") -> "str | None":

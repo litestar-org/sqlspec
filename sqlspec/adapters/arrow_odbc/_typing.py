@@ -21,6 +21,15 @@ if not TYPE_CHECKING:
     ArrowOdbcConnection = _arrow_odbc.Connection
     ArrowOdbcRawCursor = _arrow_odbc.Connection
 
+__all__ = (
+    "ArrowOdbcConnection",
+    "ArrowOdbcCursor",
+    "ArrowOdbcError",
+    "ArrowOdbcRawCursor",
+    "ArrowOdbcSessionContext",
+    "arrow_odbc_connect",
+)
+
 ArrowOdbcError: "type[Exception]" = getattr(_arrow_odbc, "Error", Exception)
 
 
@@ -84,13 +93,3 @@ class ArrowOdbcSessionContext:
             self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "ArrowOdbcConnection",
-    "ArrowOdbcCursor",
-    "ArrowOdbcError",
-    "ArrowOdbcRawCursor",
-    "ArrowOdbcSessionContext",
-    "arrow_odbc_connect",
-)

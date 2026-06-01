@@ -13,11 +13,12 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.memory._types import MemoryRecord
 
+__all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
+
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.memory.store")
 
-__all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")

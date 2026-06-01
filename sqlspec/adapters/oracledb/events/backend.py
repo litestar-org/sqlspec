@@ -14,6 +14,8 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
+__all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
+
 _ORACLEDB_AVAILABLE = False
 
 try:  # pragma: no cover - optional dependency path
@@ -39,7 +41,6 @@ DB_TYPE_JSON: Any = _DB_TYPE_JSON
 
 logger = get_logger("sqlspec.events.oracle")
 
-__all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
 
 _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
 _DEFAULT_VISIBILITY: "int | None"

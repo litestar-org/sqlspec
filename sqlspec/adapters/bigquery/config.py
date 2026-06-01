@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
     from sqlspec.core import StatementConfig
 
+__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
+
 
 class BigQueryConnectionParams(TypedDict):
     """Standard BigQuery connection parameters.
@@ -142,9 +144,6 @@ class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
 
     def release_connection(self, _conn: "BigQueryConnection", **kwargs: Any) -> None:
         return None
-
-
-__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
 
 
 class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):

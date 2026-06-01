@@ -35,6 +35,7 @@ from sqlspec.utils.type_guards import (
     has_expressions_attribute,
     has_parent_attribute,
     has_this_attribute,
+    is_async_readable,
     is_attrs_instance,
     is_attrs_instance_with_field,
     is_attrs_instance_without_field,
@@ -58,6 +59,7 @@ from sqlspec.utils.type_guards import (
     is_pydantic_model,
     is_pydantic_model_with_field,
     is_pydantic_model_without_field,
+    is_readable,
     is_schema,
     is_schema_or_dict,
     is_schema_or_dict_with_field,
@@ -154,6 +156,28 @@ class MockValueWrapper:
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+
+class SyncReadable:
+    def read(self) -> str:
+        return "sync"
+
+
+class AsyncReadable:
+    async def read(self) -> str:
+        return "async"
+
+
+def test_is_readable_accepts_sync_read_method() -> None:
+    assert is_readable(SyncReadable()) is True
+
+
+def test_is_async_readable_rejects_sync_read_method() -> None:
+    assert is_async_readable(SyncReadable()) is False
+
+
+def test_is_async_readable_accepts_async_read_method() -> None:
+    assert is_async_readable(AsyncReadable()) is True
 
 
 def test_is_dataclass_instance_with_valid_dataclass() -> None:

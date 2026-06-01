@@ -20,9 +20,10 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
+__all__ = ("AsyncTableEventQueue", "SyncTableEventQueue", "build_queue_backend")
+
 logger = get_logger("sqlspec.events.queue")
 
-__all__ = ("AsyncTableEventQueue", "SyncTableEventQueue", "build_queue_backend")
 
 _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"

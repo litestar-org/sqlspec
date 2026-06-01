@@ -5,11 +5,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
-
 __all__ = (
     "ANY_AUDIT_SEAMS",
     "CONFIG_RUNTIME_BOUNDARIES",
@@ -23,6 +18,11 @@ __all__ = (
     "collect_serializer_bridges",
     "load_mypyc_patterns",
 )
+
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
 
 
 CONFIG_RUNTIME_BOUNDARIES: tuple[dict[str, Any], ...] = (

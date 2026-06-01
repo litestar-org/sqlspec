@@ -8,11 +8,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
-
 __all__ = (
     "HOT_SURFACE_CLASSIFICATIONS",
     "build_inventory",
@@ -23,6 +18,12 @@ __all__ = (
     "load_mypyc_patterns",
     "main",
 )
+
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
 
 CANDIDATE_CLASSIFICATIONS = {"compile_now", "helper_split_first", "prove_separately"}
 SURFACE_ORDER = ("compiled", "candidate", "keep_interpreted", "interpreted")

@@ -67,13 +67,6 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters, VersionInfo
 
-
-logger = get_logger(__name__)
-
-# Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
-# on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
-# core.apply_driver_features and read at the dispatch_execute call sites below.
-
 __all__ = (
     "OracleAsyncDriver",
     "OracleAsyncExceptionHandler",
@@ -82,6 +75,14 @@ __all__ = (
     "OracleSyncExceptionHandler",
     "OracleSyncSessionContext",
 )
+
+
+logger = get_logger(__name__)
+
+# Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
+# on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
+# core.apply_driver_features and read at the dispatch_execute call sites below.
+
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: int = 23

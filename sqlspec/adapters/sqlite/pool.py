@@ -17,6 +17,8 @@ from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
+__all__ = ("SqliteConnectionPool",)
+
 
 class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
@@ -30,8 +32,6 @@ class SqliteConnectionParams(TypedDict):
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
 
-
-__all__ = ("SqliteConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlite"

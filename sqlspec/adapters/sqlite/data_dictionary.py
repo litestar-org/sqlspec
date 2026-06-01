@@ -10,10 +10,10 @@ from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_featur
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
-__all__ = ("SqliteDataDictionary",)
-
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
+
+__all__ = ("SqliteDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

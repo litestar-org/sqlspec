@@ -24,9 +24,9 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
-logger = get_logger("sqlspec.adapters.asyncpg.events.hub")
-
 __all__ = ("AsyncpgListenerHub",)
+
+logger = get_logger("sqlspec.adapters.asyncpg.events.hub")
 
 
 class AsyncpgListenerHub:

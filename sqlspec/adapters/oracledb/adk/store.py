@@ -25,8 +25,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
     from sqlspec.extensions.adk import MemoryRecord
 
-logger = get_logger("sqlspec.adapters.oracledb.adk.store")
-
 __all__ = (
     "JSONStorageType",
     "OracleAsyncADKMemoryStore",
@@ -36,6 +34,9 @@ __all__ = (
     "coerce_decimal_values",
     "storage_type_from_version",
 )
+
+logger = get_logger("sqlspec.adapters.oracledb.adk.store")
+
 
 ORACLE_TABLE_NOT_FOUND_ERROR: Final = 942
 ORACLE_MIN_JSON_NATIVE_VERSION: Final = 21

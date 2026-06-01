@@ -50,10 +50,10 @@ if TYPE_CHECKING:
         VersionInfo,
     )
 
+__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectionContext", "SyncPoolSessionFactory")
+
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
-
-__all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectionContext", "SyncPoolSessionFactory")
 
 
 EMPTY_FILTERS: Final["list[StatementFilter]"] = []

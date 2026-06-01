@@ -25,6 +25,32 @@ from sqlspec.core import (
 )
 from sqlspec.driver import ExecutionResult
 
+__all__ = (
+    "aiosqlite_async_driver",
+    "cache_config_disabled",
+    "cache_config_enabled",
+    "cache_statistics_tracker",
+    "complex_sql_with_joins",
+    "mock_lru_cache",
+    "parameter_style_config_advanced",
+    "parameter_style_config_basic",
+    "reset_cache_state",
+    "reset_global_state",
+    "sample_delete_sql",
+    "sample_insert_sql",
+    "sample_parameters_mixed",
+    "sample_parameters_named",
+    "sample_parameters_positional",
+    "sample_select_sql",
+    "sample_update_sql",
+    "sql_with_typed_parameters",
+    "sqlite_sync_driver",
+    "statement_config_mysql",
+    "statement_config_postgres",
+    "statement_config_sqlite",
+    "test_isolation",
+)
+
 
 class TestSqliteDriver(SqliteDriver):
     """Test-friendly SQLite driver that allows patching."""
@@ -62,33 +88,6 @@ async def aiosqlite_async_driver() -> AsyncGenerator[TestAiosqliteDriver, None]:
         yield TestAiosqliteDriver(conn)
     finally:
         await conn.close()
-
-
-__all__ = (
-    "aiosqlite_async_driver",
-    "cache_config_disabled",
-    "cache_config_enabled",
-    "cache_statistics_tracker",
-    "complex_sql_with_joins",
-    "mock_lru_cache",
-    "parameter_style_config_advanced",
-    "parameter_style_config_basic",
-    "reset_cache_state",
-    "reset_global_state",
-    "sample_delete_sql",
-    "sample_insert_sql",
-    "sample_parameters_mixed",
-    "sample_parameters_named",
-    "sample_parameters_positional",
-    "sample_select_sql",
-    "sample_update_sql",
-    "sql_with_typed_parameters",
-    "sqlite_sync_driver",
-    "statement_config_mysql",
-    "statement_config_postgres",
-    "statement_config_sqlite",
-    "test_isolation",
-)
 
 
 @pytest.fixture

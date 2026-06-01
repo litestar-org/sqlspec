@@ -25,8 +25,6 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol, DriverT
     from sqlspec.typing import ConnectionT, PoolT
 
-SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
-
 __all__ = (
     "SESSION_TERMINUS_ASGI_EVENTS",
     "autocommit_handler_maker",
@@ -36,6 +34,8 @@ __all__ = (
     "pool_provider_maker",
     "session_provider_maker",
 )
+
+SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 
 
 def manual_handler_maker(

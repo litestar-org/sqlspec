@@ -9,11 +9,11 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
+__all__ = ("SQLiteStore",)
+
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
-
-__all__ = ("SQLiteStore",)
 
 
 class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):

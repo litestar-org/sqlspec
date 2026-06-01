@@ -57,6 +57,22 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
 
+__all__ = (
+    "CORRELATION_STATE_KEY",
+    "DEFAULT_COMMIT_MODE",
+    "DEFAULT_CONNECTION_KEY",
+    "DEFAULT_CORRELATION_HEADER",
+    "DEFAULT_POOL_KEY",
+    "DEFAULT_SESSION_KEY",
+    "TRACE_CONTEXT_FALLBACK_HEADERS",
+    "CommitMode",
+    "CorrelationMiddleware",
+    "PluginConfigState",
+    "SQLSpecPlugin",
+    "_OffsetPaginationSchemaPlugin",
+    "not_found_error_handler",
+)
+
 logger = get_logger("sqlspec.extensions.litestar")
 
 CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
@@ -77,22 +93,6 @@ TRACE_CONTEXT_FALLBACK_HEADERS: tuple[str, ...] = (
 )
 CORRELATION_STATE_KEY = "sqlspec_correlation_id"
 _LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
-
-__all__ = (
-    "CORRELATION_STATE_KEY",
-    "DEFAULT_COMMIT_MODE",
-    "DEFAULT_CONNECTION_KEY",
-    "DEFAULT_CORRELATION_HEADER",
-    "DEFAULT_POOL_KEY",
-    "DEFAULT_SESSION_KEY",
-    "TRACE_CONTEXT_FALLBACK_HEADERS",
-    "CommitMode",
-    "CorrelationMiddleware",
-    "PluginConfigState",
-    "SQLSpecPlugin",
-    "_OffsetPaginationSchemaPlugin",
-    "not_found_error_handler",
-)
 
 
 def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundError) -> NoReturn:

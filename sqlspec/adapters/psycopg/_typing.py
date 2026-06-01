@@ -32,6 +32,22 @@ if not TYPE_CHECKING:
     PsycopgSyncRawCursor = Cursor
     PsycopgAsyncRawCursor = AsyncCursor
 
+__all__ = (
+    "PsycopgAsyncConnection",
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncRawCursor",
+    "PsycopgAsyncSessionContext",
+    "PsycopgComposed",
+    "PsycopgDictRow",
+    "PsycopgIdentifier",
+    "PsycopgPipelineDriver",
+    "PsycopgSQL",
+    "PsycopgSyncConnection",
+    "PsycopgSyncCursor",
+    "PsycopgSyncRawCursor",
+    "PsycopgSyncSessionContext",
+)
+
 
 class PsycopgSyncCursor:
     """Context manager for PostgreSQL psycopg cursor management."""
@@ -199,20 +215,3 @@ class PsycopgAsyncSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "PsycopgAsyncConnection",
-    "PsycopgAsyncCursor",
-    "PsycopgAsyncRawCursor",
-    "PsycopgAsyncSessionContext",
-    "PsycopgComposed",
-    "PsycopgDictRow",
-    "PsycopgIdentifier",
-    "PsycopgPipelineDriver",
-    "PsycopgSQL",
-    "PsycopgSyncConnection",
-    "PsycopgSyncCursor",
-    "PsycopgSyncRawCursor",
-    "PsycopgSyncSessionContext",
-)

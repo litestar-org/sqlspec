@@ -17,9 +17,9 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk.store import BaseAsyncADKStore
     from sqlspec.migrations.context import MigrationContext
 
-logger = get_logger("sqlspec.migrations.adk.tables")
-
 __all__ = ("down", "up")
+
+logger = get_logger("sqlspec.migrations.adk.tables")
 
 
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKStore]":

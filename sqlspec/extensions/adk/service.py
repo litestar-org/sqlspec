@@ -21,9 +21,9 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.adk.store import BaseAsyncADKStore
 
-logger = get_logger("sqlspec.extensions.adk.service")
-
 __all__ = ("SQLSpecSessionService",)
+
+logger = get_logger("sqlspec.extensions.adk.service")
 
 
 class SQLSpecSessionService(BaseSessionService):

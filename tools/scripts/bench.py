@@ -29,22 +29,6 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.schema import transform_dict_keys
 from sqlspec.utils.text import camelize
 
-# Pool leak detection helper
-_leaked_pools: list[str] = []
-
-
-def _is_compiled() -> bool:
-    """Detect if sqlspec driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
-
 __all__ = (
     "main",
     "print_benchmark_table",
@@ -98,6 +82,22 @@ __all__ = (
     "sqlspec_sqlite_thin_path_stress",
     "sqlspec_sqlite_write_heavy",
 )
+
+# Pool leak detection helper
+_leaked_pools: list[str] = []
+
+
+def _is_compiled() -> bool:
+    """Detect if sqlspec driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 
 ROWS_TO_INSERT = 10_000

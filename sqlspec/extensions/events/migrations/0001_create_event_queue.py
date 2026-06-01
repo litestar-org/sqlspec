@@ -11,9 +11,9 @@ if TYPE_CHECKING:
     from sqlspec.extensions.events._store import BaseEventQueueStore
     from sqlspec.migrations.context import MigrationContext
 
-logger = get_logger("sqlspec.events.migrations.queue")
-
 __all__ = ("down", "up")
+
+logger = get_logger("sqlspec.events.migrations.queue")
 
 
 async def up(context: "MigrationContext | None" = None) -> "list[str]":

@@ -34,6 +34,7 @@ from sqlspec.utils.type_guards import (
     is_expression,
     is_iterable_parameters,
 )
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 

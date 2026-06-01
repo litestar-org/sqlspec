@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
+__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
+
 
 class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
@@ -67,9 +69,6 @@ class SqliteDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[SqliteConnection], None]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
-
-
-__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
 
 
 class SqliteConnectionContext(SyncPoolConnectionContext):

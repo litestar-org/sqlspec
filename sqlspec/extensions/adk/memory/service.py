@@ -20,9 +20,9 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 
-logger = get_logger("sqlspec.extensions.adk.memory.service")
-
 __all__ = ("SQLSpecMemoryService", "SQLSpecSyncMemoryService")
+
+logger = get_logger("sqlspec.extensions.adk.memory.service")
 
 
 class SQLSpecMemoryService(BaseMemoryService):

@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
     from sqlspec.core import StatementConfig
 
+__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
+
 
 class PsqlpyConnectionParams(TypedDict):
     """Psqlpy connection parameters."""
@@ -142,9 +144,6 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         if self._ctx is not None:
             await self._ctx.__aexit__(None, None, None)
             self._ctx = None
-
-
-__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 
 class PsqlpyConnectionContext(AsyncPoolConnectionContext):

@@ -13,6 +13,54 @@ if OBSTORE_INSTALLED:
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
 
+class _FakeBytes:
+    def to_bytes(self) -> bytes:
+        return b"parquet"
+
+
+class _FakeGetResult:
+    def bytes(self) -> _FakeBytes:
+        return _FakeBytes()
+
+    async def bytes_async(self) -> _FakeBytes:
+        return _FakeBytes()
+
+
+class _FakeStore:
+    def __init__(self) -> None:
+        self.get_paths: list[str] = []
+        self.put_paths: list[str] = []
+
+    def get(self, path: str) -> _FakeGetResult:
+        self.get_paths.append(path)
+        return _FakeGetResult()
+
+    def put(self, path: str, data: bytes) -> None:
+        self.put_paths.append(path)
+
+    async def get_async(self, path: str) -> _FakeGetResult:
+        self.get_paths.append(path)
+        return _FakeGetResult()
+
+    async def put_async(self, path: str, data: bytes) -> None:
+        self.put_paths.append(path)
+
+
+class _FakeParquet:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    def read_table(self, source: Any, **kwargs: Any) -> Any:
+        return self.result
+
+    def write_table(self, table: Any, sink: Any, **kwargs: Any) -> None:
+        sink.write(b"parquet")
+
+
+class _FakeArrowTable:
+    schema: tuple[Any, ...] = ()
+
+
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_init_with_file_uri(tmp_path: Path) -> None:
     """Test initialization with file:// URI."""
@@ -208,6 +256,39 @@ def test_write_and_read_arrow(tmp_path: Path) -> None:
     assert result.equals(table)
 
 
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_read_arrow_sync_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    expected_table = object()
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(expected_table))
+
+    result = store.read_arrow_sync("key")
+
+    assert result is expected_table
+    assert fake_store.get_paths == ["mybase/key"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_write_arrow_sync_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow", lambda: object())
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(object()))
+
+    store.write_arrow_sync("key", _FakeArrowTable())
+
+    assert fake_store.put_paths == ["mybase/key"]
+
+
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
 def test_stream_arrow(tmp_path: Path) -> None:
     """Test stream Arrow record batches."""
@@ -401,6 +482,38 @@ async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     result = await store.read_arrow_async("async_test_data.parquet")
 
     assert result.equals(table)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_read_arrow_async_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    expected_table = object()
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(expected_table))
+
+    result = await store.read_arrow_async("key")
+
+    assert result is expected_table
+    assert fake_store.get_paths == ["mybase/key"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_write_arrow_async_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(object()))
+
+    await store.write_arrow_async("key", _FakeArrowTable())
+
+    assert fake_store.put_paths == ["mybase/key"]
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")

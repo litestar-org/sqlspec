@@ -39,6 +39,15 @@ if not TYPE_CHECKING:
     AiomysqlDictCursor = _AiomysqlDictCursor
     AiomysqlPool = _AiomysqlPool
 
+__all__ = (
+    "AiomysqlConnection",
+    "AiomysqlCursor",
+    "AiomysqlDictCursor",
+    "AiomysqlPool",
+    "AiomysqlRawCursor",
+    "AiomysqlSessionContext",
+)
+
 
 class AiomysqlCursor:
     """Context manager for aiomysql cursor operations.
@@ -125,13 +134,3 @@ class AiomysqlSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "AiomysqlConnection",
-    "AiomysqlCursor",
-    "AiomysqlDictCursor",
-    "AiomysqlPool",
-    "AiomysqlRawCursor",
-    "AiomysqlSessionContext",
-)

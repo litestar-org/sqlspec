@@ -25,9 +25,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyListener
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
+__all__ = ("PsqlpyListenerHub",)
+
 logger = get_logger("sqlspec.adapters.psqlpy.events.hub")
 
-__all__ = ("PsqlpyListenerHub",)
 
 _PSQLPY_CALLBACK_MIN_ARGS = 3
 

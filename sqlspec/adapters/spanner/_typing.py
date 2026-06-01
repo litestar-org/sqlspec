@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     SpannerConnection = Any
 
+__all__ = ("SpannerConnection", "SpannerSessionContext", "SpannerSyncCursor")
+
 
 class SpannerSyncCursor:
     """Context manager that yields the active Spanner connection."""
@@ -97,6 +99,3 @@ class SpannerSessionContext:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
-
-
-__all__ = ("SpannerConnection", "SpannerSessionContext", "SpannerSyncCursor")

@@ -17,8 +17,6 @@ if TYPE_CHECKING:
     from google.adk.sessions import Session
     from google.genai import types
 
-logger = get_logger("sqlspec.extensions.adk.memory.converters")
-
 __all__ = (
     "event_to_memory_record",
     "extract_content_text",
@@ -27,6 +25,8 @@ __all__ = (
     "records_to_memory_entries",
     "session_to_memory_records",
 )
+
+logger = get_logger("sqlspec.extensions.adk.memory.converters")
 
 
 def extract_content_text(content: "types.Content") -> str:

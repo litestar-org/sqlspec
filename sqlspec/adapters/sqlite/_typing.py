@@ -25,6 +25,8 @@ if not TYPE_CHECKING:
     SqliteConnection = _SqliteConnection
     SqliteRawCursor = sqlite3.Cursor
 
+__all__ = ("SqliteConnection", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")
+
 
 class SqliteCursor:
     """Context manager for SQLite cursor management.
@@ -118,6 +120,3 @@ class SqliteSessionContext:
             self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("SqliteConnection", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")

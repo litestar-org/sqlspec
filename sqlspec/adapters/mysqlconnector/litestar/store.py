@@ -12,9 +12,10 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
 
+__all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorSyncStore")
+
 logger = get_logger("sqlspec.adapters.mysqlconnector.litestar.store")
 
-__all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorSyncStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 

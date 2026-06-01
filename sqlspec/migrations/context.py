@@ -14,9 +14,9 @@ from sqlspec.utils.type_guards import has_statement_config_factory
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
-logger = get_logger("sqlspec.migrations.context")
-
 __all__ = ("MigrationContext",)
+
+logger = get_logger("sqlspec.migrations.context")
 
 
 def _normalize_dialect_name(dialect: Any | None) -> "str | None":

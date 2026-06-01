@@ -27,9 +27,10 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore
 
+__all__ = ("SQLSpecArtifactService",)
+
 logger = get_logger("sqlspec.extensions.adk.artifact.service")
 
-__all__ = ("SQLSpecArtifactService",)
 
 # Matches path traversal and absolute path components
 _UNSAFE_PATH_CHARS = re.compile(r"(?:^|/)\.\.(?:/|$)|[\x00]")

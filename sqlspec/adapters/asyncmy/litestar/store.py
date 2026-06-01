@@ -9,9 +9,10 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 
+__all__ = ("AsyncmyStore",)
+
 logger = get_logger("sqlspec.adapters.asyncmy.litestar.store")
 
-__all__ = ("AsyncmyStore",)
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 

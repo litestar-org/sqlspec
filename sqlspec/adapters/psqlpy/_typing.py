@@ -24,6 +24,8 @@ if not TYPE_CHECKING:
     PsqlpyConnection = _PsqlpyConnection
     PsqlpyListener = _PsqlpyListener
 
+__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyListener", "PsqlpySessionContext")
+
 
 class PsqlpyCursor:
     """Context manager for psqlpy cursor management."""
@@ -116,6 +118,3 @@ class PsqlpySessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyListener", "PsqlpySessionContext")

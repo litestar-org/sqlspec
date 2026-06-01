@@ -25,9 +25,9 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.data_dictionary._types import DialectConfig
 
-logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
-
 __all__ = ("OracleVersionInfo", "OracledbAsyncDataDictionary", "OracledbSyncDataDictionary")
+
+logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
 
 
 class OracleVersionInfo(VersionInfo):

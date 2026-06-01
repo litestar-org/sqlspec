@@ -15,6 +15,8 @@ from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
+__all__ = ("DuckDBConnectionPool",)
+
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "duckdb"
@@ -24,8 +26,6 @@ DEFAULT_MAX_POOL: Final[int] = 4
 POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
-
-__all__ = ("DuckDBConnectionPool",)
 
 
 class DuckDBConnectionPool:

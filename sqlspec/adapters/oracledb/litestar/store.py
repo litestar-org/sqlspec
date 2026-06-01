@@ -10,10 +10,10 @@ from sqlspec.utils.type_guards import is_async_readable, is_readable
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
+__all__ = ("OracleAsyncStore", "OracleSyncStore")
+
 
 ORACLE_SMALL_BLOB_LIMIT = 32000
-
-__all__ = ("OracleAsyncStore", "OracleSyncStore")
 
 
 def _coerce_bytes_payload(value: object) -> bytes:

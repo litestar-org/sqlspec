@@ -10,9 +10,9 @@ if TYPE_CHECKING:
     from sqlspec.extensions.litestar.store import BaseSQLSpecStore
     from sqlspec.migrations.context import MigrationContext
 
-logger = get_logger("sqlspec.migrations.litestar.session")
-
 __all__ = ("down", "up")
+
+logger = get_logger("sqlspec.migrations.litestar.session")
 
 
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseSQLSpecStore]":

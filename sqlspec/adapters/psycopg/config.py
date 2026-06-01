@@ -41,6 +41,16 @@ if TYPE_CHECKING:
 
     from sqlspec.core import StatementConfig
 
+__all__ = (
+    "PsycopgAsyncConfig",
+    "PsycopgAsyncCursor",
+    "PsycopgConnectionParams",
+    "PsycopgDriverFeatures",
+    "PsycopgPoolParams",
+    "PsycopgSyncConfig",
+    "PsycopgSyncCursor",
+)
+
 
 class PsycopgConnectionParams(TypedDict):
     """Psycopg connection parameters."""
@@ -118,17 +128,6 @@ class PsycopgDriverFeatures(TypedDict):
     on_connection_create: NotRequired["Callable[..., Any]"]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
-
-
-__all__ = (
-    "PsycopgAsyncConfig",
-    "PsycopgAsyncCursor",
-    "PsycopgConnectionParams",
-    "PsycopgDriverFeatures",
-    "PsycopgPoolParams",
-    "PsycopgSyncConfig",
-    "PsycopgSyncCursor",
-)
 
 
 class PsycopgSyncConnectionContext(SyncPoolConnectionContext):

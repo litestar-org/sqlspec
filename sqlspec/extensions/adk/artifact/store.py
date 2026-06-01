@@ -21,11 +21,12 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.artifact._types import ArtifactRecord
 
+__all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
+
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.artifact.store")
 
-__all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63

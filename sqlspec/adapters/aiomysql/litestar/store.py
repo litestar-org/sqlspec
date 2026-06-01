@@ -12,9 +12,10 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 
+__all__ = ("AiomysqlStore",)
+
 logger = get_logger("sqlspec.adapters.aiomysql.litestar.store")
 
-__all__ = ("AiomysqlStore",)
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 

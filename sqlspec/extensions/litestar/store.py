@@ -14,13 +14,14 @@ if TYPE_CHECKING:
 
     from typing_extensions import Self
 
+__all__ = ("BaseSQLSpecStore",)
+
 
 ConfigT = TypeVar("ConfigT")
 
 
 logger = get_logger("sqlspec.extensions.litestar.store")
 
-__all__ = ("BaseSQLSpecStore",)
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63

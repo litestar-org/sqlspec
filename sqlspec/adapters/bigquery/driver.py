@@ -59,9 +59,9 @@ if TYPE_CHECKING:
     )
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-logger = get_logger(__name__)
-
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
+
+logger = get_logger(__name__)
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):

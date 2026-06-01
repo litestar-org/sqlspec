@@ -11,10 +11,10 @@ from sqlspec.data_dictionary.dialects.bigquery import (
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
-__all__ = ("BigQueryDataDictionary",)
-
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
+
+__all__ = ("BigQueryDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

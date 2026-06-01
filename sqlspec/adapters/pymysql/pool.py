@@ -17,6 +17,8 @@ from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
+__all__ = ("PyMysqlConnectionPool",)
+
 
 class PyMysqlConnectionParams(TypedDict):
     """PyMySQL connection parameters."""
@@ -39,8 +41,6 @@ class PyMysqlConnectionParams(TypedDict):
     sql_mode: NotRequired[str]
     extra: NotRequired["dict[str, Any]"]
 
-
-__all__ = ("PyMysqlConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "pymysql"

@@ -22,9 +22,9 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.data_dictionary._types import DialectConfig
 
-logger = get_logger("sqlspec.adapters.mssql_python.data_dictionary")
-
 __all__ = ("MssqlPythonAsyncDataDictionary", "MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
+
+logger = get_logger("sqlspec.adapters.mssql_python.data_dictionary")
 
 
 class MssqlVersionInfo(VersionInfo):

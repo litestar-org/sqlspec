@@ -24,8 +24,6 @@ if TYPE_CHECKING:
     from sqlspec.extensions.events._protocols import AsyncEventHandler, SyncEventHandler
     from sqlspec.observability import ObservabilityRuntime
 
-logger = get_logger("sqlspec.events.channel")
-
 __all__ = (
     "AsyncEventChannel",
     "AsyncEventListener",
@@ -35,6 +33,9 @@ __all__ = (
     "load_native_backend",
     "resolve_poll_interval",
 )
+
+logger = get_logger("sqlspec.events.channel")
+
 
 _ADAPTER_MODULE_PARTS = 3
 

@@ -23,8 +23,6 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
-logger = get_logger("sqlspec.events.psycopg")
-
 __all__ = (
     "PsycopgAsyncEventsBackend",
     "PsycopgAsyncHybridEventsBackend",
@@ -32,6 +30,8 @@ __all__ = (
     "PsycopgSyncHybridEventsBackend",
     "create_event_backend",
 )
+
+logger = get_logger("sqlspec.events.psycopg")
 
 
 def _extract_event_id(payload: "str | None") -> "str | None":

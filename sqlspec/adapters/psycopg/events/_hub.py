@@ -23,9 +23,10 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
+__all__ = ("PsycopgAsyncListenerHub", "PsycopgSyncListenerHub")
+
 logger = get_logger("sqlspec.adapters.psycopg.events.hub")
 
-__all__ = ("PsycopgAsyncListenerHub", "PsycopgSyncListenerHub")
 
 _PUMP_TIMEOUT = 0.05
 _PUMP_BATCH = 32

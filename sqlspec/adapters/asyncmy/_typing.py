@@ -33,6 +33,8 @@ if not TYPE_CHECKING:
     AsyncmyConnection = Connection
     AsyncmyRawCursor = _AsyncmyCursor
 
+__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyRawCursor", "AsyncmySessionContext")
+
 
 class AsyncmyCursor:
     """Context manager for AsyncMy cursor operations.
@@ -108,6 +110,3 @@ class AsyncmySessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyRawCursor", "AsyncmySessionContext")

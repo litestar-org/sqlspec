@@ -56,6 +56,31 @@ if not TYPE_CHECKING:
     OracleSyncRawCursor = Cursor
     OracleAsyncRawCursor = AsyncCursor
 
+__all__ = (
+    "AQMSG_INVISIBLE",
+    "AQMSG_PAYLOAD_TYPE_JSON",
+    "AQMSG_VISIBLE",
+    "DB_TYPE_BLOB",
+    "DB_TYPE_CLOB",
+    "DB_TYPE_JSON",
+    "DB_TYPE_RAW",
+    "DB_TYPE_VECTOR",
+    "AQDequeueOptions",
+    "DatabaseError",
+    "OracleAsyncConnection",
+    "OracleAsyncConnectionPool",
+    "OracleAsyncCursor",
+    "OracleAsyncRawCursor",
+    "OracleAsyncSessionContext",
+    "OraclePipelineDriver",
+    "OracleSyncConnection",
+    "OracleSyncConnectionPool",
+    "OracleSyncCursor",
+    "OracleSyncRawCursor",
+    "OracleSyncSessionContext",
+    "OracleVectorType",
+)
+
 AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
 AQMSG_VISIBLE: int | None = getattr(_oracledb, "AQMSG_VISIBLE", None)
 AQMSG_INVISIBLE: int | None = getattr(_oracledb, "AQMSG_INVISIBLE", None)
@@ -230,29 +255,3 @@ class OracleAsyncSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "AQMSG_INVISIBLE",
-    "AQMSG_PAYLOAD_TYPE_JSON",
-    "AQMSG_VISIBLE",
-    "DB_TYPE_BLOB",
-    "DB_TYPE_CLOB",
-    "DB_TYPE_JSON",
-    "DB_TYPE_RAW",
-    "DB_TYPE_VECTOR",
-    "AQDequeueOptions",
-    "DatabaseError",
-    "OracleAsyncConnection",
-    "OracleAsyncConnectionPool",
-    "OracleAsyncCursor",
-    "OracleAsyncRawCursor",
-    "OracleAsyncSessionContext",
-    "OraclePipelineDriver",
-    "OracleSyncConnection",
-    "OracleSyncConnectionPool",
-    "OracleSyncCursor",
-    "OracleSyncRawCursor",
-    "OracleSyncSessionContext",
-    "OracleVectorType",
-)

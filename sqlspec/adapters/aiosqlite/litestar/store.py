@@ -8,11 +8,11 @@ from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 
+__all__ = ("AiosqliteStore",)
+
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
-
-__all__ = ("AiosqliteStore",)
 
 
 class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):

@@ -9,9 +9,10 @@ from sqlspec.exceptions import EventChannelError
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
 
+__all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
+
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
-__all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
