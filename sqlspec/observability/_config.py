@@ -3,6 +3,8 @@
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from sqlspec.observability._dispatcher import LifecycleHook
+
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from sqlspec.config import LifecycleConfig
     from sqlspec.observability._formatters._base import CloudLogFormatter
@@ -17,8 +19,6 @@ __all__ = (
     "StatementObserver",
     "TelemetryConfig",
 )
-
-LifecycleHook = Callable[[dict[str, Any]], None]
 
 
 class StatementObserver(Protocol):
@@ -328,12 +328,9 @@ def _merge_sampling(base: "SamplingConfig | None", override: "SamplingConfig | N
     if base is None:
         return override.copy()
     merged = base.copy()
-    if override.sample_rate != 1.0:
-        merged.sample_rate = override.sample_rate
-    if override.deterministic:
-        merged.deterministic = override.deterministic
-    if override.force_sample_on_error:
-        merged.force_sample_on_error = override.force_sample_on_error
+    merged.sample_rate = override.sample_rate
+    merged.deterministic = override.deterministic
+    merged.force_sample_on_error = override.force_sample_on_error
     if override.force_sample_slow_queries_ms is not None:
         merged.force_sample_slow_queries_ms = override.force_sample_slow_queries_ms
     return merged

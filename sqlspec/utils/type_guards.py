@@ -4,6 +4,7 @@ This module provides type-safe runtime checks that help the type checker
 understand type narrowing, replacing defensive hasattr() and duck typing patterns.
 """
 
+import inspect
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import Field
@@ -203,7 +204,7 @@ def is_readable(obj: Any) -> "TypeGuard[ReadableProtocol]":
 def is_async_readable(obj: Any) -> "TypeGuard[AsyncReadableProtocol]":
     """Check if an object exposes an async read method."""
     try:
-        return callable(obj.read)
+        return callable(obj.read) and inspect.iscoroutinefunction(obj.read)
     except AttributeError:
         return False
 

@@ -203,10 +203,7 @@ class ObStoreBackend:
 
         return str(path)
 
-    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
-        """Read bytes using obstore synchronously."""
-        resolved_path = self._resolve_path(path)
-
+    def _read_bytes_resolved_sync(self, resolved_path: str) -> bytes:
         result = execute_sync_storage_operation(
             partial(_read_obstore_bytes, self.store, resolved_path),
             backend=self.backend_type,
@@ -222,10 +219,12 @@ class ObStoreBackend:
         )
         return result
 
-    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Write bytes using obstore synchronously."""
+    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+        """Read bytes using obstore synchronously."""
         resolved_path = self._resolve_path(path)
+        return self._read_bytes_resolved_sync(resolved_path)
 
+    def _write_bytes_resolved_sync(self, resolved_path: str, data: bytes) -> None:
         execute_sync_storage_operation(
             partial(self.store.put, resolved_path, data),
             backend=self.backend_type,
@@ -239,6 +238,11 @@ class ObStoreBackend:
             operation="write_bytes",
             path=resolved_path,
         )
+
+    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Write bytes using obstore synchronously."""
+        resolved_path = self._resolve_path(path)
+        self._write_bytes_resolved_sync(resolved_path, data)
 
     def read_text_sync(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore synchronously."""
@@ -441,8 +445,8 @@ class ObStoreBackend:
     def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table using obstore synchronously."""
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        data = self.read_bytes_sync(resolved_path)
+        resolved_path = self._resolve_path(path)
+        data = self._read_bytes_resolved_sync(resolved_path)
         result = cast(
             "ArrowTable",
             execute_sync_storage_operation(
@@ -465,7 +469,7 @@ class ObStoreBackend:
         """Write Arrow table using obstore synchronously."""
         pa = import_pyarrow()
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
         schema = table.schema
         if any(str(f.type).startswith("decimal64") for f in schema):
@@ -490,7 +494,7 @@ class ObStoreBackend:
             path=resolved_path,
         )
         buffer.seek(0)
-        self.write_bytes_sync(resolved_path, buffer.read())
+        self._write_bytes_resolved_sync(resolved_path, buffer.read())
         _log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
@@ -625,13 +629,7 @@ class ObStoreBackend:
             msg = f"Failed to generate signed URL(s) for {resolved_paths}"
             raise StorageOperationFailedError(msg) from exc
 
-    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
-        """Read bytes from storage asynchronously."""
-        if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
-        else:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-
+    async def _read_bytes_resolved_async(self, resolved_path: str) -> bytes:
         result = await self.store.get_async(resolved_path)
         bytes_obj = await result.bytes_async()  # pyright: ignore[reportAttributeAccessIssue]
         data = cast("bytes", bytes_obj.to_bytes())
@@ -645,13 +643,12 @@ class ObStoreBackend:
         )
         return data
 
-    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Write bytes to storage asynchronously."""
-        if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
-        else:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+        """Read bytes from storage asynchronously."""
+        resolved_path = self._resolve_path(path)
+        return await self._read_bytes_resolved_async(resolved_path)
 
+    async def _write_bytes_resolved_async(self, resolved_path: str, data: bytes) -> None:
         await self.store.put_async(resolved_path, data)
         _log_storage_event(
             "storage.write",
@@ -661,6 +658,11 @@ class ObStoreBackend:
             mode="async",
             path=resolved_path,
         )
+
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Write bytes to storage asynchronously."""
+        resolved_path = self._resolve_path(path)
+        await self._write_bytes_resolved_async(resolved_path, data)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
@@ -839,8 +841,8 @@ class ObStoreBackend:
         Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
         """
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        data = await self.read_bytes_async(resolved_path)
+        resolved_path = self._resolve_path(path)
+        data = await self._read_bytes_resolved_async(resolved_path)
 
         # Offload PyArrow parsing to thread pool
         result = await async_(pq.read_table)(io.BytesIO(data), **kwargs)
@@ -862,7 +864,7 @@ class ObStoreBackend:
         to thread pool, preventing event loop blocking.
         """
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
         def _serialize() -> bytes:
             buffer = io.BytesIO()
@@ -871,7 +873,7 @@ class ObStoreBackend:
             return buffer.read()
 
         data = await async_(_serialize)()
-        await self.write_bytes_async(resolved_path, data)
+        await self._write_bytes_resolved_async(resolved_path, data)
 
         _log_storage_event(
             "storage.write",

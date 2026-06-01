@@ -64,7 +64,9 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
     connection = get_context_value(g, config_state.connection_key)
 
     session = config_state.config.driver_type(
-        connection=connection, statement_config=config_state.config.statement_config
+        connection=connection,
+        statement_config=config_state.config.statement_config,
+        driver_features=config_state.config.driver_features,
     )
 
     set_context_value(g, cache_key, session)

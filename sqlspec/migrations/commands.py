@@ -722,6 +722,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
 
+                # config auto_sync=False cannot be overridden by the call-site flag.
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
                     self._synchronize_version_records(
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -1661,6 +1662,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
+                # config auto_sync=False cannot be overridden by the call-site flag.
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
                     await self._synchronize_version_records(
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value

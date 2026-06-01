@@ -386,6 +386,9 @@ class SyncEventChannel:
 
     def nack(self, event_id: str) -> None:
         """Return an event to the queue for redelivery."""
+        if not self._backend.supports_sync:
+            msg = "Current events backend does not support sync nack"
+            raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="sync")
         try:
             self._backend.nack(event_id)
@@ -634,6 +637,9 @@ class AsyncEventChannel:
 
     async def nack(self, event_id: str) -> None:
         """Return an event to the queue for redelivery."""
+        if not self._backend.supports_async:
+            msg = "Current events backend does not support async nack"
+            raise ImproperConfigurationError(msg)
         span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="async")
         try:
             await self._backend.nack(event_id)

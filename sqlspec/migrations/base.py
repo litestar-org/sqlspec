@@ -927,6 +927,6 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         ...
 
     @abstractmethod
-    def revision(self, message: str, file_type: str = "sql") -> "None | Awaitable[None]":
+    def revision(self, message: str, file_type: str | None = None) -> "None | Awaitable[None]":
         """Create a new migration file."""
         ...

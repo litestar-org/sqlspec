@@ -68,6 +68,8 @@ def compute_update_marker(update_time: "datetime") -> str:
     """
     if update_time.tzinfo is not None:
         update_time = update_time.astimezone(timezone.utc)
+    else:
+        update_time = update_time.replace(tzinfo=timezone.utc)
     return update_time.isoformat(timespec="microseconds")
 
 
@@ -205,8 +207,8 @@ def merge_scoped_state(
         Merged state dict.
     """
     merged = dict(session_state)
-    if app_state:
+    if app_state is not None:
         merged.update(app_state)
-    if user_state:
+    if user_state is not None:
         merged.update(user_state)
     return merged
