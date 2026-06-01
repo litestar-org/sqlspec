@@ -146,7 +146,7 @@ def json_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> A
 def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register JSON type handlers on an Oracle connection.
 
-    Chains to any existing handlers via ``_JsonInputHandler`` / ``_JsonOutputHandler``
+    Chains to any existing handlers via ``_ChainedInputHandler`` / ``_ChainedOutputHandler``
     wrapper classes so vector / UUID handlers continue to fire for non-JSON values.
     """
     try:
@@ -158,20 +158,21 @@ def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
     except AttributeError:
         existing_output = None
 
-    connection.inputtypehandler = _JsonInputHandler(existing_input)
-    connection.outputtypehandler = _JsonOutputHandler(existing_output)
+    connection.inputtypehandler = _ChainedInputHandler(_input_type_handler, existing_input)
+    connection.outputtypehandler = _ChainedOutputHandler(_output_type_handler, existing_output)
 
 
-class _JsonInputHandler:
-    """Chaining wrapper that claims dict/list/tuple values, falling back otherwise."""
+class _ChainedInputHandler:
+    """Chaining wrapper that claims handled values, falling back otherwise."""
 
-    __slots__ = ("_fallback",)
+    __slots__ = ("_fallback", "_inner")
 
-    def __init__(self, fallback: "Any | None") -> None:
+    def __init__(self, inner: Any, fallback: "Any | None") -> None:
         self._fallback = fallback
+        self._inner = inner
 
     def __call__(self, cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-        result = _input_type_handler(cursor, value, arraysize)
+        result = self._inner(cursor, value, arraysize)
         if result is not None:
             return result
         if self._fallback is not None:
@@ -179,18 +180,23 @@ class _JsonInputHandler:
         return None
 
 
-class _JsonOutputHandler:
-    """Chaining wrapper that claims JSON-bearing columns, falling back otherwise."""
+class _ChainedOutputHandler:
+    """Chaining wrapper that claims handled columns, falling back otherwise."""
 
-    __slots__ = ("_fallback",)
+    __slots__ = ("_fallback", "_inner")
 
-    def __init__(self, fallback: "Any | None") -> None:
+    def __init__(self, inner: Any, fallback: "Any | None") -> None:
         self._fallback = fallback
+        self._inner = inner
 
     def __call__(self, cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-        result = _output_type_handler(cursor, metadata)
+        result = self._inner(cursor, metadata)
         if result is not None:
             return result
         if self._fallback is not None:
             return self._fallback(cursor, metadata)
         return None
+
+
+_JsonInputHandler = _ChainedInputHandler
+_JsonOutputHandler = _ChainedOutputHandler

@@ -21,8 +21,6 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 __all__ = (

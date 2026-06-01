@@ -20,40 +20,6 @@ JULIAN_EPOCH = 2440587.5
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 
 
-def _datetime_to_julian(dt: datetime) -> float:
-    """Convert datetime to Julian Day number for SQLite storage.
-
-    Args:
-        dt: Datetime to convert (must be UTC-aware).
-
-    Returns:
-        Julian Day number as REAL.
-
-    Notes:
-        Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
-        This enables direct comparison with julianday('now') in SQL queries.
-    """
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
-    return JULIAN_EPOCH + delta_days
-
-
-def _julian_to_datetime(julian: float) -> datetime:
-    """Convert Julian Day number back to datetime.
-
-    Args:
-        julian: Julian Day number.
-
-    Returns:
-        UTC-aware datetime.
-    """
-    days_since_epoch = julian - JULIAN_EPOCH
-    timestamp = days_since_epoch * SECONDS_PER_DAY
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
-
-
 class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     """Aiosqlite ADK store using asynchronous SQLite driver.
 
@@ -827,3 +793,37 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             cursor = await conn.execute(sql, (cutoff,))
             await conn.commit()
             return cursor.rowcount
+
+
+def _datetime_to_julian(dt: datetime) -> float:
+    """Convert datetime to Julian Day number for SQLite storage.
+
+    Args:
+        dt: Datetime to convert (must be UTC-aware).
+
+    Returns:
+        Julian Day number as REAL.
+
+    Notes:
+        Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
+        This enables direct comparison with julianday('now') in SQL queries.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+    return JULIAN_EPOCH + delta_days
+
+
+def _julian_to_datetime(julian: float) -> datetime:
+    """Convert Julian Day number back to datetime.
+
+    Args:
+        julian: Julian Day number.
+
+    Returns:
+        UTC-aware datetime.
+    """
+    days_since_epoch = julian - JULIAN_EPOCH
+    timestamp = days_since_epoch * SECONDS_PER_DAY
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)

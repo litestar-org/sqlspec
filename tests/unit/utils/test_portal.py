@@ -1,6 +1,7 @@
 """Unit tests for portal provider and portal manager."""
 
 import asyncio
+import queue
 from collections.abc import Callable, Coroutine, Generator
 from typing import Any
 
@@ -128,6 +129,25 @@ def test_portal_provider_call_not_started() -> None:
 
     with pytest.raises(ImproperConfigurationError, match="Portal provider not running"):
         provider.call(dummy)
+
+
+def test_process_request_returns_cleanly_when_queue_empty() -> None:
+    class RaceEmptyQueue:
+        def empty(self) -> bool:
+            return False
+
+        def get(self) -> object:
+            msg = "queue.get() should not be used after an empty() pre-check"
+            raise AssertionError(msg)
+
+        def get_nowait(self) -> object:
+            raise queue.Empty
+
+    provider = PortalProvider()
+    provider._loop = object()  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
+    provider._request_queue = RaceEmptyQueue()  # type: ignore[assignment]  # pyright: ignore[reportPrivateUsage]
+
+    provider._process_request()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_portal_provider_call_exception() -> None:

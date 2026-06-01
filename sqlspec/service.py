@@ -1,8 +1,9 @@
 """Service base classes for SQLSpec application services."""
 
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core._pagination import OffsetPagination
@@ -13,7 +14,8 @@ from sqlspec.exceptions import NotFoundError
 from sqlspec.typing import SchemaT
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import Iterator
+    from types import TracebackType
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core.filters import StatementFilter
@@ -27,6 +29,7 @@ AsyncDriverT = TypeVar("AsyncDriverT", bound=AsyncDriverAdapterBase, default=Asy
 SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase, default=SyncDriverAdapterBase)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SQLSpecAsyncService(Generic[AsyncDriverT]):
     """Base class for asynchronous SQLSpec services.
 
@@ -213,23 +216,16 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         """Roll back the current database transaction."""
         await self._session.rollback()
 
-    @asynccontextmanager
-    async def begin_transaction(self) -> "AsyncIterator[AsyncDriverT]":
+    def begin_transaction(self) -> "_AsyncBeginTransactionContext[AsyncDriverT]":
         """Context manager that commits on success and rolls back on error.
 
-        Yields:
+        Returns:
             The underlying driver session bound to the active transaction.
         """
-        await self.begin()
-        try:
-            yield self._session
-        except Exception:
-            await self.rollback()
-            raise
-        else:
-            await self.commit()
+        return _AsyncBeginTransactionContext(self)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SQLSpecSyncService(Generic[SyncDriverT]):
     """Base class for synchronous SQLSpec services.
 
@@ -431,3 +427,25 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             raise
         else:
             self.commit()
+
+
+class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
+    __slots__ = ("_service",)
+
+    def __init__(self, service: "SQLSpecAsyncService[AsyncDriverT]") -> None:
+        self._service = service
+
+    async def __aenter__(self) -> AsyncDriverT:
+        service = self._service
+        await service.begin()
+        return service.session
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"
+    ) -> bool:
+        service = self._service
+        if exc_type is None:
+            await service.commit()
+        else:
+            await service.rollback()
+        return False

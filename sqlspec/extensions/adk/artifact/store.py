@@ -32,31 +32,6 @@ VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63
 
 
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)
-
-
 class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
     """Base class for async SQLSpec-backed ADK artifact metadata stores.
 
@@ -218,6 +193,31 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
             db_system=resolve_db_system(type(self).__name__),
             artifact_table=self._artifact_table,
         )
+
+
+def _validate_table_name(table_name: str) -> None:
+    """Validate table name for SQL safety.
+
+    Args:
+        table_name: Table name to validate.
+
+    Raises:
+        ValueError: If table name is invalid.
+    """
+    if not table_name:
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+
+    if len(table_name) > MAX_TABLE_NAME_LENGTH:
+        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
+        raise ValueError(msg)
+
+    if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        msg = (
+            f"Invalid table name: {table_name!r}. "
+            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
+        )
+        raise ValueError(msg)
 
 
 class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):

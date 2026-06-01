@@ -15,10 +15,6 @@ __all__ = ("DiagnosticsPayload", "TelemetryDiagnostics", "collect_diagnostics")
 DiagnosticsPayload = dict[str, float | list[StorageTelemetry]]
 
 
-def _increment_metric(payload: "dict[str, float]", metric: str, amount: float) -> None:
-    payload[metric] = payload.get(metric, 0.0) + amount
-
-
 class TelemetryDiagnostics:
     """Aggregates lifecycle counters, custom metrics, and storage telemetry."""
 
@@ -72,3 +68,7 @@ def collect_diagnostics(sections: Iterable[tuple[str, dict[str, int]]]) -> Diagn
     for prefix, counters in sections:
         diag.add_lifecycle_snapshot(prefix, counters)
     return diag.snapshot()
+
+
+def _increment_metric(payload: "dict[str, float]", metric: str, amount: float) -> None:
+    payload[metric] = payload.get(metric, 0.0) + amount

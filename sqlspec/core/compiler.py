@@ -57,7 +57,6 @@ OperationType = Literal[
     "PRAGMA",
     "MERGE",
     "COMMAND",
-    "UNKNOWN",
 ]
 
 OPERATION_TYPE_MAP: "dict[type[exp.Expr], OperationType]" = {
@@ -568,8 +567,7 @@ class SQLProcessor:
         """
         if len(self._parse_cache) >= self._parse_cache_max_size:
             self._parse_cache.popitem(last=False)
-        # Store expression reference directly - _unpack_parse_cache_entry copies on retrieval
-        # so we avoid double-copying (store + retrieve)
+        # Store expression reference directly; _unpack_parse_cache_entry returns the same object.
         self._parse_cache[parse_cache_key] = (
             expression,
             operation_type,
@@ -1030,7 +1028,7 @@ class SQLProcessor:
             modifies_rows = copy_kind is True
             returns_rows = copy_kind is False
 
-        if not returns_rows and operation_type in {"SELECT", "WITH", "VALUES", "TABLE"}:
+        if not returns_rows and operation_type == "SELECT":
             returns_rows = True
 
         if not modifies_rows and operation_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:

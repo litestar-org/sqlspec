@@ -14,6 +14,8 @@ from sqlspec.core import (
     SQL,
     AnyCollectionFilter,
     BeforeAfterFilter,
+    BooleanFilter,
+    ChoicesFilter,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
@@ -52,6 +54,8 @@ def _filter_samples() -> "list[StatementFilter]":
         NullFilter("deleted_at"),
         NotNullFilter("created_at"),
         NotInSearchFilter("name", "spam"),
+        BooleanFilter("is_active", True),
+        ChoicesFilter("status", ["active", "pending"]),
     ]
 
 

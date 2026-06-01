@@ -37,3 +37,18 @@ def test_mssql_type_to_arrow_uses_decimal_precision_and_scale() -> None:
 
     assert mssql_type_to_arrow("decimal", precision=18, scale=4) == pa.decimal128(18, 4)
     assert mssql_type_to_arrow("numeric", precision=10, scale=2) == pa.decimal128(10, 2)
+
+
+def test_mssql_type_converter_public_package_imports() -> None:
+    from sqlspec.adapters.mssql_python import MssqlPythonTypeConverter as ExportedConverter
+    from sqlspec.adapters.mssql_python import mssql_type_to_arrow as exported_mssql_type_to_arrow
+
+    assert ExportedConverter is MssqlPythonTypeConverter
+    assert exported_mssql_type_to_arrow is mssql_type_to_arrow
+
+
+def test_mssql_type_converter_public_all() -> None:
+    import sqlspec.adapters.mssql_python as mssql_python
+
+    assert "MssqlPythonTypeConverter" in mssql_python.__all__
+    assert "mssql_type_to_arrow" in mssql_python.__all__

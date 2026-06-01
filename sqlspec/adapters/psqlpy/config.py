@@ -16,7 +16,6 @@ from sqlspec.adapters.psqlpy.core import (
     resolve_runtime_statement_config,
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
-from sqlspec.adapters.psqlpy.type_converter import register_pgvector
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
@@ -273,7 +272,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         if conn_id in self._initialized_connection_ids:
             return
         if self._pgvector_available:
-            register_pgvector(connection)
+            # TODO: Register pgvector handlers here when psqlpy exposes a compatible type-handler API.
+            pass
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
         self._initialized_connection_ids.add(conn_id)
@@ -281,20 +281,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
         return ConnectionPool(**build_connection_config(self.connection_config))
-
-    def _update_dialect_for_extensions(self) -> None:
-        """Update statement_config dialect based on detected extensions.
-
-        Priority: paradedb > pgvector > postgres (default).
-        """
-        current_dialect = getattr(self.statement_config, "dialect", "postgres")
-        if current_dialect != "postgres":
-            return
-
-        if self._paradedb_available:
-            self.statement_config = self.statement_config.replace(dialect="paradedb")
-        elif self._pgvector_available:
-            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

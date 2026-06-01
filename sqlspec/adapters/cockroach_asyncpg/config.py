@@ -98,6 +98,7 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
 class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
     """Uses pool.acquire() context manager pattern instead of direct acquire/release."""
 
+    # _connection inherited from AsyncPoolSessionFactory.__slots__ is never written; this class uses _ctx exclusively via the pool.acquire() context manager pattern.
     __slots__ = ("_ctx",)
 
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
@@ -165,7 +166,7 @@ class CockroachAsyncpgConfig(
         driver_features.setdefault("enable_auto_retry", True)
 
         # Extract user connection hook before storing driver_features
-        features_dict = dict(driver_features) if driver_features else {}
+        features_dict = dict(driver_features)
         self._user_connection_hook: Callable[[CockroachAsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )

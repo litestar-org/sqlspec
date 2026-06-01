@@ -30,7 +30,13 @@ from sqlspec.adapters.pymysql import default_statement_config as pymysql_stateme
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
-from sqlspec.storage.pipeline import AsyncStoragePipeline, StagedArtifact, StorageDestination
+from sqlspec.storage.pipeline import (
+    AsyncStoragePipeline,
+    StagedArtifact,
+    StorageDestination,
+    _encode_row_payload,
+    _StoragePipelineBase,
+)
 from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
@@ -43,6 +49,26 @@ CAPABILITIES = {
     "staging_protocols": [],
     "partition_strategies": ["fixed"],
 }
+
+
+def test_encode_row_payload_json_returns_bytes() -> None:
+    payload = _encode_row_payload([{"k": "v"}], "json")
+
+    assert isinstance(payload, bytes)
+    assert payload == b'[{"k":"v"}]'
+
+
+def test_encode_row_payload_empty_json_returns_bytes() -> None:
+    payload = _encode_row_payload([], "json")
+
+    assert isinstance(payload, bytes)
+    assert payload == b"[]"
+
+
+def test_encode_row_payload_jsonl_returns_line_delimited_bytes() -> None:
+    payload = _encode_row_payload([{"k": "v"}, {"n": 2}], "jsonl")
+
+    assert payload == b'{"k":"v"}\n{"n":2}\n'
 
 
 class DummyAsyncpgConnection:
@@ -158,6 +184,22 @@ class _CountingStorageRegistry:
     def get(self, destination: str, **options: Any) -> _CountingStorageBackend:
         self.calls.append((destination, dict(options)))
         return self.backend
+
+
+def test_storage_pipelines_share_base_state() -> None:
+    sync_pipeline = SyncStoragePipeline()
+    async_pipeline = AsyncStoragePipeline()
+
+    assert _StoragePipelineBase.__slots__ == (
+        "_csv_write_options",
+        "_resolved_backend_cache",
+        "_storage_options",
+        "registry",
+    )
+    assert SyncStoragePipeline.__slots__ == ()
+    assert AsyncStoragePipeline.__slots__ == ()
+    assert isinstance(sync_pipeline, _StoragePipelineBase)
+    assert isinstance(async_pipeline, _StoragePipelineBase)
 
 
 def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:

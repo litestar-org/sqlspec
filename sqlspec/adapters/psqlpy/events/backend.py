@@ -29,16 +29,6 @@ __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_bac
 logger = get_logger("sqlspec.events.psqlpy")
 
 
-def _extract_event_id(payload: "str | None") -> "str | None":
-    if not payload:
-        return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        event_id = raw.get("event_id")
-        return event_id if isinstance(event_id, str) else None
-    return None
-
-
 class PsqlpyEventsBackend:
     """Native LISTEN/NOTIFY backend for psqlpy adapters."""
 
@@ -208,3 +198,13 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _extract_event_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None

@@ -280,6 +280,9 @@ def session_provider_maker(
         The session provider function.
     """
 
+    # This provider intentionally stays out of mypyc: it combines *args/**kwargs
+    # with yield in async def, participates in Litestar's @contextlib.asynccontextmanager
+    # dependency wrapping, and mutates __signature__/__annotations__ at runtime.
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
         connection_obj = args[0] if args else kwargs.get(connection_dependency_key)
         yield cast(

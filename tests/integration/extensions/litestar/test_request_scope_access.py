@@ -27,7 +27,6 @@ from sqlspec.extensions.litestar import SQLSpecPlugin
 if TYPE_CHECKING:
     from litestar.handlers import HTTPRouteHandler
     from litestar.types import Guard
-
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
@@ -50,204 +49,220 @@ def create_test_app(
     sql = SQLSpec()
     sql.add_config(config)
     plugin = SQLSpecPlugin(sqlspec=sql)
-
     app = Litestar(
         route_handlers=list(route_handlers), plugins=[plugin], guards=list(guards) if guards else None, debug=True
     )
-
     with TestClient(app=app) as client:
         yield client
 
 
-class TestAsyncRequestScopeAccess:
-    """Tests for async request scope access methods with async configs."""
-
-    @pytest.fixture
-    def async_config(self, tmp_path: Any) -> AiosqliteConfig:
-        """Create an async SQLite config."""
-        db_path = tmp_path / "test.db"
-        return AiosqliteConfig(connection_config={"database": str(db_path)}, extension_config={"litestar": {}})
-
-    def test_di_session_injection_baseline(self, async_config: AiosqliteConfig) -> None:
-        """Baseline: Verify standard DI injection of session works."""
-
-        @get("/test")
-        async def handler(db_session: AsyncDriverAdapterBase) -> dict[str, Any]:
-            result = await db_session.execute("SELECT 1 as value")
-            data = result.get_first()
-            return {"value": data["value"] if data else None}
-
-        with create_test_app([handler], async_config) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"value": 1}
-
-    def test_provide_session_from_handler(self, async_config: AiosqliteConfig) -> None:
-        """Test provide_request_session_async from route handler."""
-
-        @get("/test")
-        async def handler(request: Request) -> dict[str, Any]:
-            plugin: SQLSpecPlugin = request.app.state.sqlspec
-            session = await plugin.provide_request_session_async("db_connection", request.app.state, request.scope)
-            result = await session.execute("SELECT 1 as value")
-            data = result.get_first()
-            return {"value": data["value"] if data else None}
-
-        with create_test_app([handler], async_config) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"value": 1}
-
-    def test_provide_connection_from_handler(self, async_config: AiosqliteConfig) -> None:
-        """Test provide_request_connection_async from route handler."""
-
-        @get("/test")
-        async def handler(request: Request) -> dict[str, Any]:
-            plugin: SQLSpecPlugin = request.app.state.sqlspec
-            connection = await plugin.provide_request_connection_async(
-                "db_connection", request.app.state, request.scope
-            )
-            assert connection is not None
-            return {"success": True}
-
-        with create_test_app([handler], async_config) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"success": True}
-
-    def test_provide_connection_from_guard(self, async_config: AiosqliteConfig) -> None:
-        """Test provide_request_connection_async from a guard."""
-        guard_executed = {"value": False}
-
-        async def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
-            plugin: SQLSpecPlugin = connection.app.state.sqlspec
-            db_conn = await plugin.provide_request_connection_async(
-                "db_connection", connection.app.state, connection.scope
-            )
-            assert db_conn is not None
-            guard_executed["value"] = True
-
-        @get("/test")
-        async def handler() -> dict[str, Any]:
-            return {"success": True}
-
-        with create_test_app([handler], async_config, guards=[db_guard]) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert guard_executed["value"] is True
-
-    def test_provide_session_from_guard(self, async_config: AiosqliteConfig) -> None:
-        """Test provide_request_session_async from a guard."""
-        guard_result = {"value": None}
-
-        async def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
-            plugin: SQLSpecPlugin = connection.app.state.sqlspec
-            session = await plugin.provide_request_session_async(
-                "db_connection", connection.app.state, connection.scope
-            )
-            result = await session.execute("SELECT 42 as answer")
-            data = result.get_first()
-            guard_result["value"] = data["answer"] if data else None
-
-        @get("/test")
-        async def handler() -> dict[str, Any]:
-            return {"guard_saw": guard_result["value"]}
-
-        with create_test_app([handler], async_config, guards=[db_guard]) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"guard_saw": 42}
+@pytest.fixture
+def async_request_scope_access_async_config(tmp_path: Any) -> AiosqliteConfig:
+    """Create an async SQLite config."""
+    db_path = tmp_path / "test.db"
+    return AiosqliteConfig(connection_config={"database": str(db_path)}, extension_config={"litestar": {}})
 
 
-class TestSyncRequestScopeAccess:
-    """Tests for sync request scope access methods with sync configs."""
+def test_async_request_scope_access_di_session_injection_baseline(
+    async_request_scope_access_async_config: AiosqliteConfig,
+) -> None:
+    """Baseline: Verify standard DI injection of session works."""
 
-    @pytest.fixture
-    def sync_config(self, tmp_path: Any) -> SqliteConfig:
-        """Create a sync SQLite config."""
-        db_path = tmp_path / "test.db"
-        return SqliteConfig(connection_config={"database": str(db_path)}, extension_config={"litestar": {}})
+    @get("/test")
+    async def handler(db_session: AsyncDriverAdapterBase) -> dict[str, Any]:
+        result = await db_session.execute("SELECT 1 as value")
+        data = result.get_first()
+        return {"value": data["value"] if data else None}
 
-    def test_di_session_injection_baseline(self, sync_config: SqliteConfig) -> None:
-        """Baseline: Verify standard DI injection of session works."""
+    with create_test_app([handler], async_request_scope_access_async_config) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
 
-        @get("/test", sync_to_thread=False)
-        def handler(db_session: SyncDriverAdapterBase) -> dict[str, Any]:
-            result = db_session.execute("SELECT 1 as value")
-            data = result.get_first()
-            return {"value": data["value"] if data else None}
 
-        with create_test_app([handler], sync_config) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"value": 1}
+def test_async_request_scope_access_provide_session_from_handler(
+    async_request_scope_access_async_config: AiosqliteConfig,
+) -> None:
+    """Test provide_request_session_async from route handler."""
 
-    def test_provide_session_from_handler(self, sync_config: SqliteConfig) -> None:
-        """Test provide_request_session_sync from route handler."""
+    @get("/test")
+    async def handler(request: Request) -> dict[str, Any]:
+        plugin: SQLSpecPlugin = request.app.state.sqlspec
+        session = await plugin.provide_request_session_async("db_connection", request.app.state, request.scope)
+        result = await session.execute("SELECT 1 as value")
+        data = result.get_first()
+        return {"value": data["value"] if data else None}
 
-        @get("/test", sync_to_thread=False)
-        def handler(request: Request) -> dict[str, Any]:
-            plugin: SQLSpecPlugin = request.app.state.sqlspec
-            session = plugin.provide_request_session_sync("db_connection", request.app.state, request.scope)
-            result = session.execute("SELECT 1 as value")
-            data = result.get_first()
-            return {"value": data["value"] if data else None}
+    with create_test_app([handler], async_request_scope_access_async_config) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
 
-        with create_test_app([handler], sync_config) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"value": 1}
 
-    def test_provide_connection_from_handler(self, sync_config: SqliteConfig) -> None:
-        """Test provide_request_connection_sync from route handler."""
+def test_async_request_scope_access_provide_connection_from_handler(
+    async_request_scope_access_async_config: AiosqliteConfig,
+) -> None:
+    """Test provide_request_connection_async from route handler."""
 
-        @get("/test", sync_to_thread=False)
-        def handler(request: Request) -> dict[str, Any]:
-            plugin: SQLSpecPlugin = request.app.state.sqlspec
-            connection = plugin.provide_request_connection_sync("db_connection", request.app.state, request.scope)
-            assert connection is not None
-            return {"success": True}
+    @get("/test")
+    async def handler(request: Request) -> dict[str, Any]:
+        plugin: SQLSpecPlugin = request.app.state.sqlspec
+        connection = await plugin.provide_request_connection_async("db_connection", request.app.state, request.scope)
+        assert connection is not None
+        return {"success": True}
 
-        with create_test_app([handler], sync_config) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"success": True}
+    with create_test_app([handler], async_request_scope_access_async_config) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"success": True}
 
-    def test_provide_connection_from_guard(self, sync_config: SqliteConfig) -> None:
-        """Test provide_request_connection_sync from a guard."""
-        guard_executed = {"value": False}
 
-        def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
-            plugin: SQLSpecPlugin = connection.app.state.sqlspec
-            db_conn = plugin.provide_request_connection_sync("db_connection", connection.app.state, connection.scope)
-            assert db_conn is not None
-            guard_executed["value"] = True
+def test_async_request_scope_access_provide_connection_from_guard(
+    async_request_scope_access_async_config: AiosqliteConfig,
+) -> None:
+    """Test provide_request_connection_async from a guard."""
+    guard_executed = {"value": False}
 
-        @get("/test", sync_to_thread=False)
-        def handler() -> dict[str, Any]:
-            return {"success": True}
+    async def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
+        plugin: SQLSpecPlugin = connection.app.state.sqlspec
+        db_conn = await plugin.provide_request_connection_async("db_connection", connection.app.state, connection.scope)
+        assert db_conn is not None
+        guard_executed["value"] = True
 
-        with create_test_app([handler], sync_config, guards=[db_guard]) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert guard_executed["value"] is True
+    @get("/test")
+    async def handler() -> dict[str, Any]:
+        return {"success": True}
 
-    def test_provide_session_from_guard(self, sync_config: SqliteConfig) -> None:
-        """Test provide_request_session_sync from a guard."""
-        guard_result = {"value": None}
+    with create_test_app([handler], async_request_scope_access_async_config, guards=[db_guard]) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert guard_executed["value"] is True
 
-        def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
-            plugin: SQLSpecPlugin = connection.app.state.sqlspec
-            session = plugin.provide_request_session_sync("db_connection", connection.app.state, connection.scope)
-            result = session.execute("SELECT 42 as answer")
-            data = result.get_first()
-            guard_result["value"] = data["answer"] if data else None
 
-        @get("/test", sync_to_thread=False)
-        def handler() -> dict[str, Any]:
-            return {"guard_saw": guard_result["value"]}
+def test_async_request_scope_access_provide_session_from_guard(
+    async_request_scope_access_async_config: AiosqliteConfig,
+) -> None:
+    """Test provide_request_session_async from a guard."""
+    guard_result = {"value": None}
 
-        with create_test_app([handler], sync_config, guards=[db_guard]) as client:
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert response.json() == {"guard_saw": 42}
+    async def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
+        plugin: SQLSpecPlugin = connection.app.state.sqlspec
+        session = await plugin.provide_request_session_async("db_connection", connection.app.state, connection.scope)
+        result = await session.execute("SELECT 42 as answer")
+        data = result.get_first()
+        guard_result["value"] = data["answer"] if data else None
+
+    @get("/test")
+    async def handler() -> dict[str, Any]:
+        return {"guard_saw": guard_result["value"]}
+
+    with create_test_app([handler], async_request_scope_access_async_config, guards=[db_guard]) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"guard_saw": 42}
+
+
+@pytest.fixture
+def sync_request_scope_access_sync_config(tmp_path: Any) -> SqliteConfig:
+    """Create a sync SQLite config."""
+    db_path = tmp_path / "test.db"
+    return SqliteConfig(connection_config={"database": str(db_path)}, extension_config={"litestar": {}})
+
+
+def test_sync_request_scope_access_di_session_injection_baseline(
+    sync_request_scope_access_sync_config: SqliteConfig,
+) -> None:
+    """Baseline: Verify standard DI injection of session works."""
+
+    @get("/test", sync_to_thread=False)
+    def handler(db_session: SyncDriverAdapterBase) -> dict[str, Any]:
+        result = db_session.execute("SELECT 1 as value")
+        data = result.get_first()
+        return {"value": data["value"] if data else None}
+
+    with create_test_app([handler], sync_request_scope_access_sync_config) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+
+def test_sync_request_scope_access_provide_session_from_handler(
+    sync_request_scope_access_sync_config: SqliteConfig,
+) -> None:
+    """Test provide_request_session_sync from route handler."""
+
+    @get("/test", sync_to_thread=False)
+    def handler(request: Request) -> dict[str, Any]:
+        plugin: SQLSpecPlugin = request.app.state.sqlspec
+        session = plugin.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        result = session.execute("SELECT 1 as value")
+        data = result.get_first()
+        return {"value": data["value"] if data else None}
+
+    with create_test_app([handler], sync_request_scope_access_sync_config) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+
+def test_sync_request_scope_access_provide_connection_from_handler(
+    sync_request_scope_access_sync_config: SqliteConfig,
+) -> None:
+    """Test provide_request_connection_sync from route handler."""
+
+    @get("/test", sync_to_thread=False)
+    def handler(request: Request) -> dict[str, Any]:
+        plugin: SQLSpecPlugin = request.app.state.sqlspec
+        connection = plugin.provide_request_connection_sync("db_connection", request.app.state, request.scope)
+        assert connection is not None
+        return {"success": True}
+
+    with create_test_app([handler], sync_request_scope_access_sync_config) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"success": True}
+
+
+def test_sync_request_scope_access_provide_connection_from_guard(
+    sync_request_scope_access_sync_config: SqliteConfig,
+) -> None:
+    """Test provide_request_connection_sync from a guard."""
+    guard_executed = {"value": False}
+
+    def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
+        plugin: SQLSpecPlugin = connection.app.state.sqlspec
+        db_conn = plugin.provide_request_connection_sync("db_connection", connection.app.state, connection.scope)
+        assert db_conn is not None
+        guard_executed["value"] = True
+
+    @get("/test", sync_to_thread=False)
+    def handler() -> dict[str, Any]:
+        return {"success": True}
+
+    with create_test_app([handler], sync_request_scope_access_sync_config, guards=[db_guard]) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert guard_executed["value"] is True
+
+
+def test_sync_request_scope_access_provide_session_from_guard(
+    sync_request_scope_access_sync_config: SqliteConfig,
+) -> None:
+    """Test provide_request_session_sync from a guard."""
+    guard_result = {"value": None}
+
+    def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
+        plugin: SQLSpecPlugin = connection.app.state.sqlspec
+        session = plugin.provide_request_session_sync("db_connection", connection.app.state, connection.scope)
+        result = session.execute("SELECT 42 as answer")
+        data = result.get_first()
+        guard_result["value"] = data["answer"] if data else None
+
+    @get("/test", sync_to_thread=False)
+    def handler() -> dict[str, Any]:
+        return {"guard_saw": guard_result["value"]}
+
+    with create_test_app([handler], sync_request_scope_access_sync_config, guards=[db_guard]) as client:
+        response = client.get("/test")
+        assert response.status_code == 200
+        assert response.json() == {"guard_saw": 42}

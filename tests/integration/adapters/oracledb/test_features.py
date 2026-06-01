@@ -292,7 +292,7 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
 
     assert stmt.is_script is True
 
-    sql_output = stmt.sql
+    sql_output = stmt.raw_sql
     assert "ALTER SESSION SET CONTAINER" in sql_output
     assert "CREATE TABLE" in sql_output
     assert "VECTOR(768, FLOAT32)" in sql_output

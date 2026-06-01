@@ -86,7 +86,7 @@ def test_explain_from_sql_object(oracle_explain_session: OracleSyncDriver) -> No
     """Test SQL.explain() method."""
     stmt = SQL("SELECT * FROM explain_test")
     # Use Explain directly with dialect since SQL uses default dialect
-    explain_stmt = Explain(stmt.sql, dialect="oracle")
+    explain_stmt = Explain(stmt.raw_sql, dialect="oracle")
     result = oracle_explain_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)

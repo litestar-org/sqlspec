@@ -22,7 +22,6 @@ from sqlspec.core import SQL, SQLResult
 
 if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
-
 pytestmark = pytest.mark.xdist_group("bigquery")
 
 
@@ -39,16 +38,9 @@ def bigquery_parameter_session(
     tolerate extra rows).
     """
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_parameter_conversion`"
-
-    bigquery_session.execute_script(f"""
-        CREATE OR REPLACE TABLE {table_name} (
-            id INT64,
-            name STRING NOT NULL,
-            value INT64,
-            description STRING
-        )
-    """)
-
+    bigquery_session.execute_script(
+        f"\n        CREATE OR REPLACE TABLE {table_name} (\n            id INT64,\n            name STRING NOT NULL,\n            value INT64,\n            description STRING\n        )\n    "
+    )
     bigquery_session.execute(
         f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
         {"id": 1, "name": "test1", "value": 100, "desc": "First test"},
@@ -61,179 +53,162 @@ def bigquery_parameter_session(
         f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
         {"id": 3, "name": "test3", "value": 300, "desc": None},
     )
-
-    yield bigquery_session, table_name
-
-
-class TestNamedAtParameterStyle:
-    """Test NAMED_AT (@param) parameter style (native for BigQuery)."""
-
-    def test_named_at_single_parameter(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test single @param placeholder works natively."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": "test1"})
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    def test_named_at_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test multiple @param placeholders work natively."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(
-            f"SELECT * FROM {table_name} WHERE value >= @min_val AND value <= @max_val ORDER BY value",
-            {"min_val": 100, "max_val": 200},
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 2
-        assert result.get_data()[0]["value"] == 100
-        assert result.get_data()[1]["value"] == 200
+    yield (bigquery_session, table_name)
 
 
-class TestQmarkConversion:
-    """Test QMARK (?) to NAMED_AT (@param) conversion."""
-
-    def test_qmark_single_parameter(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test single ? placeholder gets converted to @p1."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = ?", ("test1",))
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    def test_qmark_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test multiple ? placeholders get converted to @p1, @p2, etc."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = ? AND value > ?", ("test2", 100))
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test2"
+def test_named_at_parameter_style_named_at_single_parameter(
+    bigquery_parameter_session: tuple[BigQueryDriver, str],
+) -> None:
+    """Test single @param placeholder works natively."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": "test1"})
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
 
-class TestNamedColonConversion:
-    """Test NAMED_COLON (:name) to NAMED_AT (@name) conversion."""
-
-    def test_named_colon_single_parameter(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test single :name placeholder gets converted to @name."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = :name", {"name": "test1"})
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    def test_named_colon_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test multiple :name placeholders get converted."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(
-            f"SELECT * FROM {table_name} WHERE name = :name AND value > :min_val", {"name": "test2", "min_val": 100}
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test2"
+def test_named_at_parameter_style_named_at_multiple_parameters(
+    bigquery_parameter_session: tuple[BigQueryDriver, str],
+) -> None:
+    """Test multiple @param placeholders work natively."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(
+        f"SELECT * FROM {table_name} WHERE value >= @min_val AND value <= @max_val ORDER BY value",
+        {"min_val": 100, "max_val": 200},
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 2
+    assert result.get_data()[0]["value"] == 100
+    assert result.get_data()[1]["value"] == 200
 
 
-class TestNamedPyformatConversion:
-    """Test NAMED_PYFORMAT (%(name)s) to NAMED_AT (@name) conversion."""
-
-    def test_named_pyformat_single_parameter(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test single %(name)s placeholder gets converted to @name."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = %(name)s", {"name": "test1"})
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    def test_named_pyformat_multiple_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test multiple %(name)s placeholders get converted."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(
-            f"SELECT * FROM {table_name} WHERE name = %(test_name)s AND value < %(max_val)s",
-            {"test_name": "test3", "max_val": 350},
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test3"
+def test_qmark_conversion_qmark_single_parameter(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test single ? placeholder gets converted to @p1."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = ?", ("test1",))
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
 
-class TestSQLObjectConversion:
-    """Test parameter conversion with SQL objects."""
-
-    def test_sql_object_with_named_at(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test SQL object with @param placeholders."""
-        session, table_name = bigquery_parameter_session
-        sql_named_at = SQL(
-            f"SELECT * FROM {table_name} WHERE value BETWEEN @min_val AND @max_val", min_val=150, max_val=250
-        )
-        result = session.execute(sql_named_at)
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test2"
-
-    def test_sql_object_with_qmark(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test SQL object with ? placeholders."""
-        session, table_name = bigquery_parameter_session
-        sql_qmark = SQL(f"SELECT * FROM {table_name} WHERE name = ? OR name = ?", "test1", "test3")
-        result = session.execute(sql_qmark)
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 2
-        names = [row["name"] for row in result.get_data()]
-        assert "test1" in names
-        assert "test3" in names
+def test_qmark_conversion_qmark_multiple_parameters(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test multiple ? placeholders get converted to @p1, @p2, etc."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = ? AND value > ?", ("test2", 100))
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test2"
 
 
-class TestEdgeCases:
-    """Test edge cases in parameter conversion."""
+def test_named_colon_conversion_named_colon_single_parameter(
+    bigquery_parameter_session: tuple[BigQueryDriver, str],
+) -> None:
+    """Test single :name placeholder gets converted to @name."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = :name", {"name": "test1"})
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
-    def test_null_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test NULL parameter handling."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE description IS NULL")
 
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test3"
+def test_named_colon_conversion_named_colon_multiple_parameters(
+    bigquery_parameter_session: tuple[BigQueryDriver, str],
+) -> None:
+    """Test multiple :name placeholders get converted."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(
+        f"SELECT * FROM {table_name} WHERE name = :name AND value > :min_val", {"name": "test2", "min_val": 100}
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test2"
 
-    def test_sql_injection_prevention(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test that parameter escaping prevents SQL injection."""
-        session, table_name = bigquery_parameter_session
-        malicious_input = "'; DROP TABLE test_parameter_conversion; --"
 
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": malicious_input})
+def test_named_pyformat_conversion_named_pyformat_single_parameter(
+    bigquery_parameter_session: tuple[BigQueryDriver, str],
+) -> None:
+    """Test single %(name)s placeholder gets converted to @name."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = %(name)s", {"name": "test1"})
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
-        assert len(result.data) == 0
 
-        # Verify table still exists
-        count_result = session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-        assert count_result.get_data()[0]["count"] >= 3
+def test_named_pyformat_conversion_named_pyformat_multiple_parameters(
+    bigquery_parameter_session: tuple[BigQueryDriver, str],
+) -> None:
+    """Test multiple %(name)s placeholders get converted."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(
+        f"SELECT * FROM {table_name} WHERE name = %(test_name)s AND value < %(max_val)s",
+        {"test_name": "test3", "max_val": 350},
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test3"
 
-    def test_special_characters_in_parameters(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test special characters in parameter values."""
-        session, table_name = bigquery_parameter_session
-        special_value = 'O\'Reilly & Sons "Test" <script>'
 
-        session.execute(
-            f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
-            {"id": 99, "name": "special", "value": 999, "desc": special_value},
-        )
+def test_sql_object_conversion_sql_object_with_named_at(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test SQL object with @param placeholders."""
+    (session, table_name) = bigquery_parameter_session
+    sql_named_at = SQL(
+        f"SELECT * FROM {table_name} WHERE value BETWEEN @min_val AND @max_val", min_val=150, max_val=250
+    )
+    result = session.execute(sql_named_at)
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test2"
 
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": "special"})
-        assert len(result.data) == 1
-        assert result.get_data()[0]["description"] == special_value
 
-    def test_like_with_wildcards(self, bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
-        """Test LIKE queries with wildcard parameters."""
-        session, table_name = bigquery_parameter_session
-        result = session.execute(f"SELECT * FROM {table_name} WHERE name LIKE @pattern", {"pattern": "test%"})
+def test_sql_object_conversion_sql_object_with_qmark(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test SQL object with ? placeholders."""
+    (session, table_name) = bigquery_parameter_session
+    sql_qmark = SQL(f"SELECT * FROM {table_name} WHERE name = ? OR name = ?", "test1", "test3")
+    result = session.execute(sql_qmark)
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 2
+    names = [row["name"] for row in result.get_data()]
+    assert "test1" in names
+    assert "test3" in names
 
-        assert len(result.data) >= 3
-        for row in result.get_data():
-            assert row["name"].startswith("test")
+
+def test_edge_cases_null_parameters(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test NULL parameter handling."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE description IS NULL")
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test3"
+
+
+def test_edge_cases_sql_injection_prevention(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test that parameter escaping prevents SQL injection."""
+    (session, table_name) = bigquery_parameter_session
+    malicious_input = "'; DROP TABLE test_parameter_conversion; --"
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": malicious_input})
+    assert len(result.data) == 0
+    count_result = session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
+    assert count_result.get_data()[0]["count"] >= 3
+
+
+def test_edge_cases_special_characters_in_parameters(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test special characters in parameter values."""
+    (session, table_name) = bigquery_parameter_session
+    special_value = 'O\'Reilly & Sons "Test" <script>'
+    session.execute(
+        f"INSERT INTO {table_name} (id, name, value, description) VALUES (@id, @name, @value, @desc)",
+        {"id": 99, "name": "special", "value": 999, "desc": special_value},
+    )
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name = @name", {"name": "special"})
+    assert len(result.data) == 1
+    assert result.get_data()[0]["description"] == special_value
+
+
+def test_edge_cases_like_with_wildcards(bigquery_parameter_session: tuple[BigQueryDriver, str]) -> None:
+    """Test LIKE queries with wildcard parameters."""
+    (session, table_name) = bigquery_parameter_session
+    result = session.execute(f"SELECT * FROM {table_name} WHERE name LIKE @pattern", {"pattern": "test%"})
+    assert len(result.data) >= 3
+    for row in result.get_data():
+        assert row["name"].startswith("test")

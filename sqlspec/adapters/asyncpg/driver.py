@@ -60,13 +60,6 @@ _QUALIFIED_TABLE_NAME_PARTS: Final = 2
 logger = get_logger("sqlspec.adapters.asyncpg")
 
 
-def _split_copy_table_name(raw_name: str) -> "tuple[str | None, str]":
-    parts = raw_name.split(".", 1)
-    if len(parts) == _QUALIFIED_TABLE_NAME_PARTS:
-        return parts[0].strip('"'), parts[1].strip('"')
-    return None, raw_name.strip('"')
-
-
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling AsyncPG database exceptions.
 
@@ -496,7 +489,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         execution_args = statement.statement_config.execution_args
         metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
-        sql_text, _ = self._get_compiled_sql(statement, statement.statement_config)
+        if getattr(statement, "is_processed", False):
+            sql_text = statement.get_processed_state().compiled_sql
+        else:
+            sql_text, _ = self._get_compiled_sql(statement, statement.statement_config)
         copy_data = metadata.get("postgres_copy_data")
 
         if copy_data is not None and is_copy_from_operation(statement.operation_type):
@@ -542,3 +538,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
 
 register_driver_profile("asyncpg", driver_profile)
+
+
+def _split_copy_table_name(raw_name: str) -> "tuple[str | None, str]":
+    parts = raw_name.split(".", 1)
+    if len(parts) == _QUALIFIED_TABLE_NAME_PARTS:
+        return parts[0].strip('"'), parts[1].strip('"')
+    return None, raw_name.strip('"')

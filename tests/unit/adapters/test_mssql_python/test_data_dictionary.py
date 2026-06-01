@@ -81,6 +81,14 @@ def test_sync_data_dictionary_builds_version_info() -> None:
     assert data_dictionary.get_feature_flag(driver, "supports_native_json") is False
 
 
+def test_mssql_version_info_uses_build_in_version_tuple_not_patch() -> None:
+    version = MssqlVersionInfo(16, 0, 5050)
+
+    assert version.patch == 0
+    assert version.build == 5050
+    assert version.version_tuple == (16, 0, 5050)
+
+
 def test_sync_data_dictionary_merges_table_lists_with_default_schema() -> None:
     """The sync dictionary should query dbo by default and append unordered tables."""
     driver = FakeSyncDriver()

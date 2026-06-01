@@ -37,11 +37,11 @@ def test_compiled_events_modules_do_not_import_interpreted_events_modules() -> N
     includes, excludes = _events_mypyc_config()
 
     assert "sqlspec/extensions/events/_channel.py" in excludes
-    assert "sqlspec/extensions/events/_models.py" in excludes
-    assert "sqlspec/extensions/events/_queue.py" in excludes
+    assert "sqlspec/extensions/events/_models.py" in includes
+    assert "sqlspec/extensions/events/_queue.py" in includes
 
     excluded_modules = {f"{EVENTS_PACKAGE}.{Path(path).stem}" for path in excludes if Path(path).name != "__init__.py"}
-    allowed_interpreted_imports = {f"{EVENTS_PACKAGE}._models"}
+    allowed_interpreted_imports: set[str] = set()
     for include in includes:
         imported_modules = _imported_events_modules(PROJECT_ROOT / include)
         assert imported_modules.isdisjoint(excluded_modules - allowed_interpreted_imports)

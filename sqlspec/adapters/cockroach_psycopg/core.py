@@ -1,8 +1,9 @@
 """CockroachDB psycopg adapter compiled helpers."""
 
 import secrets
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
 from sqlspec.utils.type_guards import has_sqlstate
@@ -26,14 +27,24 @@ _DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
 _DEFAULT_ENABLE_LOGGING: Final[bool] = True
 
 
-@dataclass(frozen=True)
+# Keep this in sync with cockroach_asyncpg.core.CockroachAsyncpgRetryConfig.
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CockroachPsycopgRetryConfig:
     """CockroachDB psycopg transaction retry configuration."""
 
-    max_retries: int = _DEFAULT_MAX_RETRIES
-    base_delay_ms: float = _DEFAULT_BASE_DELAY_MS
-    max_delay_ms: float = _DEFAULT_MAX_DELAY_MS
-    enable_logging: bool = _DEFAULT_ENABLE_LOGGING
+    __slots__ = ("base_delay_ms", "enable_logging", "max_delay_ms", "max_retries")
+
+    def __init__(
+        self,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
+        base_delay_ms: float = _DEFAULT_BASE_DELAY_MS,
+        max_delay_ms: float = _DEFAULT_MAX_DELAY_MS,
+        enable_logging: bool = _DEFAULT_ENABLE_LOGGING,
+    ) -> None:
+        self.max_retries = max_retries
+        self.base_delay_ms = base_delay_ms
+        self.max_delay_ms = max_delay_ms
+        self.enable_logging = enable_logging
 
     @classmethod
     def from_features(cls, driver_features: "Mapping[str, Any]") -> "CockroachPsycopgRetryConfig":

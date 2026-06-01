@@ -1,5 +1,6 @@
 """Test handlers for SQLSpec Litestar extension."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,6 +24,16 @@ if TYPE_CHECKING:
     from litestar.types import Message, Scope
 
 pytestmark = pytest.mark.anyio
+
+
+def test_session_provider_documents_mypyc_blockers() -> None:
+    """The session provider should document why handlers.py stays interpreted."""
+    source = Path("sqlspec/extensions/litestar/handlers.py").read_text()
+
+    assert "*args/**kwargs" in source
+    assert "yield in async def" in source
+    assert "@contextlib.asynccontextmanager" in source
+    assert "__signature__/__annotations__" in source
 
 
 async def test_async_manual_handler_closes_connection() -> None:

@@ -4,18 +4,18 @@ import datetime
 from collections.abc import Callable, Sequence
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from functools import lru_cache, partial
+from functools import partial
 from pathlib import Path, PurePath
 from typing import Any, Final, TypeGuard, cast, overload
 from uuid import UUID
 
 from typing_extensions import TypeVar
 
+from sqlspec.data_dictionary import ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import (
     CATTRS_INSTALLED,
     NUMPY_INSTALLED,
-    ForeignKeyMetadata,
     SchemaT,
     attrs_asdict,
     cattrs_structure,
@@ -71,26 +71,6 @@ _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = Non
 # =============================================================================
 
 
-def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
-    """Safely convert a key using the converter function.
-
-    Args:
-        key: Key to convert (may not be a string).
-        converter: Function to convert string keys.
-
-    Returns:
-        Converted key if conversion succeeds, original key otherwise.
-
-    """
-    if not isinstance(key, str):
-        return key
-
-    try:
-        return converter(key)
-    except (TypeError, ValueError, AttributeError):
-        return key
-
-
 def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]) -> dict | list | Any:
     """Transform dictionary keys using the provided converter function.
 
@@ -141,6 +121,26 @@ def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]
     if isinstance(data, list):
         return _transform_list(data, converter)
     return data
+
+
+def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
+    """Safely convert a key using the converter function.
+
+    Args:
+        key: Key to convert (may not be a string).
+        converter: Function to convert string keys.
+
+    Returns:
+        Converted key if conversion succeeds, original key otherwise.
+
+    """
+    if not isinstance(key, str):
+        return key
+
+    try:
+        return converter(key)
+    except (TypeError, ValueError, AttributeError):
+        return key
 
 
 def _transform_dict(data: dict, converter: Callable[[str], str]) -> dict:
@@ -203,32 +203,6 @@ def _convert_numpy_to_list(target_type: Any, value: Any) -> Any:
         return value.tolist()
 
     return value
-
-
-@lru_cache(maxsize=128)
-def _detect_schema_type(schema_type: type) -> "str | None":
-    """Detect schema type with LRU caching.
-
-    Args:
-        schema_type: Type to detect
-
-    Returns:
-        Type identifier string or None if unsupported
-
-    """
-    return (
-        "typed_dict"
-        if is_typed_dict(schema_type)
-        else "dataclass"
-        if is_dataclass(schema_type)
-        else "msgspec"
-        if is_msgspec_struct(schema_type)
-        else "pydantic"
-        if is_pydantic_model(schema_type)
-        else "attrs"
-        if is_attrs_schema(schema_type)
-        else None
-    )
 
 
 def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:

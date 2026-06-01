@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING, Final, NoReturn
 
 from sqlglot import exp, parse_one
 
-from sqlspec.core import SQL, Statement
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLConversionError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.core import Statement
 
 
 __all__ = (
@@ -82,13 +84,25 @@ def convert_to_dialect(
     Returns:
         SQL string in target dialect.
 
+    Note:
+        Callers should prefer passing an SQL object with ``.expression`` already
+        set rather than a raw string to avoid redundant ``sqlglot.parse_one``
+        invocations. When an SQL object is provided, the already-parsed
+        ``.expression`` is used directly with no re-parse overhead.
+
+        For raw strings, each call invokes ``sqlglot.parse_one`` unconditionally.
+        There is no per-call parse cache. This function is a public utility
+        helper, not part of the internal query-execution hot path, so raw-string
+        callers accept the parse cost.
+
     """
-    parsed_expression: exp.Expr | None = None
+    parsed_expression: exp.Expr
 
     if statement is not None and isinstance(statement, SQL):
-        if statement.expression is None:
+        expr = statement.expression
+        if expr is None:
             raise_statement_parse_error()
-        parsed_expression = statement.expression
+        parsed_expression = expr
     elif isinstance(statement, exp.Expr):
         parsed_expression = statement
     else:

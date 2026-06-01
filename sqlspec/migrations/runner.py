@@ -803,7 +803,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
-                self.loader.load_sql(file_path)
+                if not self.loader.has_query(f"migrate-{version}-up"):
+                    self.loader.load_sql(file_path)
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:
@@ -1147,7 +1148,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
-                await async_(self.loader.load_sql)(file_path)
+                if not self.loader.has_query(f"migrate-{version}-up"):
+                    await async_(self.loader.load_sql)(file_path)
                 for query_name in self.loader.list_queries():
                     all_queries[query_name] = self.loader.get_sql(query_name)
             else:

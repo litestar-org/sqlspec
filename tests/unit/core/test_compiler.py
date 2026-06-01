@@ -20,7 +20,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import Mock, patch
 
 import pytest
@@ -753,7 +753,6 @@ def test_parsing_disabled_fallback(
         "SCRIPT",
         "DDL",
         "COMMAND",
-        "UNKNOWN",
     ]
 
 
@@ -1149,7 +1148,7 @@ def test_execute_many_detection(
 def test_module_constants() -> None:
     """Test module constants are properly defined."""
 
-    operation_types = ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "COMMAND", "UNKNOWN"]
+    operation_types = get_args(OperationType)
     assert "SELECT" in operation_types
     assert "INSERT" in operation_types
     assert "UPDATE" in operation_types
@@ -1159,7 +1158,7 @@ def test_module_constants() -> None:
     assert "SCRIPT" in operation_types
     assert "DDL" in operation_types
     assert "COMMAND" in operation_types
-    assert "UNKNOWN" in operation_types
+    assert "UNKNOWN" not in operation_types
 
 
 @requires_interpreted

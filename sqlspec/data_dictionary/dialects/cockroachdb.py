@@ -1,7 +1,6 @@
 import re
 
-from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
-from sqlspec.typing import VersionInfo
+from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
 
 __all__ = ("resolve_cockroachdb_json_type",)
 

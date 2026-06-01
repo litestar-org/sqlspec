@@ -5,8 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
@@ -220,8 +219,11 @@ def build_copy_to_statement(
     )
 
 
+@final
 class SQLFactory:
     """Factory for creating SQL builders and column expressions."""
+
+    __slots__ = ("dialect",)
 
     @staticmethod
     def _detect_type_from_expression(parsed_expr: exp.Expr) -> str:
@@ -250,13 +252,6 @@ class SQLFactory:
                     extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
                 )
         return None
-
-    @classmethod
-    def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
-        parsed_expr = cls._parse_sql_expression(sql, dialect)
-        if parsed_expr is None:
-            return "COMMAND"
-        return cls._detect_type_from_expression(parsed_expr)
 
     def __init__(self, dialect: DialectType = None) -> None:
         """Initialize the SQL factory.
@@ -304,7 +299,7 @@ class SQLFactory:
             return builder
 
         if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
-            return SQL(statement)
+            return SQL(parsed_expr)
 
         msg = (
             f"sql(...) only supports SELECT statements or DML statements with RETURNING clause. "
@@ -1040,6 +1035,8 @@ class SQLFactory:
             Special SQL constructs like case_, row_number_, etc. are
             handled as properties for type safety.
         """
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
         return Column(name)
 
     @staticmethod

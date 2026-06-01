@@ -16,6 +16,7 @@ TTL-based expiration, and statistics tracking for monitoring
 across the entire SQLSpec system.
 """
 
+import inspect
 import logging
 import threading
 import time
@@ -23,6 +24,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sqlspec.core.cache as cache_module
 from sqlspec.core import (
     CacheConfig,
     CacheKey,
@@ -35,7 +37,6 @@ from sqlspec.core import (
     get_cache_statistics,
     get_default_cache,
     log_cache_stats,
-    reset_cache_stats,
     reset_stats_only,
     update_cache_config,
 )
@@ -174,7 +175,7 @@ def test_lru_cache_initialization() -> None:
     """Test LRUCache initialization with default parameters."""
     cache = LRUCache()
 
-    assert cache.size() == 0
+    assert len(cache) == 0
     assert cache.is_empty() is True
     assert len(cache) == 0
 
@@ -187,7 +188,7 @@ def test_lru_cache_basic_operations() -> None:
 
     cache.put(key1, "value1")
     assert cache.get(key1) == "value1"
-    assert cache.size() == 1
+    assert len(cache) == 1
     assert not cache.is_empty()
 
     assert cache.get(key2) is None
@@ -195,7 +196,7 @@ def test_lru_cache_basic_operations() -> None:
     assert cache.delete(key1) is True
     assert cache.get(key1) is None
     assert cache.delete(key1) is False
-    assert cache.size() == 0
+    assert len(cache) == 0
 
 
 def test_lru_cache_lru_eviction() -> None:
@@ -207,10 +208,10 @@ def test_lru_cache_lru_eviction() -> None:
 
     cache.put(key1, "value1")
     cache.put(key2, "value2")
-    assert cache.size() == 2
+    assert len(cache) == 2
 
     cache.put(key3, "value3")
-    assert cache.size() == 2
+    assert len(cache) == 2
     assert cache.get(key1) is None
     assert cache.get(key2) == "value2"
     assert cache.get(key3) == "value3"
@@ -245,11 +246,11 @@ def test_lru_cache_update_existing_key() -> None:
 
     cache.put(key, "original")
     assert cache.get(key) == "original"
-    assert cache.size() == 1
+    assert len(cache) == 1
 
     cache.put(key, "updated")
     assert cache.get(key) == "updated"
-    assert cache.size() == 1
+    assert len(cache) == 1
 
 
 def test_lru_cache_ttl_expiration() -> None:
@@ -289,10 +290,10 @@ def test_lru_cache_clear_operation() -> None:
 
     cache.put(key1, "value1")
     cache.put(key2, "value2")
-    assert cache.size() == 2
+    assert len(cache) == 2
 
     cache.clear()
-    assert cache.size() == 0
+    assert len(cache) == 0
     assert cache.is_empty()
     assert cache.get(key1) is None
     assert cache.get(key2) is None
@@ -464,12 +465,12 @@ def test_clear_all_caches_function() -> None:
     default_cache.put(test_key, "test_value")
     multi_cache.put_statement("key1", "value1")
 
-    assert default_cache.size() > 0
+    assert len(default_cache) > 0
     assert multi_cache.get_statement("key1") == "value1"
 
     clear_all_caches()
 
-    assert default_cache.size() == 0
+    assert len(default_cache) == 0
     assert multi_cache.get_statement("key1") is None
 
 
@@ -593,20 +594,24 @@ def test_reset_stats_only_function_preserves_entries() -> None:
     assert multi_cache.get_statement("key") == "cached"
 
 
-def test_reset_cache_stats_function_warns_and_clears_entries() -> None:
-    """Test deprecated cache reset alias still clears cache entries."""
+def test_reset_cache_stats_function_removed() -> None:
+    """The removed cache reset alias is absent."""
+    assert not hasattr(cache_module, "reset_cache_stats")
+
+
+def test_clear_all_caches_clears_entries() -> None:
+    """Test clearing all cache entries."""
     default_cache = get_default_cache()
     multi_cache = get_cache()
 
-    test_key = CacheKey(("deprecated-reset",))
+    test_key = CacheKey(("clear-all",))
     default_cache.put(test_key, "cached")
-    multi_cache.put_statement("deprecated-key", "cached")
+    multi_cache.put_statement("clear-all-key", "cached")
 
-    with pytest.warns(DeprecationWarning, match="clear_all_caches\\(\\).*reset_stats_only\\(\\)"):
-        reset_cache_stats()
+    clear_all_caches()
 
     assert test_key not in default_cache
-    assert multi_cache.get_statement("deprecated-key") is None
+    assert multi_cache.get_statement("clear-all-key") is None
 
 
 def test_log_cache_stats_function(caplog: pytest.LogCaptureFixture) -> None:
@@ -719,7 +724,7 @@ def test_lru_cache_zero_max_size() -> None:
     cache.put(key, "test_value")
 
     assert cache.get(key) is None
-    assert cache.size() == 0
+    assert len(cache) == 0
 
 
 def test_lru_cache_very_short_ttl() -> None:
@@ -744,10 +749,10 @@ def test_lru_cache_various_sizes(cache_size: int, num_items: int) -> None:
         key = CacheKey((i,))
         cache.put(key, i)
 
-    assert cache.size() <= cache_size
+    assert len(cache) <= cache_size
 
     if num_items > cache_size:
-        assert cache.size() == cache_size
+        assert len(cache) == cache_size
 
         early_key = CacheKey((0,))
         assert cache.get(early_key) is None
@@ -866,3 +871,24 @@ def test_namespaced_cache_passes_namespace_to_lru_cache() -> None:
         assert internal_cache._namespace == namespace, (
             f"Expected namespace '{namespace}' but got '{internal_cache._namespace}'"
         )
+
+
+def test_cache_key_slots_constant_removed() -> None:
+    """CacheKey slots should live on the class, not a duplicate module constant."""
+
+    assert not hasattr(cache_module, "CACHE_KEY_SLOTS")
+
+
+def test_lru_cache_size_method_removed() -> None:
+    """LRUCache should use __len__ instead of a duplicate size() method."""
+
+    assert "size" not in LRUCache.__dict__
+
+
+def test_namespaced_cache_config_uses_inline_accessors() -> None:
+    """Namespaced cache config should not keep dead named accessor functions."""
+
+    source = inspect.getsource(cache_module)
+
+    assert "def _sql_cache_enabled" not in source
+    assert "lambda config: config.sql_cache_enabled" in source

@@ -29,7 +29,6 @@ from sqlspec.adapters.bigquery.core import (
     try_bulk_insert,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
-from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
     StatementConfig,
     build_arrow_result_from_table,
@@ -101,7 +100,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_job_retry_deadline",
         "_json_serializer",
         "_literal_inliner",
-        "_type_converter",
     )
     dialect = "bigquery"
 
@@ -112,9 +110,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         features = driver_features or {}
-
-        enable_uuid_conversion = features.get("enable_uuid_conversion", True)
-        self._type_converter = BigQueryOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
 
         if statement_config is None:
             statement_config = default_statement_config.replace(cache_config=get_cache_config())

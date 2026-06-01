@@ -40,7 +40,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
         "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", True, "litestar"
     ),
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
-    SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue"),
+    SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),

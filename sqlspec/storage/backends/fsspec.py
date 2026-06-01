@@ -1,6 +1,5 @@
 # pyright: reportPrivateUsage=false
 import asyncio
-import logging
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
@@ -10,10 +9,9 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._paths import resolve_storage_path
-from sqlspec.storage._utils import import_pyarrow_parquet
+from sqlspec.storage._utils import _log_storage_event, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
-from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
@@ -22,47 +20,7 @@ if TYPE_CHECKING:
 
 __all__ = ("FSSpecBackend",)
 
-logger = get_logger(__name__)
-
 _OBJECT_STORE_PROTOCOLS = {"s3", "gs", "az", "gcs"}
-
-
-def _log_storage_event(
-    event: str,
-    *,
-    backend_type: str,
-    protocol: str,
-    operation: str | None = None,
-    path: str | None = None,
-    source_path: str | None = None,
-    destination_path: str | None = None,
-    count: int | None = None,
-    exists: bool | None = None,
-) -> None:
-    fields: dict[str, Any] = {
-        "backend_type": backend_type,
-        "protocol": protocol,
-        "path": path,
-        "source_path": source_path,
-        "destination_path": destination_path,
-        "count": count,
-        "exists": exists,
-    }
-    if operation is not None:
-        fields["operation"] = operation
-    log_with_context(logger, logging.DEBUG, event, **fields)
-
-
-def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, options: "dict[str, Any]") -> None:
-    """Write raw bytes via an fsspec filesystem handle."""
-    with fs.open(resolved_path, mode="wb", **options) as file_obj:
-        file_obj.write(data)  # pyright: ignore
-
-
-def _write_fsspec_arrow(fs: Any, resolved_path: str, table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
-    """Write an Arrow table via an fsspec filesystem handle."""
-    with fs.open(resolved_path, mode="wb") as file_obj:
-        pq.write_table(table, file_obj, **options)  # pyright: ignore
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -572,3 +530,15 @@ class FSSpecBackend:
         Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
         """
         await async_(self.write_arrow_sync)(path, table, **kwargs)
+
+
+def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, options: "dict[str, Any]") -> None:
+    """Write raw bytes via an fsspec filesystem handle."""
+    with fs.open(resolved_path, mode="wb", **options) as file_obj:
+        file_obj.write(data)  # pyright: ignore
+
+
+def _write_fsspec_arrow(fs: Any, resolved_path: str, table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
+    """Write an Arrow table via an fsspec filesystem handle."""
+    with fs.open(resolved_path, mode="wb") as file_obj:
+        pq.write_table(table, file_obj, **options)  # pyright: ignore

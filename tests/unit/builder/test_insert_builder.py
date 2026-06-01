@@ -39,11 +39,18 @@ def test_insert_preserves_schema_qualified_table() -> None:
     assert stmt.parameters["version_num"] == "0001"
 
 
-def test_insert_values_from_dict() -> None:
-    """Test INSERT using values_from_dict method (deprecated; emits DeprecationWarning)."""
+def test_insert_values_from_dict_removed() -> None:
+    """The removed dict-only Insert API is absent."""
+    builder = sql.insert("users")
+
+    assert not hasattr(builder, "values_from_dict")
+    assert not hasattr(builder, "values_from_dicts")
+
+
+def test_insert_values_from() -> None:
+    """Test INSERT using values_from."""
     data = {"id": 1, "name": "John", "status": "active"}
-    with pytest.warns(DeprecationWarning, match=r"values_from"):
-        query = sql.insert("users").values_from_dict(data)
+    query = sql.insert("users").values_from(data)
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
@@ -53,11 +60,10 @@ def test_insert_values_from_dict() -> None:
     assert stmt.parameters["status"] == "active"
 
 
-def test_insert_values_from_dicts_multiple_rows() -> None:
-    """Test INSERT using values_from_dicts for multiple rows (deprecated; emits DeprecationWarning)."""
+def test_insert_values_from_many_multiple_rows() -> None:
+    """Test INSERT using values_from_many for multiple rows."""
     data = [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}, {"id": 3, "name": "Bob"}]
-    with pytest.warns(DeprecationWarning, match=r"values_from"):
-        query = sql.insert("users").values_from_dicts(data)
+    query = sql.insert("users").values_from_many(data)
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
@@ -139,13 +145,10 @@ def test_insert_columns_and_values_consistency() -> None:
 
 
 def test_insert_inconsistent_dict_keys_error() -> None:
-    """Test that inconsistent dictionary keys in values_from_dicts raises error (deprecated method)."""
+    """Test that inconsistent dictionary keys in values_from_many raises error."""
     data = [{"id": 1, "name": "John"}, {"id": 2, "email": "jane@test.com"}]
-    with (
-        pytest.warns(DeprecationWarning, match=r"values_from"),
-        pytest.raises(SQLBuilderError, match="do not match expected keys"),
-    ):
-        sql.insert("users").values_from_dicts(data).build()
+    with pytest.raises(SQLBuilderError, match="do not match expected keys"):
+        sql.insert("users").values_from_many(data).build()
 
 
 def test_insert_with_sql_raw_expressions() -> None:
@@ -321,43 +324,13 @@ def test_on_conflict_parameter_merging() -> None:
     assert "NOW()" in stmt.sql
 
 
-def test_on_conflict_with_values_from_dict() -> None:
-    """Test ON CONFLICT with values_from_dict (deprecated method emits DeprecationWarning)."""
+def test_on_conflict_with_values_from() -> None:
+    """Test ON CONFLICT with values_from."""
     data = {"id": 1, "name": "John", "email": "john@test.com"}
-    with pytest.warns(DeprecationWarning, match=r"values_from"):
-        query = sql.insert("users").values_from_dict(data).on_conflict("id").do_update(name="Updated")
+    query = sql.insert("users").values_from(data).on_conflict("id").do_update(name="Updated")
     stmt = query.build()
 
     assert "ON CONFLICT" in stmt.sql
     assert "DO UPDATE" in stmt.sql
     assert "name_1" in stmt.parameters
     assert stmt.parameters["name_1"] == "Updated"
-
-
-def test_values_from_dict_warning_message_contains_migration_pointer() -> None:
-    """Warning text must name the replacement API explicitly."""
-    import warnings
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        sql.insert("users").values_from_dict({"id": 1})
-
-    deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert len(deprecation_warnings) == 1
-    msg = str(deprecation_warnings[0].message)
-    assert "values_from" in msg
-    assert "msgspec" in msg or "Pydantic" in msg or "dataclass" in msg
-
-
-def test_values_from_dicts_warning_message_contains_migration_pointer() -> None:
-    """values_from_dicts warning must point at values_from_many()."""
-    import warnings
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        sql.insert("users").values_from_dicts([{"id": 1}])
-
-    deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert len(deprecation_warnings) == 1
-    msg = str(deprecation_warnings[0].message)
-    assert "values_from_many" in msg

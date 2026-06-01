@@ -66,11 +66,8 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
 
     Returns:
         PyArrow Table.
-
-    Raises:
-        TypeError: If source type is not supported.
-
     """
+    # mypyc boundary: compiled _common.py cannot safely call uncompiled arrow_helpers directly; this wrapper is intentional.
     return _coerce_arrow_table_impl(source)
 
 
@@ -85,16 +82,14 @@ def arrow_table_to_rows(
 
     Returns:
         Tuple of (column_names, list of row tuples).
-
-    Raises:
-        ValueError: If table has no columns to import.
-
     """
+    # mypyc boundary: compiled _common.py cannot safely call uncompiled arrow_helpers directly; this wrapper is intentional.
     return _arrow_table_to_rows_impl(table, columns)
 
 
 def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
     """Return whether Arrow rows may contain nested values needing preparation."""
+    # mypyc boundary: compiled _common.py cannot safely call uncompiled arrow_helpers directly; this wrapper is intentional.
     return _arrow_table_needs_parameter_preparation(table)
 
 

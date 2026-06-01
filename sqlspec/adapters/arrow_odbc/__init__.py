@@ -12,6 +12,7 @@ from sqlspec.adapters.arrow_odbc.core import (
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver, ArrowOdbcExceptionHandler
+from sqlspec.adapters.arrow_odbc.type_converter import odbc_type_to_arrow
 
 __all__ = (
     "ArrowOdbcConfig",
@@ -26,5 +27,6 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "odbc_type_to_arrow",
     "resolve_dialect_from_dbms_name",
 )

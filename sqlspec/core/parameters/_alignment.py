@@ -17,10 +17,6 @@ __all__ = (
 EXECUTE_MANY_MIN_ROWS: int = 2
 
 
-def _is_sequence_like(value: Any) -> bool:
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
-
-
 def normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
     """Normalize a parameter key into an ``(kind, value)`` tuple.
 
@@ -276,3 +272,7 @@ def validate_parameter_alignment(
         return
 
     _validate_single_parameter_set(profile, parameters)
+
+
+def _is_sequence_like(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))

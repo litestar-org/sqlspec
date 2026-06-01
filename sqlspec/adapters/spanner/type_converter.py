@@ -21,6 +21,8 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+from typing_extensions import final
+
 from sqlspec._typing import UUID_UTILS_INSTALLED
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 from sqlspec.utils.serializers import from_json
@@ -76,6 +78,7 @@ def _get_json_object_type() -> "type[Any]":
     return _JSON_OBJECT_TYPE
 
 
+@final
 class SpannerOutputConverter(CachedOutputConverter):
     """Spanner-specific output conversion with UUID and JSON support.
 

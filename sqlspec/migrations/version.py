@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, final
 
 from sqlspec.utils.logging import get_logger
 
@@ -38,6 +38,7 @@ class VersionType(Enum):
     TIMESTAMP = "timestamp"
 
 
+@final
 @dataclass(frozen=True)
 class MigrationVersion:
     """Parsed migration version with structured comparison support.
@@ -70,9 +71,6 @@ class MigrationVersion:
 
         Returns:
             True if this version sorts before other.
-
-        Raises:
-            TypeError: If comparing against non-MigrationVersion.
         """
         if not isinstance(other, MigrationVersion):
             return NotImplemented
@@ -103,6 +101,32 @@ class MigrationVersion:
             True if this version is less than or equal to other.
         """
         return self == other or self < other
+
+    def __gt__(self, other: "MigrationVersion") -> bool:
+        """Check if version is greater than another.
+
+        Args:
+            other: Version to compare against.
+
+        Returns:
+            True if this version sorts after other.
+        """
+        if not isinstance(other, MigrationVersion):
+            return NotImplemented
+        return not (self < other or self == other)
+
+    def __ge__(self, other: "MigrationVersion") -> bool:
+        """Check if version is greater than or equal to another.
+
+        Args:
+            other: Version to compare against.
+
+        Returns:
+            True if this version is greater than or equal to other.
+        """
+        if not isinstance(other, MigrationVersion):
+            return NotImplemented
+        return not self < other
 
     def __eq__(self, other: object) -> bool:
         """Check version equality.

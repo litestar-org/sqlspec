@@ -2,7 +2,9 @@
 
 import pytest
 
+from sqlspec.data_dictionary import TableMetadata
 from sqlspec.data_dictionary.dialects.mssql import (
+    MSSQL_CONFIG,
     is_mssql_azure_sql,
     list_mssql_available_features,
     merge_mssql_table_lists,
@@ -12,10 +14,8 @@ from sqlspec.data_dictionary.dialects.mssql import (
     mssql_supports_string_agg,
     parse_mssql_engine_edition,
     parse_mssql_version_components,
-    resolve_mssql_default_schema,
     resolve_mssql_feature_flag,
 )
-from sqlspec.typing import TableMetadata
 
 
 @pytest.mark.parametrize(
@@ -87,7 +87,10 @@ def test_is_mssql_azure_sql(edition: int) -> None:
 
 def test_mssql_default_schema_is_dbo() -> None:
     """MSSQL should default introspection to dbo."""
-    assert resolve_mssql_default_schema() == "dbo"
+    mssql_module = __import__("sqlspec.data_dictionary.dialects.mssql", fromlist=["resolve_mssql_default_schema"])
+
+    assert not hasattr(mssql_module, "resolve_mssql_default_schema")
+    assert MSSQL_CONFIG.default_schema == "dbo"
 
 
 def test_merge_mssql_table_lists_preserves_dependency_order_and_appends_orphans() -> None:

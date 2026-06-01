@@ -58,7 +58,7 @@ def test_warn_deprecation_pending() -> None:
 
 
 @pytest.mark.parametrize(
-    "kind,expected_prefix",
+    ("kind", "expected_prefix"),
     [
         ("function", "Call to"),
         ("method", "Call to"),

@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.driver import DuckDBDriver

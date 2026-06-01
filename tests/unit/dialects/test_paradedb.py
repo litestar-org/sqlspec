@@ -3,6 +3,9 @@
 from sqlglot import parse_one
 
 import sqlspec.dialects.postgres._paradedb  # noqa: F401
+from sqlspec.dialects.postgres._operators import PARADEDB_OPERATOR_TOKENS, PGVECTOR_OPERATOR_TOKENS
+from sqlspec.dialects.postgres._paradedb import ParadeDBTokenizer
+from sqlspec.dialects.postgres._pgvector import PGVectorTokenizer
 
 
 def _render(sql: str) -> str:
@@ -96,3 +99,21 @@ def test_prox_regex() -> None:
     sql = "SELECT * FROM mock_items WHERE description @@@ pdb.prox_regex('sho.*', 2, 'run.*')"
     rendered = _render(sql)
     assert "@@@" in rendered
+
+
+def test_paradedb_keywords_inherits_from_pgvector() -> None:
+    assert ParadeDBTokenizer.KEYWORDS == {**PGVectorTokenizer.KEYWORDS, **PARADEDB_OPERATOR_TOKENS}
+
+
+def test_paradedb_keywords_contains_paradedb_operators() -> None:
+    for operator in PARADEDB_OPERATOR_TOKENS:
+        assert operator in ParadeDBTokenizer.KEYWORDS
+
+
+def test_paradedb_keywords_contains_pgvector_operators() -> None:
+    for operator in PGVECTOR_OPERATOR_TOKENS:
+        assert operator in ParadeDBTokenizer.KEYWORDS
+
+
+def test_paradedb_tokenizer_inherits_from_pgvector_tokenizer() -> None:
+    assert issubclass(ParadeDBTokenizer, PGVectorTokenizer)

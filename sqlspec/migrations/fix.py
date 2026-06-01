@@ -105,6 +105,8 @@ class MigrationFixer:
     def create_backup(self) -> Path:
         """Create timestamped backup directory with all migration files.
 
+        Keep in sync with MigrationSquasher._create_backup.
+
         Returns:
             Path to created backup directory.
 
@@ -178,6 +180,8 @@ class MigrationFixer:
     def rollback(self) -> None:
         """Restore migration files from backup.
 
+        Keep in sync with MigrationSquasher._rollback_backup.
+
         Deletes current migration files and restores from backup directory.
         Only restores if backup exists.
         """
@@ -194,6 +198,8 @@ class MigrationFixer:
 
     def cleanup(self) -> None:
         """Remove backup directory after successful conversion.
+
+        Keep in sync with MigrationSquasher._cleanup_backup.
 
         Only removes backup if it exists. Logs warning if no backup found.
         """

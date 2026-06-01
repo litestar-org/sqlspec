@@ -198,11 +198,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         Called once during pool creation if enable_custom_adapters is True.
         Registers JSON serialization handlers if configured.
         """
-        if self.driver_features.get("enable_custom_adapters", False):
-            register_type_handlers(
-                json_serializer=self.driver_features.get("json_serializer"),
-                json_deserializer=self.driver_features.get("json_deserializer"),
-            )
+        register_type_handlers(
+            json_serializer=self.driver_features.get("json_serializer"),
+            json_deserializer=self.driver_features.get("json_deserializer"),
+        )
 
     def _close_pool(self) -> None:
         """Close the connection pool."""

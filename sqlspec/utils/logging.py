@@ -9,6 +9,8 @@ import logging
 from logging import LogRecord
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.correlation import correlation_id_var as _correlation_id_var
 
@@ -57,33 +59,7 @@ from other SQLSpec logs::
 _BASE_RECORD_KEYS: "set[str] | None" = None
 
 
-def _get_base_record_keys() -> "set[str]":
-    """Get base LogRecord keys lazily to avoid mypyc module-level dict issues."""
-    global _BASE_RECORD_KEYS
-    if _BASE_RECORD_KEYS is None:
-        _BASE_RECORD_KEYS = set(
-            logging.LogRecord(
-                name="sqlspec", level=logging.INFO, pathname="(unknown file)", lineno=0, msg="", args=(), exc_info=None
-            ).__dict__.keys()
-        )
-        _BASE_RECORD_KEYS.update({"message", "asctime"})
-    return _BASE_RECORD_KEYS
-
-
 correlation_id_var: "ContextVar[str | None]" = _correlation_id_var
-
-
-def _get_trace_context() -> "tuple[str | None, str | None]":
-    """Resolve trace context lazily to avoid import cycles.
-
-    Returns:
-        Tuple of (trace_id, span_id) or (None, None) if unavailable.
-    """
-    try:
-        from sqlspec.observability import get_trace_context
-    except Exception:
-        return (None, None)
-    return get_trace_context()
 
 
 def set_correlation_id(correlation_id: "str | None") -> None:
@@ -104,6 +80,7 @@ def get_correlation_id() -> "str | None":
     return CorrelationContext.get()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StructuredFormatter(logging.Formatter):
     """Structured JSON formatter with correlation ID support."""
 
@@ -158,6 +135,7 @@ class StructuredFormatter(logging.Formatter):
         return to_json(log_entry)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CorrelationIDFilter(logging.Filter):
     """Filter that adds correlation ID to log records."""
 
@@ -175,6 +153,7 @@ class CorrelationIDFilter(logging.Filter):
         return True
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqlglotCommandFallbackFilter(logging.Filter):
     """Filter to suppress sqlglot warnings we consider benign.
 
@@ -249,3 +228,29 @@ def suppress_erroneous_sqlglot_log_messages() -> None:
         sqlglot_logger = logging.getLogger(logger_name)
         if not any(isinstance(f, SqlglotCommandFallbackFilter) for f in sqlglot_logger.filters):
             sqlglot_logger.addFilter(SqlglotCommandFallbackFilter())
+
+
+def _get_base_record_keys() -> "set[str]":
+    """Get base LogRecord keys lazily to avoid mypyc module-level dict issues."""
+    global _BASE_RECORD_KEYS
+    if _BASE_RECORD_KEYS is None:
+        _BASE_RECORD_KEYS = set(
+            logging.LogRecord(
+                name="sqlspec", level=logging.INFO, pathname="(unknown file)", lineno=0, msg="", args=(), exc_info=None
+            ).__dict__.keys()
+        )
+        _BASE_RECORD_KEYS.update({"message", "asctime"})
+    return _BASE_RECORD_KEYS
+
+
+def _get_trace_context() -> "tuple[str | None, str | None]":
+    """Resolve trace context lazily to avoid import cycles.
+
+    Returns:
+        Tuple of (trace_id, span_id) or (None, None) if unavailable.
+    """
+    try:
+        from sqlspec.observability import get_trace_context
+    except Exception:
+        return (None, None)
+    return get_trace_context()

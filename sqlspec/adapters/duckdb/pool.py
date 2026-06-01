@@ -9,6 +9,7 @@ from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
+from typing_extensions import final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
@@ -19,17 +20,7 @@ if TYPE_CHECKING:
 __all__ = ("DuckDBConnectionPool",)
 
 
-_SQL_IDENTIFIER_RE: "Final[re.Pattern[str]]" = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
-
-
-def _validate_sql_identifier(value: str, field_name: str) -> None:
-    """Raise ValueError if value is not safe to interpolate as a SQL identifier."""
-    if not _SQL_IDENTIFIER_RE.fullmatch(value):
-        msg = (
-            f"Invalid SQL identifier for {field_name!r}: {value!r}. "
-            "Must start with a letter and contain only letters, digits, and underscores."
-        )
-        raise ValueError(msg)
+_SQL_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 logger = get_logger(POOL_LOGGER_NAME)
@@ -42,6 +33,7 @@ POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
 
 
+@final
 class DuckDBConnectionPool:
     """Thread-local connection manager for DuckDB.
 
@@ -356,3 +348,13 @@ class DuckDBConnectionPool:
         Args:
             connection: The connection to release (ignored)
         """
+
+
+def _validate_sql_identifier(value: str, field_name: str) -> None:
+    """Raise ValueError if value is not safe to interpolate as a SQL identifier."""
+    if not _SQL_IDENTIFIER_RE.fullmatch(value):
+        msg = (
+            f"Invalid SQL identifier for {field_name!r}: {value!r}. "
+            "Must start with a letter and contain only letters, digits, and underscores."
+        )
+        raise ValueError(msg)

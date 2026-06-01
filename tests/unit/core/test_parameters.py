@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Unit tests for the sqlspec.core.parameters module.
 
 Tests the 2-Phase Parameter Conversion System:
@@ -15,6 +16,7 @@ from collections.abc import Callable, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -41,10 +43,6 @@ from sqlspec.core import (
     wrap_with_type,
 )
 from sqlspec.core.parameters import _converter as _converter_module
-
-# Detect whether the core parameters module is mypyc-compiled.
-# When compiled, `patch.object` on C-extension classes is a no-op,
-# so tests that assert mock call counts must be skipped.
 from sqlspec.core.parameters import _processor as _processor_module
 from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
@@ -52,7 +50,6 @@ from sqlspec.utils.serializers import from_json, to_json
 
 _VALIDATOR_COMPILED = (_validator_module.__file__ or "").endswith((".so", ".pyd"))
 _CONVERTER_COMPILED = (_converter_module.__file__ or "").endswith((".so", ".pyd"))
-
 _ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
     "sqlspec.adapters.adbc.driver",
     "sqlspec.adapters.aiosqlite.driver",
@@ -70,10 +67,8 @@ _ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
     "sqlspec.adapters.spanner.driver",
     "sqlspec.adapters.sqlite.driver",
 )
-
 for _module_name in _ADAPTER_DRIVER_MODULES:
     import_module(_module_name)
-
 _ADAPTER_PROFILE_KEYS: "tuple[str, ...]" = (
     "adbc",
     "aiosqlite",
@@ -91,7 +86,6 @@ _ADAPTER_PROFILE_KEYS: "tuple[str, ...]" = (
     "spanner",
     "sqlite",
 )
-
 _STYLE_PLACEHOLDER: "dict[ParameterStyle, str]" = {
     ParameterStyle.QMARK: "?",
     ParameterStyle.NUMERIC: "$1",
@@ -135,14 +129,12 @@ def _build_sql_for_style(style: ParameterStyle) -> str:
 def test_parameter_style_values(style: ParameterStyle, expected_value: str) -> None:
     """Test ParameterStyle enum values match expected strings."""
     assert style.value == expected_value
-
     assert style == expected_value
 
 
 def test_typed_parameter_basic() -> None:
     """Test basic TypedParameter creation and properties."""
     param = TypedParameter(True, bool, "is_active")
-
     assert param.value is True
     assert param.original_type is bool
     assert param.semantic_name == "is_active"
@@ -151,7 +143,6 @@ def test_typed_parameter_basic() -> None:
 def test_typed_parameter_defaults() -> None:
     """Test TypedParameter with default values."""
     param = TypedParameter(42)
-
     assert param.value == 42
     assert param.original_type is int
     assert param.semantic_name is None
@@ -162,12 +153,9 @@ def test_typed_parameter_hash_equality() -> None:
     param1 = TypedParameter(True, bool, "active")
     param2 = TypedParameter(True, bool, "active")
     param3 = TypedParameter(False, bool, "active")
-
     assert param1 == param2
     assert hash(param1) == hash(param2)
-
     assert param1 != param3
-
     first_hash = hash(param1)
     second_hash = hash(param1)
     assert first_hash == second_hash
@@ -177,7 +165,6 @@ def test_typed_parameter_repr() -> None:
     """Test TypedParameter string representation for debugging."""
     param = TypedParameter(Decimal("123.45"), Decimal, "price")
     repr_str = repr(param)
-
     assert "TypedParameter" in repr_str
     assert "123.45" in repr_str
     assert "Decimal" in repr_str
@@ -207,13 +194,11 @@ def test_typed_parameter_with_different_types(value: Any, expected_type: type) -
 
 def test_wrap_with_type_basic_types() -> None:
     """Test type wrapping for basic Python types."""
-
     bool_result = wrap_with_type(True, "is_active")
     assert isinstance(bool_result, TypedParameter)
     assert bool_result.value is True
     assert bool_result.original_type is bool
     assert bool_result.semantic_name == "is_active"
-
     decimal_result = wrap_with_type(Decimal("123.45"))
     assert isinstance(decimal_result, TypedParameter)
     assert decimal_result.value == Decimal("123.45")
@@ -227,7 +212,6 @@ def test_wrap_with_type_datetime_types() -> None:
     assert isinstance(date_result, TypedParameter)
     assert date_result.value == test_date
     assert date_result.original_type == date
-
     test_datetime = datetime(2023, 1, 1, 12, 0, 0)
     datetime_result = wrap_with_type(test_datetime)
     assert isinstance(datetime_result, TypedParameter)
@@ -237,7 +221,6 @@ def test_wrap_with_type_datetime_types() -> None:
 
 def test_wrap_with_type_no_wrapping_needed() -> None:
     """Test types that don't need wrapping are returned unchanged."""
-
     assert wrap_with_type("test") == "test"
     assert wrap_with_type(42) == 42
     assert wrap_with_type(math.pi) == math.pi
@@ -264,7 +247,6 @@ def test_parameter_info_creation(
     param_info = ParameterInfo(
         name=name, style=style, position=position, ordinal=ordinal, placeholder_text=placeholder_text
     )
-
     assert param_info.name == name
     assert param_info.style == style
     assert param_info.position == position
@@ -276,20 +258,16 @@ def test_mixed_named_and_numeric_parameters() -> None:
     """Test mixed named (:name) and numeric ($2) parameters."""
     sql = "SELECT :name::text as name, $2::int as age"
     parameters = {"name": "Mixed", "age": 25}
-
     converter = ParameterConverter()
-
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
-
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Mixed", 25)
 
 
 def test_build_statement_config_helper_strategy_applies_serializer() -> None:
     """Helper strategy profiles should inject JSON serializers and tuple adapters."""
-
     calls: list[Any] = []
 
     def custom_serializer(value: Any) -> str:
@@ -298,14 +276,11 @@ def test_build_statement_config_helper_strategy_applies_serializer() -> None:
 
     profile = get_driver_profile("sqlite")
     config = build_statement_config_from_profile(profile, json_serializer=custom_serializer)
-
     parameter_config = config.parameter_config
     assert parameter_config.json_serializer is custom_serializer
-
     dict_encoder = parameter_config.type_coercion_map[dict]
     encoded_dict = dict_encoder({"a": 1})
     assert encoded_dict == "encoded:{'a': 1}"
-
     tuple_encoder = parameter_config.type_coercion_map[tuple]
     encoded_tuple = tuple_encoder((1, 2))
     assert encoded_tuple == "encoded:[1, 2]"
@@ -314,18 +289,14 @@ def test_build_statement_config_helper_strategy_applies_serializer() -> None:
 
 def test_build_statement_config_helper_strategy_defaults_to_json() -> None:
     """Helper strategy should fall back to module JSON helpers when none provided."""
-
     profile = get_driver_profile("sqlite")
     config = build_statement_config_from_profile(profile)
-
     parameter_config = config.parameter_config
     assert parameter_config.json_serializer is to_json
-
     dict_encoder = parameter_config.type_coercion_map[dict]
     encoded_dict = dict_encoder({"a": 1})
     assert isinstance(encoded_dict, str)
     assert json.loads(encoded_dict) == {"a": 1}
-
     tuple_encoder = parameter_config.type_coercion_map[tuple]
     encoded_tuple = tuple_encoder((1, 2))
     assert isinstance(encoded_tuple, str)
@@ -340,7 +311,6 @@ def test_build_statement_config_driver_strategy_preserves_type_map() -> None:
 
     profile = get_driver_profile("asyncpg")
     config = build_statement_config_from_profile(profile, json_serializer=dummy_serializer)
-
     parameter_config = config.parameter_config
     assert parameter_config.json_serializer is dummy_serializer
     assert dict not in parameter_config.type_coercion_map
@@ -349,10 +319,8 @@ def test_build_statement_config_driver_strategy_preserves_type_map() -> None:
 
 def test_build_statement_config_driver_strategy_defaults_to_json() -> None:
     """Driver strategy should wire default JSON helpers when overrides absent."""
-
     profile = get_driver_profile("asyncpg")
     config = build_statement_config_from_profile(profile)
-
     parameter_config = config.parameter_config
     assert parameter_config.json_serializer is to_json
     assert parameter_config.json_deserializer is from_json
@@ -361,7 +329,6 @@ def test_build_statement_config_driver_strategy_defaults_to_json() -> None:
 
 def test_build_statement_config_helper_tuple_strategy_override() -> None:
     """Overriding tuple strategy to tuple should preserve tuple payload."""
-
     captured: list[Any] = []
 
     def recorder(value: Any) -> str:
@@ -372,55 +339,45 @@ def test_build_statement_config_helper_tuple_strategy_override() -> None:
     config = build_statement_config_from_profile(
         profile, parameter_overrides={"json_tuple_strategy": "tuple"}, json_serializer=recorder
     )
-
     tuple_encoder = config.parameter_config.type_coercion_map[tuple]
     encoded_value = tuple_encoder((1, 2))
-
     assert encoded_value == "encoded:(1, 2)"
     assert captured[-1] == (1, 2)
 
 
 def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
     """Null parameters should render as literals and shrink parameter list."""
-
     expression = sqlglot.parse_one("INSERT INTO test VALUES ($1, $2)", dialect="postgres")
     with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
-        modified_expression, cleaned_params = replace_null_parameters_with_literals(
+        (modified_expression, cleaned_params) = replace_null_parameters_with_literals(
             expression, (42, None), dialect="postgres"
         )
-
     assert modified_expression.sql(dialect="postgres") == "INSERT INTO test VALUES ($1, NULL)"
     assert cleaned_params == (42,)
 
 
 def test_replace_null_parameters_with_literals_named_bigquery() -> None:
     """Named parameters should inline NULL literals and drop None values."""
-
     expression = sqlglot.parse_one("INSERT INTO test VALUES (@id, @desc)", dialect="bigquery")
     with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
-        modified_expression, cleaned_params = replace_null_parameters_with_literals(
+        (modified_expression, cleaned_params) = replace_null_parameters_with_literals(
             expression, {"id": 1, "desc": None}, dialect="bigquery"
         )
-
     assert modified_expression.sql(dialect="bigquery") == "INSERT INTO test VALUES (@id, NULL)"
     assert cleaned_params == {"id": 1}
 
 
 def test_replace_placeholders_with_literals_basic_sequence() -> None:
     """Placeholders are replaced by literals when provided with positional parameters."""
-
     expression = sqlglot.parse_one("SELECT ? AS value", dialect="bigquery")
     transformed = replace_placeholders_with_literals(expression, [123], json_serializer=json.dumps)
-
     assert transformed.sql(dialect="bigquery") == "SELECT 123 AS value"
 
 
 def test_replace_placeholders_with_literals_named_mapping() -> None:
     """Named parameters in mappings are embedded as string literals."""
-
     expression = sqlglot.parse_one("SELECT @name AS user", dialect="bigquery")
     transformed = replace_placeholders_with_literals(expression, {"@name": "bob"}, json_serializer=json.dumps)
-
     assert transformed.sql(dialect="bigquery") == "SELECT 'bob' AS user"
 
 
@@ -431,10 +388,8 @@ def test_build_statement_config_applies_overrides_and_extras() -> None:
         return value.upper()
 
     overrides = {"type_coercion_map": {str: uppercase}, "supported_parameter_styles": {ParameterStyle.NAMED_AT}}
-
     profile = get_driver_profile("bigquery")
     config = build_statement_config_from_profile(profile, parameter_overrides=overrides)
-
     parameter_config = config.parameter_config
     assert parameter_config.supported_parameter_styles == {ParameterStyle.NAMED_AT}
     assert parameter_config.type_coercion_map[str]("value") == "VALUE"
@@ -443,7 +398,6 @@ def test_build_statement_config_applies_overrides_and_extras() -> None:
 
 def test_get_driver_profile_missing_raises() -> None:
     """Unknown adapter keys should raise ImproperConfigurationError."""
-
     with pytest.raises(ImproperConfigurationError):
         get_driver_profile("does-not-exist")
 
@@ -451,10 +405,8 @@ def test_get_driver_profile_missing_raises() -> None:
 def test_mssql_python_parameter_profile_registered() -> None:
     """mssql_python should register a qmark default profile with pyformat support."""
     pytest.importorskip("mssql_python")
-    from sqlspec.adapters.mssql_python.core import driver_profile  # noqa: F401
 
     profile = get_driver_profile("mssql_python")
-
     assert profile.default_dialect == "tsql"
     assert profile.default_style is ParameterStyle.QMARK
     assert ParameterStyle.QMARK in profile.supported_styles
@@ -466,7 +418,6 @@ def test_mssql_python_parameter_profile_registered() -> None:
 
 def test_register_driver_profile_duplicate_guard() -> None:
     """Registering the same adapter twice without override should fail."""
-
     profile = DriverParameterProfile(
         name="TestAdapter",
         default_style=ParameterStyle.QMARK,
@@ -480,7 +431,6 @@ def test_register_driver_profile_duplicate_guard() -> None:
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
     )
-
     key = "test-duplicate"
     DRIVER_PARAMETER_PROFILES.pop(key, None)
     register_driver_profile(key, profile)
@@ -493,7 +443,6 @@ def test_register_driver_profile_duplicate_guard() -> None:
 
 def test_register_driver_profile_allows_override() -> None:
     """allow_override should replace an existing driver profile."""
-
     base_profile = DriverParameterProfile(
         name="TestAdapter",
         default_style=ParameterStyle.QMARK,
@@ -520,14 +469,12 @@ def test_register_driver_profile_allows_override() -> None:
         preserve_original_params_for_many=True,
         json_serializer_strategy="driver",
     )
-
     key = "test-override"
     DRIVER_PARAMETER_PROFILES.pop(key, None)
     register_driver_profile(key, base_profile)
     try:
         register_driver_profile(key, replacement_profile, allow_override=True)
         resolved_profile = get_driver_profile(key)
-
         assert resolved_profile is replacement_profile
         assert resolved_profile.default_style is ParameterStyle.NUMERIC
         assert resolved_profile.has_native_list_expansion is True
@@ -546,14 +493,13 @@ def test_supported_styles_sqlglot_parseable(adapter_key: str) -> None:
     """Supported styles must parse with SQLGlot for the adapter dialect."""
     profile = get_driver_profile(adapter_key)
     dialect = _normalize_sqlglot_dialect(profile.default_dialect)
-
     for style in profile.supported_styles:
         if style not in _STYLE_PLACEHOLDER:
             continue
         sql = _build_sql_for_style(style)
         try:
             sqlglot.parse_one(sql, dialect=dialect)
-        except Exception as exc:  # pragma: no cover - diagnostics in failure
+        except Exception as exc:
             pytest.fail(f"{adapter_key} {style.value} failed SQLGlot parse ({dialect}): {exc}")
 
 
@@ -564,16 +510,14 @@ def test_supported_styles_skip_parse_normalization(adapter_key: str) -> None:
     config = build_statement_config_from_profile(profile).parameter_config
     processor = ParameterProcessor()
     validator = ParameterValidator()
-
     for style in config.supported_parameter_styles:
         if style not in _STYLE_PLACEHOLDER:
             continue
         sql = _build_sql_for_style(style)
         param_info = validator.extract_parameters(sql)
         assert param_info
-        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        needs_normalization = processor._needs_parse_normalization(param_info, config)
         assert needs_normalization is False
-
     if config.supported_execution_parameter_styles is not None:
         assert config.default_execution_parameter_style in config.supported_execution_parameter_styles
 
@@ -585,13 +529,12 @@ def test_unsupported_styles_require_parse_normalization(adapter_key: str) -> Non
     config = build_statement_config_from_profile(profile).parameter_config
     processor = ParameterProcessor()
     validator = ParameterValidator()
-
     unsupported_styles = set(_STYLE_PLACEHOLDER).difference(config.supported_parameter_styles)
     for style in unsupported_styles:
         sql = _build_sql_for_style(style)
         param_info = validator.extract_parameters(sql)
         assert param_info
-        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
+        needs_normalization = processor._needs_parse_normalization(param_info, config)
         assert needs_normalization is True
 
 
@@ -599,7 +542,6 @@ def test_mixed_parameter_style_with_processor() -> None:
     """Test mixed parameter styles through the full processor pipeline."""
     sql = "SELECT :name::text as name, $2::int as age"
     parameters = {"name": "Test", "age": 30}
-
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
@@ -608,12 +550,10 @@ def test_mixed_parameter_style_with_processor() -> None:
         allow_mixed_parameter_styles=False,
         preserve_parameter_format=True,
     )
-
     processor = ParameterProcessor()
-    processed_sql, processed_params = processor.process(
+    (processed_sql, processed_params) = processor.process(
         sql=sql, parameters=parameters, config=config, dialect="postgres", is_many=False
     )
-
     assert processed_sql == "SELECT $1::text as name, $2::int as age"
     assert processed_params == ("Test", 30)
     assert len(processed_params) == 2
@@ -621,21 +561,17 @@ def test_mixed_parameter_style_with_processor() -> None:
 
 def test_parameter_processing_result_profile_metadata() -> None:
     """Parameter profile captures placeholder reuse and style information."""
-
     sql = "SELECT :id::int AS id, :id::int AS other"
     parameters = {"id": 42}
-
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_COLON,
         supported_parameter_styles={ParameterStyle.NAMED_COLON},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
     )
-
     processor = ParameterProcessor()
     result = processor.process(sql=sql, parameters=parameters, config=config, dialect="postgres")
     profile = result.parameter_profile
-
     assert profile.total_count == 2
     assert profile.placeholder_count("$1") == 2
     assert profile.reused_ordinals == (1,)
@@ -644,17 +580,13 @@ def test_parameter_processing_result_profile_metadata() -> None:
 
 def test_mixed_parameters_order_sensitivity() -> None:
     """Test that mixed parameters maintain correct order mapping."""
-
     sql = "SELECT $1::text as first, :middle::text as mid, $3::int as last"
     parameters = {"first": "A", "middle": "B", "last": "C"}
-
     converter = ParameterConverter()
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
-
     assert converted_sql == "SELECT $1::text as first, $2::text as mid, $3::int as last"
-
     assert converted_params == ("A", "B", "C")
     assert isinstance(converted_params, tuple)
     assert len(converted_params) == 3
@@ -664,12 +596,10 @@ def test_mixed_parameters_with_repeated_numeric() -> None:
     """Test mixed parameters with repeated numeric parameters."""
     sql = "SELECT :name::text as name, $2::int as age, $2::int as age2"
     parameters = {"name": "User", "age": 25}
-
     converter = ParameterConverter()
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
-
     assert converted_sql == "SELECT $1::text as name, $2::int as age, $2::int as age2"
     assert converted_params == ("User", 25)
     assert isinstance(converted_params, tuple)
@@ -682,36 +612,25 @@ def test_repeated_named_params_expand_for_qmark_style() -> None:
     When converting from NAMED_COLON to QMARK, each occurrence of a named parameter
     like :query_like must produce a separate ? placeholder with the value duplicated.
     """
-    sql = (
-        "SELECT name FROM skill WHERE LOWER(name) LIKE :query_like "
-        "OR LOWER(description) LIKE :query_like "
-        "ORDER BY CASE WHEN LOWER(name) LIKE :query_like THEN 1 ELSE 0 END DESC "
-        "LIMIT :limit"
-    )
+    sql = "SELECT name FROM skill WHERE LOWER(name) LIKE :query_like OR LOWER(description) LIKE :query_like ORDER BY CASE WHEN LOWER(name) LIKE :query_like THEN 1 ELSE 0 END DESC LIMIT :limit"
     parameters = {"query_like": "%duckdb%", "limit": 10}
-
     converter = ParameterConverter()
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.QMARK, is_many=False
     )
-
-    # SQL should have 4 ? placeholders (3 for query_like + 1 for limit)
     assert converted_sql.count("?") == 4
-    # Parameters should be expanded: 3 times query_like value + 1 time limit value
     assert converted_params == ("%duckdb%", "%duckdb%", "%duckdb%", 10)
-    assert len(converted_params) == 4  # type: ignore[arg-type]
+    assert len(converted_params) == 4
 
 
 def test_edge_case_all_numeric_parameters() -> None:
     """Test that non-mixed numeric parameters still work correctly."""
     sql = "SELECT $1::text as name, $2::int as age"
     parameters = ("Alice", 30)
-
     converter = ParameterConverter()
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
-
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Alice", 30)
 
@@ -720,12 +639,10 @@ def test_edge_case_all_named_parameters() -> None:
     """Test that non-mixed named parameters still work correctly."""
     sql = "SELECT :name::text as name, :age::int as age"
     parameters = {"name": "Bob", "age": 35}
-
     converter = ParameterConverter()
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NUMERIC, is_many=False
     )
-
     assert converted_sql == "SELECT $1::text as name, $2::int as age"
     assert converted_params == ("Bob", 35)
 
@@ -734,7 +651,6 @@ def test_parameter_info_repr() -> None:
     """Test ParameterInfo string representation."""
     param = ParameterInfo("test_param", ParameterStyle.NAMED_COLON, 10, 0, ":test_param")
     repr_str = repr(param)
-
     assert "ParameterInfo" in repr_str
     assert "test_param" in repr_str
     assert "ParameterStyle.NAMED_COLON" in repr_str
@@ -744,7 +660,6 @@ def test_parameter_info_repr() -> None:
 def test_parameter_style_config_basic() -> None:
     """Test basic ParameterStyleConfig creation."""
     config = ParameterStyleConfig(ParameterStyle.QMARK)
-
     assert config.default_parameter_style == ParameterStyle.QMARK
     assert config.supported_parameter_styles == {ParameterStyle.QMARK}
     assert config.default_execution_parameter_style == ParameterStyle.QMARK
@@ -775,10 +690,9 @@ def test_parameter_style_config_advanced() -> None:
         preserve_parameter_format=True,
         strict_named_parameters=False,
     )
-
     assert config.default_parameter_style == ParameterStyle.NAMED_COLON
     assert config.supported_parameter_styles == {ParameterStyle.NAMED_COLON, ParameterStyle.QMARK}
-    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}  # type: ignore[comparison-overlap]
+    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}
     assert config.default_execution_parameter_style == ParameterStyle.QMARK
     assert config.type_coercion_map == coercion_map
     assert config.has_native_list_expansion is True
@@ -794,9 +708,7 @@ def test_parameter_style_config_hash_value() -> None:
     config1 = ParameterStyleConfig(ParameterStyle.QMARK)
     config2 = ParameterStyleConfig(ParameterStyle.QMARK)
     config3 = ParameterStyleConfig(ParameterStyle.NAMED_COLON)
-
     assert hash(config1) == hash(config2)
-
     assert hash(config1) != hash(config3)
 
 
@@ -804,14 +716,13 @@ def test_parameter_style_config_hash_differs_for_different_output_transformers()
     """Test different output transformer callables produce different hashes."""
 
     def transformer_a(sql: str, params: Any) -> tuple[str, Any]:
-        return sql, params
+        return (sql, params)
 
     def transformer_b(sql: str, params: Any) -> tuple[str, Any]:
-        return sql.upper(), params
+        return (sql.upper(), params)
 
     config_a = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer_a)
     config_b = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer_b)
-
     assert hash(config_a) != hash(config_b)
 
 
@@ -819,11 +730,10 @@ def test_parameter_style_config_hash_same_for_same_output_transformer_reference(
     """Test shared output transformer references produce the same hash."""
 
     def transformer(sql: str, params: Any) -> tuple[str, Any]:
-        return sql, params
+        return (sql, params)
 
     config_a = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer)
     config_b = ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transformer)
-
     assert hash(config_a) == hash(config_b)
 
 
@@ -831,14 +741,13 @@ def test_parameter_style_config_hash_differs_for_different_ast_transformers() ->
     """Test different AST transformer callables produce different hashes."""
 
     def transformer_a(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
-        return expr, params
+        return (expr, params)
 
     def transformer_b(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
-        return expr, params
+        return (expr, params)
 
     config_a = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer_a)
     config_b = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer_b)
-
     assert hash(config_a) != hash(config_b)
 
 
@@ -846,11 +755,10 @@ def test_parameter_style_config_hash_same_for_same_ast_transformer_reference() -
     """Test shared AST transformer references produce the same hash."""
 
     def transformer(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
-        return expr, params
+        return (expr, params)
 
     config_a = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer)
     config_b = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer)
-
     assert hash(config_a) == hash(config_b)
 
 
@@ -885,7 +793,6 @@ def test_extract_parameters(
 ) -> None:
     """Test parameter extraction from various SQL patterns."""
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == expected_count
     for i, expected_style in enumerate(expected_styles):
         assert parameters[i].style == expected_style
@@ -912,7 +819,6 @@ def test_extract_parameters_ignores_special_cases(
 ) -> None:
     """Test that parameters in special contexts are handled correctly."""
     parameters = validator.extract_parameters(sql)
-
     if should_be_ignored:
         assert len(parameters) == 0
     else:
@@ -922,34 +828,21 @@ def test_extract_parameters_ignores_special_cases(
 def test_extract_parameters_caching(validator: ParameterValidator) -> None:
     """Test that parameter extraction results are cached."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
-
     parameters1 = validator.extract_parameters(sql)
     parameters2 = validator.extract_parameters(sql)
-
     assert parameters1 is parameters2
 
 
 def test_extract_parameters_complex_sql(validator: ParameterValidator) -> None:
     """Test parameter extraction from complex SQL with multiple styles."""
-    sql = """
-    SELECT u.*, o.*
-    FROM users u
-    JOIN orders o ON u.id = o.user_id
-    WHERE u.name = :name
-      AND u.email = %(email)s
-      AND o.created_at > ?
-      AND o.status = @status
-      AND o.total > $1
-    """
+    sql = "\n    SELECT u.*, o.*\n    FROM users u\n    JOIN orders o ON u.id = o.user_id\n    WHERE u.name = :name\n      AND u.email = %(email)s\n      AND o.created_at > ?\n      AND o.status = @status\n      AND o.total > $1\n    "
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == 5
     styles = {p.style for p in parameters}
     assert ParameterStyle.NAMED_COLON in styles
     assert ParameterStyle.NAMED_PYFORMAT in styles
     assert ParameterStyle.QMARK in styles
     assert ParameterStyle.NAMED_AT in styles
-
     assert ParameterStyle.NUMERIC in styles
 
 
@@ -957,11 +850,9 @@ def test_parameter_position_tracking(validator: ParameterValidator) -> None:
     """Test that parameter positions are tracked correctly."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == 2
     qmark_param = next(p for p in parameters if p.style == ParameterStyle.QMARK)
     named_param = next(p for p in parameters if p.style == ParameterStyle.NAMED_COLON)
-
     assert qmark_param.position < named_param.position
     assert sql[qmark_param.position] == "?"
     assert sql[named_param.position : named_param.position + len(":name")] == ":name"
@@ -993,8 +884,7 @@ def test_convert_placeholder_style(
     expected_param_format: type,
 ) -> None:
     """Test Phase 2 execution format conversion."""
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, target_style)
-
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, target_style)
     assert expected_sql_pattern in converted_sql
     assert isinstance(converted_params, expected_param_format)
 
@@ -1003,9 +893,7 @@ def test_convert_static_embedding(converter: ParameterConverter) -> None:
     """Test STATIC style parameter embedding."""
     sql = "SELECT * FROM users WHERE id = ? AND active = ?"
     parameters = [123, True]
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
-
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
     assert "123" in converted_sql
     assert "TRUE" in converted_sql
     assert "?" not in converted_sql
@@ -1014,23 +902,17 @@ def test_convert_static_embedding(converter: ParameterConverter) -> None:
 
 def test_convert_static_embedding_parameter_reuse(converter: ParameterConverter) -> None:
     """Test STATIC style parameter embedding with parameter reuse."""
-
     sql = "SELECT $1, $2, $1, $3, $1"
     parameters = [100, 200, 300]
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
-
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
     expected = "SELECT 100, 200, 100, 300, 100"
     assert converted_sql == expected
     assert converted_params is None
-
     sql_named = "SELECT :value, :other, :value"
     params_named = {"value": "hello", "other": 42}
-
-    converted_sql_named, converted_params_named = converter.convert_placeholder_style(
+    (converted_sql_named, converted_params_named) = converter.convert_placeholder_style(
         sql_named, params_named, ParameterStyle.STATIC
     )
-
     expected_named = "SELECT 'hello', 42, 'hello'"
     assert converted_sql_named == expected_named
     assert converted_params_named is None
@@ -1039,10 +921,8 @@ def test_convert_static_embedding_parameter_reuse(converter: ParameterConverter)
 def test_convert_parameter_format_preservation(converter: ParameterConverter) -> None:
     """Test parameter format preservation (list vs tuple vs dict)."""
     sql = "SELECT * FROM users WHERE id = ? AND name = ?"
-
     tuple_params = (123, "john")
-    _, converted_params = converter.convert_placeholder_style(sql, tuple_params, ParameterStyle.QMARK)
-
+    (_, converted_params) = converter.convert_placeholder_style(sql, tuple_params, ParameterStyle.QMARK)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
 
@@ -1051,11 +931,9 @@ def test_convert_executemany_handling(converter: ParameterConverter) -> None:
     """Test execute_many parameter handling."""
     sql = "INSERT INTO users (id, name) VALUES (?, ?)"
     many_parameters = [[1, "alice"], [2, "bob"], [3, "charlie"]]
-
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, many_parameters, ParameterStyle.QMARK, is_many=True
     )
-
     assert "?" in converted_sql
     assert converted_params == many_parameters
 
@@ -1087,9 +965,7 @@ def advanced_config() -> ParameterStyleConfig:
 def test_process_no_parameters(processor: ParameterProcessor, basic_config: ParameterStyleConfig) -> None:
     """Test processing SQL with no parameters (fast path)."""
     sql = "SELECT * FROM users"
-
-    final_sql, final_params = processor.process(sql, None, basic_config)
-
+    (final_sql, final_params) = processor.process(sql, None, basic_config)
     assert final_sql == sql
     assert final_params is None
 
@@ -1098,9 +974,7 @@ def test_process_type_wrapping(processor: ParameterProcessor, basic_config: Para
     """Test type wrapping in parameter processing."""
     sql = "SELECT * FROM users WHERE active = ?"
     parameters = [True]
-
-    final_sql, final_params = processor.process(sql, parameters, basic_config)
-
+    (final_sql, final_params) = processor.process(sql, parameters, basic_config)
     assert final_sql == sql
     assert len(final_params) == 1
 
@@ -1109,12 +983,9 @@ def test_process_type_coercion(processor: ParameterProcessor, advanced_config: P
     """Test type coercion mapping."""
     sql = "SELECT * FROM users WHERE active = :active"
     parameters = {"active": True}
-
-    _, final_params = processor.process(sql, parameters, advanced_config, "postgres")
-
+    (_, final_params) = processor.process(sql, parameters, advanced_config, "postgres")
     if isinstance(final_params, dict):
         value = final_params["active"]
-
         if hasattr(value, "value"):
             assert value.value == 1 or value.value is True
         else:
@@ -1136,12 +1007,9 @@ def test_process_output_transformation(processor: ParameterProcessor, advanced_c
     """Test final output transformation."""
     sql = "select * from users where id = :id"
     parameters = {"id": 123}
-
-    final_sql, final_params = processor.process(sql, parameters, advanced_config, "postgres")
-
+    (final_sql, final_params) = processor.process(sql, parameters, advanced_config, "postgres")
     assert final_sql.isupper()
     assert "SELECT" in final_sql
-
     if isinstance(final_params, dict):
         assert final_params["id"] == 123
     elif isinstance(final_params, (list, tuple)):
@@ -1150,22 +1018,17 @@ def test_process_output_transformation(processor: ParameterProcessor, advanced_c
 
 def test_process_full_pipeline(processor: ParameterProcessor) -> None:
     """Test complete processing pipeline with complex scenario."""
-
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_PYFORMAT,
         default_execution_parameter_style=ParameterStyle.QMARK,
         type_coercion_map={bool: lambda x: 1 if x else 0, Decimal: lambda x: float(x)},
     )
-
     sql = "SELECT * FROM orders WHERE active = %(active)s AND total > %(total)s"
     parameters = {"active": True, "total": Decimal("99.99")}
-
-    final_sql, final_params = processor.process(sql, parameters, config, "mysql")
-
+    (final_sql, final_params) = processor.process(sql, parameters, config, "mysql")
     assert "?" in final_sql
     assert "%(active)s" not in final_sql
     assert "%(total)s" not in final_sql
-
     if final_params is None or (isinstance(final_params, dict) and len(final_params) == 0):
         pass
     elif isinstance(final_params, list):
@@ -1180,12 +1043,9 @@ def test_process_execute_many_mapping_payload(
     processor: "ParameterProcessor", basic_config: "ParameterStyleConfig"
 ) -> None:
     """Ensure execute_many normalizes mapping payloads for positional placeholders."""
-
     sql = "INSERT INTO metrics (a, b) VALUES (?, ?)"
     parameters = [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]
-
-    final_sql, final_params = processor.process(sql, parameters, basic_config, is_many=True)
-
+    (final_sql, final_params) = processor.process(sql, parameters, basic_config, is_many=True)
     assert final_sql == sql
     assert isinstance(final_params, list)
     assert all(isinstance(param_set, (list, tuple)) for param_set in final_params)
@@ -1194,18 +1054,14 @@ def test_process_execute_many_mapping_payload(
 
 def test_process_execute_many_named_to_positional(processor: "ParameterProcessor") -> None:
     """Execute_many with named placeholders should convert mapping batches to positional values."""
-
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_DOLLAR,
         supported_parameter_styles={ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.QMARK,
     )
-
     sql = "INSERT INTO metrics (a, b) VALUES ($a, $b)"
     parameters = [{"a": 10, "b": 20}, {"b": 40, "a": 30}]
-
-    final_sql, final_params = processor.process(sql, parameters, config, "duckdb", is_many=True)
-
+    (final_sql, final_params) = processor.process(sql, parameters, config, "duckdb", is_many=True)
     assert final_sql.count("?") == 2
     assert isinstance(final_params, list)
     assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
@@ -1221,9 +1077,7 @@ def test_process_execute_many_skips_coercion_allocations_when_no_types_match(pro
     )
     sql = "INSERT INTO metrics (value) VALUES (?)"
     parameters = [("v1",), ("v2",), ("v3",)]
-
     result = processor.process(sql, parameters, config, is_many=True, wrap_types=False)
-
     assert result.parameters is parameters
     assert result.parameters == parameters
 
@@ -1235,9 +1089,7 @@ def test_process_execute_many_coerces_only_rows_that_require_conversion(processo
     )
     sql = "INSERT INTO metrics (value) VALUES (?)"
     parameters = [(True,), ("v2",)]
-
     result = processor.process(sql, parameters, config, is_many=True, wrap_types=False)
-
     assert isinstance(result.parameters, list)
     assert result.parameters is not parameters
     assert tuple(result.parameters[0]) == (1,)
@@ -1257,17 +1109,14 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
         type_coercion_map={int: lambda value: value + 1},
     )
     sql = "SELECT * FROM metrics WHERE value = ?"
-
     result = processor.process(sql, [MyInt(4)], config, wrap_types=False)
-
     assert isinstance(result.parameters, list)
     assert result.parameters == [5]
 
 
 def test_coerce_parameter_types_returns_decimal_scalar(processor: "ParameterProcessor") -> None:
     """Test scalar type coercion results are preserved."""
-    result = processor._coerce_parameter_types(Decimal("3.14"), {Decimal: float})  # pyright: ignore[reportPrivateUsage]
-
+    result = processor._coerce_parameter_types(Decimal("3.14"), {Decimal: float})
     assert result == 3.14
     assert isinstance(result, float)
 
@@ -1278,10 +1127,7 @@ def test_coerce_parameter_types_returns_custom_scalar(processor: "ParameterProce
     class CustomValue:
         pass
 
-    result = processor._coerce_parameter_types(  # pyright: ignore[reportPrivateUsage]
-        CustomValue(), {CustomValue: lambda value: "coerced"}
-    )
-
+    result = processor._coerce_parameter_types(CustomValue(), {CustomValue: lambda value: "coerced"})
     assert result == "coerced"
 
 
@@ -1293,20 +1139,16 @@ def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterP
         default_execution_parameter_style=ParameterStyle.QMARK,
         type_coercion_map={Decimal: float},
     )
-
     result = processor.process("SELECT * FROM prices WHERE amount = ?", Decimal("19.99"), config, wrap_types=False)
-
     assert result.parameters == [19.99]
 
 
 def test_replace_null_parameters_without_profile_emits_deprecation_warning() -> None:
     """No-profile NULL pruning warns about the fallback AST round trip."""
     expression = sqlglot.parse_one("SELECT * FROM t WHERE id = $1", dialect="postgres")
-
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         replace_null_parameters_with_literals(expression, (42,), dialect="postgres")
-
     deprecation_warnings = [warning for warning in caught if issubclass(warning.category, DeprecationWarning)]
     assert deprecation_warnings
     assert any(
@@ -1320,23 +1162,18 @@ def test_replace_null_parameters_with_profile_emits_no_warning() -> None:
     validator = ParameterValidator()
     expression = sqlglot.parse_one("SELECT * FROM t WHERE id = $1", dialect="postgres")
     profile = ParameterProfile(validator.extract_parameters(expression.sql(dialect="postgres")))
-
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         replace_null_parameters_with_literals(expression, (42,), dialect="postgres", parameter_profile=profile)
-
     deprecation_warnings = [warning for warning in caught if issubclass(warning.category, DeprecationWarning)]
     assert not deprecation_warnings
 
 
 def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:
     """ABC-registered coercions should still resolve for builtin sequence payloads."""
-    type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}  # type: ignore[dict-item]
-    fallback_items = _processor_module._type_coercion_fallbacks(type_map)  # pyright: ignore[reportPrivateUsage]
-
-    assert _processor_module._resolve_type_coercion(  # pyright: ignore[reportPrivateUsage]
-        [1, 2, 3], type_map, fallback_items
-    ) == (1, 2, 3)
+    type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}
+    fallback_items = _processor_module._type_coercion_fallbacks(type_map)
+    assert _processor_module._resolve_type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
 
 
 def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(
@@ -1344,9 +1181,7 @@ def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_a
 ) -> None:
     """execute_many rebinding should avoid allocating when every row is already positional."""
     parameters = [(1, 2), (3, 4)]
-
-    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)  # pyright: ignore[reportPrivateUsage]
-
+    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)
     assert remapped is parameters
 
 
@@ -1355,9 +1190,7 @@ def test_map_named_to_positional_only_allocates_when_execute_many_row_needs_mapp
 ) -> None:
     """execute_many rebinding should allocate only after the first mapping row."""
     parameters: list[object] = [(1, 2), {"a": 3, "b": 4}]
-
-    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)  # pyright: ignore[reportPrivateUsage]
-
+    remapped = processor._map_named_to_positional(parameters, ("a", "b"), is_many=True)
     assert isinstance(remapped, list)
     assert remapped is not parameters
     assert remapped[0] is parameters[0]
@@ -1368,9 +1201,7 @@ def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     """Test that list parameters are properly handled."""
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"
     parameters = [1, "alice", True]
-
-    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
+    (_, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert isinstance(converted_params, list)
     assert converted_params == parameters
 
@@ -1379,9 +1210,7 @@ def test_tuple_parameter_handling(converter: ParameterConverter) -> None:
     """Test that tuple parameters are handled correctly."""
     sql = "INSERT INTO users (id, name) VALUES (?, ?)"
     parameters = (1, "alice")
-
-    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
+    (_, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
 
@@ -1390,9 +1219,7 @@ def test_dict_parameter_handling(converter: ParameterConverter) -> None:
     """Test that dictionary parameters work with named styles."""
     sql = "INSERT INTO users (id, name) VALUES (:id, :name)"
     parameters = {"id": 1, "name": "alice"}
-
-    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
-
+    (_, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
     assert isinstance(converted_params, dict)
     assert converted_params == parameters
 
@@ -1401,7 +1228,6 @@ def test_missing_named_parameters_raise(converter: ParameterConverter) -> None:
     """Missing named parameters should raise rather than fall back to ordinal ordering."""
     sql = "SELECT * FROM users WHERE id = :provider_user_id AND token = :access_token"
     parameters = {"access_token": "token"}
-
     with pytest.raises(SQLSpecError):
         converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
 
@@ -1410,11 +1236,9 @@ def test_missing_named_parameters_can_fallback_when_disabled(converter: Paramete
     """Missing named parameters may fall back to ordinal ordering when strict mode is disabled."""
     sql = "SELECT * FROM users WHERE id = :provider_user_id AND token = :access_token"
     parameters = {"access_token": "token", "refresh_token": "refresh"}
-
-    _sql, converted_params = converter.convert_placeholder_style(
+    (_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.QMARK, strict_named_parameters=False
     )
-
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
     assert next(iter(converted_params)) == "token"
@@ -1440,20 +1264,14 @@ def test_database_specific_parameter_conversion(
     param_pattern: type,
 ) -> None:
     """Test parameter conversion for specific database requirements."""
-
     assert database is not None
     assert param_pattern is not None
-
     sql = "SELECT * FROM users WHERE id = :id"
     parameters = {"id": 123}
-
     if input_style != ParameterStyle.NAMED_COLON:
-        sql, parameters = converter.convert_placeholder_style(sql, parameters, input_style)
-
-    final_sql, final_params = converter.convert_placeholder_style(sql, parameters, output_style)
-
+        (sql, parameters) = converter.convert_placeholder_style(sql, parameters, input_style)
+    (final_sql, final_params) = converter.convert_placeholder_style(sql, parameters, output_style)
     assert sql_pattern in final_sql
-
     assert final_params is not None
 
 
@@ -1461,7 +1279,6 @@ def test_mixed_style_detection(validator: ParameterValidator) -> None:
     """Test detection of mixed parameter styles."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name AND email = %(email)s"
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == 3
     styles = {p.style for p in parameters}
     assert ParameterStyle.QMARK in styles
@@ -1473,11 +1290,8 @@ def test_parameter_caching() -> None:
     """Test that parameter extraction is cached."""
     validator = ParameterValidator()
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
-
     params1 = validator.extract_parameters(sql)
-
     params2 = validator.extract_parameters(sql)
-
     assert params1 is params2
 
 
@@ -1491,11 +1305,9 @@ def test_processor_cache_key_uses_shared_tuple_helper() -> None:
     sql = "SELECT * FROM users WHERE id = ?"
     parameters = {"id": 1}
     fingerprint = _processor_module.structural_fingerprint(parameters, is_many=False)
-
     cache_key = processor._make_processor_cache_key(
         sql, parameters, config, False, None, True, False, param_fingerprint=fingerprint
     )
-
     assert cache_key == _processor_module._make_cache_key_tuple(
         sql,
         fingerprint,
@@ -1510,14 +1322,11 @@ def test_processor_cache_key_uses_shared_tuple_helper() -> None:
 
 def test_isinstance_type_wrapping() -> None:
     """Test that isinstance dispatch correctly wraps typed parameters."""
-
     bool_result = wrap_with_type(True)
     decimal_result = wrap_with_type(Decimal("123.45"))
     string_result = wrap_with_type("test")
-
     assert isinstance(bool_result, TypedParameter)
     assert isinstance(decimal_result, TypedParameter)
-
     assert string_result == "test"
     assert not isinstance(string_result, TypedParameter)
 
@@ -1530,7 +1339,6 @@ def test_parameter_style_constants_are_module_frozensets() -> None:
     positional_styles = getattr(_types, "_POSITIONAL_STYLES", None)
     named_style_values = getattr(_types, "_NAMED_STYLE_VALUES", None)
     positional_style_values = getattr(_types, "_POSITIONAL_STYLE_VALUES", None)
-
     assert isinstance(named_styles, frozenset)
     assert isinstance(positional_styles, frozenset)
     assert isinstance(named_style_values, frozenset)
@@ -1559,7 +1367,6 @@ def test_wrap_with_type_isinstance_chain_semantics() -> None:
     date_result = wrap_with_type(date(2024, 1, 1))
     time_result = wrap_with_type(time(12, 30))
     bytes_result = wrap_with_type(b"hello")
-
     assert isinstance(bool_result, TypedParameter)
     assert bool_result.original_type is bool
     assert isinstance(decimal_result, TypedParameter)
@@ -1578,7 +1385,6 @@ def test_wrap_with_type_isinstance_chain_semantics() -> None:
 def test_parameter_style_config_hash_wrapper_removed() -> None:
     """ParameterStyleConfig only exposes __hash__, not a wrapper method."""
     config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NAMED_COLON)
-
     assert not hasattr(config, "hash")
     assert isinstance(hash(config), int)
 
@@ -1586,7 +1392,6 @@ def test_parameter_style_config_hash_wrapper_removed() -> None:
 def test_hash_map_placeholder_generation() -> None:
     """Test that placeholder generation uses O(1) hash map lookups."""
     converter = ParameterConverter()
-
     supported_styles = [
         ParameterStyle.QMARK,
         ParameterStyle.NUMERIC,
@@ -1595,13 +1400,10 @@ def test_hash_map_placeholder_generation() -> None:
         ParameterStyle.NAMED_PYFORMAT,
         ParameterStyle.NAMED_AT,
     ]
-
     for style in supported_styles:
         sql = "SELECT * FROM users WHERE id = :param_0"
         parameters = ["test_value"]
-
-        converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, style)
-
+        (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, style)
         assert converted_sql is not None
         assert converted_params is not None
 
@@ -1616,9 +1418,7 @@ def test_null_parameter_handling(converter: ParameterConverter) -> None:
     """Test handling of null parameters."""
     sql = "SELECT * FROM users WHERE deleted_at = ?"
     parameters = [None]
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
-
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
     assert "NULL" in converted_sql
     assert "?" not in converted_sql
     assert converted_params is None
@@ -1635,12 +1435,9 @@ def test_complex_data_types(converter: ParameterConverter) -> None:
         "created": datetime(2023, 1, 1, 12, 0, 0),
     }
     parameters = [complex_data]
-
-    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
+    (_, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert isinstance(converted_params, list)
     assert len(converted_params) == 1
-
     assert converted_params[0] == complex_data
 
 
@@ -1648,7 +1445,6 @@ def test_parameter_ordinal_assignment(validator: ParameterValidator) -> None:
     """Test that parameter ordinals are assigned correctly."""
     sql = "SELECT * FROM users WHERE id = ? AND name = ? AND email = ?"
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == 3
     assert parameters[0].ordinal == 0
     assert parameters[1].ordinal == 1
@@ -1657,13 +1453,10 @@ def test_parameter_ordinal_assignment(validator: ParameterValidator) -> None:
 
 def test_large_parameter_count(validator: ParameterValidator) -> None:
     """Test handling of SQL with many parameters."""
-
     placeholders = ", ".join("?" for _ in range(50))
     sql = f"INSERT INTO test_table (col1, col2, ...) VALUES ({placeholders})"
-
     parameters = validator.extract_parameters(sql)
     assert len(parameters) == 50
-
     for i, param in enumerate(parameters):
         assert param.ordinal == i
 
@@ -1691,12 +1484,9 @@ def test_dollar_numeric_vs_named_disambiguation() -> None:
     validator = ParameterValidator()
     sql = "SELECT * FROM users WHERE id = $1 AND name = $username"
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == 2
-
     dollar_1_param = next(p for p in parameters if p.placeholder_text == "$1")
     dollar_username_param = next(p for p in parameters if p.placeholder_text == "$username")
-
     assert dollar_1_param.style == ParameterStyle.NUMERIC
     assert dollar_username_param.style == ParameterStyle.NAMED_DOLLAR
     assert dollar_1_param.name == "1"
@@ -1708,7 +1498,6 @@ def test_positional_colon_oracle_style() -> None:
     validator = ParameterValidator()
     sql = "SELECT * FROM users WHERE id = :1 AND name = :2 AND active = :3"
     parameters = validator.extract_parameters(sql)
-
     assert len(parameters) == 3
     assert all(p.style == ParameterStyle.POSITIONAL_COLON for p in parameters)
     assert parameters[0].placeholder_text == ":1"
@@ -1723,11 +1512,9 @@ def test_preserve_parameter_names_in_conversion(converter: ParameterConverter) -
     """Test that parameter names are preserved during conversion."""
     sql = "SELECT * FROM users WHERE name = :user_name AND email = :user_email"
     parameters = {"user_name": "alice", "user_email": "alice@example.com"}
-
-    converted_sql, converted_params = converter.convert_placeholder_style(
+    (converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.NAMED_PYFORMAT
     )
-
     assert "%(user_name)s" in converted_sql
     assert "%(user_email)s" in converted_sql
     assert isinstance(converted_params, dict)
@@ -1741,27 +1528,18 @@ def test_duplicate_named_parameters_named_colon_to_numeric(converter: ParameterC
     This reproduces the issue described in the bug report where duplicate named
     parameters cause incorrect parameter counting.
     """
-    # SQL with duplicate :embedding parameter (appears twice)
     sql = "SELECT id, name, 1 - (embedding <=> :embedding) AS similarity FROM items WHERE 1 - (embedding <=> :embedding) > :threshold ORDER BY similarity DESC LIMIT :limit"
-
     parameters = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
-
-    # Should have exactly 3 parameters, not 4
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 3
-
-    # Check the SQL has correct numeric placeholders
     assert "$1" in converted_sql
     assert "$2" in converted_sql
     assert "$3" in converted_sql
-    assert "$4" not in converted_sql  # Should not have a 4th parameter
-
-    # Check parameter values are correct
-    assert converted_params[0] == [0.1, 0.2, 0.3]  # embedding value appears once
-    assert converted_params[1] == 0.5  # threshold
-    assert converted_params[2] == 10  # limit
+    assert "$4" not in converted_sql
+    assert converted_params[0] == [0.1, 0.2, 0.3]
+    assert converted_params[1] == 0.5
+    assert converted_params[2] == 10
 
 
 def test_duplicate_named_parameters_various_styles(converter: ParameterConverter) -> None:
@@ -1783,22 +1561,14 @@ def test_duplicate_named_parameters_various_styles(converter: ParameterConverter
             "expected_placeholders": ["%(param)s"],
         },
     ]
-
     for case in test_cases:
         parameters = {"param": "test_value"}
-
-        converted_sql, converted_params = converter.convert_placeholder_style(
-            case["sql"],  # type: ignore[arg-type]
-            parameters,
-            ParameterStyle.NUMERIC,
+        (converted_sql, converted_params) = converter.convert_placeholder_style(
+            case["sql"], parameters, ParameterStyle.NUMERIC
         )
-
-        # Should convert to single numeric parameter
         assert isinstance(converted_params, (list, tuple))
         assert len(converted_params) == 1
         assert converted_params[0] == "test_value"
-
-        # Should have $1 twice in the SQL
         assert converted_sql.count("$1") == 2
         assert "$2" not in converted_sql
 
@@ -1807,44 +1577,27 @@ def test_duplicate_parameters_mixed_with_unique(converter: ParameterConverter) -
     """Test duplicate parameters mixed with unique parameters."""
     sql = "SELECT :a, :b, :a, :c, :b"
     parameters = {"a": 1, "b": 2, "c": 3}
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
-
-    # Should have exactly 3 unique parameters
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 3
-
-    # Check the correct values are extracted
-    assert 1 in converted_params  # a
-    assert 2 in converted_params  # b
-    assert 3 in converted_params  # c
-
-    # Check SQL has correct numeric placeholders in the right positions
-    # Original: :a, :b, :a, :c, :b
-    # Should become: $1, $2, $1, $3, $2
+    assert 1 in converted_params
+    assert 2 in converted_params
+    assert 3 in converted_params
     expected_positions = ["$1", "$2", "$1", "$3", "$2"]
-
-    # Extract placeholder positions from converted SQL
     import re
 
-    placeholders_in_sql = [match.group() for match in re.finditer(r"\$\d+", converted_sql)]
-
+    placeholders_in_sql = [match.group() for match in re.finditer("\\$\\d+", converted_sql)]
     assert placeholders_in_sql == expected_positions
 
 
 def test_duplicate_parameters_qmark_to_numeric(converter: ParameterConverter) -> None:
     """Test duplicate qmark parameters conversion (edge case)."""
-    # This is a different case - qmark parameters are positional so duplicates would be different values
     sql = "SELECT * FROM table WHERE col1 = ? AND col2 = ?"
     parameters = [1, 2]
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
-
-    # Should have 2 parameters as they're positional
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
     assert list(converted_params) == [1, 2]
-
     assert "$1" in converted_sql
     assert "$2" in converted_sql
 
@@ -1852,12 +1605,10 @@ def test_duplicate_parameters_qmark_to_numeric(converter: ParameterConverter) ->
 def test_distinct_positional_pyformat_parameters_to_numeric(converter: ParameterConverter) -> None:
     """Repeated ``%s`` placeholders should remain distinct when normalized."""
     sql = "SELECT * FROM table WHERE col1 = %s AND col2 = %s"
-
-    converted_sql, _ = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC)
+    (converted_sql, _) = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC)
     converted_info = converter.convert_parameter_info_style(
         converter.validator.extract_parameters(sql), ParameterStyle.NUMERIC
     )
-
     assert converted_sql == "SELECT * FROM table WHERE col1 = $1 AND col2 = $2"
     assert [(param.name, param.position, param.placeholder_text) for param in converted_info] == [
         ("1", 33, "$1"),
@@ -1867,28 +1618,11 @@ def test_distinct_positional_pyformat_parameters_to_numeric(converter: Parameter
 
 def test_vector_similarity_search_example(converter: ParameterConverter) -> None:
     """Test the exact example from the bug report."""
-    sql = """SELECT
-    id,
-    name,
-    1 - (embedding <=> :embedding) as similarity
-FROM
-    items
-WHERE
-    1 - (embedding <=> :embedding) > :threshold
-ORDER BY
-    similarity DESC
-LIMIT
-    :limit"""
-
+    sql = "SELECT\n    id,\n    name,\n    1 - (embedding <=> :embedding) as similarity\nFROM\n    items\nWHERE\n    1 - (embedding <=> :embedding) > :threshold\nORDER BY\n    similarity DESC\nLIMIT\n    :limit"
     parameters = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
-
-    # Should have exactly 3 parameters despite :embedding appearing twice
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NUMERIC)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 3
-
-    # Verify parameter values
     assert [0.1, 0.2, 0.3] in converted_params
     assert 0.5 in converted_params
     assert 10 in converted_params
@@ -1899,32 +1633,20 @@ def test_parameter_processor_duplicate_handling(processor: ParameterProcessor) -
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_COLON, default_execution_parameter_style=ParameterStyle.NUMERIC
     )
-
     sql = "SELECT :param1, :param2, :param1 WHERE id = :param2"
     parameters = {"param1": "value1", "param2": "value2"}
-
-    _processed_sql, processed_params = processor.process(sql, parameters, config, dialect="postgres")
-
-    # Should have exactly 2 unique parameters
+    (_processed_sql, processed_params) = processor.process(sql, parameters, config, dialect="postgres")
     assert isinstance(processed_params, (list, tuple))
     assert len(processed_params) == 2
     assert "value1" in processed_params
     assert "value2" in processed_params
 
 
-# ============================================================================
-# Type Narrowing Tests - Testing new ConvertedParameters type aliases
-# ============================================================================
-
-
 def test_converted_parameters_type_narrowing_none(converter: ParameterConverter) -> None:
     """Test that None parameters return None (ConvertedParameters type)."""
     sql = "SELECT * FROM table"
     parameters = None
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
-    # Should return None for None input
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert converted_params is None
 
 
@@ -1933,13 +1655,9 @@ def test_converted_parameters_type_narrowing_empty_dict(converter: ParameterConv
     sql = "SELECT * FROM table WHERE id = :id"
     parameters: dict[str, object] = {}
     param_info = converter.validator.extract_parameters(sql)
-
-    # Use _convert_parameter_format directly to test empty dict handling
-    converted_params = converter._convert_parameter_format(  # pyright: ignore
+    converted_params = converter._convert_parameter_format(
         parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
     )
-
-    # Should return empty dict for empty dict input
     assert converted_params == {}
     assert isinstance(converted_params, dict)
 
@@ -1949,13 +1667,9 @@ def test_converted_parameters_type_narrowing_empty_list(converter: ParameterConv
     sql = "SELECT * FROM table WHERE id = ?"
     parameters: list[object] = []
     param_info = converter.validator.extract_parameters(sql)
-
-    # Use _convert_parameter_format directly to test empty list handling
-    converted_params = converter._convert_parameter_format(  # pyright: ignore
+    converted_params = converter._convert_parameter_format(
         parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False
     )
-
-    # Should return empty list for empty list input
     assert converted_params == []
     assert isinstance(converted_params, list)
 
@@ -1964,13 +1678,11 @@ def test_converted_parameters_type_narrowing_dict_output(converter: ParameterCon
     """Test that dict parameters return dict[str, Any] (NamedParameterOutput type)."""
     sql = "SELECT * FROM table WHERE id = :id AND name = :name"
     parameters = {"id": 1, "name": "test"}
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
-
-    # Should return dict for named parameters
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NAMED_COLON
+    )
     assert isinstance(converted_params, dict)
     assert converted_params == {"id": 1, "name": "test"}
-    # Type should be exactly dict, not Mapping
     assert type(converted_params) is dict
 
 
@@ -1978,13 +1690,9 @@ def test_converted_parameters_type_narrowing_list_output(converter: ParameterCon
     """Test that list parameters return list[Any] (PositionalParameterOutput type)."""
     sql = "SELECT * FROM table WHERE id = ? AND name = ?"
     parameters = [1, "test"]
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
-    # Should return list for positional parameters
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert isinstance(converted_params, list)
     assert converted_params == [1, "test"]
-    # Type should be exactly list, not Sequence
     assert type(converted_params) is list
 
 
@@ -1992,13 +1700,9 @@ def test_converted_parameters_type_narrowing_tuple_output(converter: ParameterCo
     """Test that tuple parameters return tuple[Any, ...] (PositionalParameterOutput type)."""
     sql = "SELECT * FROM table WHERE id = ? AND name = ?"
     parameters = (1, "test")
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
-    # Should return tuple for positional parameters when preserving format
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert isinstance(converted_params, tuple)
     assert converted_params == (1, "test")
-    # Type should be exactly tuple, not Sequence
     assert type(converted_params) is tuple
 
 
@@ -2006,30 +1710,21 @@ def test_converted_parameters_type_narrowing_static_style(converter: ParameterCo
     """Test that static style returns None (ConvertedParameters type)."""
     sql = "SELECT * FROM table WHERE id = :id"
     parameters = {"id": 1}
-
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
-
-    # Should return None for static style (parameters embedded in SQL)
+    (converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
     assert converted_params is None
-    assert "1" in converted_sql  # Parameter should be embedded
+    assert "1" in converted_sql
 
 
 def test_positional_parameter_output_type_narrowing(converter: ParameterConverter) -> None:
     """Test _preserve_original_format returns PositionalParameterOutput."""
     param_values = [1, 2, 3]
-
-    # Test with tuple original
-    result_tuple = converter._preserve_original_format(param_values, (1, 2, 3))  # pyright: ignore
+    result_tuple = converter._preserve_original_format(param_values, (1, 2, 3))
     assert isinstance(result_tuple, tuple)
     assert result_tuple == (1, 2, 3)
-
-    # Test with list original
-    result_list = converter._preserve_original_format(param_values, [1, 2, 3])  # pyright: ignore
+    result_list = converter._preserve_original_format(param_values, [1, 2, 3])
     assert isinstance(result_list, list)
     assert result_list == [1, 2, 3]
-
-    # Test with dict original (should return tuple)
-    result_dict = converter._preserve_original_format(param_values, {"a": 1})  # pyright: ignore
+    result_dict = converter._preserve_original_format(param_values, {"a": 1})
     assert isinstance(result_dict, tuple)
     assert result_dict == (1, 2, 3)
 
@@ -2045,9 +1740,7 @@ def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
         raise AssertionError("sorted() should not run for already ordered parameter metadata")
 
     monkeypatch.setattr("builtins.sorted", fail_sorted)
-
-    converted_sql = converter._convert_placeholders_to_style(sql, param_info, ParameterStyle.NUMERIC)  # pyright: ignore
-
+    converted_sql = converter._convert_placeholders_to_style(sql, param_info, ParameterStyle.NUMERIC)
     assert converted_sql == "SELECT $1, $2, $3"
 
 
@@ -2056,9 +1749,7 @@ def test_convert_placeholders_to_style_sorts_unsafely_ordered_params_as_fallback
     sql = "SELECT :a, :b, :c"
     param_info = converter.validator.extract_parameters(sql)
     unordered = [param_info[2], param_info[0], param_info[1]]
-
-    converted_sql = converter._convert_placeholders_to_style(sql, unordered, ParameterStyle.NUMERIC)  # pyright: ignore
-
+    converted_sql = converter._convert_placeholders_to_style(sql, unordered, ParameterStyle.NUMERIC)
     assert converted_sql == "SELECT $1, $2, $3"
 
 
@@ -2067,10 +1758,7 @@ def test_named_parameter_output_type_narrowing(converter: ParameterConverter) ->
     sql = "SELECT * FROM table WHERE id = :id AND name = :name"
     param_info = converter.validator.extract_parameters(sql)
     parameters = [1, "test"]
-
-    result = converter._convert_sequence_to_dict(parameters, param_info)  # pyright: ignore
-
-    # Should return dict[str, Any]
+    result = converter._convert_sequence_to_dict(parameters, param_info)
     assert isinstance(result, dict)
     assert type(result) is dict
     assert result == {"id": 1, "name": "test"}
@@ -2081,10 +1769,7 @@ def test_converted_parameters_processor_none_handling(processor: ParameterProces
     config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     sql = "SELECT * FROM table"
     parameters = None
-
     result = processor.process(sql, parameters, config)
-
-    # Should return None for None parameters
     assert result.parameters is None
 
 
@@ -2093,10 +1778,7 @@ def test_converted_parameters_processor_empty_dict_handling(processor: Parameter
     config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NAMED_COLON)
     sql = "SELECT * FROM table"
     parameters: dict[str, object] = {}
-
     result = processor.process(sql, parameters, config)
-
-    # Should return empty dict for empty dict
     assert result.parameters == {}
     assert isinstance(result.parameters, dict)
 
@@ -2106,10 +1788,7 @@ def test_converted_parameters_processor_dict_output(processor: ParameterProcesso
     config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NAMED_COLON)
     sql = "SELECT * FROM table WHERE id = :id"
     parameters = {"id": 1}
-
     result = processor.process(sql, parameters, config)
-
-    # Should return dict
     assert isinstance(result.parameters, dict)
     assert type(result.parameters) is dict
 
@@ -2119,10 +1798,7 @@ def test_converted_parameters_processor_list_output(processor: ParameterProcesso
     config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK, preserve_parameter_format=False)
     sql = "SELECT * FROM table WHERE id = ?"
     parameters = [1]
-
     result = processor.process(sql, parameters, config)
-
-    # Should return list or tuple
     assert isinstance(result.parameters, (list, tuple))
 
 
@@ -2131,18 +1807,11 @@ def test_converted_parameters_transformers_null_pruning(processor: ParameterProc
     _config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
     sql = "SELECT * FROM table WHERE id = ? AND name = ?"
     parameters = [1, None]
-
-    # Parse SQL to get expression
     expression = sqlglot.parse_one(sql, dialect="postgres")
-
-    # Test null pruning
     with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
-        _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
-
-    # Should return concrete type - list or tuple
+        (_transformed_expr, transformed_params) = replace_null_parameters_with_literals(expression, parameters)
     assert transformed_params is not None
     assert isinstance(transformed_params, (list, tuple))
-    # Should have removed the None parameter
     assert len(transformed_params) == 1
     assert transformed_params[0] == 1
 
@@ -2150,11 +1819,7 @@ def test_converted_parameters_transformers_null_pruning(processor: ParameterProc
 def test_converted_parameters_transformers_none_input(processor: ParameterProcessor) -> None:
     """Test replace_null_parameters_with_literals handles None input."""
     expression = sqlglot.parse_one("SELECT * FROM table", dialect="postgres")
-
-    # Test with None parameters
-    _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, None)
-
-    # Should return None for None input
+    (_transformed_expr, transformed_params) = replace_null_parameters_with_literals(expression, None)
     assert transformed_params is None
 
 
@@ -2162,11 +1827,7 @@ def test_converted_parameters_transformers_empty_dict(processor: ParameterProces
     """Test replace_null_parameters_with_literals handles empty dict."""
     expression = sqlglot.parse_one("SELECT * FROM table", dialect="postgres")
     parameters: dict[str, object] = {}
-
-    # Test with empty dict
-    _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
-
-    # Should return dict for empty dict
+    (_transformed_expr, transformed_params) = replace_null_parameters_with_literals(expression, parameters)
     assert transformed_params == {}
     assert isinstance(transformed_params, dict)
 
@@ -2175,12 +1836,9 @@ def test_converted_parameters_is_many_handling(converter: ParameterConverter) ->
     """Test is_many parameter handling with type narrowing."""
     sql = "INSERT INTO table (id, name) VALUES (?, ?)"
     parameters = [[1, "test1"], [2, "test2"]]
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(
         sql, parameters, ParameterStyle.QMARK, is_many=True
     )
-
-    # Should return list of parameters
     assert isinstance(converted_params, list)
     assert len(converted_params) == 2
     assert all(isinstance(p, list) for p in converted_params)
@@ -2190,10 +1848,7 @@ def test_converted_parameters_dict_to_positional_conversion(converter: Parameter
     """Test conversion from dict to positional returns PositionalParameterOutput."""
     sql = "SELECT * FROM table WHERE id = :id AND name = :name"
     parameters = {"id": 1, "name": "test"}
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
-
-    # Should return list or tuple (PositionalParameterOutput)
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
 
@@ -2202,10 +1857,9 @@ def test_converted_parameters_sequence_to_named_conversion(converter: ParameterC
     """Test conversion from sequence to named returns NamedParameterOutput."""
     sql = "SELECT * FROM table WHERE id = :id AND name = :name"
     parameters = [1, "test"]
-
-    _converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
-
-    # Should return dict (NamedParameterOutput)
+    (_converted_sql, converted_params) = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NAMED_COLON
+    )
     assert isinstance(converted_params, dict)
     assert type(converted_params) is dict
 
@@ -2213,16 +1867,11 @@ def test_converted_parameters_sequence_to_named_conversion(converter: ParameterC
 def test_converted_parameters_fallback_to_none(converter: ParameterConverter) -> None:
     """Test that non-standard parameters return None."""
     sql = "SELECT * FROM table WHERE id = :id"
-    # Pass a non-standard parameter type
     parameters = "invalid"
     param_info = converter.validator.extract_parameters(sql)
-
-    # Use _convert_parameter_format directly
-    converted_params = converter._convert_parameter_format(  # pyright: ignore
+    converted_params = converter._convert_parameter_format(
         parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
     )
-
-    # Should return None for non-standard parameters
     assert converted_params is None
 
 
@@ -2237,504 +1886,451 @@ def test_converted_parameters_processor_coercion(processor: ParameterProcessor) 
     )
     sql = "SELECT * FROM table WHERE id = ?"
     parameters = [42]
-
     result = processor.process(sql, parameters, config)
-
-    # Should return list with coerced value
     assert isinstance(result.parameters, (list, tuple))
     assert result.parameters[0] == "coerced:42"
 
 
-# =============================================================================
-# Config-Driven Parse Normalization Tests
-# =============================================================================
+@pytest.fixture
+def config_driven_parse_normalization_processor() -> ParameterProcessor:
+    """Create a ParameterProcessor instance."""
+    return ParameterProcessor()
 
 
-class TestConfigDrivenParseNormalization:
-    """Test that parse normalization decisions use config.supported_parameter_styles."""
+@pytest.fixture
+def config_driven_parse_normalization_validator() -> ParameterValidator:
+    """Create a ParameterValidator instance."""
+    return ParameterValidator()
 
-    @pytest.fixture
-    def processor(self) -> ParameterProcessor:
-        """Create a ParameterProcessor instance."""
-        return ParameterProcessor()
 
-    @pytest.fixture
-    def validator(self) -> ParameterValidator:
-        """Create a ParameterValidator instance."""
-        return ParameterValidator()
+def test_config_driven_parse_normalization_needs_normalization_when_style_not_in_supported(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """Style NOT in supported_parameter_styles triggers normalization."""
+    sql = "SELECT * FROM t WHERE id = %(name)s"
+    param_info = config_driven_parse_normalization_validator.extract_parameters(sql)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+    )
+    needs_normalization = config_driven_parse_normalization_processor._needs_parse_normalization(param_info, config)
+    assert needs_normalization is True
 
-    def test_needs_normalization_when_style_not_in_supported(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """Style NOT in supported_parameter_styles triggers normalization."""
-        sql = "SELECT * FROM t WHERE id = %(name)s"
-        param_info = validator.extract_parameters(sql)
 
-        # Config where NAMED_PYFORMAT is NOT supported
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+def test_config_driven_parse_normalization_no_normalization_when_style_in_supported(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """Style IN supported_parameter_styles does NOT trigger normalization."""
+    sql = "SELECT * FROM t WHERE id = $1"
+    param_info = config_driven_parse_normalization_validator.extract_parameters(sql)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+    )
+    needs_normalization = config_driven_parse_normalization_processor._needs_parse_normalization(param_info, config)
+    assert needs_normalization is False
+
+
+def test_config_driven_parse_normalization_normalization_converts_to_default_style(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """Normalization converts to config.default_parameter_style."""
+    sql = "SELECT * FROM t WHERE id = %(name)s"
+    param_info = config_driven_parse_normalization_validator.extract_parameters(sql)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+    )
+    normalized_sql = config_driven_parse_normalization_processor._normalize_sql_for_parsing(sql, param_info, config)
+    assert "%(name)s" not in normalized_sql
+    assert "$1" in normalized_sql
+
+
+def test_config_driven_parse_normalization_no_normalization_preserves_original_sql(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """When no normalization needed, original SQL is preserved."""
+    sql = "SELECT * FROM t WHERE id = $1"
+    param_info = config_driven_parse_normalization_validator.extract_parameters(sql)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+    )
+    normalized_sql = config_driven_parse_normalization_processor._normalize_sql_for_parsing(sql, param_info, config)
+    assert normalized_sql == sql
+
+
+def test_config_driven_parse_normalization_none_supported_styles_defaults_to_default_style(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """When supported_parameter_styles=None, defaults to {default_style}."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles=None)
+    assert config.supported_parameter_styles == frozenset({ParameterStyle.NUMERIC})
+    sql_numeric = "SELECT * FROM t WHERE id = $1"
+    param_info_numeric = config_driven_parse_normalization_validator.extract_parameters(sql_numeric)
+    assert config_driven_parse_normalization_processor._needs_parse_normalization(param_info_numeric, config) is False
+    sql_pyformat = "SELECT * FROM t WHERE id = %(name)s"
+    param_info_pyformat = config_driven_parse_normalization_validator.extract_parameters(sql_pyformat)
+    assert config_driven_parse_normalization_processor._needs_parse_normalization(param_info_pyformat, config) is True
+
+
+def test_config_driven_parse_normalization_multiple_unsupported_parameters_all_normalized(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """Multiple unsupported parameters are all normalized."""
+    sql = "SELECT * FROM t WHERE a = %(a)s AND b = %(b)s AND c = %(c)s"
+    param_info = config_driven_parse_normalization_validator.extract_parameters(sql)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
+    )
+    normalized_sql = config_driven_parse_normalization_processor._normalize_sql_for_parsing(sql, param_info, config)
+    assert "%(a)s" not in normalized_sql
+    assert "%(b)s" not in normalized_sql
+    assert "%(c)s" not in normalized_sql
+    assert "$" in normalized_sql
+
+
+@pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
+def test_config_driven_parse_normalization_process_reuses_extracted_metadata_for_parse_normalization(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """process() should normalize SQL without re-extracting placeholders."""
+    sql = "SELECT * FROM t WHERE id = %(name)s"
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        default_execution_parameter_style=ParameterStyle.NAMED_PYFORMAT,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NAMED_PYFORMAT},
+    )
+    with patch.object(
+        ParameterValidator, "extract_parameters", wraps=config_driven_parse_normalization_validator.extract_parameters
+    ) as mock_extract:
+        result = config_driven_parse_normalization_processor.process(sql, {"name": 1}, config)
+    assert mock_extract.call_count == 1
+    assert result.sql == sql
+    assert result.sqlglot_sql == "SELECT * FROM t WHERE id = $1"
+
+
+@pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
+def test_config_driven_parse_normalization_process_reuses_extracted_metadata_for_execution_conversion(
+    config_driven_parse_normalization_processor: ParameterProcessor,
+    config_driven_parse_normalization_validator: ParameterValidator,
+) -> None:
+    """process() should derive the final profile without re-parsing converted SQL."""
+    sql = "SELECT * FROM t WHERE id = :id AND name = :name"
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+    with patch.object(
+        ParameterValidator, "extract_parameters", wraps=config_driven_parse_normalization_validator.extract_parameters
+    ) as mock_extract:
+        result = config_driven_parse_normalization_processor.process(sql, {"id": 1, "name": "a"}, config)
+    assert mock_extract.call_count == 1
+    assert result.sql == "SELECT * FROM t WHERE id = $1 AND name = $2"
+    assert result.parameter_profile.styles == (ParameterStyle.NUMERIC.value,)
+    assert result.parameter_profile.named_parameters == ("1", "2")
+
+
+def _driver_profile_validation__get_all_driver_profiles() -> dict[str, DriverParameterProfile]:
+    """Collect all driver profiles."""
+    return {key: get_driver_profile(key) for key in _ADAPTER_PROFILE_KEYS if key in DRIVER_PARAMETER_PROFILES}
+
+
+def test_driver_profile_validation_default_style_in_supported_styles() -> None:
+    """default_style must be in supported_styles for all drivers."""
+    profiles = _driver_profile_validation__get_all_driver_profiles()
+    for name, profile in profiles.items():
+        assert profile.default_style in profile.supported_styles, (
+            f"{name}: default_style {profile.default_style} not in supported_styles {profile.supported_styles}"
         )
 
-        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
-        assert needs_normalization is True
 
-    def test_no_normalization_when_style_in_supported(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """Style IN supported_parameter_styles does NOT trigger normalization."""
-        sql = "SELECT * FROM t WHERE id = $1"
-        param_info = validator.extract_parameters(sql)
-
-        # Config where NUMERIC is supported
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+def test_driver_profile_validation_default_execution_style_in_supported_execution_styles() -> None:
+    """default_execution_style must be in supported_execution_styles for all drivers."""
+    profiles = _driver_profile_validation__get_all_driver_profiles()
+    for name, profile in profiles.items():
+        assert (
+            profile.supported_execution_styles and profile.default_execution_style in profile.supported_execution_styles
+        ), (
+            f"{name}: default_execution_style {profile.default_execution_style} not in supported_execution_styles {profile.supported_execution_styles}"
         )
 
-        needs_normalization = processor._needs_parse_normalization(param_info, config)  # pyright: ignore
-        assert needs_normalization is False
 
-    def test_normalization_converts_to_default_style(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """Normalization converts to config.default_parameter_style."""
-        sql = "SELECT * FROM t WHERE id = %(name)s"
-        param_info = validator.extract_parameters(sql)
+def test_driver_profile_validation_no_pyformat_in_supported_styles() -> None:
+    """Pyformat styles should NOT be in supported_styles (sqlglot can't parse %)."""
+    profiles = _driver_profile_validation__get_all_driver_profiles()
+    pyformat_styles = {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
+    for name, profile in profiles.items():
+        incompatible = profile.supported_styles & pyformat_styles
+        assert not incompatible, f"{name}: supported_styles contains {incompatible} but sqlglot interprets % as modulo"
+
+
+@pytest.fixture
+def end_to_end_parameter_normalization_processor() -> ParameterProcessor:
+    """Create a ParameterProcessor instance."""
+    return ParameterProcessor()
+
+
+def test_end_to_end_parameter_normalization_pyformat_normalized_for_sqlglot_sql(
+    end_to_end_parameter_normalization_processor: ParameterProcessor,
+) -> None:
+    """Pyformat input should be normalized in sqlglot_sql output."""
+    sql = "SELECT * FROM t WHERE name = %(name)s"
+    params = {"name": "test"}
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+    result = end_to_end_parameter_normalization_processor.process(sql, params, config, dialect="postgres")
+    assert result.sqlglot_sql is not None
+    assert "%(name)s" not in result.sqlglot_sql
+
+
+def test_end_to_end_parameter_normalization_supported_style_preserved_in_sqlglot_sql(
+    end_to_end_parameter_normalization_processor: ParameterProcessor,
+) -> None:
+    """Supported styles should be preserved in sqlglot_sql."""
+    sql = "SELECT * FROM t WHERE id = $1"
+    params = ["test"]
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+    result = end_to_end_parameter_normalization_processor.process(sql, params, config, dialect="postgres")
+    assert result.sqlglot_sql is not None
+    assert "$1" in result.sqlglot_sql
+
+
+@pytest.fixture
+def async_pg_specific_behavior_asyncpg_config() -> ParameterStyleConfig | None:
+    """Get AsyncPG config if available."""
+    try:
+        from sqlspec.adapters.asyncpg.core import driver_profile
 
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
-        )
-
-        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
-
-        # Should have converted to NUMERIC ($1)
-        assert "%(name)s" not in normalized_sql
-        assert "$1" in normalized_sql
-
-    def test_no_normalization_preserves_original_sql(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """When no normalization needed, original SQL is preserved."""
-        sql = "SELECT * FROM t WHERE id = $1"
-        param_info = validator.extract_parameters(sql)
-
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
-        )
-
-        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
-        assert normalized_sql == sql
-
-    def test_none_supported_styles_defaults_to_default_style(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """When supported_parameter_styles=None, defaults to {default_style}."""
-        # When passing None, ParameterStyleConfig defaults to frozenset({default_style})
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles=None,  # type: ignore[arg-type]
-        )
-
-        # Should have defaulted to {NUMERIC}
-        assert config.supported_parameter_styles == frozenset({ParameterStyle.NUMERIC})
-
-        # SQL with NUMERIC should NOT need normalization
-        sql_numeric = "SELECT * FROM t WHERE id = $1"
-        param_info_numeric = validator.extract_parameters(sql_numeric)
-        assert processor._needs_parse_normalization(param_info_numeric, config) is False  # pyright: ignore
-
-        # SQL with NAMED_PYFORMAT SHOULD need normalization (not in default set)
-        sql_pyformat = "SELECT * FROM t WHERE id = %(name)s"
-        param_info_pyformat = validator.extract_parameters(sql_pyformat)
-        assert processor._needs_parse_normalization(param_info_pyformat, config) is True  # pyright: ignore
-
-    def test_multiple_unsupported_parameters_all_normalized(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """Multiple unsupported parameters are all normalized."""
-        sql = "SELECT * FROM t WHERE a = %(a)s AND b = %(b)s AND c = %(c)s"
-        param_info = validator.extract_parameters(sql)
-
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
-        )
-
-        normalized_sql = processor._normalize_sql_for_parsing(sql, param_info, config)  # pyright: ignore
-
-        # No pyformat placeholders should remain
-        assert "%(a)s" not in normalized_sql
-        assert "%(b)s" not in normalized_sql
-        assert "%(c)s" not in normalized_sql
-
-        # Should have NUMERIC placeholders
-        assert "$" in normalized_sql
-
-    @pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
-    def test_process_reuses_extracted_metadata_for_parse_normalization(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """process() should normalize SQL without re-extracting placeholders."""
-        sql = "SELECT * FROM t WHERE id = %(name)s"
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            default_execution_parameter_style=ParameterStyle.NAMED_PYFORMAT,
-            supported_parameter_styles={ParameterStyle.NUMERIC},
-            supported_execution_parameter_styles={ParameterStyle.NAMED_PYFORMAT},
-        )
-
-        with patch.object(ParameterValidator, "extract_parameters", wraps=validator.extract_parameters) as mock_extract:
-            result = processor.process(sql, {"name": 1}, config)
-
-        assert mock_extract.call_count == 1
-        assert result.sql == sql
-        assert result.sqlglot_sql == "SELECT * FROM t WHERE id = $1"
-
-    @pytest.mark.skipif(_VALIDATOR_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
-    def test_process_reuses_extracted_metadata_for_execution_conversion(
-        self, processor: ParameterProcessor, validator: ParameterValidator
-    ) -> None:
-        """process() should derive the final profile without re-parsing converted SQL."""
-        sql = "SELECT * FROM t WHERE id = :id AND name = :name"
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NAMED_COLON,
-            default_execution_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
-            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        )
-
-        with patch.object(ParameterValidator, "extract_parameters", wraps=validator.extract_parameters) as mock_extract:
-            result = processor.process(sql, {"id": 1, "name": "a"}, config)
-
-        assert mock_extract.call_count == 1
-        assert result.sql == "SELECT * FROM t WHERE id = $1 AND name = $2"
-        assert result.parameter_profile.styles == (ParameterStyle.NUMERIC.value,)
-        assert result.parameter_profile.named_parameters == ("1", "2")
-
-
-class TestDriverProfileValidation:
-    """Validate all driver profiles have correct supported_styles."""
-
-    def _get_all_driver_profiles(self) -> dict[str, DriverParameterProfile]:
-        """Collect all driver profiles."""
-        return {key: get_driver_profile(key) for key in _ADAPTER_PROFILE_KEYS if key in DRIVER_PARAMETER_PROFILES}
-
-    def test_default_style_in_supported_styles(self) -> None:
-        """default_style must be in supported_styles for all drivers."""
-        profiles = self._get_all_driver_profiles()
-
-        for name, profile in profiles.items():
-            assert profile.default_style in profile.supported_styles, (
-                f"{name}: default_style {profile.default_style} not in supported_styles {profile.supported_styles}"
-            )
-
-    def test_default_execution_style_in_supported_execution_styles(self) -> None:
-        """default_execution_style must be in supported_execution_styles for all drivers."""
-        profiles = self._get_all_driver_profiles()
-
-        for name, profile in profiles.items():
-            assert (
-                profile.supported_execution_styles
-                and profile.default_execution_style in profile.supported_execution_styles
-            ), (
-                f"{name}: default_execution_style {profile.default_execution_style} "
-                f"not in supported_execution_styles {profile.supported_execution_styles}"
-            )
-
-    def test_no_pyformat_in_supported_styles(self) -> None:
-        """Pyformat styles should NOT be in supported_styles (sqlglot can't parse %)."""
-        profiles = self._get_all_driver_profiles()
-        pyformat_styles = {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
-
-        for name, profile in profiles.items():
-            incompatible = profile.supported_styles & pyformat_styles
-            assert not incompatible, (
-                f"{name}: supported_styles contains {incompatible} but sqlglot interprets % as modulo"
-            )
-
-
-class TestEndToEndParameterNormalization:
-    """Test complete parameter processing flow."""
-
-    @pytest.fixture
-    def processor(self) -> ParameterProcessor:
-        """Create a ParameterProcessor instance."""
-        return ParameterProcessor()
-
-    def test_pyformat_normalized_for_sqlglot_sql(self, processor: ParameterProcessor) -> None:
-        """Pyformat input should be normalized in sqlglot_sql output."""
-        sql = "SELECT * FROM t WHERE name = %(name)s"
-        params = {"name": "test"}
-
-        # Config similar to asyncpg - pyformat NOT in supported_styles
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
-            default_execution_parameter_style=ParameterStyle.NUMERIC,
-            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        )
-
-        result = processor.process(sql, params, config, dialect="postgres")
-
-        # sqlglot_sql should NOT contain pyformat
-        assert result.sqlglot_sql is not None
-        assert "%(name)s" not in result.sqlglot_sql
-
-    def test_supported_style_preserved_in_sqlglot_sql(self, processor: ParameterProcessor) -> None:
-        """Supported styles should be preserved in sqlglot_sql."""
-        sql = "SELECT * FROM t WHERE id = $1"
-        params = ["test"]
-
-        config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
-            default_execution_parameter_style=ParameterStyle.NUMERIC,
-            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
-        )
-
-        result = processor.process(sql, params, config, dialect="postgres")
-
-        # sqlglot_sql should still have $1
-        assert result.sqlglot_sql is not None
-        assert "$1" in result.sqlglot_sql
-
-
-class TestAsyncPGSpecificBehavior:
-    """Test AsyncPG-specific parameter handling."""
-
-    @pytest.fixture
-    def asyncpg_config(self) -> ParameterStyleConfig | None:
-        """Get AsyncPG config if available."""
-        try:
-            from sqlspec.adapters.asyncpg.core import driver_profile
-
-            return ParameterStyleConfig(
-                default_parameter_style=driver_profile.default_style,
-                supported_parameter_styles=driver_profile.supported_styles,
-                default_execution_parameter_style=driver_profile.default_execution_style,
-                supported_execution_parameter_styles=driver_profile.supported_execution_styles,
-            )
-        except ImportError:
-            return None
-
-    @pytest.fixture
-    def processor(self) -> ParameterProcessor:
-        """Create a ParameterProcessor instance."""
-        return ParameterProcessor()
-
-    def test_asyncpg_pyformat_converts_for_sqlglot(
-        self, processor: ParameterProcessor, asyncpg_config: ParameterStyleConfig | None
-    ) -> None:
-        """AsyncPG: pyformat input should be converted for sqlglot parsing."""
-        if asyncpg_config is None:
-            pytest.skip("asyncpg adapter not available")
-
-        sql = "SELECT * FROM t WHERE name = %(name)s"
-        params = {"name": "test"}
-
-        result = processor.process(sql, params, asyncpg_config, dialect="postgres")
-
-        # sqlglot_sql should NOT contain pyformat (% = modulo in postgres)
-        assert result.sqlglot_sql is not None
-        assert "%(name)s" not in result.sqlglot_sql
-        # Should be converted to NUMERIC ($1) or NAMED_COLON (:name)
-        assert "$" in result.sqlglot_sql or ":" in result.sqlglot_sql
-
-
-class TestPsycopgSpecificBehavior:
-    """Test Psycopg-specific parameter handling."""
-
-    @pytest.fixture
-    def psycopg_config(self) -> ParameterStyleConfig | None:
-        """Get Psycopg config if available."""
-        try:
-            from sqlspec.adapters.psycopg.core import driver_profile
-
-            return ParameterStyleConfig(
-                default_parameter_style=driver_profile.default_style,
-                supported_parameter_styles=driver_profile.supported_styles,
-                default_execution_parameter_style=driver_profile.default_execution_style,
-                supported_execution_parameter_styles=driver_profile.supported_execution_styles,
-            )
-        except ImportError:
-            return None
-
-    @pytest.fixture
-    def processor(self) -> ParameterProcessor:
-        """Create a ParameterProcessor instance."""
-        return ParameterProcessor()
-
-    def test_psycopg_pyformat_normalized_for_parsing(
-        self, processor: ParameterProcessor, psycopg_config: ParameterStyleConfig | None
-    ) -> None:
-        """Psycopg: pyformat normalized for sqlglot but available for execution."""
-        if psycopg_config is None:
-            pytest.skip("psycopg adapter not available")
-
-        sql = "SELECT * FROM t WHERE name = %(name)s"
-        params = {"name": "test"}
-
-        result = processor.process(sql, params, psycopg_config, dialect="postgres")
-
-        # sqlglot_sql should NOT contain pyformat (normalized for parsing)
-        assert result.sqlglot_sql is not None
-        assert "%(name)s" not in result.sqlglot_sql
-
-    def test_psycopg_positional_pyformat_preserves_distinct_positions(
-        self, processor: ParameterProcessor, psycopg_config: ParameterStyleConfig | None
-    ) -> None:
-        """Psycopg: repeated ``%s`` placeholders should normalize to distinct numeric positions."""
-        if psycopg_config is None:
-            pytest.skip("psycopg adapter not available")
-
-        sql = "SELECT * FROM t WHERE name = ? AND value > ?"
-        params = ["test", 100]
-
-        result = processor.process(sql, params, psycopg_config, dialect="postgres")
-
-        assert result.sql == "SELECT * FROM t WHERE name = %s AND value > %s"
-        assert result.sqlglot_sql == "SELECT * FROM t WHERE name = $1 AND value > $2"
-
-
-class TestMySQLAdaptersBehavior:
-    """Test MySQL adapter parameter handling."""
-
-    @pytest.fixture
-    def pymysql_config(self) -> ParameterStyleConfig | None:
-        """Get PyMySQL config if available."""
-        try:
-            from sqlspec.adapters.pymysql.core import driver_profile
-
-            return ParameterStyleConfig(
-                default_parameter_style=driver_profile.default_style,
-                supported_parameter_styles=driver_profile.supported_styles,
-                default_execution_parameter_style=driver_profile.default_execution_style,
-                supported_execution_parameter_styles=driver_profile.supported_execution_styles,
-            )
-        except ImportError:
-            return None
-
-    @pytest.fixture
-    def processor(self) -> ParameterProcessor:
-        """Create a ParameterProcessor instance."""
-        return ParameterProcessor()
-
-    def test_pymysql_pyformat_normalized_for_parsing(
-        self, processor: ParameterProcessor, pymysql_config: ParameterStyleConfig | None
-    ) -> None:
-        """PyMySQL: pyformat normalized for sqlglot parsing."""
-        if pymysql_config is None:
-            pytest.skip("pymysql adapter not available")
-
-        sql = "SELECT * FROM t WHERE name = %s"
-        params = ["test"]
-
-        result = processor.process(sql, params, pymysql_config, dialect="mysql")
-
-        # sqlglot_sql should NOT contain %s
-        assert result.sqlglot_sql is not None
-        assert "%s" not in result.sqlglot_sql
-
-
-class TestDuplicateNamedParamsCacheHit:
-    """Regression tests for bugs #375 and #376.
-
-    The bug was in ParameterProcessor where ``input_named_parameters`` stored
-    duplicates when a named parameter appeared more than once in the SQL.  On
-    cache hit, ``_map_named_to_positional`` would iterate the duplicated names
-    and produce too many positional arguments.  The fix uses
-    ``dict.fromkeys()`` to deduplicate.
-    """
-
-    @pytest.fixture
-    def config(self) -> ParameterStyleConfig:
         return ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NAMED_COLON,
-            default_execution_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles=frozenset({ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC}),
-            supported_execution_parameter_styles=frozenset({ParameterStyle.NUMERIC}),
+            default_parameter_style=driver_profile.default_style,
+            supported_parameter_styles=driver_profile.supported_styles,
+            default_execution_parameter_style=driver_profile.default_execution_style,
+            supported_execution_parameter_styles=driver_profile.supported_execution_styles,
         )
+    except ImportError:
+        return None
 
-    @pytest.fixture
-    def processor(self) -> ParameterProcessor:
-        return ParameterProcessor(cache_max_size=100, validator_cache_max_size=100)
 
-    def test_duplicate_named_params_cache_hit_uuid_cast(
-        self, processor: ParameterProcessor, config: ParameterStyleConfig
-    ) -> None:
-        """Regression test for #375: duplicate params with ``::uuid`` cast.
+@pytest.fixture
+def async_pg_specific_behavior_processor() -> ParameterProcessor:
+    """Create a ParameterProcessor instance."""
+    return ParameterProcessor()
 
-        SQL contains ``:id`` twice (once in a ``::uuid IS NULL`` cast and once
-        in a plain comparison) plus ``:ts``.  Both the cache-miss and
-        cache-hit calls must produce exactly 2 positional parameters.
-        """
-        sql = "INSERT INTO t (col) SELECT :id WHERE :id::uuid IS NULL OR col = :id AND ts = :ts"
-        params = {"id": "abc-123", "ts": "2024-01-01"}
 
-        result1 = processor.process(sql, params, config)
-        assert len(result1.parameters) == 2, f"Cache miss produced {len(result1.parameters)} params, expected 2"
+def test_async_pg_specific_behavior_asyncpg_pyformat_converts_for_sqlglot(
+    async_pg_specific_behavior_processor: ParameterProcessor,
+    async_pg_specific_behavior_asyncpg_config: ParameterStyleConfig | None,
+) -> None:
+    """AsyncPG: pyformat input should be converted for sqlglot parsing."""
+    if async_pg_specific_behavior_asyncpg_config is None:
+        pytest.skip("asyncpg adapter not available")
+    sql = "SELECT * FROM t WHERE name = %(name)s"
+    params = {"name": "test"}
+    result = async_pg_specific_behavior_processor.process(
+        sql, params, async_pg_specific_behavior_asyncpg_config, dialect="postgres"
+    )
+    assert result.sqlglot_sql is not None
+    assert "%(name)s" not in result.sqlglot_sql
+    assert "$" in result.sqlglot_sql or ":" in result.sqlglot_sql
 
-        result2 = processor.process(sql, params, config)
-        assert len(result2.parameters) == 2, f"Cache hit produced {len(result2.parameters)} params, expected 2"
 
-    def test_duplicate_named_params_cache_hit_interleaved(
-        self, processor: ParameterProcessor, config: ParameterStyleConfig
-    ) -> None:
-        """Regression test: interleaved duplicate named parameters.
+@pytest.fixture
+def psycopg_specific_behavior_psycopg_config() -> ParameterStyleConfig | None:
+    """Get Psycopg config if available."""
+    try:
+        from sqlspec.adapters.psycopg.core import driver_profile
 
-        ``:a`` and ``:b`` each appear twice.  Both calls must produce exactly
-        2 positional parameters.
-        """
-        sql = "SELECT * FROM t WHERE x = :a AND y = :b AND z = :a AND w = :b"
-        params = {"a": 1, "b": 2}
-
-        result1 = processor.process(sql, params, config)
-        assert len(result1.parameters) == 2, f"Cache miss produced {len(result1.parameters)} params, expected 2"
-
-        result2 = processor.process(sql, params, config)
-        assert len(result2.parameters) == 2, f"Cache hit produced {len(result2.parameters)} params, expected 2"
-
-    def test_duplicate_named_params_cache_hit_triple(
-        self, processor: ParameterProcessor, config: ParameterStyleConfig
-    ) -> None:
-        """Regression test: single parameter repeated three times.
-
-        ``:now`` appears three times.  Both calls must produce exactly
-        1 positional parameter.
-        """
-        sql = "SELECT :now, :now, :now"
-        params = {"now": "2024-01-01T00:00:00"}
-
-        result1 = processor.process(sql, params, config)
-        assert len(result1.parameters) == 1, f"Cache miss produced {len(result1.parameters)} params, expected 1"
-
-        result2 = processor.process(sql, params, config)
-        assert len(result2.parameters) == 1, f"Cache hit produced {len(result2.parameters)} params, expected 1"
-
-    def test_duplicate_named_params_cache_hit_embedding_query(
-        self, processor: ParameterProcessor, config: ParameterStyleConfig
-    ) -> None:
-        """Regression test for #376: vector-similarity query with repeated ``:embedding``.
-
-        ``:embedding`` appears twice (in the WHERE clause and the ORDER BY),
-        plus ``:threshold`` and ``:limit``.  Both calls must produce exactly
-        3 positional parameters.
-        """
-        sql = (
-            "SELECT * FROM items "
-            "WHERE embedding <=> :embedding > :threshold "
-            "ORDER BY embedding <=> :embedding "
-            "LIMIT :limit"
+        return ParameterStyleConfig(
+            default_parameter_style=driver_profile.default_style,
+            supported_parameter_styles=driver_profile.supported_styles,
+            default_execution_parameter_style=driver_profile.default_execution_style,
+            supported_execution_parameter_styles=driver_profile.supported_execution_styles,
         )
-        params = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
+    except ImportError:
+        return None
 
-        result1 = processor.process(sql, params, config)
-        assert len(result1.parameters) == 3, f"Cache miss produced {len(result1.parameters)} params, expected 3"
 
-        result2 = processor.process(sql, params, config)
-        assert len(result2.parameters) == 3, f"Cache hit produced {len(result2.parameters)} params, expected 3"
+@pytest.fixture
+def psycopg_specific_behavior_processor() -> ParameterProcessor:
+    """Create a ParameterProcessor instance."""
+    return ParameterProcessor()
+
+
+def test_psycopg_specific_behavior_psycopg_pyformat_normalized_for_parsing(
+    psycopg_specific_behavior_processor: ParameterProcessor,
+    psycopg_specific_behavior_psycopg_config: ParameterStyleConfig | None,
+) -> None:
+    """Psycopg: pyformat normalized for sqlglot but available for execution."""
+    if psycopg_specific_behavior_psycopg_config is None:
+        pytest.skip("psycopg adapter not available")
+    sql = "SELECT * FROM t WHERE name = %(name)s"
+    params = {"name": "test"}
+    result = psycopg_specific_behavior_processor.process(
+        sql, params, psycopg_specific_behavior_psycopg_config, dialect="postgres"
+    )
+    assert result.sqlglot_sql is not None
+    assert "%(name)s" not in result.sqlglot_sql
+
+
+def test_psycopg_specific_behavior_psycopg_positional_pyformat_preserves_distinct_positions(
+    psycopg_specific_behavior_processor: ParameterProcessor,
+    psycopg_specific_behavior_psycopg_config: ParameterStyleConfig | None,
+) -> None:
+    """Psycopg: repeated ``%s`` placeholders should normalize to distinct numeric positions."""
+    if psycopg_specific_behavior_psycopg_config is None:
+        pytest.skip("psycopg adapter not available")
+    sql = "SELECT * FROM t WHERE name = ? AND value > ?"
+    params = ["test", 100]
+    result = psycopg_specific_behavior_processor.process(
+        sql, params, psycopg_specific_behavior_psycopg_config, dialect="postgres"
+    )
+    assert result.sql == "SELECT * FROM t WHERE name = %s AND value > %s"
+    assert result.sqlglot_sql == "SELECT * FROM t WHERE name = $1 AND value > $2"
+
+
+@pytest.fixture
+def my_sql_adapters_behavior_pymysql_config() -> ParameterStyleConfig | None:
+    """Get PyMySQL config if available."""
+    try:
+        from sqlspec.adapters.pymysql.core import driver_profile
+
+        return ParameterStyleConfig(
+            default_parameter_style=driver_profile.default_style,
+            supported_parameter_styles=driver_profile.supported_styles,
+            default_execution_parameter_style=driver_profile.default_execution_style,
+            supported_execution_parameter_styles=driver_profile.supported_execution_styles,
+        )
+    except ImportError:
+        return None
+
+
+@pytest.fixture
+def my_sql_adapters_behavior_processor() -> ParameterProcessor:
+    """Create a ParameterProcessor instance."""
+    return ParameterProcessor()
+
+
+def test_my_sql_adapters_behavior_pymysql_pyformat_normalized_for_parsing(
+    my_sql_adapters_behavior_processor: ParameterProcessor,
+    my_sql_adapters_behavior_pymysql_config: ParameterStyleConfig | None,
+) -> None:
+    """PyMySQL: pyformat normalized for sqlglot parsing."""
+    if my_sql_adapters_behavior_pymysql_config is None:
+        pytest.skip("pymysql adapter not available")
+    sql = "SELECT * FROM t WHERE name = %s"
+    params = ["test"]
+    result = my_sql_adapters_behavior_processor.process(
+        sql, params, my_sql_adapters_behavior_pymysql_config, dialect="mysql"
+    )
+    assert result.sqlglot_sql is not None
+    assert "%s" not in result.sqlglot_sql
+
+
+@pytest.fixture
+def duplicate_named_params_cache_hit_config() -> ParameterStyleConfig:
+    return ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles=frozenset({ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC}),
+        supported_execution_parameter_styles=frozenset({ParameterStyle.NUMERIC}),
+    )
+
+
+@pytest.fixture
+def duplicate_named_params_cache_hit_processor() -> ParameterProcessor:
+    return ParameterProcessor(cache_max_size=100, validator_cache_max_size=100)
+
+
+def test_duplicate_named_params_cache_hit_duplicate_named_params_cache_hit_uuid_cast(
+    duplicate_named_params_cache_hit_processor: ParameterProcessor,
+    duplicate_named_params_cache_hit_config: ParameterStyleConfig,
+) -> None:
+    """Regression test for #375: duplicate params with ``::uuid`` cast.
+
+    SQL contains ``:id`` twice (once in a ``::uuid IS NULL`` cast and once
+    in a plain comparison) plus ``:ts``.  Both the cache-miss and
+    cache-hit calls must produce exactly 2 positional parameters.
+    """
+    sql = "INSERT INTO t (col) SELECT :id WHERE :id::uuid IS NULL OR col = :id AND ts = :ts"
+    params = {"id": "abc-123", "ts": "2024-01-01"}
+    result1 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result1.parameters) == 2, f"Cache miss produced {len(result1.parameters)} params, expected 2"
+    result2 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result2.parameters) == 2, f"Cache hit produced {len(result2.parameters)} params, expected 2"
+
+
+def test_duplicate_named_params_cache_hit_duplicate_named_params_cache_hit_interleaved(
+    duplicate_named_params_cache_hit_processor: ParameterProcessor,
+    duplicate_named_params_cache_hit_config: ParameterStyleConfig,
+) -> None:
+    """Regression test: interleaved duplicate named parameters.
+
+    ``:a`` and ``:b`` each appear twice.  Both calls must produce exactly
+    2 positional parameters.
+    """
+    sql = "SELECT * FROM t WHERE x = :a AND y = :b AND z = :a AND w = :b"
+    params = {"a": 1, "b": 2}
+    result1 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result1.parameters) == 2, f"Cache miss produced {len(result1.parameters)} params, expected 2"
+    result2 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result2.parameters) == 2, f"Cache hit produced {len(result2.parameters)} params, expected 2"
+
+
+def test_duplicate_named_params_cache_hit_duplicate_named_params_cache_hit_triple(
+    duplicate_named_params_cache_hit_processor: ParameterProcessor,
+    duplicate_named_params_cache_hit_config: ParameterStyleConfig,
+) -> None:
+    """Regression test: single parameter repeated three times.
+
+    ``:now`` appears three times.  Both calls must produce exactly
+    1 positional parameter.
+    """
+    sql = "SELECT :now, :now, :now"
+    params = {"now": "2024-01-01T00:00:00"}
+    result1 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result1.parameters) == 1, f"Cache miss produced {len(result1.parameters)} params, expected 1"
+    result2 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result2.parameters) == 1, f"Cache hit produced {len(result2.parameters)} params, expected 1"
+
+
+def test_duplicate_named_params_cache_hit_duplicate_named_params_cache_hit_embedding_query(
+    duplicate_named_params_cache_hit_processor: ParameterProcessor,
+    duplicate_named_params_cache_hit_config: ParameterStyleConfig,
+) -> None:
+    """Regression test for #376: vector-similarity query with repeated ``:embedding``.
+
+    ``:embedding`` appears twice (in the WHERE clause and the ORDER BY),
+    plus ``:threshold`` and ``:limit``.  Both calls must produce exactly
+    3 positional parameters.
+    """
+    sql = (
+        "SELECT * FROM items WHERE embedding <=> :embedding > :threshold ORDER BY embedding <=> :embedding LIMIT :limit"
+    )
+    params = {"embedding": [0.1, 0.2, 0.3], "threshold": 0.5, "limit": 10}
+    result1 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result1.parameters) == 3, f"Cache miss produced {len(result1.parameters)} params, expected 3"
+    result2 = duplicate_named_params_cache_hit_processor.process(sql, params, duplicate_named_params_cache_hit_config)
+    assert len(result2.parameters) == 3, f"Cache hit produced {len(result2.parameters)} params, expected 3"
 
 
 class _CountingParameterConverter(ParameterConverter):
@@ -2748,12 +2344,12 @@ class _CountingParameterConverter(ParameterConverter):
         self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
     ) -> "tuple[list[ParameterInfo], dict[str, int]]":
         self.build_conversion_plan_calls += 1
-        return super()._build_conversion_plan(param_info, target_style)  # pyright: ignore[reportPrivateUsage]
+        return super()._build_conversion_plan(param_info, target_style)
 
 
 def _counting_processor() -> "tuple[ParameterProcessor, _CountingParameterConverter]":
     converter = _CountingParameterConverter()
-    return ParameterProcessor(converter=converter, cache_max_size=0, validator_cache_max_size=0), converter
+    return (ParameterProcessor(converter=converter, cache_max_size=0, validator_cache_max_size=0), converter)
 
 
 @pytest.mark.skipif(
@@ -2761,16 +2357,14 @@ def _counting_processor() -> "tuple[ParameterProcessor, _CountingParameterConver
 )
 def test_build_conversion_plan_called_once_in_execution_conversion() -> None:
     """Execution-style conversion should build one shared conversion plan."""
-    processor, converter = _counting_processor()
+    (processor, converter) = _counting_processor()
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_COLON,
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
     )
-
     result = processor.process("SELECT * FROM t WHERE id = :id AND name = :name", {"id": 1, "name": "alice"}, config)
-
     assert converter.build_conversion_plan_calls == 1
     assert result.sql == "SELECT * FROM t WHERE id = $1 AND name = $2"
 
@@ -2780,18 +2374,16 @@ def test_build_conversion_plan_called_once_in_execution_conversion() -> None:
 )
 def test_build_conversion_plan_called_once_in_requires_mapping_branch() -> None:
     """Mapping-normalization pre-processing should build one shared conversion plan."""
-    processor, converter = _counting_processor()
+    (processor, converter) = _counting_processor()
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         default_execution_parameter_style=ParameterStyle.NAMED_PYFORMAT,
         supported_parameter_styles={ParameterStyle.NUMERIC},
         supported_execution_parameter_styles={ParameterStyle.NAMED_PYFORMAT},
     )
-
     result = processor.process_for_execution(
         "SELECT * FROM t WHERE id = $1 AND name = $2", {"id": 42, "name": "bob"}, config
     )
-
     assert converter.build_conversion_plan_calls == 1
     assert result.parameters == {"1": 42, "2": "bob"}
 
@@ -2801,7 +2393,7 @@ def test_build_conversion_plan_called_once_in_requires_mapping_branch() -> None:
 )
 def test_build_conversion_plan_called_once_execute_many_preserve_original_params() -> None:
     """The execute_many preserve-original path should build one shared conversion plan."""
-    processor, converter = _counting_processor()
+    (processor, converter) = _counting_processor()
     config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_COLON,
         default_execution_parameter_style=ParameterStyle.NUMERIC,
@@ -2810,9 +2402,20 @@ def test_build_conversion_plan_called_once_execute_many_preserve_original_params
         preserve_original_params_for_many=True,
     )
     rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
-
     result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
-
     assert converter.build_conversion_plan_calls == 1
     assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
     assert result.parameters is rows
+
+
+def test_skip_groups_constant_is_module_level() -> None:
+    """Parameter validator skip groups should be hoisted out of hot paths."""
+    source = Path("sqlspec/core/parameters/_validator.py").read_text()
+    assert "_SKIP_GROUPS:" in source
+    assert "skip_groups =" not in source
+
+
+def test_skip_groups_constant_used_by_both_paths() -> None:
+    """Cached and uncached parameter extraction should share the same skip groups."""
+    source = Path("sqlspec/core/parameters/_validator.py").read_text()
+    assert source.count("_SKIP_GROUPS") == 3

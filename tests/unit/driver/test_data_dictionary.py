@@ -24,8 +24,8 @@ from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary,
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
+from sqlspec.data_dictionary import VersionInfo
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.typing import VersionInfo
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted

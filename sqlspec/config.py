@@ -31,6 +31,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker, create_migration_commands
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 
@@ -53,6 +54,7 @@ __all__ = (
     "AsyncConfigT",
     "AsyncDatabaseConfig",
     "ConfigT",
+    "ConnectionT",
     "DatabaseConfigProtocol",
     "DriverT",
     "EventsConfig",
@@ -65,6 +67,7 @@ __all__ = (
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "OpenTelemetryConfig",
+    "PoolT",
     "PrometheusConfig",
     "SanicConfig",
     "StarletteConfig",
@@ -79,8 +82,6 @@ ConfigT = TypeVar(
     bound="AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]",
 )
 
-ConnectionT = TypeVar("ConnectionT")
-PoolT = TypeVar("PoolT")
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
 
 logger = get_logger("sqlspec.config")
@@ -1641,7 +1642,137 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         raise NotImplementedError
 
 
-class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
+class _SyncMigrationMixin:
+    """Shared sync migration convenience methods."""
+
+    __slots__ = ()
+
+    def migrate_up(
+        self: Any,
+        revision: str = "head",
+        allow_missing: bool = False,
+        auto_sync: bool = True,
+        dry_run: bool = False,
+        *,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        commands.upgrade(
+            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
+
+    def migrate_down(
+        self: Any,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
+        """Apply database migrations down to specified revision."""
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
+
+    def get_current_migration(self: Any, verbose: bool = False) -> "str | None":
+        """Get the current migration version."""
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        return commands.current(verbose=verbose)
+
+    def create_migration(self: Any, message: str, file_type: str = "sql") -> None:
+        """Create a new migration file."""
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        commands.revision(message, file_type)
+
+    def init_migrations(self: Any, directory: "str | None" = None, package: bool = True) -> None:
+        """Initialize migration directory structure."""
+        if directory is None:
+            migration_config = self.migration_config or {}
+            directory = str(migration_config.get("script_location") or "migrations")
+
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        commands.init(directory, package)
+
+    def stamp_migration(self: Any, revision: str) -> None:
+        """Mark database as being at a specific revision without running migrations."""
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        commands.stamp(revision)
+
+    def fix_migrations(self: Any, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
+        """Convert timestamp migrations to sequential format."""
+        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
+        commands.fix(dry_run, update_database, yes)
+
+
+class _AsyncMigrationMixin:
+    """Shared async migration convenience methods."""
+
+    __slots__ = ()
+
+    async def migrate_up(
+        self: Any,
+        revision: str = "head",
+        allow_missing: bool = False,
+        auto_sync: bool = True,
+        dry_run: bool = False,
+        *,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
+        """Apply database migrations up to specified revision."""
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        await commands.upgrade(
+            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
+
+    async def migrate_down(
+        self: Any,
+        revision: str = "-1",
+        *,
+        dry_run: bool = False,
+        use_logger: bool = False,
+        echo: bool | None = None,
+        summary_only: bool | None = None,
+    ) -> None:
+        """Apply database migrations down to specified revision."""
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
+
+    async def get_current_migration(self: Any, verbose: bool = False) -> "str | None":
+        """Get the current migration version."""
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        return await commands.current(verbose=verbose)
+
+    async def create_migration(self: Any, message: str, file_type: str = "sql") -> None:
+        """Create a new migration file."""
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        await commands.revision(message, file_type)
+
+    async def init_migrations(self: Any, directory: "str | None" = None, package: bool = True) -> None:
+        """Initialize migration directory structure."""
+        if directory is None:
+            migration_config = self.migration_config or {}
+            directory = str(migration_config.get("script_location") or "migrations")
+
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        await commands.init(directory, package)
+
+    async def stamp_migration(self: Any, revision: str) -> None:
+        """Mark database as being at a specific revision without running migrations."""
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        await commands.stamp(revision)
+
+    async def fix_migrations(self: Any, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
+        """Convert timestamp migrations to sequential format."""
+        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
+        await commands.fix(dry_run, update_database, yes)
+
+
+class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for sync database configurations that do not implement a pool."""
 
     __slots__ = ("connection_config",)
@@ -1699,112 +1830,8 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     def provide_pool(self, *args: Any, **kwargs: Any) -> None:
         return None
 
-    def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
-        *,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations up to specified revision.
 
-        Args:
-            revision: Target revision or "head" for latest.
-            allow_missing: Allow out-of-order migrations.
-            auto_sync: Auto-reconcile renamed migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = self._ensure_migration_commands()
-        commands.upgrade(
-            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
-        )
-
-    def migrate_down(
-        self,
-        revision: str = "-1",
-        *,
-        dry_run: bool = False,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations down to specified revision.
-
-        Args:
-            revision: Target revision, "-1" for one step back, or "base" for all migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = self._ensure_migration_commands()
-        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
-
-    def get_current_migration(self, verbose: bool = False) -> "str | None":
-        """Get the current migration version.
-
-        Args:
-            verbose: Whether to show detailed migration history.
-
-        Returns:
-            Current migration version or None if no migrations applied.
-        """
-        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
-        return commands.current(verbose=verbose)
-
-    def create_migration(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
-
-        Args:
-            message: Description for the migration.
-            file_type: Type of migration file to create ('sql' or 'py').
-        """
-        commands = self._ensure_migration_commands()
-        commands.revision(message, file_type)
-
-    def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
-        """Initialize migration directory structure.
-
-        Args:
-            directory: Directory to initialize migrations in.
-            package: Whether to create __init__.py file.
-        """
-        if directory is None:
-            migration_config = self.migration_config or {}
-            directory = str(migration_config.get("script_location") or "migrations")
-
-        commands = self._ensure_migration_commands()
-        commands.init(directory, package)
-
-    def stamp_migration(self, revision: str) -> None:
-        """Mark database as being at a specific revision without running migrations.
-
-        Args:
-            revision: The revision to stamp.
-        """
-        commands = self._ensure_migration_commands()
-        commands.stamp(revision)
-
-    def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
-        """Convert timestamp migrations to sequential format.
-
-        Args:
-            dry_run: Preview changes without applying.
-            update_database: Update migration records in database.
-            yes: Skip confirmation prompt.
-        """
-        commands = self._ensure_migration_commands()
-        commands.fix(dry_run, update_database, yes)
-
-
-class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
+class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for async database configurations that do not implement a pool."""
 
     __slots__ = ("connection_config",)
@@ -1862,112 +1889,8 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     def provide_pool(self, *args: Any, **kwargs: Any) -> None:
         return None
 
-    async def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
-        *,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations up to specified revision.
 
-        Args:
-            revision: Target revision or "head" for latest.
-            allow_missing: Allow out-of-order migrations.
-            auto_sync: Auto-reconcile renamed migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.upgrade(
-            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
-        )
-
-    async def migrate_down(
-        self,
-        revision: str = "-1",
-        *,
-        dry_run: bool = False,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations down to specified revision.
-
-        Args:
-            revision: Target revision, "-1" for one step back, or "base" for all migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
-
-    async def get_current_migration(self, verbose: bool = False) -> "str | None":
-        """Get the current migration version.
-
-        Args:
-            verbose: Whether to show detailed migration history.
-
-        Returns:
-            Current migration version or None if no migrations applied.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        return await commands.current(verbose=verbose)
-
-    async def create_migration(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
-
-        Args:
-            message: Description for the migration.
-            file_type: Type of migration file to create ('sql' or 'py').
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.revision(message, file_type)
-
-    async def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
-        """Initialize migration directory structure.
-
-        Args:
-            directory: Directory to initialize migrations in.
-            package: Whether to create __init__.py file.
-        """
-        if directory is None:
-            migration_config = self.migration_config or {}
-            directory = str(migration_config.get("script_location") or "migrations")
-
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.init(directory, package)
-
-    async def stamp_migration(self, revision: str) -> None:
-        """Mark database as being at a specific revision without running migrations.
-
-        Args:
-            revision: The revision to stamp.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.stamp(revision)
-
-    async def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
-        """Convert timestamp migrations to sequential format.
-
-        Args:
-            dry_run: Preview changes without applying.
-            update_database: Update migration records in database.
-            yes: Skip confirmation prompt.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.fix(dry_run, update_database, yes)
-
-
-class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
+class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for sync database configurations with connection pooling."""
 
     __slots__ = ("_pool_lock", "connection_config")
@@ -2073,112 +1996,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """Actual pool destruction implementation."""
         raise NotImplementedError
 
-    def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
-        *,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations up to specified revision.
 
-        Args:
-            revision: Target revision or "head" for latest.
-            allow_missing: Allow out-of-order migrations.
-            auto_sync: Auto-reconcile renamed migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = self._ensure_migration_commands()
-        commands.upgrade(
-            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
-        )
-
-    def migrate_down(
-        self,
-        revision: str = "-1",
-        *,
-        dry_run: bool = False,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations down to specified revision.
-
-        Args:
-            revision: Target revision, "-1" for one step back, or "base" for all migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = self._ensure_migration_commands()
-        commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
-
-    def get_current_migration(self, verbose: bool = False) -> "str | None":
-        """Get the current migration version.
-
-        Args:
-            verbose: Whether to show detailed migration history.
-
-        Returns:
-            Current migration version or None if no migrations applied.
-        """
-        commands = cast("SyncMigrationCommands[Any]", self._ensure_migration_commands())
-        return commands.current(verbose=verbose)
-
-    def create_migration(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
-
-        Args:
-            message: Description for the migration.
-            file_type: Type of migration file to create ('sql' or 'py').
-        """
-        commands = self._ensure_migration_commands()
-        commands.revision(message, file_type)
-
-    def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
-        """Initialize migration directory structure.
-
-        Args:
-            directory: Directory to initialize migrations in.
-            package: Whether to create __init__.py file.
-        """
-        if directory is None:
-            migration_config = self.migration_config or {}
-            directory = str(migration_config.get("script_location") or "migrations")
-
-        commands = self._ensure_migration_commands()
-        commands.init(directory, package)
-
-    def stamp_migration(self, revision: str) -> None:
-        """Mark database as being at a specific revision without running migrations.
-
-        Args:
-            revision: The revision to stamp.
-        """
-        commands = self._ensure_migration_commands()
-        commands.stamp(revision)
-
-    def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
-        """Convert timestamp migrations to sequential format.
-
-        Args:
-            dry_run: Preview changes without applying.
-            update_database: Update migration records in database.
-            yes: Skip confirmation prompt.
-        """
-        commands = self._ensure_migration_commands()
-        commands.fix(dry_run, update_database, yes)
-
-
-class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
+class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for async database configurations with connection pooling."""
 
     __slots__ = ("_pool_lock", "connection_config")
@@ -2283,107 +2102,3 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     async def _close_pool(self) -> None:
         """Actual async pool destruction implementation."""
         raise NotImplementedError
-
-    async def migrate_up(
-        self,
-        revision: str = "head",
-        allow_missing: bool = False,
-        auto_sync: bool = True,
-        dry_run: bool = False,
-        *,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations up to specified revision.
-
-        Args:
-            revision: Target revision or "head" for latest.
-            allow_missing: Allow out-of-order migrations.
-            auto_sync: Auto-reconcile renamed migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.upgrade(
-            revision, allow_missing, auto_sync, dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
-        )
-
-    async def migrate_down(
-        self,
-        revision: str = "-1",
-        *,
-        dry_run: bool = False,
-        use_logger: bool = False,
-        echo: bool | None = None,
-        summary_only: bool | None = None,
-    ) -> None:
-        """Apply database migrations down to specified revision.
-
-        Args:
-            revision: Target revision, "-1" for one step back, or "base" for all migrations.
-            dry_run: Show what would be done without applying.
-            use_logger: Use Python logger instead of Rich console for output.
-            echo: Echo output to the console. Defaults to True when unset.
-            summary_only: Emit a single summary log entry when logger output is enabled.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.downgrade(revision, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only)
-
-    async def get_current_migration(self, verbose: bool = False) -> "str | None":
-        """Get the current migration version.
-
-        Args:
-            verbose: Whether to show detailed migration history.
-
-        Returns:
-            Current migration version or None if no migrations applied.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        return await commands.current(verbose=verbose)
-
-    async def create_migration(self, message: str, file_type: str = "sql") -> None:
-        """Create a new migration file.
-
-        Args:
-            message: Description for the migration.
-            file_type: Type of migration file to create ('sql' or 'py').
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.revision(message, file_type)
-
-    async def init_migrations(self, directory: "str | None" = None, package: bool = True) -> None:
-        """Initialize migration directory structure.
-
-        Args:
-            directory: Directory to initialize migrations in.
-            package: Whether to create __init__.py file.
-        """
-        if directory is None:
-            migration_config = self.migration_config or {}
-            directory = str(migration_config.get("script_location") or "migrations")
-
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.init(directory, package)
-
-    async def stamp_migration(self, revision: str) -> None:
-        """Mark database as being at a specific revision without running migrations.
-
-        Args:
-            revision: The revision to stamp.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.stamp(revision)
-
-    async def fix_migrations(self, dry_run: bool = False, update_database: bool = True, yes: bool = False) -> None:
-        """Convert timestamp migrations to sequential format.
-
-        Args:
-            dry_run: Preview changes without applying.
-            update_database: Update migration records in database.
-            yes: Skip confirmation prompt.
-        """
-        commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        await commands.fix(dry_run, update_database, yes)

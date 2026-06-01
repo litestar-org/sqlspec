@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.adbc._typing import AdbcConnection
+from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
@@ -17,7 +17,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, AdbcSessionContext
+from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
@@ -193,6 +193,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     _session_factory_class: "ClassVar[type[_AdbcSessionConnectionHandler]]" = _AdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[AdbcSessionContext]]" = AdbcSessionContext
     _default_statement_config = StatementConfig()
+    __slots__ = ("_default_session_config", "_paradedb_available", "_pgvector_available", "_resolved_dialect")
 
     def __init__(
         self,
@@ -224,12 +225,13 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
-        dialect = resolve_dialect_from_config(self.connection_config)
+        self._resolved_dialect = resolve_dialect_from_config(self.connection_config)
 
         if statement_config is None:
-            statement_config = get_statement_config(dialect)
+            statement_config = get_statement_config(self._resolved_dialect)
 
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+        self._default_session_config = get_statement_config(self._resolved_dialect)
 
         super().__init__(
             connection_config=self.connection_config,
@@ -246,7 +248,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     @property
     def supports_migration_schemas(self) -> bool:  # type: ignore[override]
         """Migration schema support is only available for PostgreSQL-backed ADBC drivers."""
-        return is_postgres_dialect(resolve_dialect_from_config(self.connection_config))
+        return is_postgres_dialect(self._resolved_dialect)
 
     def create_connection(self) -> AdbcConnection:
         """Create and return a new connection using the specified driver.
@@ -346,9 +348,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """
         self._detect_extensions_if_needed()
         statement_config = resolve_runtime_statement_config(
-            statement_config,
-            self.statement_config,
-            get_statement_config(resolve_dialect_from_config(self.connection_config)),
+            statement_config, self.statement_config, self._default_session_config
         )
         handler = _AdbcSessionConnectionHandler(self)
 

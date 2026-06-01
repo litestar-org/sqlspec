@@ -22,6 +22,54 @@ __all__ = ("down", "up")
 logger = get_logger("sqlspec.migrations.adk.tables")
 
 
+async def up(context: "MigrationContext | None" = None) -> "list[str]":
+    """Create the ADK session, events, and memory tables using store DDL definitions.
+
+    This migration delegates to the appropriate store class to generate
+    dialect-specific DDL. The store classes contain the single source of
+    truth for table schemas.
+
+    Args:
+        context: Migration context containing config.
+
+    Returns:
+        List of SQL statements to execute for upgrade.
+
+    Notes:
+        Configuration is read from context.config.extension_config["adk"].
+        Supports custom table names and optional owner_id_column for linking
+        sessions to owner tables (users, tenants, teams, etc.).
+        Memory table is included if enable_memory or include_memory_migration is True.
+    """
+    if context is None or context.config is None:
+        _raise_missing_config()
+
+    store_class = _get_store_class(context)
+    store_instance = store_class(config=context.config)
+
+    statements = [
+        await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
+        await store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    if _is_memory_enabled(context):
+        memory_store_class = _get_memory_store_class(context)
+        if memory_store_class is not None:
+            memory_store = memory_store_class(config=context.config)
+            memory_sql = memory_store._get_create_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
+            if inspect.isawaitable(memory_sql):
+                memory_sql = await memory_sql
+            if isinstance(memory_sql, list):
+                statements.extend(memory_sql)
+            else:
+                statements.append(memory_sql)
+            log_with_context(
+                logger, logging.DEBUG, "adk.migration.memory.include", table_name=memory_store.memory_table
+            )
+
+    return statements
+
+
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKStore]":
     """Get the appropriate store class based on the config's module path.
 
@@ -95,54 +143,6 @@ def _raise_missing_config() -> NoReturn:
     """
     msg = "Migration context must have a config to determine store class"
     raise SQLSpecError(msg)
-
-
-async def up(context: "MigrationContext | None" = None) -> "list[str]":
-    """Create the ADK session, events, and memory tables using store DDL definitions.
-
-    This migration delegates to the appropriate store class to generate
-    dialect-specific DDL. The store classes contain the single source of
-    truth for table schemas.
-
-    Args:
-        context: Migration context containing config.
-
-    Returns:
-        List of SQL statements to execute for upgrade.
-
-    Notes:
-        Configuration is read from context.config.extension_config["adk"].
-        Supports custom table names and optional owner_id_column for linking
-        sessions to owner tables (users, tenants, teams, etc.).
-        Memory table is included if enable_memory or include_memory_migration is True.
-    """
-    if context is None or context.config is None:
-        _raise_missing_config()
-
-    store_class = _get_store_class(context)
-    store_instance = store_class(config=context.config)
-
-    statements = [
-        await store_instance._get_create_sessions_table_sql(),  # pyright: ignore[reportPrivateUsage]
-        await store_instance._get_create_events_table_sql(),  # pyright: ignore[reportPrivateUsage]
-    ]
-
-    if _is_memory_enabled(context):
-        memory_store_class = _get_memory_store_class(context)
-        if memory_store_class is not None:
-            memory_store = memory_store_class(config=context.config)
-            memory_sql = memory_store._get_create_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
-            if inspect.isawaitable(memory_sql):
-                memory_sql = await memory_sql
-            if isinstance(memory_sql, list):
-                statements.extend(memory_sql)
-            else:
-                statements.append(memory_sql)
-            log_with_context(
-                logger, logging.DEBUG, "adk.migration.memory.include", table_name=memory_store.memory_table
-            )
-
-    return statements
 
 
 async def down(context: "MigrationContext | None" = None) -> "list[str]":

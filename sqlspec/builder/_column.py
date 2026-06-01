@@ -15,24 +15,6 @@ from sqlspec.builder._vector_distance import VectorDistance
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
 
-def _convert_value(value: Any) -> exp.Expr:
-    """Convert a Python value to a SQLGlot expression.
-
-    Special handling for datetime objects to prevent SQLGlot from
-    converting them to TIME_STR_TO_TIME function calls. Datetime
-    objects should be passed as parameters, not converted to SQL functions.
-
-    Args:
-        value: The value to convert
-
-    Returns:
-        A SQLGlot expression representing the value
-    """
-    if isinstance(value, (datetime, date)):
-        return exp.Literal(this=value, is_string=False)
-    return exp.convert(value)
-
-
 class ColumnExpression:
     """Base class for column expressions that can be combined with operators."""
 
@@ -519,3 +501,21 @@ class FunctionColumn:
     def __hash__(self) -> int:
         """Hash based on the expression identity."""
         return hash(id(self._expression))
+
+
+def _convert_value(value: Any) -> exp.Expr:
+    """Convert a Python value to a SQLGlot expression.
+
+    Special handling for datetime objects to prevent SQLGlot from
+    converting them to TIME_STR_TO_TIME function calls. Datetime
+    objects should be passed as parameters, not converted to SQL functions.
+
+    Args:
+        value: The value to convert
+
+    Returns:
+        A SQLGlot expression representing the value
+    """
+    if isinstance(value, (datetime, date)):
+        return exp.Literal(this=value, is_string=False)
+    return exp.convert(value)

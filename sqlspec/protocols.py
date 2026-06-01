@@ -17,15 +17,8 @@ if TYPE_CHECKING:
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
-    from sqlspec.typing import (
-        ArrowRecordBatch,
-        ArrowTable,
-        ColumnMetadata,
-        ForeignKeyMetadata,
-        IndexMetadata,
-        TableMetadata,
-        VersionInfo,
-    )
+    from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
     "ArrowTableStatsProtocol",
@@ -356,9 +349,6 @@ class StatementProtocol(Protocol):
 
     @property
     def raw_sql(self) -> "str | None": ...
-
-    @property
-    def sql(self) -> str: ...
 
     @property
     def operation_type(self) -> str: ...
@@ -770,10 +760,6 @@ class SQLBuilderProtocol(Protocol):
 
     def _generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate a unique parameter name."""
-        ...
-
-    def _create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":
-        """Create placeholder expression with bound parameter."""
         ...
 
     def create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":

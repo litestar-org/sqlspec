@@ -3,6 +3,9 @@
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Final
 
+from mypy_extensions import mypyc_attr
+from typing_extensions import final
+
 if TYPE_CHECKING:
     from sqlspec.core.compiler import OperationProfile, OperationType
     from sqlspec.core.parameters import ParameterProfile
@@ -13,6 +16,8 @@ __all__ = ("STMT_CACHE_MAX_SIZE", "CachedQuery", "QueryCache")
 STMT_CACHE_MAX_SIZE: Final[int] = 1024
 
 
+@final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CachedQuery:
     """Cached query metadata for fast-path execution."""
 
@@ -65,6 +70,8 @@ class CachedQuery:
         self.column_names = column_names
 
 
+@final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class QueryCache:
     """LRU cache for compiled query metadata."""
 

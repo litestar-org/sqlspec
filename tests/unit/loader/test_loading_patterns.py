@@ -330,7 +330,7 @@ SELECT 'loaded from URI' as source;
     assert "uri_query" in queries
 
     sql = loader.get_sql("uri_query")
-    assert "loaded from URI" in sql.sql
+    assert "loaded from URI" in sql.raw_sql
 
 
 def test_mixed_local_and_uri_loading(tmp_path: Path) -> None:

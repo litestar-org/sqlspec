@@ -2,11 +2,9 @@
 
 from typing import TYPE_CHECKING, ClassVar
 
-from mypy_extensions import mypyc_attr
-
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
@@ -14,14 +12,10 @@ if TYPE_CHECKING:
 __all__ = ("CockroachAsyncpgDataDictionary",)
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
     """CockroachDB async data dictionary (AsyncPG)."""
 
     dialect: ClassVar[str] = "cockroachdb"
-
-    def __init__(self) -> None:
-        super().__init__()
 
     async def get_version(self, driver: "CockroachAsyncpgDriver") -> "VersionInfo | None":
         driver_id = id(driver)

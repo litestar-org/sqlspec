@@ -6,6 +6,7 @@ staging and production environments.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -33,6 +34,7 @@ console = Console()
 logger = get_logger("sqlspec.migrations.validation")
 
 
+@dataclass(frozen=True, slots=True)
 class MigrationGap:
     """Represents a migration that is out of order.
 
@@ -46,18 +48,11 @@ class MigrationGap:
 
     """
 
-    __slots__ = ("_initialized", "applied_after", "missing_version")
-    applied_after: "list[MigrationVersion]"
     missing_version: "MigrationVersion"
-    _initialized: bool
+    applied_after: "list[MigrationVersion]"
 
-    def __init__(self, missing_version: "MigrationVersion", applied_after: "list[MigrationVersion]") -> None:
-        object.__setattr__(self, "missing_version", missing_version)
-        object.__setattr__(self, "applied_after", list(applied_after))
-        object.__setattr__(self, "_initialized", True)
-
-    def __repr__(self) -> str:
-        return f"MigrationGap(missing_version={self.missing_version!r}, applied_after={self.applied_after!r})"
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "applied_after", list(self.applied_after))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MigrationGap):
@@ -66,19 +61,6 @@ class MigrationGap:
 
     def __hash__(self) -> int:
         return hash((self.missing_version, tuple(self.applied_after)))
-
-    def __setattr__(self, name: str, value: object) -> None:
-        if name == "_initialized":
-            object.__setattr__(self, name, value)
-            return
-        try:
-            initialized = self._initialized
-        except AttributeError:
-            initialized = False
-        if initialized:
-            msg = "MigrationGap is immutable"
-            raise AttributeError(msg)
-        object.__setattr__(self, name, value)
 
 
 def detect_out_of_order_migrations(

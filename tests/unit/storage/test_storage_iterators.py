@@ -4,7 +4,21 @@ import io
 
 import pytest
 
-from sqlspec.storage.backends.base import AsyncThreadedBytesIterator
+from sqlspec.storage.backends.base import AsyncObStoreStreamIterator, AsyncThreadedBytesIterator
+
+
+class FakeAsyncStream:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = iter(chunks)
+
+    def __aiter__(self) -> "FakeAsyncStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return next(self._chunks)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
 
 
 @pytest.mark.anyio
@@ -37,3 +51,18 @@ async def test_async_threaded_bytes_iterator_early_exit_closes_file() -> None:
 
     # Verified: Context manager ensures closure even on break/early exit
     assert file_obj.closed
+
+
+def test_async_obstore_stream_iterator_slots_are_minimal() -> None:
+    iterator = AsyncObStoreStreamIterator(FakeAsyncStream([b"abc"]), chunk_size=2)
+
+    assert AsyncObStoreStreamIterator.__slots__ == ("_chunk_size", "_stream")
+    assert not hasattr(iterator, "_buffer")
+    assert not hasattr(iterator, "_stream_exhausted")
+
+
+@pytest.mark.anyio
+async def test_async_obstore_stream_iterator_delegates_to_stream() -> None:
+    iterator = AsyncObStoreStreamIterator(FakeAsyncStream([b"abc"]), chunk_size=2)
+
+    assert await iterator.__anext__() == b"abc"

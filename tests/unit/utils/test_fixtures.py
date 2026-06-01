@@ -7,6 +7,7 @@ JSON fixture file loading with compression support.
 
 import gzip
 import importlib
+import inspect
 import json
 import sys
 import zipfile
@@ -17,6 +18,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from sqlspec.utils.fixtures import (
+    _async_compress,
+    _async_read_compressed,
+    _async_read_text,
+    _async_serialize,
     _find_fixture_file,
     _read_compressed_file,
     _serialize_data,
@@ -25,6 +30,7 @@ from sqlspec.utils.fixtures import (
     write_fixture,
     write_fixture_async,
 )
+from sqlspec.utils.sync_tools import _AsyncWrapper
 
 
 def test_find_fixture_file_json(tmp_path: Path) -> None:
@@ -129,6 +135,18 @@ def test_read_unsupported_format(tmp_path: Path) -> None:
         _read_compressed_file(unsupported_file)
 
 
+def test_async_fixture_wrappers_are_hoisted() -> None:
+    assert isinstance(_async_read_text, _AsyncWrapper)
+    assert isinstance(_async_read_compressed, _AsyncWrapper)
+    assert isinstance(_async_serialize, _AsyncWrapper)
+    assert isinstance(_async_compress, _AsyncWrapper)
+
+
+def test_async_fixture_functions_do_not_allocate_wrappers_inline() -> None:
+    assert "async_(" not in inspect.getsource(open_fixture_async)
+    assert "async_(" not in inspect.getsource(write_fixture_async)
+
+
 def test_serialize_dict() -> None:
     """Test serializing a simple dictionary."""
     data = {"name": "test", "value": 42}
@@ -158,11 +176,11 @@ def test_serialize_pydantic_model() -> None:
     try:
         from pydantic import BaseModel
 
-        class TestModel(BaseModel):
+        class FixtureModel(BaseModel):
             name: str
             value: int
 
-        model = TestModel(name="test", value=42)
+        model = FixtureModel(name="test", value=42)
         result = _serialize_data(model)
         assert json.loads(result) == {"name": "test", "value": 42}
     except ImportError:
@@ -177,11 +195,11 @@ def test_serialize_msgspec_struct() -> None:
     try:
         import msgspec
 
-        class TestStruct(msgspec.Struct):
+        class FixtureStruct(msgspec.Struct):
             name: str
             value: int
 
-        struct = TestStruct(name="test", value=42)
+        struct = FixtureStruct(name="test", value=42)
         result = _serialize_data(struct)
         assert json.loads(result) == {"name": "test", "value": 42}
     except ImportError:

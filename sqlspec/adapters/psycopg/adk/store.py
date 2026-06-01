@@ -23,39 +23,6 @@ __all__ = ("PsycopgAsyncADKMemoryStore", "PsycopgAsyncADKStore", "PsycopgSyncADK
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
 
 
-def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":
-    return (
-        entry["id"],
-        entry["session_id"],
-        entry["app_name"],
-        entry["user_id"],
-        entry["event_id"],
-        entry["author"],
-        entry["timestamp"],
-        Jsonb(entry["content_json"]),
-        entry["content_text"],
-        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-        entry["inserted_at"],
-    )
-
-
-def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: "object | None") -> "tuple[object, ...]":
-    return (
-        entry["id"],
-        entry["session_id"],
-        entry["app_name"],
-        entry["user_id"],
-        entry["event_id"],
-        entry["author"],
-        owner_id,
-        entry["timestamp"],
-        Jsonb(entry["content_json"]),
-        entry["content_text"],
-        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-        entry["inserted_at"],
-    )
-
-
 class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     """PostgreSQL ADK store using Psycopg3 async driver.
 
@@ -1085,6 +1052,39 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         return await async_(self._delete_entries_older_than)(days)
+
+
+def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":
+    return (
+        entry["id"],
+        entry["session_id"],
+        entry["app_name"],
+        entry["user_id"],
+        entry["event_id"],
+        entry["author"],
+        entry["timestamp"],
+        Jsonb(entry["content_json"]),
+        entry["content_text"],
+        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+        entry["inserted_at"],
+    )
+
+
+def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: "object | None") -> "tuple[object, ...]":
+    return (
+        entry["id"],
+        entry["session_id"],
+        entry["app_name"],
+        entry["user_id"],
+        entry["event_id"],
+        entry["author"],
+        owner_id,
+        entry["timestamp"],
+        Jsonb(entry["content_json"]),
+        entry["content_text"],
+        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+        entry["inserted_at"],
+    )
 
 
 def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":

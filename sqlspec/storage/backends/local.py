@@ -25,39 +25,6 @@ if TYPE_CHECKING:
 __all__ = ("LocalStore",)
 
 
-def _write_local_bytes(resolved: "Path", data: bytes) -> None:
-    """Write bytes to a local file, ensuring parent directories exist."""
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_bytes(data)
-
-
-def _delete_local_path(resolved: "Path") -> None:
-    """Delete a local file or directory."""
-    if resolved.is_dir():
-        shutil.rmtree(resolved)
-    elif resolved.exists():
-        resolved.unlink()
-
-
-def _copy_local_path(src: "Path", dst: "Path") -> None:
-    """Copy a local file or directory."""
-    if src.is_dir():
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-    else:
-        shutil.copy2(src, dst)
-
-
-def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
-    """Write an Arrow table to a local path."""
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, str(resolved), **options)  # pyright: ignore
-
-
-def _open_file_for_read(path: Path) -> Any:
-    """Open a file for binary reading."""
-    return path.open("rb")
-
-
 @mypyc_attr(allow_interpreted_subclasses=True)
 class LocalStore:
     """Simple local file system storage backend.
@@ -466,3 +433,36 @@ class LocalStore:
     ) -> "str | list[str]":
         """Generate signed URL(s) asynchronously."""
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]
+
+
+def _write_local_bytes(resolved: "Path", data: bytes) -> None:
+    """Write bytes to a local file, ensuring parent directories exist."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_bytes(data)
+
+
+def _delete_local_path(resolved: "Path") -> None:
+    """Delete a local file or directory."""
+    if resolved.is_dir():
+        shutil.rmtree(resolved)
+    elif resolved.exists():
+        resolved.unlink()
+
+
+def _copy_local_path(src: "Path", dst: "Path") -> None:
+    """Copy a local file or directory."""
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+
+
+def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
+    """Write an Arrow table to a local path."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(resolved), **options)  # pyright: ignore
+
+
+def _open_file_for_read(path: Path) -> Any:
+    """Open a file for binary reading."""
+    return path.open("rb")

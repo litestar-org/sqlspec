@@ -287,6 +287,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
+        in_transaction = getattr(self.connection, "in_transaction", None)
+        if in_transaction is not None:
+            try:
+                return bool(in_transaction)
+            except Exception:
+                return False
         autocommit = getattr(self.connection, "autocommit", None)
         if autocommit is not None:
             try:

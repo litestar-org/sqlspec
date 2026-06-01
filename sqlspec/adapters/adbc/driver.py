@@ -6,8 +6,11 @@ database dialects, parameter style conversion, and transaction management.
 
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from typing_extensions import final
+
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
+    _prepare_batch_with_casts,
     collect_rows,
     create_mapped_exception,
     detect_dialect,
@@ -48,6 +51,7 @@ __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionConte
 logger = get_logger("sqlspec.adapters.adbc")
 
 
+@final
 class AdbcExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling ADBC database exceptions.
 
@@ -68,6 +72,7 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
         return True
 
 
+@final
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC driver for Arrow Database Connectivity.
 
@@ -122,19 +127,9 @@ class AdbcDriver(SyncDriverAdapterBase):
             Execution result with data or row count
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        parameter_casts = resolve_parameter_casts(statement) if self._is_postgres else {}
 
         try:
-            if self._is_postgres and parameter_casts:
-                execute_parameters = prepare_postgres_parameters(
-                    prepared_parameters,
-                    parameter_casts,
-                    self.statement_config,
-                    dialect=self._dialect_name,
-                    json_serializer=self._json_serializer,
-                )
-            else:
-                execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+            execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
             cursor.execute(sql, parameters=execute_parameters)
 
         except Exception:
@@ -181,23 +176,8 @@ class AdbcDriver(SyncDriverAdapterBase):
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 parameter_count = len(prepared_parameters)
                 if self._is_postgres:
-                    parameter_casts = resolve_parameter_casts(statement)
-                    processed_params: list[Any] | tuple[Any, ...]
-                    if parameter_casts:
-                        processed_params = [
-                            prepare_postgres_parameters(
-                                param_set,
-                                parameter_casts,
-                                self.statement_config,
-                                dialect=self._dialect_name,
-                                json_serializer=self._json_serializer,
-                            )
-                            for param_set in prepared_parameters
-                        ]
-                    else:
-                        processed_params = prepared_parameters
-                    cursor.executemany(sql, processed_params)
-                    row_count = resolve_many_rowcount(cursor, processed_params, fallback_count=parameter_count)
+                    cursor.executemany(sql, prepared_parameters)
+                    row_count = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
                 else:
                     cursor.executemany(sql, prepared_parameters)
                     row_count = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
@@ -558,10 +538,23 @@ class AdbcDriver(SyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
-        if enable_cast_detection and prepared_statement and self._is_postgres and not is_many:
+        if enable_cast_detection and prepared_statement and self._is_postgres:
+            prepared_parameters = super().prepare_driver_parameters(
+                parameters, statement_config, is_many, prepared_statement
+            )
             parameter_casts = resolve_parameter_casts(prepared_statement)
+            if is_many:
+                if not parameter_casts or not isinstance(prepared_parameters, (list, tuple)):
+                    return prepared_parameters
+                return _prepare_batch_with_casts(
+                    prepared_parameters,
+                    parameter_casts,
+                    statement_config,
+                    dialect=self._dialect_name,
+                    json_serializer=self._json_serializer,
+                )
             return prepare_postgres_parameters(
-                parameters,
+                prepared_parameters,
                 parameter_casts,
                 statement_config,
                 dialect=self._dialect_name,

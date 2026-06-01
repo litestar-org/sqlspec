@@ -13,6 +13,8 @@ from sqlspec.core import (
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
+    NotNullFilter,
+    NullFilter,
     OrderByFilter,
     SearchFilter,
 )
@@ -39,6 +41,16 @@ def _get_order_by_dependency(provider: Any) -> Any:
         if hasattr(arg, "dependency"):
             return arg.dependency
     msg = "order_by_filter dependency was not found"
+    raise AssertionError(msg)
+
+
+def _get_dependency(provider: Any, name: str) -> Any:
+    signature = provider.__signature__
+    annotation = signature.parameters[name].annotation
+    for arg in get_args(annotation):
+        if hasattr(arg, "dependency"):
+            return arg.dependency
+    msg = f"{name} dependency was not found"
     raise AssertionError(msg)
 
 
@@ -189,6 +201,20 @@ def test_provide_filters_search_set() -> None:
     )
     assert len(filters) == 1
     assert filters[0].field_name == {"name", "email", "username"}  # type: ignore[union-attr]
+
+
+def test_provide_filters_search_list_dependency() -> None:
+    """FastAPI search configuration accepts list field names."""
+    config: FilterConfig = {"search": ["name", "email"]}
+    provider = provide_filters(config)
+    search_dependency = _get_dependency(provider, "search_filter")
+
+    result = search_dependency(search_string="john", ignore_case=True)
+
+    assert isinstance(result, SearchFilter)
+    assert result.field_name == {"name", "email"}
+    assert result.value == "john"
+    assert result.ignore_case is True
 
 
 def test_provide_filters_search_ignore_case() -> None:
@@ -456,8 +482,6 @@ def test_provide_filters_in_fields_with_string_list() -> None:
 
 def test_provide_filters_null_fields() -> None:
     """Test null_fields filter generation."""
-    from sqlspec.core import NullFilter
-
     config: FilterConfig = {"null_fields": {"email"}}
     provider = provide_filters(config)
 
@@ -472,10 +496,21 @@ def test_provide_filters_null_fields() -> None:
     assert filters[0].field_name == "email"
 
 
+def test_provide_filters_null_fields_list() -> None:
+    """FastAPI null_fields accepts list field names."""
+    config: FilterConfig = {"null_fields": ["email", "deleted_at"]}
+    provider = provide_filters(config)
+
+    filters = provider(
+        email_null_filter=NullFilter(field_name="email"), deleted_at_null_filter=NullFilter(field_name="deleted_at")
+    )
+
+    assert len(filters) == 2
+    assert {filter_.field_name for filter_ in filters if isinstance(filter_, NullFilter)} == {"email", "deleted_at"}
+
+
 def test_provide_filters_not_null_fields() -> None:
     """Test not_null_fields filter generation."""
-    from sqlspec.core import NotNullFilter
-
     config: FilterConfig = {"not_null_fields": {"email"}}
     provider = provide_filters(config)
 
@@ -483,3 +518,73 @@ def test_provide_filters_not_null_fields() -> None:
     assert len(filters) == 1
     assert isinstance(filters[0], NotNullFilter)
     assert filters[0].field_name == "email"
+
+
+def test_provide_filters_not_null_fields_list() -> None:
+    """FastAPI not_null_fields accepts list field names."""
+    config: FilterConfig = {"not_null_fields": ["email", "updated_at"]}
+    provider = provide_filters(config)
+
+    filters = provider(
+        email_not_null_filter=NotNullFilter(field_name="email"),
+        updated_at_not_null_filter=NotNullFilter(field_name="updated_at"),
+    )
+
+    assert len(filters) == 2
+    assert {filter_.field_name for filter_ in filters if isinstance(filter_, NotNullFilter)} == {"email", "updated_at"}
+
+
+def test_provide_filters_boolean_fields() -> None:
+    """Test boolean_fields filter generation in FastAPI."""
+    from sqlspec.core import BooleanFilter
+
+    config: FilterConfig = {"boolean_fields": {"is_active"}}
+    provider = provide_filters(config)
+
+    filters = provider(is_active_boolean_filter=BooleanFilter(field_name="is_active", value=True))
+    assert len(filters) == 1
+    assert isinstance(filters[0], BooleanFilter)
+    assert filters[0].field_name == "is_active"
+    assert filters[0].value is True
+
+
+def test_provide_filters_boolean_fields_list() -> None:
+    """FastAPI boolean_fields accepts and advertises list field names."""
+    from sqlspec.core import BooleanFilter
+
+    assert "list[str]" in repr(FilterConfig.__annotations__["boolean_fields"])
+
+    config: FilterConfig = {"boolean_fields": ["is_active", "is_staff"]}
+    provider = provide_filters(config)
+
+    filters = provider(
+        is_active_boolean_filter=BooleanFilter(field_name="is_active", value=True),
+        is_staff_boolean_filter=BooleanFilter(field_name="is_staff", value=False),
+    )
+
+    assert len(filters) == 2
+    assert {filter_.field_name for filter_ in filters if isinstance(filter_, BooleanFilter)} == {
+        "is_active",
+        "is_staff",
+    }
+
+
+def test_provide_filters_choice_fields() -> None:
+    """Test choice_fields filter generation in FastAPI."""
+    from enum import Enum
+
+    class StatusEnum(Enum):
+        ACTIVE = "active"
+        PENDING = "pending"
+
+    from sqlspec.core import ChoicesFilter
+    from sqlspec.extensions.fastapi.providers import ChoiceField
+
+    config: FilterConfig = {"choice_fields": [ChoiceField("status", StatusEnum)]}
+    provider = provide_filters(config)
+
+    filters = provider(status_choices_filter=ChoicesFilter(field_name="status", values=[StatusEnum.ACTIVE]))
+    assert len(filters) == 1
+    assert isinstance(filters[0], ChoicesFilter)
+    assert filters[0].field_name == "status"
+    assert filters[0].values == [StatusEnum.ACTIVE]

@@ -74,20 +74,6 @@ HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
 
 
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _tuple_to_list(value: Any) -> Any:
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
-def _return_none(_: Any) -> None:
-    return None
-
-
 def storage_api_available() -> bool:
     """Return True when the BigQuery Storage API client can be imported."""
     try:
@@ -363,28 +349,49 @@ def build_retry(deadline: float) -> "Retry":
     return Retry(predicate=_should_retry_bigquery_job, deadline=deadline)
 
 
-def _should_copy_job_attribute(attr: str, source_config: QueryJobConfig) -> bool:
-    if attr.startswith("_"):
-        return False
-
-    try:
-        value = source_config.__getattribute__(attr)
-        return value is not None and not callable(value)
-    except (AttributeError, TypeError):
-        return False
+_COPY_JOB_FIELDS: tuple[str, ...] = (
+    "allow_large_results",
+    "clustering_fields",
+    "connection_properties",
+    "create_disposition",
+    "create_session",
+    "default_dataset",
+    "destination",
+    "destination_encryption_configuration",
+    "dry_run",
+    "flatten_results",
+    "job_timeout_ms",
+    "labels",
+    "max_slots",
+    "maximum_billing_tier",
+    "maximum_bytes_billed",
+    "priority",
+    "range_partitioning",
+    "reservation",
+    "schema_update_options",
+    "script_options",
+    "time_partitioning",
+    "udf_resources",
+    "use_legacy_sql",
+    "use_query_cache",
+    "write_disposition",
+    "write_incremental_results",
+)
 
 
 def copy_job_config(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
-    """Copy non-private attributes from source config to target config."""
-    for attr in dir(source_config):
-        if not _should_copy_job_attribute(attr, source_config):
-            continue
+    """Copy known job config fields from source to target."""
+    for attr in _COPY_JOB_FIELDS:
+        _copy_job_config_field(source_config, target_config, attr)
 
-        try:
-            value = source_config.__getattribute__(attr)
-            setattr(target_config, attr, value)
-        except (AttributeError, TypeError):
-            continue
+
+def _copy_job_config_field(source_config: QueryJobConfig, target_config: QueryJobConfig, attr: str) -> None:
+    try:
+        value = getattr(source_config, attr)
+    except (AttributeError, TypeError):
+        return
+    if value is not None:
+        setattr(target_config, attr, value)
 
 
 def run_query_job(
@@ -625,6 +632,20 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _tuple_to_list(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _return_none(_: Any) -> None:
+    return None
+
+
 driver_profile = build_profile()
 
 
@@ -640,10 +661,10 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
 default_statement_config = build_statement_config()
 
 
-def _normalize_bigquery_driver_features(
+def apply_driver_features(
     driver_features: "Mapping[str, Any] | None",
 ) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
-    """Normalize driver feature defaults and extract core options."""
+    """Apply BigQuery driver feature defaults and extract core options."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     user_connection_hook = features.pop("on_connection_create", None)
     features.setdefault("enable_uuid_conversion", True)
@@ -658,13 +679,6 @@ def _normalize_bigquery_driver_features(
         cast("Callable[[Any], None] | None", user_connection_hook),
         connection_instance,
     )
-
-
-def apply_driver_features(
-    driver_features: "Mapping[str, Any] | None",
-) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
-    """Apply BigQuery driver feature defaults and extract core options."""
-    return _normalize_bigquery_driver_features(driver_features)
 
 
 def _create_bigquery_error(

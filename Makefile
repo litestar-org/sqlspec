@@ -109,6 +109,7 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@echo "${INFO} Testing mypyc compilation... 🔧"
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/text.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/sync_tools.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/module_loader.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/cache.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/hashing.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/parameters/_processor.py
@@ -119,6 +120,7 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/psqlpy/core.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/pool.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_paths.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_utils.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/_loader.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/bigquery.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/cockroachdb.py
@@ -128,16 +130,19 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/postgres.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/spanner.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/sqlite.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/_compat.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_generators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_operators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/spanner/_generators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_hints.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_models.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_names.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_payload.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_queue.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/_types.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/memory/_types.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/artifact/_types.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/migrations/version.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/observability/_formatting.py
 	@echo "${OK} Mypyc compilation tests passed ✨"
 
 
@@ -240,7 +245,7 @@ mypy-parallel: mypy                                 ## Run mypy parallel checkin
 .PHONY: pyright
 pyright:                                            ## Run pyright
 	@echo "${INFO} Running pyright... 🔍"
-	@uv run pyright
+	@PYRIGHT_PYTHON_FORCE_VERSION=latest uv run pyright
 	@echo "${OK} Pyright checks passed ✨"
 
 .PHONY: type-check

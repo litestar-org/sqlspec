@@ -213,22 +213,21 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         count = 0
         script_params = cast("dict[str, Any] | None", params)
+        coerced_params = self._coerce_params(script_params)
+        param_types_map = self._infer_param_types(coerced_params)
         for stmt in statements:
             try:
                 parsed = _sqlglot.parse_one(stmt)
                 is_select = isinstance(parsed, _sqlglot_exp.Select)
             except Exception:
                 is_select = stmt.upper().strip().startswith("SELECT")
-            coerced_params = self._coerce_params(script_params)
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
-                writer.execute_update(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
+                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map)
             else:
-                _ = list(
-                    reader.execute_sql(stmt, params=coerced_params, param_types=self._infer_param_types(coerced_params))
-                )
+                _ = list(reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map))
             count += 1
 
         return self.create_execution_result(

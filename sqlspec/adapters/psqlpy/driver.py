@@ -23,7 +23,6 @@ from sqlspec.adapters.psqlpy.core import (
     format_execute_many_parameters,
     format_table_identifier,
     get_parameter_casts,
-    normalize_scalar_parameter,
     prepare_parameters_with_casts,
     split_schema_and_table,
 )
@@ -396,9 +395,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         if not is_many and isinstance(prepared, list):
             prepared = tuple(prepared)
-
-        if not is_many and isinstance(prepared, tuple):
-            return tuple(normalize_scalar_parameter(item) for item in prepared)
 
         return prepared
 

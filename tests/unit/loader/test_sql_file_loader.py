@@ -645,7 +645,7 @@ def test_get_sql_basic() -> None:
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    assert "SELECT * FROM users WHERE id = ?" in sql.sql
+    assert "SELECT * FROM users WHERE id = ?" in sql.raw_sql
 
 
 def test_get_sql_simplified() -> None:
@@ -656,7 +656,7 @@ def test_get_sql_simplified() -> None:
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    assert "SELECT * FROM users WHERE id = :user_id" in sql.sql
+    assert "SELECT * FROM users WHERE id = :user_id" in sql.raw_sql
 
     assert sql.parameters == []
 
@@ -728,10 +728,10 @@ left join users on users.id = inserted_data.user_id;
     sql = loader.get_sql("asset_maintenance_alert")
 
     assert isinstance(sql, SQL)
-    assert "inserted_data" in sql.sql
-    assert ":date_start" in sql.sql
-    assert ":date_end" in sql.sql
-    assert "alert_users" in sql.sql
+    assert "inserted_data" in sql.raw_sql
+    assert ":date_start" in sql.raw_sql
+    assert ":date_end" in sql.raw_sql
+    assert "alert_users" in sql.raw_sql
 
     assert sql.parameters == []
 
@@ -764,7 +764,7 @@ def test_parameter_style_detection_simplified() -> None:
 
     assert isinstance(sql, SQL)
 
-    assert "SELECT * FROM users WHERE id = ? AND active = ?" in sql.sql
+    assert "SELECT * FROM users WHERE id = ? AND active = ?" in sql.raw_sql
 
 
 def test_dialect_normalization() -> None:
@@ -1100,7 +1100,7 @@ def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> Non
     for query_name in queries:
         sql = loader.get_sql(query_name)
         assert isinstance(sql, SQL)
-        assert len(sql.sql.strip()) > 0
+        assert len(sql.raw_sql.strip()) > 0
 
 
 def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> None:

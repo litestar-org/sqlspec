@@ -1,5 +1,6 @@
 """Shared utilities for observability instrumentation."""
 
+import functools
 import hashlib
 from typing import Any
 
@@ -24,6 +25,7 @@ _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
 )
 
 
+@functools.lru_cache(maxsize=32)
 def resolve_db_system(adapter_or_driver: str) -> str:
     """Resolve adapter/driver name to OTel db.system value.
 

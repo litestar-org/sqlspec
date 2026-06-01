@@ -43,7 +43,12 @@ _MSSQL_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, A
 
 
 class MssqlPythonTypeConverter:
-    """Bind-side and read-side coercion for mssql-python."""
+    """Utility converter for explicit mssql-python value coercion.
+
+    The driver pipeline builds its internal coercions directly from feature
+    flags. This class is a public utility for callers that need per-value bind
+    or result coercion outside the driver execution path.
+    """
 
     __slots__ = ("_json_deserializer", "_json_serializer")
 

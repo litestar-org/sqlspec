@@ -6,10 +6,9 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pymysql
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymysql._typing import PyMysqlConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
@@ -18,28 +17,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 __all__ = ("PyMysqlConnectionPool",)
-
-
-class PyMysqlConnectionParams(TypedDict):
-    """PyMySQL connection parameters."""
-
-    host: NotRequired[str]
-    user: NotRequired[str]
-    password: NotRequired[str]
-    database: NotRequired[str]
-    port: NotRequired[int]
-    unix_socket: NotRequired[str]
-    charset: NotRequired[str]
-    connect_timeout: NotRequired[int]
-    read_timeout: NotRequired[int]
-    write_timeout: NotRequired[int]
-    autocommit: NotRequired[bool]
-    ssl: NotRequired["dict[str, Any]"]
-    client_flag: NotRequired[int]
-    cursorclass: NotRequired[type]
-    init_command: NotRequired[str]
-    sql_mode: NotRequired[str]
-    extra: NotRequired["dict[str, Any]"]
 
 
 logger = get_logger(POOL_LOGGER_NAME)
@@ -160,8 +137,14 @@ class PyMysqlConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[PyMysqlConnection, None, None]":
+        """Get a thread-local connection."""
         connection = self._get_thread_connection()
-        yield connection
+        try:
+            yield connection
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._close_thread_connection()
+            raise
 
     def close(self) -> None:
         self._close_thread_connection()

@@ -1,3 +1,7 @@
+import inspect
+
+import pytest
+
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -7,12 +11,14 @@ from sqlspec.exceptions import (
     NotFoundError,
     NotNullViolationError,
     OperationalError,
+    RepositoryError,
     SQLFileNotFoundError,
     SQLSpecError,
     SQLStatementNotFoundError,
     StackExecutionError,
     TransactionError,
     UniqueViolationError,
+    wrap_exceptions,
 )
 
 
@@ -22,7 +28,6 @@ def test_new_exception_hierarchy() -> None:
     assert issubclass(ForeignKeyViolationError, IntegrityError)
     assert issubclass(CheckViolationError, IntegrityError)
     assert issubclass(NotNullViolationError, IntegrityError)
-
     assert issubclass(DatabaseConnectionError, SQLSpecError)
     assert issubclass(TransactionError, SQLSpecError)
     assert issubclass(DataError, SQLSpecError)
@@ -59,7 +64,6 @@ def test_stack_execution_error_includes_context() -> None:
         native_pipeline=False,
         downgrade_reason="operator_override",
     )
-
     detail = str(base)
     assert "operation 2" in detail
     assert "asyncpg" in detail
@@ -135,12 +139,9 @@ def test_sqlspec_error_str_empty() -> None:
 def test_sqlspec_error_standard_exception_compatibility() -> None:
     """Test standard Python exception patterns work."""
     exc = SQLSpecError("error message")
-
     assert exc.args[0] == "error message"
-
     (message,) = exc.args
     assert message == "error message"
-
     assert bool(exc.args)
 
 
@@ -155,15 +156,14 @@ def test_subclass_inherits_args_behavior() -> None:
 def test_sql_statement_not_found_exposes_lookup_context() -> None:
     """Test SQLStatementNotFoundError exposes bounded lookup context."""
     exc = SQLStatementNotFoundError(name="missing-query", normalized_name="missing_query", query_count=12)
-
     assert isinstance(exc, SQLFileNotFoundError)
     assert exc.name == "missing-query"
     assert exc.path is None
     assert exc.normalized_name == "missing_query"
     assert exc.query_count == 12
-    assert str(exc) == (
-        "SQL statement 'missing-query' not found. 12 SQL statements are loaded. "
-        "Use list_queries() to inspect available statement names."
+    assert (
+        str(exc)
+        == "SQL statement 'missing-query' not found. 12 SQL statements are loaded. Use list_queries() to inspect available statement names."
     )
 
 
@@ -174,3 +174,39 @@ def test_stack_execution_error_preserves_args() -> None:
     assert len(exc.args) == 1
     assert "operation 2" in exc.args[0]
     assert exc.args[0] == exc.detail
+
+
+def test_wrap_exceptions_wrap_exceptions_suppresses_single_type() -> None:
+    """suppress=<type> silently swallows matching exceptions."""
+    with wrap_exceptions(suppress=ValueError):
+        raise ValueError("suppressed")
+
+
+def test_wrap_exceptions_wrap_exceptions_suppresses_tuple_of_types() -> None:
+    """suppress=(<type>, ...) silently swallows matching exceptions."""
+    with wrap_exceptions(suppress=(ValueError, TypeError)):
+        raise TypeError("suppressed")
+
+
+def test_wrap_exceptions_wrap_exceptions_wraps_unmatched_suppressed_type() -> None:
+    """Non-matching exceptions are still wrapped."""
+    with pytest.raises(RepositoryError):
+        with wrap_exceptions(suppress=ValueError):
+            raise RuntimeError("not suppressed")
+
+
+def test_wrap_exceptions_wrap_exceptions_sqlspec_error_passes_through() -> None:
+    """SQLSpecError is reraised when it is not explicitly suppressed."""
+    original = SQLSpecError("already mapped")
+    with pytest.raises(SQLSpecError) as exc_info:
+        with wrap_exceptions():
+            raise original
+    assert exc_info.value is original
+
+
+def test_wrap_exceptions_wrap_exceptions_does_not_guard_suppress_classinfo_shape() -> None:
+    """wrap_exceptions should delegate classinfo handling directly to isinstance."""
+    source = inspect.getsource(wrap_exceptions)
+    assert "isinstance(suppress, type)" not in source
+    assert "isinstance(suppress, tuple)" not in source
+    assert "isinstance(exc, suppress)" in source

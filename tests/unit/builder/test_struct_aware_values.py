@@ -63,7 +63,7 @@ def test_insert_values_from_many_dataclasses_emits_multi_row() -> None:
 
 
 def test_insert_values_from_many_empty_list_returns_self_unchanged() -> None:
-    """Empty input must return the builder unchanged (matches values_from_dicts contract)."""
+    """Empty input must return the builder unchanged."""
     builder = sql.insert("users")
     result = builder.values_from_many([])
     assert result is builder

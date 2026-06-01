@@ -180,6 +180,7 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
             self._conn = None
 
 
+@mypyc_attr(native_class=False)
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration.
 
@@ -284,20 +285,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
         return pool
-
-    def _update_dialect_for_extensions(self) -> None:
-        """Update statement_config dialect based on detected extensions.
-
-        Priority: paradedb > pgvector > postgres (default).
-        """
-        current_dialect = getattr(self.statement_config, "dialect", "postgres")
-        if current_dialect != "postgres":
-            return
-
-        if self._paradedb_available:
-            self.statement_config = self.statement_config.replace(dialect="paradedb")
-        elif self._pgvector_available:
-            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     def _configure_connection(self, conn: "PsycopgSyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")
@@ -569,20 +556,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         await pool.open()
 
         return pool
-
-    def _update_dialect_for_extensions(self) -> None:
-        """Update statement_config dialect based on detected extensions.
-
-        Priority: paradedb > pgvector > postgres (default).
-        """
-        current_dialect = getattr(self.statement_config, "dialect", "postgres")
-        if current_dialect != "postgres":
-            return
-
-        if self._paradedb_available:
-            self.statement_config = self.statement_config.replace(dialect="paradedb")
-        elif self._pgvector_available:
-            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     async def _configure_async_connection(self, conn: "PsycopgAsyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")

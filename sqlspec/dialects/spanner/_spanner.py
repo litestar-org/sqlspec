@@ -13,7 +13,13 @@ from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.parsers.bigquery import BigQueryParser
 from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.dialects.spanner._generators import SpannerGenerator
+from sqlspec.dialects.spanner._generators import (  # noqa: F401
+    _INTERLEAVE_NAME,
+    _ROW_DELETION_NAME,
+    _TTL_MIN_COMPONENTS,
+    SpannerGenerator,
+    _normalize_interval_expression,
+)
 
 __all__ = ("Spanner",)
 
@@ -25,9 +31,6 @@ ttl_token = cast("TokenType | None", TokenType.__dict__.get("TTL"))
 if ttl_token is not None:
     _SPANNER_KEYWORDS["TTL"] = ttl_token
 
-_TTL_MIN_COMPONENTS = 2
-_ROW_DELETION_NAME = "ROW_DELETION_POLICY"
-_INTERLEAVE_NAME = "INTERLEAVE_IN_PARENT"
 _ORIGINAL_PARSE_PROPERTY_ATTR: Final[str] = "_sqlspec_original_parse_property"
 _HOOKS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_hooks_registered"
 _INTERLEAVE_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -50,14 +53,6 @@ def _build_interleave_property(parent: exp.Expr, on_delete: str | None = None) -
     if on_delete is not None:
         values.append(exp.Literal.string(_normalize_on_delete_value(on_delete)))
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
-
-
-def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
-    if isinstance(expression, exp.Alias):
-        alias = expression.args.get("alias")
-        if isinstance(alias, exp.Identifier) and isinstance(expression.this, exp.Expr):
-            return exp.Interval(this=expression.this.copy(), unit=alias.copy())
-    return expression
 
 
 def _extract_interleave_property(sql: str) -> tuple[str, exp.Property | None]:

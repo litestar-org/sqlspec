@@ -25,8 +25,6 @@ __all__ = (
     "parse_comment",
 )
 
-_SQLCOMMENTER_PREFIX = "sqlcommenter:"
-
 
 class SQLCommenterAttributes(TypedDict, total=False):
     """Structured attributes appended as SQL comments for query attribution."""

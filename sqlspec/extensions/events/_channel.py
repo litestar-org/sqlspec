@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events._names import normalize_event_channel_name
 from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
 from sqlspec.extensions.events._queue import build_queue_backend
-from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
@@ -35,9 +35,6 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.events.channel")
-
-
-_ADAPTER_MODULE_PARTS = 3
 
 
 @dataclass(slots=True)
@@ -104,15 +101,15 @@ def _get_default_backend(adapter_name: "str | None") -> str:
     return "table_queue"
 
 
-def load_native_backend(config: Any, backend_name: str | None, extension_settings: "dict[str, Any]") -> Any | None:
+def load_native_backend(
+    config: Any, backend_name: str | None, extension_settings: "dict[str, Any]", adapter_name: "str | None" = None
+) -> Any | None:
     """Load adapter-specific native backend if available."""
     if backend_name in {None, "table_queue"}:
         return None
-    module_name = type(config).__module__
-    parts = module_name.split(".")
-    if len(parts) < _ADAPTER_MODULE_PARTS or parts[0] != "sqlspec" or parts[1] != "adapters":
+    adapter_name = adapter_name or resolve_adapter_name(config)
+    if adapter_name is None:
         return None
-    adapter_name = parts[2]
     backend_module_name = f"sqlspec.adapters.{adapter_name}.events.backend"
     try:
         backend_module = importlib.import_module(backend_module_name)
@@ -236,7 +233,7 @@ class SyncEventChannel:
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
-        native_backend = load_native_backend(config, backend_name, extension_settings)
+        native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
                 log_with_context(
@@ -482,7 +479,7 @@ class AsyncEventChannel:
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
-        native_backend = load_native_backend(config, backend_name, extension_settings)
+        native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
         if native_backend is None:
             if backend_name not in {None, "table_queue"}:
                 log_with_context(

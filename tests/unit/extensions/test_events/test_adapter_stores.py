@@ -649,11 +649,11 @@ def test_base_store_table_name_property() -> None:
         connection_config={"database": ":memory:"}, extension_config={"events": {"queue_table": "custom_queue"}}
     )
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
-    store = TestStore(config)
+    store = FixtureStore(config)
     assert store.table_name == "custom_queue"
 
 
@@ -666,11 +666,11 @@ def test_base_store_settings_property() -> None:
         extension_config={"events": {"queue_table": "my_queue", "custom_setting": "value"}},
     )
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
-    store = TestStore(config)
+    store = FixtureStore(config)
     assert store.settings.get("queue_table") == "my_queue"
     assert store.settings.get("custom_setting") == "value"
 
@@ -681,11 +681,11 @@ def test_base_store_default_table_name() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"events": {}})
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
-    store = TestStore(config)
+    store = FixtureStore(config)
     assert store.table_name == "sqlspec_event_queue"
 
 
@@ -695,11 +695,11 @@ def test_base_store_create_statements_if_not_exists() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"events": {}})
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
-    store = TestStore(config)
+    store = FixtureStore(config)
     statements = store.create_statements()
 
     assert len(statements) == 2
@@ -713,11 +713,11 @@ def test_base_store_drop_statements_if_exists() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"events": {}})
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self):
             return "TEXT", "TEXT", "TIMESTAMP"
 
-    store = TestStore(config)
+    store = FixtureStore(config)
     statements = store.drop_statements()
 
     assert len(statements) == 1

@@ -38,265 +38,232 @@ async def cockroach_asyncpg_parameter_session(
             "ssl": None,
         }
     )
-
     try:
         async with config.provide_session() as session:
-            await session.execute_script("""
-                DROP TABLE IF EXISTS test_parameter_conversion CASCADE;
-                CREATE TABLE test_parameter_conversion (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    value INT DEFAULT 0,
-                    description TEXT
-                );
-                INSERT INTO test_parameter_conversion (name, value, description) VALUES
-                    ('test1', 100, 'First test'),
-                    ('test2', 200, 'Second test'),
-                    ('test3', 300, NULL);
-            """)
-
+            await session.execute_script(
+                "\n                DROP TABLE IF EXISTS test_parameter_conversion CASCADE;\n                CREATE TABLE test_parameter_conversion (\n                    id SERIAL PRIMARY KEY,\n                    name TEXT NOT NULL,\n                    value INT DEFAULT 0,\n                    description TEXT\n                );\n                INSERT INTO test_parameter_conversion (name, value, description) VALUES\n                    ('test1', 100, 'First test'),\n                    ('test2', 200, 'Second test'),\n                    ('test3', 300, NULL);\n            "
+            )
             yield session
-
             await session.execute_script("DROP TABLE IF EXISTS test_parameter_conversion")
     finally:
-        # Close pool AFTER session context exits to avoid deadlock
         await config.close_pool()
 
 
-class TestNumericParameterStyle:
-    """Test NUMERIC ($1, $2) parameter style (native for CockroachDB)."""
-
-    async def test_numeric_single_parameter(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test single $1 placeholder works natively."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = $1", ("test1",)
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    async def test_numeric_multiple_parameters(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test multiple $n placeholders work natively."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE value >= $1 AND value <= $2 ORDER BY value", (100, 200)
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 2
-        assert result.get_data()[0]["value"] == 100
-        assert result.get_data()[1]["value"] == 200
+async def test_numeric_parameter_style_numeric_single_parameter(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test single $1 placeholder works natively."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = $1", ("test1",)
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
 
-class TestQmarkConversion:
-    """Test QMARK (?) to NUMERIC ($1) conversion."""
-
-    async def test_qmark_single_parameter(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test single ? placeholder gets converted to $1."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = ?", ("test1",)
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    async def test_qmark_multiple_parameters(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test multiple ? placeholders get converted to $1, $2, etc."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = ? AND value > ?", ("test2", 100)
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test2"
-
-    async def test_qmark_in_insert(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test ? placeholders in INSERT statements."""
-        await cockroach_asyncpg_parameter_session.execute(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-            ("qmark_insert", 500, "Inserted via QMARK"),
-        )
-
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = ?", ("qmark_insert",)
-        )
-        assert len(result.data) == 1
-        assert result.get_data()[0]["value"] == 500
+async def test_numeric_parameter_style_numeric_multiple_parameters(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test multiple $n placeholders work natively."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE value >= $1 AND value <= $2 ORDER BY value", (100, 200)
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 2
+    assert result.get_data()[0]["value"] == 100
+    assert result.get_data()[1]["value"] == 200
 
 
-class TestNamedColonConversion:
-    """Test NAMED_COLON (:name) to NUMERIC ($1) conversion."""
-
-    async def test_named_colon_single_parameter(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test single :name placeholder gets converted."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = :name", {"name": "test1"}
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    async def test_named_colon_multiple_parameters(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test multiple :name placeholders get converted."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = :name AND value > :min_val",
-            {"name": "test2", "min_val": 100},
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test2"
-
-    async def test_named_colon_repeated_parameter(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test same :name used multiple times."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = :val OR description LIKE :val", {"val": "test1"}
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
+async def test_qmark_conversion_qmark_single_parameter(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test single ? placeholder gets converted to $1."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = ?", ("test1",)
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
 
-class TestNamedPyformatConversion:
-    """Test NAMED_PYFORMAT (%(name)s) to NUMERIC ($1) conversion."""
-
-    async def test_named_pyformat_single_parameter(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test single %(name)s placeholder gets converted."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = %(name)s", {"name": "test1"}
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test1"
-
-    async def test_named_pyformat_multiple_parameters(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test multiple %(name)s placeholders get converted."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = %(test_name)s AND value < %(max_val)s",
-            {"test_name": "test3", "max_val": 350},
-        )
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test3"
+async def test_qmark_conversion_qmark_multiple_parameters(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test multiple ? placeholders get converted to $1, $2, etc."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = ? AND value > ?", ("test2", 100)
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test2"
 
 
-class TestSQLObjectConversion:
-    """Test parameter conversion with SQL objects."""
-
-    async def test_sql_object_with_numeric(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test SQL object with $n placeholders."""
-        sql_numeric = SQL("SELECT * FROM test_parameter_conversion WHERE value BETWEEN $1 AND $2", 150, 250)
-        result = await cockroach_asyncpg_parameter_session.execute(sql_numeric)
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test2"
-
-    async def test_sql_object_with_qmark(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test SQL object with ? placeholders."""
-        sql_qmark = SQL("SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?", "test1", "test3")
-        result = await cockroach_asyncpg_parameter_session.execute(sql_qmark)
-
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 2
-        names = [row["name"] for row in result.get_data()]
-        assert "test1" in names
-        assert "test3" in names
+async def test_qmark_conversion_qmark_in_insert(cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
+    """Test ? placeholders in INSERT statements."""
+    await cockroach_asyncpg_parameter_session.execute(
+        "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
+        ("qmark_insert", 500, "Inserted via QMARK"),
+    )
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = ?", ("qmark_insert",)
+    )
+    assert len(result.data) == 1
+    assert result.get_data()[0]["value"] == 500
 
 
-class TestExecuteMany:
-    """Test parameter conversion with execute_many."""
-
-    async def test_execute_many_with_numeric(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test execute_many with $n placeholders."""
-        data = [("batch1", 1001, "Batch 1"), ("batch2", 1002, "Batch 2"), ("batch3", 1003, "Batch 3")]
-
-        result = await cockroach_asyncpg_parameter_session.execute_many(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES ($1, $2, $3)", data
-        )
-
-        assert isinstance(result, SQLResult)
-        assert result.rows_affected == 3
-
-    async def test_execute_many_with_qmark(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test execute_many with ? placeholders."""
-        data = [("qbatch1", 2001, "QBatch 1"), ("qbatch2", 2002, "QBatch 2")]
-
-        result = await cockroach_asyncpg_parameter_session.execute_many(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)", data
-        )
-
-        assert isinstance(result, SQLResult)
-        assert result.rows_affected == 2
+async def test_named_colon_conversion_named_colon_single_parameter(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test single :name placeholder gets converted."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = :name", {"name": "test1"}
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
 
-class TestEdgeCases:
-    """Test edge cases in parameter conversion."""
+async def test_named_colon_conversion_named_colon_multiple_parameters(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test multiple :name placeholders get converted."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = :name AND value > :min_val",
+        {"name": "test2", "min_val": 100},
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test2"
 
-    async def test_null_parameters(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test NULL parameter handling."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE description IS NULL"
-        )
 
-        assert isinstance(result, SQLResult)
-        assert len(result.data) == 1
-        assert result.get_data()[0]["name"] == "test3"
+async def test_named_colon_conversion_named_colon_repeated_parameter(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test same :name used multiple times."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = :val OR description LIKE :val", {"val": "test1"}
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
 
-    async def test_sql_injection_prevention(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test that parameter escaping prevents SQL injection."""
-        malicious_input = "'; DROP TABLE test_parameter_conversion; --"
 
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = $1", (malicious_input,)
-        )
+async def test_named_pyformat_conversion_named_pyformat_single_parameter(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test single %(name)s placeholder gets converted."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = %(name)s", {"name": "test1"}
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test1"
 
-        assert len(result.data) == 0
 
-        # Verify table still exists
-        count_result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT COUNT(*) as count FROM test_parameter_conversion"
-        )
-        assert count_result.get_data()[0]["count"] >= 3
+async def test_named_pyformat_conversion_named_pyformat_multiple_parameters(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test multiple %(name)s placeholders get converted."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = %(test_name)s AND value < %(max_val)s",
+        {"test_name": "test3", "max_val": 350},
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test3"
 
-    async def test_special_characters_in_parameters(
-        self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver
-    ) -> None:
-        """Test special characters in parameter values."""
-        special_value = 'O\'Reilly & Sons "Test" <script>'
-        await cockroach_asyncpg_parameter_session.execute(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES ($1, $2, $3)",
-            ("special", 999, special_value),
-        )
 
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name = $1", ("special",)
-        )
-        assert len(result.data) == 1
-        assert result.get_data()[0]["description"] == special_value
+async def test_sql_object_conversion_sql_object_with_numeric(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test SQL object with $n placeholders."""
+    sql_numeric = SQL("SELECT * FROM test_parameter_conversion WHERE value BETWEEN $1 AND $2", 150, 250)
+    result = await cockroach_asyncpg_parameter_session.execute(sql_numeric)
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test2"
 
-    async def test_like_with_wildcards(self, cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
-        """Test LIKE queries with wildcard parameters."""
-        result = await cockroach_asyncpg_parameter_session.execute(
-            "SELECT * FROM test_parameter_conversion WHERE name LIKE $1", ("test%",)
-        )
 
-        assert len(result.data) >= 3
-        for row in result.get_data():
-            assert row["name"].startswith("test")
+async def test_sql_object_conversion_sql_object_with_qmark(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test SQL object with ? placeholders."""
+    sql_qmark = SQL("SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?", "test1", "test3")
+    result = await cockroach_asyncpg_parameter_session.execute(sql_qmark)
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 2
+    names = [row["name"] for row in result.get_data()]
+    assert "test1" in names
+    assert "test3" in names
+
+
+async def test_execute_many_execute_many_with_numeric(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test execute_many with $n placeholders."""
+    data = [("batch1", 1001, "Batch 1"), ("batch2", 1002, "Batch 2"), ("batch3", 1003, "Batch 3")]
+    result = await cockroach_asyncpg_parameter_session.execute_many(
+        "INSERT INTO test_parameter_conversion (name, value, description) VALUES ($1, $2, $3)", data
+    )
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == 3
+
+
+async def test_execute_many_execute_many_with_qmark(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test execute_many with ? placeholders."""
+    data = [("qbatch1", 2001, "QBatch 1"), ("qbatch2", 2002, "QBatch 2")]
+    result = await cockroach_asyncpg_parameter_session.execute_many(
+        "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)", data
+    )
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == 2
+
+
+async def test_edge_cases_null_parameters(cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
+    """Test NULL parameter handling."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE description IS NULL"
+    )
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.get_data()[0]["name"] == "test3"
+
+
+async def test_edge_cases_sql_injection_prevention(cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
+    """Test that parameter escaping prevents SQL injection."""
+    malicious_input = "'; DROP TABLE test_parameter_conversion; --"
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = $1", (malicious_input,)
+    )
+    assert len(result.data) == 0
+    count_result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT COUNT(*) as count FROM test_parameter_conversion"
+    )
+    assert count_result.get_data()[0]["count"] >= 3
+
+
+async def test_edge_cases_special_characters_in_parameters(
+    cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver,
+) -> None:
+    """Test special characters in parameter values."""
+    special_value = 'O\'Reilly & Sons "Test" <script>'
+    await cockroach_asyncpg_parameter_session.execute(
+        "INSERT INTO test_parameter_conversion (name, value, description) VALUES ($1, $2, $3)",
+        ("special", 999, special_value),
+    )
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name = $1", ("special",)
+    )
+    assert len(result.data) == 1
+    assert result.get_data()[0]["description"] == special_value
+
+
+async def test_edge_cases_like_with_wildcards(cockroach_asyncpg_parameter_session: CockroachAsyncpgDriver) -> None:
+    """Test LIKE queries with wildcard parameters."""
+    result = await cockroach_asyncpg_parameter_session.execute(
+        "SELECT * FROM test_parameter_conversion WHERE name LIKE $1", ("test%",)
+    )
+    assert len(result.data) >= 3
+    for row in result.get_data():
+        assert row["name"].startswith("test")

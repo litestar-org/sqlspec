@@ -4,7 +4,7 @@ Provides a fluent interface for building EXPLAIN statements with
 dialect-aware SQL generation.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import trait
 from typing_extensions import Self
@@ -168,7 +168,7 @@ def build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
     if options.analyze:
         return f"EXPLAIN ANALYZE {statement_sql}"
 
-    if options.format is not None and options.format == ExplainFormat.JSON:
+    if options.format == ExplainFormat.JSON:
         return f"EXPLAIN (FORMAT JSON) {statement_sql}"
 
     return f"EXPLAIN {statement_sql}"
@@ -253,6 +253,8 @@ def build_explain_sql(statement_sql: str, options: "ExplainOptions", dialect: "D
         return build_oracle_explain(statement_sql, options)
     if dialect_name in BIGQUERY_DIALECTS:
         return build_bigquery_explain(statement_sql, options)
+    if dialect_name in SPANNER_DIALECTS:
+        return build_generic_explain(statement_sql, options)
 
     return build_generic_explain(statement_sql, options)
 
@@ -285,7 +287,7 @@ class Explain:
             )
     """
 
-    __slots__: ClassVar[tuple[str, ...]] = ("_dialect", "_options", "_parameters", "_statement", "_statement_sql")
+    __slots__ = ("_dialect", "_options", "_parameters", "_statement_sql")
 
     def __init__(
         self,
@@ -302,7 +304,6 @@ class Explain:
         """
         self._dialect = dialect
         self._options = options if options is not None else ExplainOptions()
-        self._statement = statement
         self._parameters: dict[str, Any] = {}
 
         self._statement_sql = self._resolve_statement_sql(statement)

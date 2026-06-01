@@ -2,15 +2,13 @@
 """Unit tests for ObStoreBackend."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
+from sqlspec.storage.backends.obstore import _SIGNABLE_PROTOCOLS, ObStoreBackend
 from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
-
-if OBSTORE_INSTALLED:
-    from sqlspec.storage.backends.obstore import ObStoreBackend
 
 
 class _FakeBytes:
@@ -44,6 +42,59 @@ class _FakeStore:
 
     async def put_async(self, path: str, data: bytes) -> None:
         self.put_paths.append(path)
+
+
+def _new_obstore_for_signing(protocol: str = "s3", base_path: str = "prefix") -> "ObStoreBackend":
+    store = ObStoreBackend.__new__(ObStoreBackend)
+    store.protocol = protocol
+    store.base_path = base_path
+    store.store = _FakeStore()
+    return store
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_signable_protocols_exported_constant() -> None:
+    assert _SIGNABLE_PROTOCOLS == frozenset({"s3", "gs", "gcs", "az", "azure"})
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_rejects_unsupported_protocol() -> None:
+    store = _new_obstore_for_signing(protocol="file")
+
+    with pytest.raises(NotImplementedError, match="URL signing is not supported"):
+        store._prepare_sign_request("object.txt", 3600, False)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_rejects_excessive_expiration() -> None:
+    store = _new_obstore_for_signing()
+
+    with pytest.raises(ValueError, match="expires_in cannot exceed 604800"):
+        store._prepare_sign_request("object.txt", 604801, False)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_resolves_single_download_path() -> None:
+    store = _new_obstore_for_signing(base_path="tenant")
+
+    method, expires_delta, resolved_paths, is_single = store._prepare_sign_request("object.txt", 60, False)
+
+    assert method == "GET"
+    assert expires_delta.total_seconds() == 60
+    assert resolved_paths == ["tenant/object.txt"]
+    assert is_single is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_resolves_list_upload_paths() -> None:
+    store = _new_obstore_for_signing(base_path="tenant")
+
+    method, expires_delta, resolved_paths, is_single = store._prepare_sign_request(["a.txt", "b.txt"], 120, True)
+
+    assert method == "PUT"
+    assert expires_delta.total_seconds() == 120
+    assert resolved_paths == ["tenant/a.txt", "tenant/b.txt"]
+    assert is_single is False
 
 
 class _FakeListingStore:
@@ -416,7 +467,7 @@ def test_write_arrow_sync_resolves_cloud_base_path_once(monkeypatch: pytest.Monk
     monkeypatch.setattr(obstore_module, "import_pyarrow", lambda: object())
     monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(object()))
 
-    store.write_arrow_sync("key", _FakeArrowTable())
+    store.write_arrow_sync("key", cast("Any", _FakeArrowTable()))
 
     assert fake_store.put_paths == ["mybase/key"]
 
@@ -704,7 +755,7 @@ async def test_write_arrow_async_resolves_cloud_base_path_once(monkeypatch: pyte
     store.store = fake_store
     monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(object()))
 
-    await store.write_arrow_async("key", _FakeArrowTable())
+    await store.write_arrow_async("key", cast("Any", _FakeArrowTable()))
 
     assert fake_store.put_paths == ["mybase/key"]
 

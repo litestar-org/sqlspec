@@ -230,11 +230,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             AiosqliteConnectionPool: The connection pool instance.
 
         """
-        config = {k: v for k, v in self.connection_config.items() if v is not None}
-        pool_size = config.pop("pool_size", 5)
-        connect_timeout = config.pop("connect_timeout", 30.0)
-        idle_timeout = config.pop("idle_timeout", 24 * 60 * 60)
-        operation_timeout = config.pop("operation_timeout", 10.0)
+        pool_size = self.connection_config.get("pool_size") or 5
+        connect_timeout = self.connection_config.get("connect_timeout") or 30.0
+        idle_timeout = self.connection_config.get("idle_timeout") or 24 * 60 * 60
+        operation_timeout = self.connection_config.get("operation_timeout") or 10.0
 
         pool = AiosqliteConnectionPool(
             connection_parameters=build_connection_config(self.connection_config),
@@ -256,11 +255,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Called once during pool creation if enable_custom_adapters is True.
         Registers JSON serialization handlers if configured.
         """
-        if self.driver_features.get("enable_custom_adapters", False):
-            register_type_handlers(
-                json_serializer=self.driver_features.get("json_serializer"),
-                json_deserializer=self.driver_features.get("json_deserializer"),
-            )
+        register_type_handlers(
+            json_serializer=self.driver_features.get("json_serializer"),
+            json_deserializer=self.driver_features.get("json_deserializer"),
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AiosqliteConfig types.

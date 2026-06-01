@@ -3,6 +3,7 @@
 import hashlib
 import re
 from collections import OrderedDict
+from typing import Final
 
 from mypy_extensions import mypyc_attr
 
@@ -34,6 +35,17 @@ PARAMETER_REGEX = re.compile(
     (?P<qmark>\?)
     """,
     re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+
+_SKIP_GROUPS: Final[tuple[str, ...]] = (
+    "dquote",
+    "squote",
+    "dollar_quoted_string",
+    "line_comment",
+    "block_comment",
+    "pg_q_operator",
+    "pg_cast",
+    "sql_server_global",
 )
 
 
@@ -114,19 +126,8 @@ class ParameterValidator:
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
-        skip_groups = (
-            "dquote",
-            "squote",
-            "dollar_quoted_string",
-            "line_comment",
-            "block_comment",
-            "pg_q_operator",
-            "pg_cast",
-            "sql_server_global",
-        )
-
         for match in PARAMETER_REGEX.finditer(sql):
-            if any(match.group(group) for group in skip_groups):
+            if any(match.group(group) for group in _SKIP_GROUPS):
                 continue
             style, name = self._extract_parameter_style(match)
             if style is None:
@@ -144,23 +145,12 @@ class ParameterValidator:
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
-        skip_groups = (
-            "dquote",
-            "squote",
-            "dollar_quoted_string",
-            "line_comment",
-            "block_comment",
-            "pg_q_operator",
-            "pg_cast",
-            "sql_server_global",
-        )
-
         # Fast check using frozenset intersection (faster than any() with generator)
         if not _PARAM_CHARS.intersection(sql):
             return []
 
         for match in PARAMETER_REGEX.finditer(sql):
-            if any(match.group(group) for group in skip_groups):
+            if any(match.group(group) for group in _SKIP_GROUPS):
                 continue
             style, name = self._extract_parameter_style(match)
             if style is None:

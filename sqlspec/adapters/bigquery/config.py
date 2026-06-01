@@ -238,9 +238,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration."""
 
-        if self.connection_config.get("default_query_job_config") is not None:
-            return
-
         job_config = QueryJobConfig()
 
         dataset_id = self.connection_config.get("dataset_id")

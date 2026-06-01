@@ -27,66 +27,6 @@ COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 MAX_TABLE_NAME_LENGTH: Final = 63
 
 
-def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
-    """Extract column name from owner ID column DDL definition.
-
-    Args:
-        owner_id_column_ddl: Full column DDL string (e.g., "user_id INTEGER REFERENCES users(id)").
-
-    Returns:
-        Column name only (first word).
-
-    Raises:
-        ValueError: If DDL format is invalid.
-
-    Examples:
-        "account_id INTEGER NOT NULL" -> "account_id"
-        "user_id UUID REFERENCES users(id)" -> "user_id"
-        "tenant VARCHAR(64) DEFAULT 'public'" -> "tenant"
-
-    Notes:
-        Only the column name is parsed. The rest of the DDL is passed through
-        verbatim to CREATE TABLE statements.
-    """
-    match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
-    if not match:
-        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
-        raise ValueError(msg)
-
-    return match.group(1)
-
-
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-
-    Notes:
-        - Must start with letter or underscore
-        - Can only contain letters, numbers, and underscores
-        - Maximum length is 63 characters (PostgreSQL limit)
-        - Prevents SQL injection in table names
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)
-
-
 class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     """Base class for async SQLSpec-backed ADK session stores.
 
@@ -589,3 +529,63 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             Order matters: drop events before sessions due to FK.
         """
         raise NotImplementedError
+
+
+def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
+    """Extract column name from owner ID column DDL definition.
+
+    Args:
+        owner_id_column_ddl: Full column DDL string (e.g., "user_id INTEGER REFERENCES users(id)").
+
+    Returns:
+        Column name only (first word).
+
+    Raises:
+        ValueError: If DDL format is invalid.
+
+    Examples:
+        "account_id INTEGER NOT NULL" -> "account_id"
+        "user_id UUID REFERENCES users(id)" -> "user_id"
+        "tenant VARCHAR(64) DEFAULT 'public'" -> "tenant"
+
+    Notes:
+        Only the column name is parsed. The rest of the DDL is passed through
+        verbatim to CREATE TABLE statements.
+    """
+    match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
+    if not match:
+        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
+        raise ValueError(msg)
+
+    return match.group(1)
+
+
+def _validate_table_name(table_name: str) -> None:
+    """Validate table name for SQL safety.
+
+    Args:
+        table_name: Table name to validate.
+
+    Raises:
+        ValueError: If table name is invalid.
+
+    Notes:
+        - Must start with letter or underscore
+        - Can only contain letters, numbers, and underscores
+        - Maximum length is 63 characters (PostgreSQL limit)
+        - Prevents SQL injection in table names
+    """
+    if not table_name:
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+
+    if len(table_name) > MAX_TABLE_NAME_LENGTH:
+        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
+        raise ValueError(msg)
+
+    if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        msg = (
+            f"Invalid table name: {table_name!r}. "
+            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
+        )
+        raise ValueError(msg)

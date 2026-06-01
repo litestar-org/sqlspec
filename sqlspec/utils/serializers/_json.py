@@ -22,7 +22,7 @@ from sqlspec.typing import (
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
-from sqlspec.utils.uuids import UUID_UTILS_INSTALLED, _load_uuid_utils
+from sqlspec.utils.uuids import UUID_UTILS_INSTALLED, _uuid_utils_mod
 
 __all__ = (
     "DEFAULT_TYPE_ENCODERS",
@@ -47,7 +47,7 @@ StructuralEncoder = Callable[[Any], Any]
 def _get_uuid_utils_type() -> "type[Any] | None":
     if not UUID_UTILS_INSTALLED:
         return None
-    module = _load_uuid_utils()
+    module = _uuid_utils_mod
     if module is None:
         return None
     return module.UUID  # type: ignore[no-any-return]

@@ -239,7 +239,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return self._database
 
     def create_connection(self) -> SpannerConnection:
-        return cast("SpannerConnection", self.get_database().snapshot())
+        return cast("SpannerConnection", self.get_database().snapshot())  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> AbstractSessionPool:
         instance_id = self.connection_config.get("instance_id")

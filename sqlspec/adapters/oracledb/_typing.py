@@ -38,16 +38,12 @@ if TYPE_CHECKING:
     OracleAsyncConnectionPool: TypeAlias = AsyncConnectionPool
     OracleSyncRawCursor: TypeAlias = Cursor
     OracleAsyncRawCursor: TypeAlias = AsyncCursor
-    OracleVectorType: TypeAlias = int
 
 if not TYPE_CHECKING:
     try:
         from oracledb import DB_TYPE_VECTOR
-
-        OracleVectorType = int
     except ImportError:
         DB_TYPE_VECTOR = None
-        OracleVectorType = int
 
     OracleSyncConnection = Connection
     OracleAsyncConnection = AsyncConnection
@@ -78,7 +74,6 @@ __all__ = (
     "OracleSyncCursor",
     "OracleSyncRawCursor",
     "OracleSyncSessionContext",
-    "OracleVectorType",
 )
 
 AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
@@ -118,14 +113,9 @@ class OracleAsyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+    async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
-                # Oracle async cursors have a synchronous close method
-                # but we need to ensure proper cleanup in the event loop context
                 self.cursor.close()
 
 

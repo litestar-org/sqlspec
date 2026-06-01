@@ -8,6 +8,7 @@ from unittest.mock import patch
 import sqlglot
 from sqlglot import exp
 
+import sqlspec.core.sqlcommenter as sqlcommenter_module
 from sqlspec.core.sqlcommenter import (
     SQLCommenterContext,
     append_comment,
@@ -28,6 +29,12 @@ def test_generate_comment_basic() -> None:
 def test_generate_comment_empty_attrs() -> None:
     result = generate_comment({})
     assert result == ""
+
+
+def test_sqlcommenter_prefix_constant_removed() -> None:
+    """The unused SQLCommenter prefix constant should stay removed."""
+
+    assert not hasattr(sqlcommenter_module, "_SQLCOMMENTER_PREFIX")
 
 
 def test_generate_comment_lexicographic_sort() -> None:

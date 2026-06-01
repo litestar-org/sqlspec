@@ -21,6 +21,23 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   wire-aligned names.
 * Third-party ADK stores implementing ``append_event_and_update_state()`` must
   return the updated ``SessionRecord``.
+* Data dictionary metadata/version helpers now live under
+  ``sqlspec.data_dictionary``. ``ColumnMetadata``, ``ForeignKeyMetadata``,
+  ``IndexMetadata``, ``TableMetadata``, ``VersionInfo``, and
+  ``VersionCacheResult`` are no longer exported from ``sqlspec.typing`` or
+  ``sqlspec.core``.
+* Removed modernization compatibility shims for ``SQL.sql``,
+  ``sqlspec.utils.correlation.correlation_context()``,
+  ``resolve_mssql_default_schema()``, and Oracle
+  ``requires_session_callback()``. Removed deprecated
+  ``Insert.values_from_dict()``, ``Insert.values_from_dicts()``,
+  ``reset_cache_stats()``, and the no-profile
+  ``replace_null_parameters_with_literals()`` AST fallback. Use
+  ``SQL.raw_sql``, ``CorrelationContext.context()``,
+  ``MSSQL_CONFIG.default_schema``, the always-on Oracle session callback path,
+  ``Insert.values_from()``, ``Insert.values_from_many()``,
+  ``clear_all_caches()`` or ``reset_stats_only()``, and explicit
+  ``parameter_profile`` values instead.
 * Performance cleanup tightened several compatibility-sensitive contracts:
   storage ``backend_type`` is a class attribute, parameter builders expose
   ``generate_unique_parameter_name()``, statement observers are protocol based,
@@ -36,12 +53,6 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   checked-out resources before pools close.
 * Added runtime lifecycle hook registration through
   ``ObservabilityRuntime.register_lifecycle_hook()``.
-
-**Deprecated:**
-
-* Deprecated ``Insert.values_from_dict()`` and ``Insert.values_from_dicts()`` in
-  favor of ``values_from()`` and ``values_from_many()``. Removal is planned for
-  ``0.48.0``.
 
 **Fixed:**
 

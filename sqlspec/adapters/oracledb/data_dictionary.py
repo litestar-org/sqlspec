@@ -4,7 +4,14 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
+    get_dialect_config,
+)
 from sqlspec.data_dictionary.dialects.oracle import (
     extract_oracle_version_value,
     list_oracle_available_features,
@@ -18,7 +25,6 @@ from sqlspec.data_dictionary.dialects.oracle import (
     resolve_oracle_json_type,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:

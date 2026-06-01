@@ -104,7 +104,7 @@ async def test_explain_from_sql_object(asyncmy_session: AsyncmyDriver) -> None:
     """Test SQL.explain() method."""
     stmt = SQL("SELECT * FROM explain_test")
     # Use Explain directly with dialect since SQL uses default dialect
-    explain_stmt = Explain(stmt.sql, dialect="mysql")
+    explain_stmt = Explain(stmt.raw_sql, dialect="mysql")
     result = await asyncmy_session.execute(explain_stmt.build())
 
     assert isinstance(result, SQLResult)

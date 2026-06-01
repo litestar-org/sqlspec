@@ -15,6 +15,54 @@ __all__ = ("down", "up")
 logger = get_logger("sqlspec.migrations.litestar.session")
 
 
+async def up(context: "MigrationContext | None" = None) -> "list[str]":
+    """Create the litestar session table using store DDL definitions.
+
+    This migration delegates to the appropriate store class to generate
+    dialect-specific DDL. The store classes contain the single source of
+    truth for session table schemas.
+
+    Args:
+        context: Migration context containing config.
+
+    Returns:
+        List of SQL statements to execute for upgrade.
+
+    Notes:
+        Table configuration is read from context.config.extension_config["litestar"].
+    """
+    store_class = _get_store_class(context)
+    if context is None or context.config is None:
+        _raise_missing_config()
+    store = store_class(config=context.config)
+
+    return [store._get_create_table_sql()]  # pyright: ignore[reportPrivateUsage]
+
+
+async def down(context: "MigrationContext | None" = None) -> "list[str]":
+    """Drop the litestar session table using store DDL definitions.
+
+    This migration delegates to the appropriate store class to generate
+    dialect-specific DROP statements. The store classes contain the single
+    source of truth for session table schemas.
+
+    Args:
+        context: Migration context containing config.
+
+    Returns:
+        List of SQL statements to execute for downgrade.
+
+    Notes:
+        Table configuration is read from context.config.extension_config["litestar"].
+    """
+    store_class = _get_store_class(context)
+    if context is None or context.config is None:
+        _raise_missing_config()
+    store = store_class(config=context.config)
+
+    return store._get_drop_table_sql()  # pyright: ignore[reportPrivateUsage]
+
+
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseSQLSpecStore]":
     """Get the appropriate store class based on the config's module path.
 
@@ -87,51 +135,3 @@ def _raise_store_import_failed(store_path: str, error: ImportError) -> NoReturn:
     """
     msg = f"Failed to import Litestar store class from {store_path}: {error}"
     raise SQLSpecError(msg) from error
-
-
-async def up(context: "MigrationContext | None" = None) -> "list[str]":
-    """Create the litestar session table using store DDL definitions.
-
-    This migration delegates to the appropriate store class to generate
-    dialect-specific DDL. The store classes contain the single source of
-    truth for session table schemas.
-
-    Args:
-        context: Migration context containing config.
-
-    Returns:
-        List of SQL statements to execute for upgrade.
-
-    Notes:
-        Table configuration is read from context.config.extension_config["litestar"].
-    """
-    store_class = _get_store_class(context)
-    if context is None or context.config is None:
-        _raise_missing_config()
-    store = store_class(config=context.config)
-
-    return [store._get_create_table_sql()]  # pyright: ignore[reportPrivateUsage]
-
-
-async def down(context: "MigrationContext | None" = None) -> "list[str]":
-    """Drop the litestar session table using store DDL definitions.
-
-    This migration delegates to the appropriate store class to generate
-    dialect-specific DROP statements. The store classes contain the single
-    source of truth for session table schemas.
-
-    Args:
-        context: Migration context containing config.
-
-    Returns:
-        List of SQL statements to execute for downgrade.
-
-    Notes:
-        Table configuration is read from context.config.extension_config["litestar"].
-    """
-    store_class = _get_store_class(context)
-    if context is None or context.config is None:
-        _raise_missing_config()
-    store = store_class(config=context.config)
-
-    return store._get_drop_table_sql()  # pyright: ignore[reportPrivateUsage]

@@ -7,6 +7,7 @@ from typing import Any, cast
 from mypy_extensions import mypyc_attr
 from sqlglot import exp as _exp
 
+import sqlspec.exceptions
 from sqlspec.core.parameters._alignment import (
     collect_null_parameter_ordinals,
     looks_like_execute_many,
@@ -21,8 +22,6 @@ from sqlspec.core.parameters._types import (
     ParameterPayload,
     ParameterProfile,
 )
-from sqlspec.core.parameters._validator import ParameterValidator
-from sqlspec.utils.deprecation import warn_deprecation
 from sqlspec.utils.type_guards import get_value_attribute
 
 __all__ = (
@@ -32,28 +31,19 @@ __all__ = (
     "replace_placeholders_with_literals",
 )
 
-# Flyweight validator used exclusively by the deprecated no-profile fallback
-# path. Callers that pass validator= bypass this singleton.
-_AST_TRANSFORMER_VALIDATOR: "ParameterValidator" = ParameterValidator()
-
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPruningTransform:
-    __slots__ = ("_dialect", "_validator")
+    __slots__ = ("_dialect",)
 
-    def __init__(self, dialect: str, validator: "ParameterValidator | None") -> None:
+    def __init__(self, dialect: str) -> None:
         self._dialect = dialect
-        self._validator = validator
 
     def __call__(
         self, expression: Any, parameters: "ParameterPayload", parameter_profile: "ParameterProfile"
     ) -> "tuple[Any, ConvertedParameters]":
         return replace_null_parameters_with_literals(
-            expression,
-            parameters,
-            dialect=self._dialect,
-            validator=self._validator,
-            parameter_profile=parameter_profile,
+            expression, parameters, dialect=self._dialect, parameter_profile=parameter_profile
         )
 
 
@@ -182,10 +172,10 @@ class _PlaceholderLiteralTransformer:
 
 
 def build_null_pruning_transform(
-    *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
+    *, dialect: str = "postgres"
 ) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, ConvertedParameters]]":
     """Return a callable that prunes NULL placeholders from an expression."""
-    return _NullPruningTransform(dialect, validator)
+    return _NullPruningTransform(dialect)
 
 
 def build_literal_inlining_transform(
@@ -200,7 +190,6 @@ def replace_null_parameters_with_literals(
     parameters: "ParameterPayload",
     *,
     dialect: str = "postgres",
-    validator: "ParameterValidator | None" = None,
     parameter_profile: "ParameterProfile | None" = None,
 ) -> "tuple[Any, ConvertedParameters]":
     """Rewrite placeholders representing ``NULL`` values and prune parameters.
@@ -209,8 +198,7 @@ def replace_null_parameters_with_literals(
         expression: SQLGlot expression tree to transform.
         parameters: Parameter payload provided by the caller.
         dialect: SQLGlot dialect for serializing the expression.
-        validator: Optional validator instance for parameter extraction.
-        parameter_profile: Optional parameter profile to reuse for validation.
+        parameter_profile: Parameter profile to reuse for validation.
 
     Returns:
         Tuple containing the transformed expression and updated parameters.
@@ -232,25 +220,12 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
         return expression, None
 
-    validator_instance = validator or _AST_TRANSFORMER_VALIDATOR
-    profile = parameter_profile
-    if profile is None:
-        warn_deprecation(
-            "0.49",
-            "replace_null_parameters_with_literals",
-            "function",
-            info=(
-                "Calling replace_null_parameters_with_literals without parameter_profile triggers a "
-                "round-trip AST serialization. Pass parameter_profile for efficiency. This fallback will "
-                "be removed in a future version."
-            ),
-            stacklevel=3,
-        )
-        parameter_info = validator_instance.extract_parameters(expression.sql(dialect=dialect))
-        profile = ParameterProfile(parameter_info)
-    validate_parameter_alignment(profile, parameters)
+    if parameter_profile is None:
+        msg = "replace_null_parameters_with_literals() requires parameter_profile for non-empty parameters"
+        raise sqlspec.exceptions.SQLSpecError(msg)
+    validate_parameter_alignment(parameter_profile, parameters)
 
-    null_positions = collect_null_parameter_ordinals(parameters, profile)
+    null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
     if not null_positions:
         # Convert to concrete type for return
         if isinstance(parameters, dict):
@@ -265,7 +240,7 @@ def replace_null_parameters_with_literals(
 
     null_names: set[str] = set()
     positional_null_positions: set[int] = set()
-    for parameter in profile.parameters:
+    for parameter in parameter_profile.parameters:
         if parameter.ordinal not in null_positions:
             continue
         if parameter.style in _NAMED_STYLES and parameter.name:

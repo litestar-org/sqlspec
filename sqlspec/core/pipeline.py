@@ -281,44 +281,14 @@ class StatementPipelineRegistry:
         except AttributeError:
             pass
 
+        config_hash = hash(config)
         param_config = config.parameter_config
-        param_config_hash = hash(param_config)
         converter_type = type(config.parameter_converter) if config.parameter_converter else None
         validator_type = type(config.parameter_validator) if config.parameter_validator else None
-        output_transformer_id = id(config.output_transformer) if config.output_transformer else None
-        statement_transformer_ids = (
-            tuple(id(transformer) for transformer in config.statement_transformers)
-            if config.statement_transformers
-            else ()
-        )
         param_output_transformer_id = id(param_config.output_transformer) if param_config.output_transformer else None
         param_ast_transformer_id = id(param_config.ast_transformer) if param_config.ast_transformer else None
-        finger_components = (
-            bool(config.enable_parsing),
-            bool(config.enable_validation),
-            bool(config.enable_transformations),
-            bool(config.enable_analysis),
-            bool(config.enable_expression_simplification),
-            bool(config.enable_parameter_type_wrapping),
-            bool(config.enable_caching),
-            str(config.dialect),
-            param_config.default_parameter_style.value,
-            param_config.default_execution_parameter_style.value,
-            param_config_hash,
-            converter_type,
-            validator_type,
-            output_transformer_id,
-            statement_transformer_ids,
-            bool(param_config.output_transformer),
-            bool(param_config.ast_transformer),
-            param_output_transformer_id,
-            param_ast_transformer_id,
-            param_config.has_native_list_expansion,
-            param_config.allow_mixed_parameter_styles,
-            param_config.preserve_parameter_format,
-            param_config.preserve_original_params_for_many,
-        )
-        fingerprint = hashlib.blake2b(repr(finger_components).encode(), digest_size=8).hexdigest()
+        supplement = (converter_type, validator_type, param_output_transformer_id, param_ast_transformer_id)
+        fingerprint = hashlib.blake2b(repr((config_hash, supplement)).encode(), digest_size=8).hexdigest()
         full_fingerprint = f"pipeline::{fingerprint}"
 
         # Cache the fingerprint for future calls - configs are immutable in practice

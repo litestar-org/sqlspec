@@ -5,6 +5,10 @@ from unittest.mock import Mock
 import pytest
 
 from sqlspec.adapters.oracledb._json_handlers import (
+    _ChainedInputHandler,
+    _ChainedOutputHandler,
+    _JsonInputHandler,
+    _JsonOutputHandler,
     json_converter_in_blob,
     json_converter_in_clob,
     json_converter_out_blob,
@@ -427,3 +431,26 @@ def test_input_handler_dispatch_table(major: int) -> None:
 
     assert result is cursor_var
     assert cursor.var.call_count == 1
+
+
+def test_generic_chained_input_handler_slots_and_fallback() -> None:
+    fallback = Mock(return_value="fallback")
+    inner = Mock(return_value=None)
+    handler = _ChainedInputHandler(inner, fallback)
+
+    assert _JsonInputHandler is _ChainedInputHandler
+    assert _ChainedInputHandler.__slots__ == ("_fallback", "_inner")
+    assert handler(Mock(), "value", 1) == "fallback"
+    inner.assert_called_once()
+    fallback.assert_called_once()
+
+
+def test_generic_chained_output_handler_slots_and_claim() -> None:
+    fallback = Mock()
+    inner = Mock(return_value="claimed")
+    handler = _ChainedOutputHandler(inner, fallback)
+
+    assert _JsonOutputHandler is _ChainedOutputHandler
+    assert _ChainedOutputHandler.__slots__ == ("_fallback", "_inner")
+    assert handler(Mock(), Mock()) == "claimed"
+    fallback.assert_not_called()

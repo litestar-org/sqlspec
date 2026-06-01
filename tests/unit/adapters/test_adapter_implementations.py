@@ -96,10 +96,10 @@ def test_adapter_parameter_style_handling(
 
     if adapter_config["parameter_style"] == ParameterStyle.QMARK:
         statement = SQL(queries["select"], 1, statement_config=config)
-        assert "?" in statement.sql
+        assert "?" in statement.raw_sql
     elif adapter_config["parameter_style"] == ParameterStyle.NUMERIC:
         statement = SQL(queries["select"], 1, statement_config=config)
-        assert "$1" in statement.sql or "?" in statement.sql
+        assert "$1" in statement.raw_sql or "?" in statement.raw_sql
 
 
 def test_adapter_sql_compilation(

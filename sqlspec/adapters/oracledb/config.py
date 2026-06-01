@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 import oracledb
-from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
@@ -19,7 +18,7 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
-from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
+from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
@@ -48,27 +47,6 @@ __all__ = (
     "OraclePoolParams",
     "OracleSyncConfig",
 )
-
-
-def _extract_oracle_major(connection: Any) -> "int | None":
-    """Read the major version digit from ``connection.version``.
-
-    Used by ``_init_connection`` to cache server major on the connection so the
-    JSON input handler can route bind paths without per-bind metadata queries.
-    Returns ``None`` when the version string is missing or unparsable; callers
-    treat ``None`` as "assume 21c+ (modern default)".
-    """
-    try:
-        version_str = connection.version
-    except AttributeError:
-        return None
-    if not version_str:
-        return None
-    head = version_str.split(".", 1)[0]
-    try:
-        return int(head)
-    except ValueError:
-        return None
 
 
 class OracleConnectionParams(TypedDict):
@@ -292,9 +270,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
-        # Always use session_callback to support user callback
-        if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
-            config["session_callback"] = self._init_connection
+        config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
 
@@ -392,6 +368,27 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return namespace
 
 
+def _extract_oracle_major(connection: Any) -> "int | None":
+    """Read the major version digit from ``connection.version``.
+
+    Used by ``_init_connection`` to cache server major on the connection so the
+    JSON input handler can route bind paths without per-bind metadata queries.
+    Returns ``None`` when the version string is missing or unparsable; callers
+    treat ``None`` as "assume 21c+ (modern default)".
+    """
+    try:
+        version_str = connection.version
+    except AttributeError:
+        return None
+    if not version_str:
+        return None
+    head = version_str.split(".", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Oracle connections."""
 
@@ -402,7 +399,7 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
 
 
-@mypyc_attr(native_class=False)
+# mypyc annotations are unnecessary here because adapter config modules stay interpreted.
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections.
 
@@ -484,9 +481,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
-        # Always use session_callback to support user callback
-        if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
-            config["session_callback"] = self._init_connection
+        config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from sqlspec.storage import StorageTelemetry
 
-__all__ = ("ObservabilityRuntime",)
+__all__ = ("ObservabilityRuntime", "compute_sql_hash")
 
 
 _LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
@@ -260,6 +260,7 @@ class ObservabilityRuntime:
         duration_s: float,
         storage_backend: str | None,
         started_at: float | None = None,
+        precomputed_sql_hash: str | None = None,
     ) -> None:
         """Emit a statement event to all registered observers."""
 
@@ -277,7 +278,7 @@ class ObservabilityRuntime:
         db_system = resolve_db_system(self.config_name)
         sql_hash = None
         if logging_config and logging_config.include_sql_hash:
-            sql_hash = compute_sql_hash(sanitized_sql)
+            sql_hash = precomputed_sql_hash if precomputed_sql_hash is not None else compute_sql_hash(sanitized_sql)
         sql_truncation_length = logging_config.sql_truncation_length if logging_config else 2000
         sql_original_length = len(sanitized_sql)
         sql_truncated = sql_original_length > sql_truncation_length
@@ -311,13 +312,14 @@ class ObservabilityRuntime:
         for observer in self._statement_observers:
             observer(event)
 
-    def start_query_span(self, sql: str, operation: str, driver: str) -> Any:
+    def start_query_span(self, sql: str, operation: str, driver: str, *, sql_hash: str | None = None) -> Any:
         """Start a query span with runtime metadata."""
 
         if not self.span_manager.is_enabled:
             return None
 
-        sql_hash = compute_sql_hash(sql)
+        if sql_hash is None:
+            sql_hash = compute_sql_hash(sql)
         connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
         sql_payload = ""
         if self.config.print_sql:
@@ -461,6 +463,7 @@ def _mask_parameters(value: Any, allow_list: set[str]) -> Any:
     return "***"
 
 
+# Keep in sync with sqlspec.observability._observer._truncate_text.
 def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(value) <= max_chars:
         return value, False

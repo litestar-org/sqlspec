@@ -157,9 +157,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         Returns:
             ExecutionResult: Batch execution results
-
-        Raises:
-            ValueError: If no parameters provided for executemany operation
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 

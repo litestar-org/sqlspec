@@ -7,7 +7,12 @@ import pytest
 
 pytest.importorskip("arrow_odbc")
 
-from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver, resolve_dialect_from_dbms_name
+from sqlspec.adapters.arrow_odbc import (
+    ArrowOdbcConfig,
+    ArrowOdbcDriver,
+    odbc_type_to_arrow,
+    resolve_dialect_from_dbms_name,
+)
 from sqlspec.exceptions import SQLSpecError
 
 
@@ -94,6 +99,26 @@ def test_arrow_odbc_select_to_arrow_uses_native_reader() -> None:
     assert result.get_data().num_rows == 3
     assert connection.read_calls[0]["query"] == "SELECT 1 AS x"
     assert connection.read_calls[0]["batch_size"] == 2
+
+
+def test_arrow_odbc_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("Any", connection),
+        driver_features={"connection_string": "Driver={ODBC Driver 18 for SQL Server};", "chunk_size": 2},
+    )
+    original = ArrowOdbcDriver._get_compiled_sql
+    captured: list[bool] = []
+
+    def get_compiled_sql(self: ArrowOdbcDriver, statement: Any, config: Any) -> Any:
+        captured.append(statement.is_processed)
+        return original(self, statement, config)
+
+    monkeypatch.setattr(ArrowOdbcDriver, "_get_compiled_sql", get_compiled_sql)
+
+    driver.select_to_arrow("SELECT 1 AS x")
+
+    assert captured == [True]
 
 
 def test_arrow_odbc_select_to_arrow_batches_returns_batches() -> None:
@@ -229,3 +254,115 @@ def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     assert driver.statement_config.dialect == "tsql"
     assert sql == "SELECT ?"
     assert parameters == (1,)
+
+
+def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
+    """The public dialect slot stores the resolved statement dialect without a private mirror slot."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("Any", connection), driver_features={"dbms_name": "Microsoft SQL Server"})
+
+    assert driver.dialect == "tsql"
+    assert "_statement_dialect" not in ArrowOdbcDriver.__slots__
+    assert not hasattr(driver, "_statement_dialect")
+
+
+def test_arrow_odbc_driver_slots_populated_from_features() -> None:
+    """All driver_features values are cached as typed slots at initialization."""
+    connection = FakeConnection()
+    features = {
+        "chunk_size": 4096,
+        "max_bytes_per_batch": 1_000_000,
+        "max_text_size": 512,
+        "max_binary_size": 256,
+        "fetch_concurrently": False,
+        "query_timeout_sec": 30,
+    }
+    driver = ArrowOdbcDriver(cast("Any", connection), driver_features=features)
+
+    assert driver._chunk_size_val == 4096
+    assert driver._max_batch_bytes == 1_000_000
+    assert driver._max_text_size_val == 512
+    assert driver._max_binary_size_val == 256
+    assert driver._use_concurrent_fetch is False
+    assert driver._query_timeout_sec_val == 30
+
+
+def test_arrow_odbc_type_helper_public_import() -> None:
+    import sqlspec.adapters.arrow_odbc as arrow_odbc_adapter
+
+    assert arrow_odbc_adapter.odbc_type_to_arrow is odbc_type_to_arrow
+    assert "odbc_type_to_arrow" in arrow_odbc_adapter.__all__
+    assert odbc_type_to_arrow("bigint") == pa.int64()
+
+
+def test_arrow_odbc_driver_slots_default_values() -> None:
+    """Slot defaults match the previous driver_features.get() fallbacks."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("Any", connection), driver_features={})
+
+    assert driver._chunk_size_val == 65_536
+    assert driver._max_batch_bytes is None
+    assert driver._max_text_size_val is None
+    assert driver._max_binary_size_val is None
+    assert driver._use_concurrent_fetch is True
+    assert driver._query_timeout_sec_val is None
+
+
+def test_arrow_odbc_driver_chunk_size_returns_slot() -> None:
+    """_chunk_size() returns the pre-computed slot value, not a live dict lookup."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("Any", connection), driver_features={"chunk_size": 8192})
+
+    assert driver._chunk_size() == 8192
+    driver.driver_features["chunk_size"] = 99999  # pyright: ignore[reportPrivateUsage]
+    assert driver._chunk_size() == 8192
+
+
+def test_arrow_odbc_read_batches_uses_cached_slots() -> None:
+    """_read_arrow_batches passes slot values, not live driver_features lookups."""
+    connection = FakeConnection()
+    features = {
+        "chunk_size": 100,
+        "max_bytes_per_batch": 500_000,
+        "max_text_size": 200,
+        "max_binary_size": 100,
+        "fetch_concurrently": True,
+        "query_timeout_sec": 10,
+    }
+    driver = ArrowOdbcDriver(cast("Any", connection), driver_features=features)
+
+    driver._read_arrow_batches("SELECT 1", None, 100)
+
+    assert len(connection.read_calls) == 1
+    call = connection.read_calls[0]
+    assert call["max_bytes_per_batch"] == 500_000
+    assert call["max_text_size"] == 200
+    assert call["max_binary_size"] == 100
+    assert call["fetch_concurrently"] is True
+    assert call["query_timeout_sec"] == 10
+
+
+def test_arrow_odbc_read_batches_omits_query_timeout_when_none() -> None:
+    """query_timeout_sec key is absent from kwargs when slot is None."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("Any", connection), driver_features={"chunk_size": 50})
+
+    driver._read_arrow_batches("SELECT 1", None, 50)
+
+    call = connection.read_calls[0]
+    assert "query_timeout_sec" not in call
+
+
+def test_arrow_odbc_driver_slots_in_class_definition() -> None:
+    """All new slots are declared on the class and remain alphabetically sorted."""
+    slots = ArrowOdbcDriver.__slots__
+    expected_new = {
+        "_chunk_size_val",
+        "_max_batch_bytes",
+        "_max_binary_size_val",
+        "_max_text_size_val",
+        "_query_timeout_sec_val",
+        "_use_concurrent_fetch",
+    }
+    assert expected_new.issubset(set(slots))
+    assert list(slots) == sorted(slots)

@@ -12,7 +12,6 @@ Components:
 import logging
 import threading
 import time
-import warnings
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
@@ -60,7 +59,6 @@ DEFAULT_TTL_SECONDS: Final = 3600
 CACHE_STATS_UPDATE_INTERVAL: Final = 100
 
 
-CACHE_KEY_SLOTS: Final = ("_hash", "_key_data")
 CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp", "access_count")
 LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats", "_namespace")
 CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
@@ -337,10 +335,6 @@ class LRUCache:
             self._tail.prev = self._head
             self._stats.reset()
 
-    def size(self) -> int:
-        """Get current cache size."""
-        return len(self._cache)
-
     def is_empty(self) -> bool:
         """Check if cache is empty."""
         return not self._cache
@@ -565,17 +559,6 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
-def reset_cache_stats() -> None:
-    """Deprecated alias for clearing all cache entries."""
-    warnings.warn(
-        "reset_cache_stats() clears cached data and is deprecated; use clear_all_caches() to evict entries or "
-        "reset_stats_only() to reset counters without eviction.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    clear_all_caches()
-
-
 def log_cache_stats() -> None:
     """Log cache statistics."""
     logger = get_logger("sqlspec.cache")
@@ -650,36 +633,12 @@ def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> st
     return f"{namespace}:{dialect or 'default'}:{key}"
 
 
-def _sql_cache_enabled(config: "CacheConfig") -> bool:
-    return config.sql_cache_enabled
-
-
-def _sql_cache_size(config: "CacheConfig") -> int:
-    return config.sql_cache_size
-
-
-def _fragment_cache_enabled(config: "CacheConfig") -> bool:
-    return config.fragment_cache_enabled
-
-
-def _fragment_cache_size(config: "CacheConfig") -> int:
-    return config.fragment_cache_size
-
-
-def _optimized_cache_enabled(config: "CacheConfig") -> bool:
-    return config.optimized_cache_enabled
-
-
-def _optimized_cache_size(config: "CacheConfig") -> int:
-    return config.optimized_cache_size
-
-
 NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]" = {
-    "statement": (_sql_cache_enabled, _sql_cache_size),
-    "builder": (_sql_cache_enabled, _sql_cache_size),
-    "expression": (_fragment_cache_enabled, _fragment_cache_size),
-    "file": (_fragment_cache_enabled, _fragment_cache_size),
-    "optimized": (_optimized_cache_enabled, _optimized_cache_size),
+    "statement": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
+    "builder": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
+    "expression": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),
+    "file": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),
+    "optimized": (lambda config: config.optimized_cache_enabled, lambda config: config.optimized_cache_size),
 }
 
 

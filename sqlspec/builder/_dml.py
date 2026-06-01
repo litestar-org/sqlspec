@@ -168,7 +168,7 @@ class InsertValuesMixin:
                     row_expressions.append(extract_sql_object_expression(val, builder=self))
                     continue
                 column_name = str(col).split(".")[-1]
-                placeholder, _ = builder._create_placeholder(val, column_name)  # pyright: ignore[reportPrivateUsage]
+                placeholder, _ = builder.create_placeholder(val, column_name)
                 row_expressions.append(placeholder)
         else:
             if column_defs and len(positional_values) != len(column_defs):
@@ -189,7 +189,7 @@ class InsertValuesMixin:
                         column_name = column_token.rsplit(".", maxsplit=1)[-1]
                     else:
                         column_name = f"value_{index + 1}"
-                    placeholder, _ = builder._create_placeholder(raw_value, column_name)  # pyright: ignore[reportPrivateUsage]
+                    placeholder, _ = builder.create_placeholder(raw_value, column_name)
                     row_expressions.append(placeholder)
 
         values_node = current_expr.args.get("expression")

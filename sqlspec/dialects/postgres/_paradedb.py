@@ -19,14 +19,9 @@ Also inherits pgvector distance operators from PGVector:
 """
 
 from sqlglot.dialects.dialect import Dialect
-from sqlglot.dialects.postgres import Postgres
 
 from sqlspec.dialects.postgres._generators import ParadeDBGenerator
-from sqlspec.dialects.postgres._operators import (
-    PARADEDB_OPERATOR_TOKENS,
-    PGVECTOR_OPERATOR_TOKENS,
-    register_postgres_extension_operators,
-)
+from sqlspec.dialects.postgres._operators import PARADEDB_OPERATOR_TOKENS, register_postgres_extension_operators
 from sqlspec.dialects.postgres._pgvector import PGVector, PGVectorTokenizer
 
 __all__ = ("ParadeDB",)
@@ -37,7 +32,7 @@ register_postgres_extension_operators()
 class ParadeDBTokenizer(PGVectorTokenizer):
     """Tokenizer with ParadeDB search operators and pgvector distance operators."""
 
-    KEYWORDS = {**Postgres.Tokenizer.KEYWORDS, **PGVECTOR_OPERATOR_TOKENS, **PARADEDB_OPERATOR_TOKENS}
+    KEYWORDS = {**PGVectorTokenizer.KEYWORDS, **PARADEDB_OPERATOR_TOKENS}
 
 
 class ParadeDB(PGVector):

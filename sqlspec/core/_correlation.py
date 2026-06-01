@@ -8,11 +8,14 @@ correlation IDs from request headers with consistent behavior.
 from collections.abc import Callable
 from typing import ClassVar
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.utils.correlation import CorrelationContext
 
 __all__ = ("CorrelationExtractor",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CorrelationExtractor:
     """Extracts correlation IDs from HTTP request headers.
 

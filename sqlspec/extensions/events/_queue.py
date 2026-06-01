@@ -3,13 +3,15 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
+
+from typing_extensions import final
 
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
+from sqlspec.extensions.events._names import normalize_queue_table_name
 from sqlspec.extensions.events._payload import parse_event_timestamp
-from sqlspec.extensions.events._store import normalize_queue_table_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
@@ -168,14 +170,15 @@ class _BaseTableEventQueue:
         )
 
 
+@final
 class SyncTableEventQueue(_BaseTableEventQueue):
     """Sync table queue implementation."""
 
     __slots__ = ()
 
-    supports_sync = True
-    supports_async = False
-    backend_name = "table_queue"
+    supports_sync: ClassVar[bool] = True
+    supports_async: ClassVar[bool] = False
+    backend_name: ClassVar[str] = "table_queue"
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -265,6 +268,8 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         current_time = self._utcnow()
         with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
             return driver.select_one_or_none(
+                # SQL allocation here is intentional: DB round-trip dominates by >=100x,
+                # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
                     self._select_sql,
                     {
@@ -293,14 +298,15 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             return result.rows_affected
 
 
+@final
 class AsyncTableEventQueue(_BaseTableEventQueue):
     """Async table queue implementation."""
 
     __slots__ = ()
 
-    supports_sync = False
-    supports_async = True
-    backend_name = "table_queue"
+    supports_sync: ClassVar[bool] = False
+    supports_async: ClassVar[bool] = True
+    backend_name: ClassVar[str] = "table_queue"
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -392,6 +398,8 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
         ) as driver:
             return await driver.select_one_or_none(
+                # SQL allocation here is intentional: DB round-trip dominates by >=100x,
+                # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
                     self._select_sql,
                     {

@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Final
 from uuid import UUID
 
+from typing_extensions import final
+
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid, format_datetime_rfc3339
 
 __all__ = ("DUCKDB_SPECIAL_CHARS", "DuckDBOutputConverter")
@@ -15,6 +17,7 @@ __all__ = ("DUCKDB_SPECIAL_CHARS", "DuckDBOutputConverter")
 DUCKDB_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"-", ":", "T", ".", "[", "{"})
 
 
+@final
 class DuckDBOutputConverter(CachedOutputConverter):
     """DuckDB-specific output conversion with native UUID support.
 
@@ -80,39 +83,3 @@ class DuckDBOutputConverter(CachedOutputConverter):
             RFC 3339 formatted datetime string.
         """
         return format_datetime_rfc3339(dt)
-
-    def convert_duckdb_value(self, value: Any) -> Any:
-        """Convert value with DuckDB-specific handling.
-
-        Args:
-            value: Value to convert.
-
-        Returns:
-            Converted value appropriate for DuckDB.
-        """
-        if isinstance(value, (str, UUID)):
-            uuid_value = self.handle_uuid(value)
-            if isinstance(uuid_value, UUID):
-                return uuid_value
-
-        if isinstance(value, str):
-            return self.convert(value)
-
-        if isinstance(value, datetime):
-            return self.format_datetime(value)
-
-        return value
-
-    def prepare_duckdb_parameter(self, value: Any) -> Any:
-        """Prepare parameter for DuckDB execution.
-
-        Args:
-            value: Parameter value to prepare.
-
-        Returns:
-            Value ready for DuckDB parameter binding.
-        """
-        converted = self.convert_duckdb_value(value)
-        if isinstance(converted, UUID):
-            return converted
-        return converted

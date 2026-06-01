@@ -26,6 +26,7 @@ from sqlspec.core import (
     StatementConfig,
     get_cache,
     get_cache_config,
+    hash_expression,
     hash_optimized_expression,
 )
 from sqlspec.core.filters import StatementFilter
@@ -506,10 +507,6 @@ class QueryBuilder(ABC):
         self._parameter_name_counters[base_name] = next_index
         return candidate
 
-    def _create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
-        """Backwards-compatible placeholder helper (delegates to create_placeholder)."""
-        return self.create_placeholder(value, base_name)
-
     def create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
         """Create placeholder expression with a unique parameter name.
 
@@ -571,11 +568,7 @@ class QueryBuilder(ABC):
         if self._expression is None:
             self._expression = self._create_base_expression()
 
-        if self._expression:
-            expr_sql = self._expression.sql()
-            expr_hash = hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()
-        else:
-            expr_hash = "None"
+        expr_hash = str(hash_expression(self._expression)) if self._expression is not None else "None"
 
         parameters_snapshot = sorted(self._parameters.items())
         parameters_hash = hashlib.sha256(str(parameters_snapshot).encode()).hexdigest()[:8]
@@ -828,6 +821,10 @@ class QueryBuilder(ABC):
         """
         dialect_override = config.dialect if config else None
         safe_query = self.build(dialect=dialect_override)
+        statement_expression = self._build_final_expression(copy=True)
+
+        if self.enable_optimization and isinstance(statement_expression, exp.Expr):
+            statement_expression = self._optimize_expression(statement_expression)
 
         kwargs, parameters = self._extract_statement_parameters(safe_query.parameters)
 
@@ -839,23 +836,11 @@ class QueryBuilder(ABC):
                 dialect=safe_query.dialect,
             )
 
-        sql_string = safe_query.sql
-        if (
-            config.dialect is not None
-            and config.dialect != safe_query.dialect
-            and isinstance(self._expression, exp.Expr)
-        ):
-            try:
-                identify = self._should_identify(config.dialect)
-                sql_string = self._expression.sql(dialect=config.dialect, pretty=True, identify=identify)
-            except Exception:
-                sql_string = safe_query.sql
-
         if kwargs:
-            return SQL(sql_string, statement_config=config, **kwargs)
+            return SQL(statement_expression, statement_config=config, **kwargs)
         if parameters:
-            return SQL(sql_string, *parameters, statement_config=config)
-        return SQL(sql_string, statement_config=config)
+            return SQL(statement_expression, *parameters, statement_config=config)
+        return SQL(statement_expression, statement_config=config)
 
     def _extract_statement_parameters(
         self, raw_parameters: Any

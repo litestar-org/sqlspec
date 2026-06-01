@@ -92,6 +92,23 @@ def test_select_to_arrow_returns_arrow_result_from_native_cursor() -> None:
     assert connection.cursor_obj.closed is True
 
 
+def test_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = ArrowConnection()
+    driver = MssqlPythonDriver(cast("Any", connection))
+    original = MssqlPythonDriver._get_compiled_sql
+    captured: list[bool] = []
+
+    def get_compiled_sql(self: MssqlPythonDriver, statement: Any, config: Any) -> Any:
+        captured.append(statement.is_processed)
+        return original(self, statement, config)
+
+    monkeypatch.setattr(MssqlPythonDriver, "_get_compiled_sql", get_compiled_sql)
+
+    driver.select_to_arrow("SELECT 1 AS x")
+
+    assert captured == [True]
+
+
 def test_select_to_arrow_raises_mapped_driver_exception() -> None:
     """Native Arrow failures should use SQLSpec's deferred exception mapping."""
     connection = ErrorArrowConnection()
@@ -166,6 +183,24 @@ async def test_async_select_to_arrow_offloads_cursor_work(monkeypatch: pytest.Mo
     assert "_execute_cursor" in calls
     assert "arrow" in calls
     assert "close" in calls
+
+
+@pytest.mark.anyio
+async def test_async_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = ArrowConnection()
+    driver = MssqlPythonAsyncDriver(cast("Any", connection))
+    original = MssqlPythonAsyncDriver._get_compiled_sql
+    captured: list[bool] = []
+
+    def get_compiled_sql(self: MssqlPythonAsyncDriver, statement: Any, config: Any) -> Any:
+        captured.append(statement.is_processed)
+        return original(self, statement, config)
+
+    monkeypatch.setattr(MssqlPythonAsyncDriver, "_get_compiled_sql", get_compiled_sql)
+
+    await driver.select_to_arrow("SELECT 1 AS x")
+
+    assert captured == [True]
 
 
 @pytest.mark.anyio

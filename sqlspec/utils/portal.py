@@ -194,13 +194,16 @@ class PortalProvider:
         if self._loop is None:
             return
 
-        if not self._request_queue.empty():
-            func, args, kwargs, local_result_queue = self._request_queue.get()
-            future = asyncio.run_coroutine_threadsafe(self._async_caller(func, args, kwargs), self._loop)
+        try:
+            func, args, kwargs, local_result_queue = self._request_queue.get_nowait()
+        except queue.Empty:
+            return
 
-            future.add_done_callback(
-                functools.partial(self._handle_future_result, local_result_queue=local_result_queue)  # pyright: ignore[reportArgumentType]
-            )
+        future = asyncio.run_coroutine_threadsafe(self._async_caller(func, args, kwargs), self._loop)
+
+        future.add_done_callback(
+            functools.partial(self._handle_future_result, local_result_queue=local_result_queue)  # pyright: ignore[reportArgumentType]
+        )
 
     @staticmethod
     def _handle_future_result(

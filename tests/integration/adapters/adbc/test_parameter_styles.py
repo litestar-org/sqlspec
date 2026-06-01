@@ -14,7 +14,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.core import replace_null_parameters_with_literals
+from sqlspec.core import ParameterProfile, ParameterValidator, replace_null_parameters_with_literals
 from sqlspec.exceptions import SQLSpecError
 from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 
@@ -591,9 +591,11 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
     # Parse the SQL
     parsed = parse_one(original_sql, dialect="postgres")
 
+    profile = ParameterProfile(ParameterValidator().extract_parameters(parsed.sql(dialect="postgres")))
+
     # FIXED: AST transformer now validates parameter count and rejects mismatches
     with pytest.raises(SQLSpecError) as exc_info:
-        replace_null_parameters_with_literals(parsed, original_params, dialect="postgres")
+        replace_null_parameters_with_literals(parsed, original_params, dialect="postgres", parameter_profile=profile)
 
     # Verify we get the correct error message
     error_msg = str(exc_info.value).lower()
@@ -602,7 +604,9 @@ def test_adbc_ast_transformer_validation_fixed(adbc_postgresql_session: AdbcDriv
 
     # Verify that correct parameter count works fine
     correct_params = (200, None)  # 2 params for 2 placeholders
-    modified_ast, cleaned_params = replace_null_parameters_with_literals(parsed, correct_params, dialect="postgres")
+    modified_ast, cleaned_params = replace_null_parameters_with_literals(
+        parsed, correct_params, dialect="postgres", parameter_profile=profile
+    )
 
     # Convert back to SQL to see the transformation
     transformed_sql = modified_ast.sql(dialect="postgres")

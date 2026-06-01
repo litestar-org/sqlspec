@@ -16,7 +16,6 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.deprecation import warn_deprecation
 from sqlspec.utils.serializers import schema_dump, serialize_collection
 from sqlspec.utils.type_guards import has_expression_and_sql
 
@@ -106,8 +105,8 @@ class Insert(
         """Get the insert expression (public API)."""
         return self._get_insert_expression()
 
-    def _bind_values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
-        """Bind a single dict row without deprecation warnings (internal)."""
+    def _bind_mapping_values(self, data: "Mapping[str, Any]") -> "Self":
+        """Bind a single mapping row."""
         insert_expr = self._get_insert_expression()
         if insert_expr.args.get("this") is None:
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
@@ -121,8 +120,8 @@ class Insert(
 
         return self.values(*[data[col] for col in self._columns])
 
-    def _bind_values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
-        """Bind many dict rows without deprecation warnings (internal)."""
+    def _bind_mapping_values_many(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
+        """Bind many mapping rows."""
         if not data:
             return self
 
@@ -144,57 +143,6 @@ class Insert(
 
         return self
 
-    def values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
-        """Adds a row of values from a dictionary.
-
-        .. deprecated:: 0.46.2
-            Use :meth:`values_from` instead — it accepts dicts, msgspec Structs,
-            Pydantic models, dataclasses, and attrs classes.
-
-        Args:
-            data: A mapping of column names to values.
-
-        Returns:
-            The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If `into()` has not been called to set the table.
-        """
-        warn_deprecation(
-            version="0.46.2",
-            deprecated_name="Insert.values_from_dict",
-            kind="method",
-            alternative="Insert.values_from() — accepts dicts, msgspec Structs, Pydantic models, dataclasses, and attrs classes",
-            removal_in="0.48.0",
-        )
-        return self._bind_values_from_dict(data)
-
-    def values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
-        """Adds multiple rows of values from a sequence of dictionaries.
-
-        .. deprecated:: 0.46.2
-            Use :meth:`values_from_many` instead — it accepts dicts, msgspec Structs,
-            Pydantic models, dataclasses, and attrs classes.
-
-        Args:
-            data: A sequence of mappings, each representing a row of data.
-
-        Returns:
-            The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If `into()` has not been called to set the table,
-                           or if dictionaries have inconsistent keys.
-        """
-        warn_deprecation(
-            version="0.46.2",
-            deprecated_name="Insert.values_from_dicts",
-            kind="method",
-            alternative="Insert.values_from_many() — accepts dicts, msgspec Structs, Pydantic models, dataclasses, and attrs classes",
-            removal_in="0.48.0",
-        )
-        return self._bind_values_from_dicts(data)
-
     def values_from(self, data: Any, *, exclude_unset: bool = True) -> "Self":
         """Add a row of values from a dict, dataclass, msgspec.Struct, Pydantic model, or attrs class.
 
@@ -212,13 +160,9 @@ class Insert(
 
         Returns:
             The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If ``into()`` has not been called or the dict shape is
-                incompatible with previously set columns.
         """
         payload = schema_dump(data, exclude_unset=exclude_unset, wire_format=False)
-        return self._bind_values_from_dict(payload)
+        return self._bind_mapping_values(payload)
 
     def values_from_many(self, items: "Sequence[Any]", *, exclude_unset: bool = True) -> "Self":
         """Add multiple rows from a sequence of dicts, dataclasses, msgspec Structs, Pydantic models, or attrs classes.
@@ -235,15 +179,11 @@ class Insert(
         Returns:
             The current builder instance for method chaining. Empty input returns the
             builder unchanged.
-
-        Raises:
-            SQLBuilderError: If ``into()`` has not been called or item dict shapes
-                disagree on key sets.
         """
         if not items:
             return self
         payload = serialize_collection(items, exclude_unset=exclude_unset, wire_format=False)
-        return self._bind_values_from_dicts(payload)
+        return self._bind_mapping_values_many(payload)
 
     def on_conflict(self, *columns: str) -> "ConflictBuilder":
         """Adds an ON CONFLICT clause with specified columns.
@@ -303,18 +243,7 @@ class Insert(
 
         insert_expr = self._get_insert_expression()
 
-        set_expressions = []
-        for col, val in kwargs.items():
-            if has_expression_and_sql(val):
-                value_expr = extract_sql_object_expression(val, builder=self)
-            elif isinstance(val, exp.Expr):
-                value_expr = val
-            else:
-                param_name = self.generate_unique_parameter_name(col)
-                _, param_name = self.add_parameter(val, name=param_name)
-                value_expr = exp.Placeholder(this=param_name)
-
-            set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
+        set_expressions = _build_conflict_set_expressions(self, kwargs)
 
         on_conflict = exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=set_expressions or None)
 
@@ -383,18 +312,7 @@ class ConflictBuilder:
         """
         insert_expr = self._insert_builder.get_insert_expression()
 
-        set_expressions = []
-        for col, val in kwargs.items():
-            if has_expression_and_sql(val):
-                value_expr = extract_sql_object_expression(val, builder=self._insert_builder)
-            elif isinstance(val, exp.Expr):
-                value_expr = val
-            else:
-                param_name = self._insert_builder.generate_unique_parameter_name(col)
-                _, param_name = self._insert_builder.add_parameter(val, name=param_name)
-                value_expr = exp.Placeholder(this=param_name)
-
-            set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
+        set_expressions = _build_conflict_set_expressions(self._insert_builder, kwargs)
 
         conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
         on_conflict = exp.OnConflict(
@@ -403,3 +321,19 @@ class ConflictBuilder:
 
         insert_expr.set("conflict", on_conflict)
         return self._insert_builder
+
+
+def _build_conflict_set_expressions(builder: "Insert", kwargs: dict[str, Any]) -> list[exp.Expr]:
+    set_expressions: list[exp.Expr] = []
+    for col, val in kwargs.items():
+        if has_expression_and_sql(val):
+            value_expr = extract_sql_object_expression(val, builder=builder)
+        elif isinstance(val, exp.Expr):
+            value_expr = val
+        else:
+            param_name = builder.generate_unique_parameter_name(col)
+            _, param_name = builder.add_parameter(val, name=param_name)
+            value_expr = exp.Placeholder(this=param_name)
+
+        set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
+    return set_expressions

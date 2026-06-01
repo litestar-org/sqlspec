@@ -1,12 +1,17 @@
 """Unit tests for mssql_python adapter configuration."""
 
 import warnings
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 import sqlspec.adapters.mssql_python.config as _mssql_config
-from sqlspec.adapters.mssql_python.config import MssqlPythonConfig, MssqlPythonConnectionPool
+from sqlspec.adapters.mssql_python.config import (
+    MssqlPythonAsyncConfig,
+    MssqlPythonConfig,
+    MssqlPythonConnectionPool,
+    _normalize_mssql_python_init,
+)
 
 
 class DummyConnection:
@@ -132,3 +137,35 @@ def test_second_pool_same_params_no_warn(monkeypatch: pytest.MonkeyPatch) -> Non
         MssqlPythonConnectionPool(connection_string="Server=srv2;", max_size=10, idle_timeout=60, enabled=True)
 
     assert len(caught) == 0
+
+
+def test_normalize_mssql_python_init_returns_config_features_and_hook() -> None:
+    seen: list[DummyConnection] = []
+
+    normalized, features, hook = _normalize_mssql_python_init(
+        {"server": "localhost"}, {"on_connection_create": seen.append, "use_pool": False}
+    )
+
+    assert normalized == {"server": "localhost"}
+    assert features["use_pool"] is False
+    assert "on_connection_create" not in features
+    assert hook is not None
+    hook(cast(Any, DummyConnection()))
+    assert len(seen) == 1
+
+
+def test_sync_and_async_config_delegate_to_shared_init_helper() -> None:
+    def hook(_connection: Any) -> None:
+        return None
+
+    sync_config = MssqlPythonConfig(
+        connection_config={"server": "localhost"}, driver_features={"on_connection_create": hook}
+    )
+    async_config = MssqlPythonAsyncConfig(
+        connection_config={"server": "localhost"}, driver_features={"on_connection_create": hook}
+    )
+
+    assert sync_config.connection_config == {"server": "localhost"}
+    assert async_config.connection_config == {"server": "localhost"}
+    assert sync_config._user_connection_hook is hook
+    assert async_config._user_connection_hook is hook

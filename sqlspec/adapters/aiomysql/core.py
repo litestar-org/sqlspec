@@ -114,10 +114,6 @@ _MYSQL_CONNECTION_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
 }
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
@@ -182,6 +178,10 @@ def build_profile() -> "DriverParameterProfile":
         custom_type_coercions=coercions,
         default_dialect="mysql",
     )
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
 
 
 driver_profile = build_profile()
@@ -354,6 +354,7 @@ def detect_json_columns(
     return detect_json_columns_from_description(description, json_type_codes)
 
 
+# Keep private helpers in sync with sqlspec.adapters.asyncmy.core.
 def _deserialize_json_dict_rows(
     column_names: "list[str]",
     rows: "list[dict[str, Any]]",

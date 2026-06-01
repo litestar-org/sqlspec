@@ -27,16 +27,6 @@ __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_b
 logger = get_logger("sqlspec.events.postgres")
 
 
-def _extract_event_id(payload: "str | None") -> "str | None":
-    if not payload:
-        return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        event_id = raw.get("event_id")
-        return event_id if isinstance(event_id, str) else None
-    return None
-
-
 class AsyncpgHybridEventsBackend:
     """Hybrid backend combining durable queue with LISTEN/NOTIFY wakeups."""
 
@@ -208,3 +198,13 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _extract_event_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None

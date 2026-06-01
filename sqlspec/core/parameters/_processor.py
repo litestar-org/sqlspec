@@ -36,22 +36,6 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
-def _make_cache_key_tuple(
-    sql: str,
-    param_fingerprint: Any,
-    input_style: str,
-    exec_style: str,
-    dialect: str | None,
-    is_many: bool,
-    wrap_types: bool | None = None,
-    normalize_for_parsing: bool | None = None,
-) -> tuple[Any, ...]:
-    """Build the shared SQL and parameter processor cache key tuple."""
-    if wrap_types is None and normalize_for_parsing is None:
-        return (sql, param_fingerprint, input_style, exec_style, dialect, is_many)
-    return (sql, param_fingerprint, input_style, exec_style, dialect, is_many, wrap_types, normalize_for_parsing)
-
-
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
     """Return a structural fingerprint for caching parameter payloads.
 
@@ -509,13 +493,13 @@ class ParameterProcessor:
                     wrapped_values = source[:idx]
                 wrapped_values.append(wrapped)
             if wrapped_values is None:
-                return cast("ConvertedParameters", parameters)
+                return parameters
             return wrapped_values
         if param_type is tuple:
             tuple_source = cast("tuple[Any, ...]", parameters)
             wrapped_values = [wrap_with_type(value) for value in tuple_source]
             if all(wrapped is value for wrapped, value in zip(wrapped_values, tuple_source, strict=False)):
-                return cast("ConvertedParameters", parameters)
+                return parameters
             return wrapped_values
         if param_type is dict:
             source_mapping = cast("dict[str, Any]", parameters)
@@ -528,7 +512,7 @@ class ParameterProcessor:
                     wrapped_mapping = dict(source_mapping)
                 wrapped_mapping[key] = wrapped
             if wrapped_mapping is None:
-                return cast("ConvertedParameters", parameters)
+                return parameters
             return wrapped_mapping
         # Fallback to ABC checks for custom types
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
@@ -563,12 +547,12 @@ class ParameterProcessor:
             return None
         result_type = type(result)
         if result_type is dict:
-            return cast("ConvertedParameters", result)
+            return result
         if result_type is list:
-            return cast("ConvertedParameters", result)
+            return result
         if result_type is tuple:
-            return cast("ConvertedParameters", result)
-        return cast("ConvertedParameters", result)
+            return result
+        return result
 
     def _store_cached_result(
         self, cache_key: Any | None, result: "ParameterProcessingResult"
@@ -611,7 +595,7 @@ class ParameterProcessor:
         if parameters is None:
             return None
 
-        processed = cast("ConvertedParameters", parameters)
+        processed = parameters
 
         if apply_wrap_types and processed:
             processed = self._wrap_parameter_types(processed)
@@ -1173,3 +1157,19 @@ class ParameterProcessor:
             precomputed_plan=execution_plan,
         )
         return processed_sql, processed_parameters, converted_param_info
+
+
+def _make_cache_key_tuple(
+    sql: str,
+    param_fingerprint: Any,
+    input_style: str,
+    exec_style: str,
+    dialect: str | None,
+    is_many: bool,
+    wrap_types: bool | None = None,
+    normalize_for_parsing: bool | None = None,
+) -> tuple[Any, ...]:
+    """Build the shared SQL and parameter processor cache key tuple."""
+    if wrap_types is None and normalize_for_parsing is None:
+        return (sql, param_fingerprint, input_style, exec_style, dialect, is_many)
+    return (sql, param_fingerprint, input_style, exec_style, dialect, is_many, wrap_types, normalize_for_parsing)

@@ -7,7 +7,13 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
+    build_statement_config_from_profile,
+)
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
     resolve_postgres_extension_state,
@@ -59,7 +65,6 @@ __all__ = (
     "format_execute_many_parameters",
     "format_table_identifier",
     "get_parameter_casts",
-    "normalize_scalar_parameter",
     "prepare_parameters_with_casts",
     "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
@@ -76,44 +81,45 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
-_JSONB_TYPE: "type[Any] | None" = None
-_JSONB_RESOLVED: bool = False
+_JSONB_TYPE: type[Any] | None = None
+try:
+    from psqlpy.extra_types import JSONB as _JSONB_IMPORTED
+except ImportError:
+    pass
+else:
+    _JSONB_TYPE = _JSONB_IMPORTED
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
-_STRING_WRITER_TYPE: "type[Any] | None" = None
-_STRING_WRITER_RESOLVED = False
+_STRING_WRITER_TYPE: type[Any] | None
+try:
+    from librt.strings import StringWriter
+except ImportError:
+    _STRING_WRITER_TYPE = None
+else:
+    _STRING_WRITER_TYPE = StringWriter
 
 
-def _get_librt_string_writer() -> "type[Any] | None":
-    """Return librt's StringWriter when the optional performance helper exists."""
-    global _STRING_WRITER_RESOLVED, _STRING_WRITER_TYPE
-    if _STRING_WRITER_RESOLVED:
-        return _STRING_WRITER_TYPE
-    try:
-        from librt.strings import StringWriter
-    except ImportError:
-        _STRING_WRITER_TYPE = None
-    else:
-        _STRING_WRITER_TYPE = StringWriter
-    _STRING_WRITER_RESOLVED = True
-    return _STRING_WRITER_TYPE
-
-
-def _get_jsonb_type() -> "type[Any] | None":
-    global _JSONB_TYPE, _JSONB_RESOLVED
-    if _JSONB_RESOLVED:
-        return _JSONB_TYPE
-    try:
-        from psqlpy.extra_types import JSONB
-    except ImportError:
-        _JSONB_TYPE = None
-    else:
-        _JSONB_TYPE = JSONB
-    _JSONB_RESOLVED = True
-    return _JSONB_TYPE
+def build_profile() -> "DriverParameterProfile":
+    """Create the psqlpy driver parameter profile."""
+    coercions: dict[type, Callable[[Any], Any]] = build_uuid_coercions(native=True)
+    return DriverParameterProfile(
+        name="Psqlpy",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=False,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions=coercions,
+        default_dialect="postgres",
+    )
 
 
 def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
@@ -121,7 +127,7 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
 
     if value is None:
         return None
-    jsonb_type = _get_jsonb_type()
+    jsonb_type = _JSONB_TYPE
     if cast_type == "JSONB":
         if jsonb_type is not None and isinstance(value, jsonb_type):
             return value
@@ -199,43 +205,18 @@ def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
     return tuple(_DECIMAL_NORMALIZER(item) for item in value)
 
 
-def build_profile() -> "DriverParameterProfile":
-    """Create the psqlpy driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {decimal.Decimal: float, **build_uuid_coercions(native=True)}
-    return DriverParameterProfile(
-        name="Psqlpy",
-        default_style=ParameterStyle.NUMERIC,
-        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
-        default_execution_style=ParameterStyle.NUMERIC,
-        supported_execution_styles={ParameterStyle.NUMERIC},
-        has_native_list_expansion=False,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions=coercions,
-        default_dialect="postgres",
-    )
-
-
 driver_profile = build_profile()
 
 
-def _build_psqlpy_parameter_config(
-    profile: "DriverParameterProfile", serializer: "Callable[[Any], str]"
-) -> "ParameterStyleConfig":
+def _build_psqlpy_parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleConfig":
     """Construct parameter configuration for psqlpy.
 
     Args:
-        profile: Driver parameter profile to extend.
-        serializer: JSON serializer for parameter coercion.
+        base_config: Base parameter configuration to extend.
 
     Returns:
         ParameterStyleConfig with updated type coercions.
     """
-
-    base_config = build_statement_config_from_profile(profile, json_serializer=serializer).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
     updated_type_map[dict] = _prepare_dict_parameter
@@ -249,8 +230,8 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     """Construct the psqlpy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     profile = driver_profile
-    parameter_config = _build_psqlpy_parameter_config(profile, serializer)
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
+    parameter_config = _build_psqlpy_parameter_config(base_config.parameter_config)
     return base_config.replace(parameter_config=parameter_config)
 
 
@@ -279,7 +260,8 @@ def apply_driver_features(
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
 
-    parameter_config = _build_psqlpy_parameter_config(driver_profile, serializer)
+    base_config = build_statement_config_from_profile(driver_profile, json_serializer=serializer)
+    parameter_config = _build_psqlpy_parameter_config(base_config.parameter_config)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
@@ -301,10 +283,6 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     if not dict_rows:
         return [], []
     return dict_rows, list(dict_rows[0])
-
-
-def normalize_scalar_parameter(value: Any) -> Any:
-    return value
 
 
 def coerce_numeric_for_write(value: Any) -> Any:
@@ -366,7 +344,7 @@ def _format_copy_value(value: Any) -> str:
 def encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
     """Encode row tuples into a bytes payload compatible with binary_copy_to_table."""
 
-    string_writer_type = _get_librt_string_writer()
+    string_writer_type = _STRING_WRITER_TYPE
     if string_writer_type is not None:
         writer = string_writer_type()
         for record in records:

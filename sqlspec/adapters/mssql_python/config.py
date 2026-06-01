@@ -266,11 +266,10 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        normalized = normalize_connection_config(connection_config)
-        features_dict = apply_driver_features(dict(driver_features or {}))
-        self._user_connection_hook: Callable[[MssqlPythonConnection], None] | None = features_dict.pop(
-            "on_connection_create", None
+        normalized, features_dict, user_connection_hook = _normalize_mssql_python_init(
+            connection_config, driver_features
         )
+        self._user_connection_hook = user_connection_hook
         super().__init__(
             bind_key=bind_key,
             connection_config=normalized,
@@ -345,11 +344,10 @@ class MssqlPythonAsyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        normalized = normalize_connection_config(connection_config)
-        features_dict = apply_driver_features(dict(driver_features or {}))
-        self._user_connection_hook: Callable[[MssqlPythonConnection], None] | None = features_dict.pop(
-            "on_connection_create", None
+        normalized, features_dict, user_connection_hook = _normalize_mssql_python_init(
+            connection_config, driver_features
         )
+        self._user_connection_hook = user_connection_hook
         super().__init__(
             bind_key=bind_key,
             connection_config=normalized,
@@ -411,3 +409,13 @@ def _create_mssql_python_pool(
         enabled=pool_enabled,
         on_connection_create=on_connection_create,
     )
+
+
+def _normalize_mssql_python_init(
+    connection_config: "MssqlPythonPoolParams | dict[str, Any] | None",
+    driver_features: "MssqlPythonDriverFeatures | dict[str, Any] | None",
+) -> "tuple[dict[str, Any], dict[str, Any], Callable[[MssqlPythonConnection], None] | None]":
+    normalized = normalize_connection_config(connection_config)
+    features_dict = apply_driver_features(dict(driver_features or {}))
+    hook = cast("Callable[[MssqlPythonConnection], None] | None", features_dict.pop("on_connection_create", None))
+    return normalized, features_dict, hook

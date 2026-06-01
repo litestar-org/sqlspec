@@ -4,7 +4,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
+    get_dialect_config,
+)
 from sqlspec.data_dictionary.dialects.mssql import (
     extract_mssql_version_value,
     is_mssql_azure_sql,
@@ -16,7 +23,6 @@ from sqlspec.data_dictionary.dialects.mssql import (
     resolve_mssql_feature_flag,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -39,7 +45,7 @@ class MssqlVersionInfo(VersionInfo):
         edition: str | None = None,
         engine_edition: int | None = None,
     ) -> None:
-        super().__init__(major, minor, build)
+        super().__init__(major, minor, 0)
         self.build = build
         self.revision = revision
         self.edition = edition
@@ -49,6 +55,11 @@ class MssqlVersionInfo(VersionInfo):
     def supports_native_json(self) -> bool:
         """Return whether this server supports the native JSON type."""
         return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
+
+    @property
+    def version_tuple(self) -> "tuple[int, int, int]":
+        """Get version tuple using the MSSQL build number as the third component."""
+        return (self.major, self.minor, self.build)
 
     def __str__(self) -> str:
         """String representation of version info."""

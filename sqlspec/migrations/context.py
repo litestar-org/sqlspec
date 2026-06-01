@@ -19,19 +19,7 @@ __all__ = ("MigrationContext",)
 logger = get_logger("sqlspec.migrations.context")
 
 
-def _normalize_dialect_name(dialect: Any | None) -> "str | None":
-    if dialect is None:
-        return None
-    if isinstance(dialect, str):
-        return dialect
-    if isinstance(dialect, type):
-        return dialect.__name__
-    if isinstance(dialect, Dialect):
-        return dialect.__class__.__name__
-    return None
-
-
-@dataclass
+@dataclass(slots=True)
 class MigrationContext:
     """Context object passed to migration functions.
 
@@ -155,3 +143,15 @@ class MigrationContext:
         if not inspect.iscoroutinefunction(migration_func) and self.is_async_driver:
             self.set_execution_metadata("mixed_execution", value=True)
             logger.debug("Sync migration function in async driver context - using compatibility mode")
+
+
+def _normalize_dialect_name(dialect: Any | None) -> "str | None":
+    if dialect is None:
+        return None
+    if isinstance(dialect, str):
+        return dialect
+    if isinstance(dialect, type):
+        return dialect.__name__
+    if isinstance(dialect, Dialect):
+        return dialect.__class__.__name__
+    return None

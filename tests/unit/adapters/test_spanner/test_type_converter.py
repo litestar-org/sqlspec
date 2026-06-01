@@ -28,3 +28,12 @@ def test_disabled_uuid_conversion() -> None:
     result = converter.convert(uuid_str)
     assert isinstance(result, str)
     assert result == uuid_str
+
+
+def test_spanner_output_converter_is_final() -> None:
+    assert getattr(SpannerOutputConverter, "__final__", False) is True
+
+
+def test_spanner_output_converter_instantiates() -> None:
+    converter = SpannerOutputConverter()
+    assert isinstance(converter, SpannerOutputConverter)

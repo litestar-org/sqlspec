@@ -27,12 +27,12 @@ def test_base_store_string_type_default() -> None:
     """Base store _string_type returns VARCHAR(N) format."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._string_type(64) == "VARCHAR(64)"
     assert store._string_type(128) == "VARCHAR(128)"
@@ -43,12 +43,12 @@ def test_base_store_integer_type_default() -> None:
     """Base store _integer_type returns INTEGER."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._integer_type() == "INTEGER"
 
@@ -57,12 +57,12 @@ def test_base_store_timestamp_default() -> None:
     """Base store _timestamp_default returns CURRENT_TIMESTAMP."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._timestamp_default() == "CURRENT_TIMESTAMP"
 
@@ -71,12 +71,12 @@ def test_base_store_primary_key_syntax_default() -> None:
     """Base store _primary_key_syntax returns empty string (column-level PK)."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._primary_key_syntax() == ""
 
@@ -85,12 +85,12 @@ def test_base_store_table_clause_default() -> None:
     """Base store _table_clause returns empty string."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._table_clause() == ""
 
@@ -473,12 +473,12 @@ def test_ddl_contains_all_required_columns() -> None:
     """DDL includes all required event queue columns."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
     ddl = store._build_create_table_sql()
 
     required_columns = [
@@ -502,12 +502,12 @@ def test_ddl_default_values() -> None:
     """DDL includes default values for status, attempts, available_at, created_at."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
     ddl = store._build_create_table_sql()
 
     assert "DEFAULT 'pending'" in ddl
@@ -519,12 +519,12 @@ def test_ddl_nullable_columns() -> None:
     """DDL correctly marks optional columns as nullable (no NOT NULL)."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
     ddl = store._build_create_table_sql()
 
     assert "metadata_json JSON," in ddl
@@ -536,12 +536,12 @@ def test_ddl_not_null_columns() -> None:
     """DDL correctly marks required columns as NOT NULL."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "JSON", "JSON", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
     ddl = store._build_create_table_sql()
 
     assert "channel VARCHAR(128) NOT NULL" in ddl
@@ -575,12 +575,12 @@ def test_wrap_create_statement_unknown_object_type() -> None:
     """_wrap_create_statement returns statement unchanged for unknown object types."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     original = "CREATE TRIGGER test_trigger ON test_table"
     result = store._wrap_create_statement(original, "trigger")
@@ -592,12 +592,12 @@ def test_wrap_create_statement_table() -> None:
     """_wrap_create_statement adds IF NOT EXISTS for table."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     result = store._wrap_create_statement("CREATE TABLE test (id INT)", "table")
 
@@ -608,12 +608,12 @@ def test_wrap_create_statement_index() -> None:
     """_wrap_create_statement adds IF NOT EXISTS for index."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     result = store._wrap_create_statement("CREATE INDEX test_idx ON test(id)", "index")
 
@@ -624,12 +624,12 @@ def test_wrap_drop_statement() -> None:
     """_wrap_drop_statement adds IF EXISTS for DROP TABLE."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     result = store._wrap_drop_statement("DROP TABLE test")
 
@@ -640,12 +640,12 @@ def test_index_name_generation() -> None:
     """_index_name generates correct index name from table name."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._index_name() == "idx_sqlspec_event_queue_channel_status"
 
@@ -654,14 +654,14 @@ def test_index_name_with_schema_qualified_table() -> None:
     """_index_name replaces dots with underscores for schema-qualified tables."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(
         connection_config={"database": ":memory:"}, extension_config={"events": {"queue_table": "myschema.events"}}
     )
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store._index_name() == "idx_myschema_events_channel_status"
 
@@ -670,12 +670,12 @@ def test_build_index_sql() -> None:
     """_build_index_sql generates correct CREATE INDEX statement."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    store = TestStore(config)
+    store = FixtureStore(config)
     index_sql = store._build_index_sql()
 
     assert index_sql is not None
@@ -687,7 +687,7 @@ def test_settings_property() -> None:
     """settings property returns extension settings dict."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    class TestStore(BaseEventQueueStoreBase):
+    class FixtureStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
@@ -695,7 +695,7 @@ def test_settings_property() -> None:
         connection_config={"database": ":memory:"},
         extension_config={"events": {"queue_table": "custom", "custom_key": "custom_value"}},
     )
-    store = TestStore(config)
+    store = FixtureStore(config)
 
     assert store.settings["queue_table"] == "custom"
     assert store.settings["custom_key"] == "custom_value"

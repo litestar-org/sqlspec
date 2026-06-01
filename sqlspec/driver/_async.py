@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL, ProcessedState, StackResult, Statement, create_arrow_result
+from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
@@ -26,6 +26,7 @@ from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import stringify_storage_target
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
+from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -37,24 +38,14 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, StatementConfig, StatementFilter
-    from sqlspec.typing import (
-        ArrowReturnFormat,
-        ArrowTable,
-        ColumnMetadata,
-        ForeignKeyMetadata,
-        IndexMetadata,
-        SchemaT,
-        StatementParameters,
-        TableMetadata,
-        VersionInfo,
-    )
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+    from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
 
 
 __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncPoolConnectionContext", "AsyncPoolSessionFactory")
 
 
-EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
 
@@ -223,7 +214,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         try:
             runtime = self._observability
             compiled_sql, execution_parameters = statement.compile()
-            _ = cast("ProcessedState", statement.get_processed_state())
             result: SQLResult | None = None
 
             # FAST PATH: Skip all instrumentation if runtime is absent or idle.
@@ -256,7 +246,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 "is_script": statement.is_script,
             }
             runtime.emit_query_start(**query_context)
-            span = runtime.start_query_span(compiled_sql, operation, type(self).__name__)
+            sql_hash = None
+            if runtime.span_manager.is_enabled or (
+                runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
+            ):
+                sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
+            span = runtime.start_query_span(compiled_sql, operation, type(self).__name__, sql_hash=sql_hash)
             started = perf_counter()
 
             exc_handler = self.handle_database_exceptions()
@@ -309,6 +304,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 duration_s=duration,
                 storage_backend=(result.metadata or {}).get("storage_backend"),
                 started_at=started,
+                precomputed_sql_hash=sql_hash,
             )
             return result
         finally:
@@ -365,7 +361,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         successful_count: int = 0
 
         for stmt in statements:
-            single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
+            single_stmt = self._build_direct_sub_statement(stmt, prepared_parameters)
             await self.dispatch_execute(cursor, single_stmt)
             successful_count += 1
 

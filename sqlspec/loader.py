@@ -56,41 +56,6 @@ DIALECT_ALIASES: Final = {
 MIN_QUERY_PARTS: Final = 3
 
 
-def _normalize_query_name(name: str) -> str:
-    """Normalize query name to be a valid Python identifier.
-
-    Convert hyphens to underscores, preserve dots for namespacing,
-    and remove invalid characters.
-
-    Args:
-        name: Raw query name from SQL file.
-
-    Returns:
-        Normalized query name suitable as Python identifier.
-    """
-    parts = name.split(".")
-    normalized_parts = []
-
-    for part in parts:
-        normalized_part = slugify(part, separator="_")
-        normalized_parts.append(normalized_part)
-
-    return ".".join(normalized_parts)
-
-
-def _normalize_dialect(dialect: str) -> str:
-    """Normalize dialect name with aliases.
-
-    Args:
-        dialect: Raw dialect name from SQL file.
-
-    Returns:
-        Normalized dialect name.
-    """
-    normalized = dialect.lower().strip()
-    return DIALECT_ALIASES.get(normalized, normalized)
-
-
 class NamedStatement:
     """Represents a parsed SQL statement with metadata.
 
@@ -714,9 +679,6 @@ class SQLFileLoader:
 
         Returns:
             Raw SQL text.
-
-        Raises:
-            SQLStatementNotFoundError: If query not found.
         """
         safe_name = _normalize_query_name(name)
         if safe_name not in self._queries:
@@ -732,9 +694,6 @@ class SQLFileLoader:
 
         Returns:
             SQL object ready for execution.
-
-        Raises:
-            SQLStatementNotFoundError: If statement name not found.
         """
         safe_name = _normalize_query_name(name)
 
@@ -755,3 +714,38 @@ class SQLFileLoader:
             raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
         self._compiled_statements[safe_name] = sql
         return sql
+
+
+def _normalize_query_name(name: str) -> str:
+    """Normalize query name to be a valid Python identifier.
+
+    Convert hyphens to underscores, preserve dots for namespacing,
+    and remove invalid characters.
+
+    Args:
+        name: Raw query name from SQL file.
+
+    Returns:
+        Normalized query name suitable as Python identifier.
+    """
+    parts = name.split(".")
+    normalized_parts = []
+
+    for part in parts:
+        normalized_part = slugify(part, separator="_")
+        normalized_parts.append(normalized_part)
+
+    return ".".join(normalized_parts)
+
+
+def _normalize_dialect(dialect: str) -> str:
+    """Normalize dialect name with aliases.
+
+    Args:
+        dialect: Raw dialect name from SQL file.
+
+    Returns:
+        Normalized dialect name.
+    """
+    normalized = dialect.lower().strip()
+    return DIALECT_ALIASES.get(normalized, normalized)

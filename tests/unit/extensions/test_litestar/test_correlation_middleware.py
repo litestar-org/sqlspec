@@ -64,7 +64,7 @@ async def test_litestar_correlation_middleware_sanitizes_header_value() -> None:
 
     assert seen["cid"] == "x" * 128
     assert seen["scope_cid"] == "x" * 128
-    assert get_sqlspec_scope_state(scope, CORRELATION_STATE_KEY) is None
+    assert get_sqlspec_scope_state(cast("Any", scope), CORRELATION_STATE_KEY) is None
 
 
 async def test_litestar_correlation_middleware_uses_additional_header() -> None:

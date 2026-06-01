@@ -7,7 +7,7 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 if TYPE_CHECKING:
     import pyarrow as pa
 
-__all__ = ("ArrowOdbcTypeConverter", "odbc_type_to_arrow")
+__all__ = ("odbc_type_to_arrow",)
 
 _ODBC_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, Any]]]] = {
     "bit": ("bool_", (), {}),
@@ -50,20 +50,6 @@ _ODBC_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, An
 }
 
 _ARROW_TYPE_CACHE: "dict[tuple[str, tuple[Any, ...], tuple[tuple[str, Any], ...]], Any]" = {}
-
-
-class ArrowOdbcTypeConverter:
-    """Small bind/read converter surface for arrow-odbc."""
-
-    __slots__ = ()
-
-    def coerce_bind_value(self, value: "Any") -> "Any":
-        """Coerce values before arrow-odbc parameter binding."""
-        return None if value is None else str(value)
-
-    def coerce_read_value(self, value: "Any") -> "Any":
-        """Return arrow-odbc result values unchanged."""
-        return value
 
 
 def odbc_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: int | None = None) -> "pa.DataType":

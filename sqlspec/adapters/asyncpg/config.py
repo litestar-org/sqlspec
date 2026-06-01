@@ -300,7 +300,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         # Extract user connection hook before storing driver_features
-        features_dict = dict(driver_features) if driver_features else {}
+        features_dict = dict(driver_features)
         self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -465,20 +465,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
-
-    def _update_dialect_for_extensions(self) -> None:
-        """Update statement_config dialect based on detected extensions.
-
-        Priority: paradedb > pgvector > postgres (default).
-        """
-        current_dialect = getattr(self.statement_config, "dialect", "postgres")
-        if current_dialect != "postgres":
-            return
-
-        if self._paradedb_available:
-            self.statement_config = self.statement_config.replace(dialect="paradedb")
-        elif self._pgvector_available:
-            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool and cleanup connectors."""

@@ -80,6 +80,28 @@ _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
 
 
+def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
+    """Parse a single ORDER BY item string into a SQLGlot expression."""
+    normalized = order_item.strip()
+    if not normalized:
+        return exp.column(order_item)
+
+    if enable_parsing:
+        try:
+            parsed = sqlglot.parse_one(normalized, dialect=dialect, into=exp.Ordered)
+        except ParseError:
+            parsed = None
+        if parsed is not None:
+            return parsed
+
+    parts = normalized.rsplit(None, 1)
+    if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
+        base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
+        return base_expr.desc() if parts[1].lower() == "desc" else base_expr.asc()
+
+    return exp.column(normalized)
+
+
 SQL_CONFIG_SLOTS: Final = (
     "dialect",
     "enable_analysis",
@@ -160,6 +182,7 @@ SQL_SLOTS: Final = (
     "_processed_state",
     "_raw_expression",
     "_raw_sql",
+    "_rebind_processor",
     "_sql_param_counters",
     "_statement_config",
 )
@@ -277,6 +300,7 @@ class SQL:
         stmt._is_cache_direct = True
         stmt._is_many = False
         stmt._is_script = False
+        stmt._rebind_processor = None
         return stmt
 
     def __init__(
@@ -310,6 +334,7 @@ class SQL:
         self._sql_param_counters = {}
         self._is_script = False
         self._raw_expression: exp.Expr | None = None
+        self._rebind_processor: ParameterProcessor | None = None
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)
@@ -376,6 +401,7 @@ class SQL:
         self._raw_sql = ""
         self._statement_config = get_default_config()
         self._dialect = self._normalize_dialect(self._statement_config.dialect)
+        self._rebind_processor = None
 
     def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
@@ -509,11 +535,6 @@ class SQL:
             self._positional_parameters.extend(actual_params)
 
     @property
-    def sql(self) -> str:
-        """Get the raw SQL string."""
-        return self._get_raw_sql()
-
-    @property
     def raw_sql(self) -> str:
         """Get raw SQL string (public API).
 
@@ -558,7 +579,10 @@ class SQL:
 
     @property
     def expression(self) -> "exp.Expr | None":
-        """SQLGlot expression."""
+        """SQLGlot expression.
+
+        This intentionally mirrors statement_expression for compatibility.
+        """
         if self._processed_state is not Empty:
             return self._processed_state.parsed_expression
         return self._raw_expression
@@ -598,6 +622,8 @@ class SQL:
     @property
     def statement_expression(self) -> "exp.Expr | None":
         """Get parsed statement expression (public API).
+
+        This intentionally mirrors expression for compatibility.
 
         Returns:
             Parsed SQLGlot expression or None if not parsed
@@ -744,12 +770,14 @@ class SQL:
 
     def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
         params = self._named_parameters or self._positional_parameters
-        processor = ParameterProcessor(
-            converter=self._statement_config.parameter_converter,
-            validator=self._statement_config.parameter_validator,
-            cache_max_size=0,
-            validator_cache_max_size=0,
-        )
+        if self._rebind_processor is None:
+            self._rebind_processor = ParameterProcessor(
+                converter=self._statement_config.parameter_converter,
+                validator=self._statement_config.parameter_validator,
+                cache_max_size=0,
+                validator_cache_max_size=0,
+            )
+        processor = self._rebind_processor
         rebound_params = processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
             params,
             state.parameter_profile,
@@ -980,6 +1008,14 @@ class SQL:
         except ParseError:
             return exp.Select().from_(f"({self._raw_sql})")
 
+    def _get_expression_for_filter_modification(self) -> exp.Expr:
+        """Return a mutable expression copy for statement filters.
+
+        Filter implementations may modify the returned expression in place. The
+        expression is detached from cached processed state and raw expressions.
+        """
+        return self._get_or_parse_expression()
+
     def _create_modified_copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
         """Create a new SQL instance with a modified expression.
 
@@ -1028,16 +1064,7 @@ class SQL:
         Returns:
             New SQL instance with the WHERE condition applied
         """
-        if self.statement_expression is not None:
-            current_expr = self.statement_expression.copy()
-        elif not self._statement_config.enable_parsing:
-            current_expr = exp.Select().from_(f"({self._raw_sql})")
-        else:
-            try:
-                current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
-            except ParseError:
-                subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
-                current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
+        current_expr = self._get_or_parse_expression()
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
@@ -1056,15 +1083,7 @@ class SQL:
         else:
             new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
 
-        original_params = self._original_parameters
-        config = self._statement_config
-        is_many = self._is_many
-        new_sql = SQL(new_expr, *original_params, statement_config=config, is_many=is_many)
-
-        new_sql._named_parameters.update(self._named_parameters)
-        new_sql._positional_parameters = self._positional_parameters.copy()
-        new_sql._filters = self._filters.copy()
-        return new_sql
+        return self._create_modified_copy_with_expression(new_expr)
 
     # ==========================================================================
     # Parameterized WHERE Methods (using shared utilities)
@@ -1346,40 +1365,14 @@ class SQL:
         if not items:
             return self
 
-        if self.statement_expression is not None:
-            current_expr = self.statement_expression.copy()
-        elif not self._statement_config.enable_parsing:
-            current_expr = exp.Select().from_(f"({self._raw_sql})")
-        else:
-            try:
-                current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
-            except ParseError:
-                current_expr = exp.Select().from_(f"({self._raw_sql})")
-
-        def parse_order_item(order_item: str) -> exp.Expr:
-            normalized = order_item.strip()
-            if not normalized:
-                return exp.column(order_item)
-
-            if self._statement_config.enable_parsing:
-                try:
-                    parsed = sqlglot.parse_one(normalized, dialect=self._dialect, into=exp.Ordered)
-                except ParseError:
-                    parsed = None
-                if parsed is not None:
-                    return parsed
-
-            parts = normalized.rsplit(None, 1)
-            if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
-                base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
-                return base_expr.desc() if parts[1].lower() == "desc" else base_expr.asc()
-
-            return exp.column(normalized)
+        current_expr = self._get_or_parse_expression()
 
         new_expr: exp.Expr = current_expr
+        dialect = self._dialect
+        enable_parsing = self._statement_config.enable_parsing
         for item in items:
             if isinstance(item, str):
-                order_expr = parse_order_item(item)
+                order_expr = _parse_order_item(item, dialect, enable_parsing)
                 if desc and not isinstance(order_expr, exp.Ordered):
                     order_expr = order_expr.desc()
             else:
@@ -1389,16 +1382,7 @@ class SQL:
             else:
                 new_expr = exp.Select().from_(new_expr).order_by(order_expr)
 
-        original_params = self._original_parameters
-        config = self._statement_config
-        is_many = self._is_many
-        stmt_expr: exp.Expr = new_expr if isinstance(new_expr, exp.Expr) else exp.Select().from_(new_expr)
-        new_sql = SQL(stmt_expr, *original_params, statement_config=config, is_many=is_many)
-
-        new_sql._named_parameters.update(self._named_parameters)
-        new_sql._positional_parameters = self._positional_parameters.copy()
-        new_sql._filters = self._filters.copy()
-        return new_sql
+        return self._create_modified_copy_with_expression(new_expr)
 
     # ==========================================================================
     # Pagination Methods
@@ -1412,9 +1396,6 @@ class SQL:
 
         Returns:
             New SQL instance with LIMIT applied
-
-        Raises:
-            SQLSpecError: If statement is not a SELECT
         """
         expression = self._get_or_parse_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_limit(e, value))
@@ -1428,9 +1409,6 @@ class SQL:
 
         Returns:
             New SQL instance with OFFSET applied
-
-        Raises:
-            SQLSpecError: If statement is not a SELECT
         """
         expression = self._get_or_parse_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_offset(e, value))
@@ -1580,6 +1558,13 @@ class SQL:
             and (builder_dialect == self._dialect)
         ):
             expression = self._raw_expression.copy()
+        elif (
+            self._processed_state is not Empty
+            and self._processed_state.parsed_expression is not None
+            and converted_sql == raw_sql_for_builder
+            and builder_dialect == self._dialect
+        ):
+            expression = self._processed_state.parsed_expression.copy()
         else:
             try:
                 expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)

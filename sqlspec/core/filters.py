@@ -24,12 +24,12 @@ from collections import abc
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias
 
-import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
 from sqlspec.core._pagination import OffsetPagination
+from sqlspec.core.query_modifiers import parse_column_for_condition
 from sqlspec.utils.type_guards import has_field_name
 
 if TYPE_CHECKING:
@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 __all__ = (
     "AnyCollectionFilter",
     "BeforeAfterFilter",
+    "BooleanFilter",
+    "ChoicesFilter",
     "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
@@ -53,12 +55,10 @@ __all__ = (
     "OffsetPagination",
     "OnBeforeAfterFilter",
     "OrderByFilter",
-    "PaginationFilter",
     "SearchFilter",
     "StatementFilter",
     "apply_filter",
     "canonicalize_filters",
-    "create_filters",
     "find_filter",
 )
 
@@ -121,7 +121,7 @@ class StatementFilter(ABC):
 
         return resolved_names
 
-    def _get_column_expression(self, field_name: "str | exp.Expression") -> exp.Column | exp.Expression:
+    def _get_column_expression(self, field_name: "str | exp.Expression") -> exp.Expr:
         """Parse field name into a qualified column if dotted, else bare column.
 
         Args:
@@ -130,15 +130,7 @@ class StatementFilter(ABC):
         Returns:
             exp.Column | exp.Expression: SQLGlot column expression or provided expression
         """
-        if isinstance(field_name, exp.Expression):
-            return field_name
-
-        if "." in field_name:
-            # Use maybe_parse for dotted names to get qualified columns
-            parsed: exp.Expression | None = exp.maybe_parse(field_name)
-            if isinstance(parsed, exp.Column):
-                return parsed
-        return exp.column(field_name)
+        return parse_column_for_condition(field_name)
 
     def _sanitize_param_name(self, name: "str | exp.Expression") -> str:
         """Sanitize field name for use as a parameter name by replacing dots with underscores.
@@ -419,7 +411,7 @@ class InAnyFilter(StatementFilter, ABC, Generic[T]):
                 named_parameters[param_names[i]] = value
         return [], named_parameters
 
-    def _build_collection_condition(self, col_expr: exp.Expression, placeholders: "list[exp.Expr]") -> exp.Expression:
+    def _build_collection_condition(self, col_expr: exp.Expr, placeholders: "list[exp.Expr]") -> exp.Expr:
         condition_type = self._condition_type
         if condition_type == "in":
             return exp.In(this=col_expr, expressions=placeholders)
@@ -471,6 +463,17 @@ class InCollectionFilter(InAnyFilter[T]):
     _parameter_suffix: ClassVar[str] = "in"
 
 
+class ChoicesFilter(InCollectionFilter[T]):
+    """Filter for field matching a defined set of choice values.
+
+    Constructs WHERE ... IN (...) clauses.
+    """
+
+    __slots__ = ()
+    _cache_key_name: ClassVar[str] = "ChoicesFilter"
+    _parameter_suffix: ClassVar[str] = "choices"
+
+
 class NotInCollectionFilter(InAnyFilter[T]):
     """Filter for NOT IN clause queries.
 
@@ -480,7 +483,7 @@ class NotInCollectionFilter(InAnyFilter[T]):
     __slots__ = ()
     _cache_key_name: ClassVar[str] = "NotInCollectionFilter"
     _condition_type: ClassVar[Literal["in", "not_in", "any", "not_any"]] = "not_in"
-    _parameter_suffix: ClassVar[str] = "not-in".replace("-", "")
+    _parameter_suffix: ClassVar[str] = "notin"
 
 
 class AnyCollectionFilter(InAnyFilter[T]):
@@ -508,17 +511,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     _parameter_suffix: ClassVar[str] = "not_any"
 
 
-class PaginationFilter(StatementFilter, ABC):
-    """Base class for pagination-related filters."""
-
-    __slots__ = ()
-
-    @abstractmethod
-    def append_to_statement(self, statement: "SQL") -> "SQL":
-        raise NotImplementedError
-
-
-class LimitOffsetFilter(PaginationFilter):
+class LimitOffsetFilter(StatementFilter):
     """Filter for LIMIT and OFFSET clauses.
 
     Adds pagination support through LIMIT/OFFSET SQL clauses.
@@ -554,19 +547,7 @@ class LimitOffsetFilter(PaginationFilter):
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
-        # Prefer cached expression to avoid re-parsing
-        current_statement: exp.Expr
-        if statement.statement_expression is not None:
-            current_statement = statement.statement_expression.copy()
-        elif statement.raw_expression is not None:
-            current_statement = statement.raw_expression.copy()
-        elif not statement.statement_config.enable_parsing:
-            current_statement = exp.Select().from_(f"({statement.raw_sql})")
-        else:
-            try:
-                current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
-            except Exception:
-                current_statement = exp.Select().from_(f"({statement.raw_sql})")
+        current_statement = statement._get_expression_for_filter_modification()
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
@@ -592,8 +573,13 @@ class OrderByFilter(StatementFilter):
     """
 
     __slots__ = ("_field_name", "_sort_order")
+    _field_name: str | exp.Expression
+    _sort_order: Literal["asc", "desc"]
 
     def __init__(self, field_name: "str | exp.Expression", sort_order: Literal["asc", "desc"] = "asc") -> None:
+        if sort_order not in ("asc", "desc"):
+            msg = "sort_order must be 'asc' or 'desc'"
+            raise ValueError(msg)
         self._field_name = field_name
         self._sort_order = sort_order
 
@@ -603,33 +589,17 @@ class OrderByFilter(StatementFilter):
 
     @property
     def sort_order(self) -> Literal["asc", "desc"]:
-        return self._sort_order  # pyright: ignore
+        return self._sort_order
 
     def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
         """Extract filter parameters."""
         return [], {}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        converted_sort_order = self.sort_order.lower()
-        if converted_sort_order not in {"asc", "desc"}:
-            converted_sort_order = "asc"
-
         col_expr = self._get_column_expression(self.field_name)
-        order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
+        order_expr = col_expr.desc() if self._sort_order == "desc" else col_expr.asc()
 
-        # Prefer cached expression to avoid re-parsing
-        current_statement: exp.Expr
-        if statement.statement_expression is not None:
-            current_statement = statement.statement_expression.copy()
-        elif statement.raw_expression is not None:
-            current_statement = statement.raw_expression.copy()
-        elif not statement.statement_config.enable_parsing:
-            current_statement = exp.Select().from_(f"({statement.raw_sql})")
-        else:
-            try:
-                current_statement = sqlglot.parse_one(statement.raw_sql, dialect=statement.dialect)
-            except Exception:
-                current_statement = exp.Select().from_(f"({statement.raw_sql})")
+        current_statement = statement._get_expression_for_filter_modification()
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.order_by(order_expr)
@@ -673,7 +643,7 @@ class SearchFilter(StatementFilter):
         return self._value
 
     @property
-    def ignore_case(self) -> bool | None:
+    def ignore_case(self) -> bool:
         return self._ignore_case
 
     @property
@@ -800,7 +770,7 @@ class NullFilter(StatementFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply IS NULL filter to SQL expression."""
         col_expr = self._get_column_expression(self.field_name)
-        is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
+        is_null_condition = exp.Is(this=col_expr, expression=exp.null())
         return statement.where(is_null_condition)
 
     def get_cache_key(self) -> "tuple[Any, ...]":
@@ -836,7 +806,7 @@ class NotNullFilter(StatementFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply IS NOT NULL filter to SQL expression."""
         col_expr = self._get_column_expression(self.field_name)
-        is_null_condition = exp.Is(this=col_expr, expression=exp.Null())
+        is_null_condition = exp.Is(this=col_expr, expression=exp.null())
         is_not_null_condition = exp.Not(this=is_null_condition)
         return statement.where(is_not_null_condition)
 
@@ -848,11 +818,61 @@ class NotNullFilter(StatementFilter):
         return (self._field_name,)
 
 
+class BooleanFilter(StatementFilter):
+    """Filter for boolean comparison queries.
+
+    Constructs WHERE field_name = :param clauses.
+    """
+
+    __slots__ = ("_field_name", "_value")
+
+    def __init__(self, field_name: "str | exp.Expression", value: bool) -> None:
+        self._field_name = field_name
+        self._value = value
+
+    @property
+    def field_name(self) -> "str | exp.Expression":
+        return self._field_name
+
+    @property
+    def value(self) -> bool:
+        return self._value
+
+    def get_param_name(self) -> str:
+        """Get parameter name without storing it."""
+        sanitized_field = self._sanitize_param_name(self.field_name)
+        return f"{sanitized_field}_boolean"
+
+    def extract_parameters(self) -> "tuple[list[Any], dict[str, Any]]":
+        """Extract filter parameters."""
+        return [], {self.get_param_name(): self.value}
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Apply boolean filter to SQL expression."""
+        param_name = self.get_param_name()
+        resolved_names = self._resolve_parameter_conflicts(statement, [param_name])
+        param_name = resolved_names[0]
+
+        col_expr = self._get_column_expression(self.field_name)
+        condition = exp.EQ(this=col_expr, expression=exp.Placeholder(this=param_name))
+        result = statement.where(condition)
+        return result.add_named_parameter(param_name, self.value)
+
+    def get_cache_key(self) -> "tuple[Any, ...]":
+        """Return cache key for this filter configuration."""
+        return ("BooleanFilter", self.field_name, self.value)
+
+    def _reconstruction_args(self) -> "tuple[Any, ...]":
+        return (self._field_name, self._value)
+
+
 class NotInSearchFilter(SearchFilter):
     """Filter for negated text search queries.
 
     Constructs WHERE field_name NOT LIKE '%value%' clauses.
     """
+
+    __slots__ = ()
 
     def get_param_name(self) -> str | None:
         """Get parameter name without storing it."""
@@ -972,22 +992,9 @@ FilterTypes: TypeAlias = (
     | NotAnyCollectionFilter[Any]
     | NullFilter
     | NotNullFilter
+    | BooleanFilter
+    | ChoicesFilter[Any]
 )
-
-
-def create_filters(filters: "list[StatementFilter]") -> "tuple[StatementFilter, ...]":
-    """Convert mutable filters to immutable tuple.
-
-    Since StatementFilter classes are now immutable (with read-only properties),
-    we just need to convert to a tuple for consistent sharing.
-
-    Args:
-        filters: List of StatementFilter objects (already immutable)
-
-    Returns:
-        Tuple of StatementFilter objects
-    """
-    return tuple(filters)
 
 
 def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str, str]":

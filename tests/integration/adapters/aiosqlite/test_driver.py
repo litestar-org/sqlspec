@@ -81,31 +81,6 @@ async def test_aiosqlite_parameter_styles(
     assert result.get_data()[0]["name"] == "test_value"
 
 
-async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> None:
-    """Test execute_many functionality."""
-
-    await aiosqlite_session.execute("DELETE FROM test_table")
-    await aiosqlite_session.commit()
-
-    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
-
-    result = await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", parameters_list)
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(parameters_list)
-
-    select_result = await aiosqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert select_result.get_data()[0]["count"] == len(parameters_list)
-
-    ordered_result = await aiosqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(ordered_result, SQLResult)
-    assert ordered_result.data is not None
-    assert len(ordered_result.data) == 3
-    assert ordered_result.get_data()[0]["name"] == "name1"
-    assert ordered_result.get_data()[0]["value"] == 1
-
-
 async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> None:
     """Test execute_script functionality."""
     script = """

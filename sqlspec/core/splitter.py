@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from enum import Enum
 from re import Pattern
-from typing import Any, Final, TypeAlias, cast
+from typing import Any, Final, TypeAlias, cast, final
 
 from mypy_extensions import mypyc_attr
 
@@ -91,11 +91,6 @@ def _get_librt_string_writer() -> "type[Any] | None":
         _STRING_WRITER_TYPE = StringWriter
     _STRING_WRITER_RESOLVED = True
     return _STRING_WRITER_TYPE
-
-
-def _join_string_fragments(fragments: "list[str]") -> str:
-    """Join fragments with the standard list-join path."""
-    return "".join(fragments)
 
 
 class TokenType(Enum):
@@ -498,6 +493,7 @@ class PostgreSQLDialectConfig(DialectConfig):
             return None
 
 
+@final
 class GenericDialectConfig(DialectConfig):
     """Generic SQL dialect configuration for standard SQL."""
 
@@ -526,6 +522,7 @@ class GenericDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
+@final
 class MySQLDialectConfig(DialectConfig):
     """Configuration for MySQL dialect."""
 
@@ -560,6 +557,7 @@ class MySQLDialectConfig(DialectConfig):
         return self._special_terminators
 
 
+@final
 class SQLiteDialectConfig(DialectConfig):
     """Configuration for SQLite dialect."""
 
@@ -588,6 +586,7 @@ class SQLiteDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
+@final
 class DuckDBDialectConfig(DialectConfig):
     """Configuration for DuckDB dialect."""
 
@@ -616,6 +615,7 @@ class DuckDBDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
+@final
 class BigQueryDialectConfig(DialectConfig):
     """Configuration for BigQuery dialect."""
 
@@ -642,6 +642,23 @@ class BigQueryDialectConfig(DialectConfig):
         if self._statement_terminators is None:
             self._statement_terminators = {";"}
         return self._statement_terminators
+
+
+_DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
+    "generic": GenericDialectConfig,
+    "oracle": OracleDialectConfig,
+    "tsql": TSQLDialectConfig,
+    "mssql": TSQLDialectConfig,
+    "sqlserver": TSQLDialectConfig,
+    "postgresql": PostgreSQLDialectConfig,
+    "postgres": PostgreSQLDialectConfig,
+    "paradedb": PostgreSQLDialectConfig,
+    "pgvector": PostgreSQLDialectConfig,
+    "mysql": MySQLDialectConfig,
+    "sqlite": SQLiteDialectConfig,
+    "duckdb": DuckDBDialectConfig,
+    "bigquery": BigQueryDialectConfig,
+}
 
 
 _pattern_cache: LRUCache | None = None
@@ -852,11 +869,11 @@ class StatementSplitter:
             else:
                 current_statement_writer.write(token.value)
 
+            # Keep token-list mutation centralized for whitespace/comment and executable paths.
+            current_statement_tokens.append(token)
             if token.type in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
-                current_statement_tokens.append(token)
                 continue
 
-            current_statement_tokens.append(token)
             token_upper = token.value.upper()
 
             if token.type == TokenType.KEYWORD:
@@ -887,9 +904,9 @@ class StatementSplitter:
 
             if is_terminator:
                 if token.type == TokenType.KEYWORD and token_upper in self._dialect.batch_separators:
-                    statement = _join_string_fragments([item.value for item in current_statement_tokens[:-1]]).strip()
+                    statement = "".join(item.value for item in current_statement_tokens[:-1]).strip()
                 elif current_statement_writer is None:
-                    statement = _join_string_fragments(current_statement_chars).strip()
+                    statement = "".join(current_statement_chars).strip()
                 else:
                     statement = cast("str", current_statement_writer.getvalue()).strip()
 
@@ -903,7 +920,8 @@ class StatementSplitter:
                 ):
                     statement = statement[: -len(token.value)].rstrip()
 
-                if statement and self._contains_executable_content(statement):
+                content_tokens = current_statement_tokens[:-1]
+                if statement and self._contains_executable_content(content_tokens):
                     statements.append(statement)
                 current_statement_tokens = []
                 current_statement_writer = string_writer_type() if string_writer_type is not None else None
@@ -912,10 +930,10 @@ class StatementSplitter:
 
         if current_statement_fragment_count:
             if current_statement_writer is None:
-                statement = _join_string_fragments(current_statement_chars).strip()
+                statement = "".join(current_statement_chars).strip()
             else:
                 statement = cast("str", current_statement_writer.getvalue()).strip()
-            if statement and self._contains_executable_content(statement):
+            if statement and self._contains_executable_content(current_statement_tokens):
                 statements.append(statement)
 
         return statements
@@ -935,17 +953,15 @@ class StatementSplitter:
                 return token.value.upper() in {"BEGIN", "DECLARE"}
         return False
 
-    def _contains_executable_content(self, statement: str) -> bool:
+    def _contains_executable_content(self, tokens: "list[Token]") -> bool:
         """Check if a statement contains executable content.
 
         Args:
-            statement: The SQL statement to check
+            tokens: Pre-tokenized SQL statement tokens to check
 
         Returns:
             True if statement contains non-whitespace/non-comment content
         """
-        tokens = list(self._tokenize(statement))
-
         for token in tokens:
             if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
                 return True
@@ -967,26 +983,11 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
     if dialect is None:
         dialect = "generic"
 
-    dialect_configs = {
-        "generic": GenericDialectConfig(),
-        "oracle": OracleDialectConfig(),
-        "tsql": TSQLDialectConfig(),
-        "mssql": TSQLDialectConfig(),
-        "sqlserver": TSQLDialectConfig(),
-        "postgresql": PostgreSQLDialectConfig(),
-        "postgres": PostgreSQLDialectConfig(),
-        "paradedb": PostgreSQLDialectConfig(),
-        "pgvector": PostgreSQLDialectConfig(),
-        "mysql": MySQLDialectConfig(),
-        "sqlite": SQLiteDialectConfig(),
-        "duckdb": DuckDBDialectConfig(),
-        "bigquery": BigQueryDialectConfig(),
-    }
-
-    config = dialect_configs.get(dialect.lower())
-    if not config:
+    config_class = _DIALECT_CLASS_MAP.get(dialect.lower())
+    if config_class is None:
         _warn_unknown_dialect_once(dialect)
-        config = GenericDialectConfig()
+        config_class = GenericDialectConfig
+    config = config_class()
 
     splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_terminator)
     return splitter.split(script)
@@ -1015,6 +1016,6 @@ def get_splitter_cache_stats() -> "dict[str, Any]":
     result_cache = _get_result_cache()
 
     return {
-        "pattern_cache": {"size": pattern_cache.size(), "stats": pattern_cache.get_stats()},
-        "result_cache": {"size": result_cache.size(), "stats": result_cache.get_stats()},
+        "pattern_cache": {"size": len(pattern_cache), "stats": pattern_cache.get_stats()},
+        "result_cache": {"size": len(result_cache), "stats": result_cache.get_stats()},
     }

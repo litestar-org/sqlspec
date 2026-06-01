@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 
 if TYPE_CHECKING:
-    from sqlspec.typing import TableMetadata, VersionInfo
+    from sqlspec.data_dictionary import TableMetadata, VersionInfo
 
 __all__ = (
     "extract_oracle_version_value",

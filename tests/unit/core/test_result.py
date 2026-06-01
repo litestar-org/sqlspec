@@ -1,5 +1,6 @@
 """Tests for the SQLResult iteration functionality."""
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, cast
 from unittest.mock import patch
@@ -8,10 +9,24 @@ import pytest
 
 import sqlspec.core.result as result_package
 import sqlspec.core.result._base as result_base
-from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, create_sql_result
+from sqlspec.core import SQL, ArrowResult, OperationType, SQLResult, StackResult, create_sql_result
 from sqlspec.typing import PYARROW_INSTALLED
 
 _RESULT_BASE_COMPILED = (result_base.__file__ or "").endswith((".so", ".pyd"))
+
+
+class UpperRaises(str):
+    """String sentinel that exposes redundant upper() calls in result helpers."""
+
+    __slots__ = ()
+
+    def upper(self) -> str:
+        msg = "operation_type is already normalized"
+        raise AssertionError(msg)
+
+
+def _operation_type(value: str) -> OperationType:
+    return cast("OperationType", UpperRaises(value))
 
 
 def test_fast_dml_result_alias_is_not_exported() -> None:
@@ -21,6 +36,30 @@ def test_fast_dml_result_alias_is_not_exported() -> None:
     assert alias_name not in result_package.__all__
     assert not hasattr(result_base, alias_name)
     assert not hasattr(result_package, alias_name)
+
+
+def test_sql_result_helpers_do_not_upper_operation_type() -> None:
+    stmt = SQL("INSERT INTO users (id) VALUES (1)")
+    result = SQLResult(statement=stmt, operation_type=_operation_type("INSERT"), rows_affected=1)
+    assert result.is_success() is True
+    assert result.was_inserted() is True
+    assert result.was_updated() is False
+    assert result.was_deleted() is False
+    assert result.get_data() == []
+
+
+def test_stack_result_type_does_not_upper_sql_result_operation_type() -> None:
+    stmt = SQL("SELECT * FROM users")
+    result = SQLResult(statement=stmt, operation_type=_operation_type("SELECT"), data=[])
+    stack = StackResult(result)
+    assert stack.result_type == "SELECT"
+
+
+def test_create_sql_result_signature_has_no_kwargs() -> None:
+    """create_sql_result should expose explicit SQLResult constructor options."""
+    signature = inspect.signature(create_sql_result)
+    assert not any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+    assert "row_format" in signature.parameters
 
 
 @pytest.fixture
@@ -64,9 +103,7 @@ def test_sql_result_basic_iteration() -> None:
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
         {"id": 3, "name": "Charlie", "email": "charlie@example.com"},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=3)
-
     rows = list(result)
     assert len(rows) == 3
     assert rows[0]["name"] == "Alice"
@@ -77,11 +114,9 @@ def test_sql_result_basic_iteration() -> None:
 def test_sql_result_iteration_with_empty_data() -> None:
     """Test iteration when SQLResult has no data."""
     sql_stmt = SQL("SELECT * FROM empty_table")
-
     result = SQLResult(statement=sql_stmt, data=None, rows_affected=0)
     rows = list(result)
     assert len(rows) == 0
-
     result = SQLResult(statement=sql_stmt, data=[], rows_affected=0)
     rows = list(result)
     assert len(rows) == 0
@@ -95,12 +130,9 @@ def test_sql_result_iteration_with_list_comprehension() -> None:
         {"id": 2, "name": "Bob", "age": 30},
         {"id": 3, "name": "Charlie", "age": 35},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=3)
-
     names = [row["name"] for row in result]
     assert names == ["Alice", "Bob", "Charlie"]
-
     ages = [row["age"] for row in result]
     assert ages == [25, 30, 35]
 
@@ -113,9 +145,7 @@ def test_sql_result_iteration_with_filtering() -> None:
         {"id": 2, "name": "Bob", "age": 30, "active": False},
         {"id": 3, "name": "Charlie", "age": 35, "active": True},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=3)
-
     active_users = [row for row in result if row["active"]]
     assert len(active_users) == 2
     assert active_users[0]["name"] == "Alice"
@@ -126,9 +156,7 @@ def test_sql_result_iteration_preserves_existing_functionality() -> None:
     """Test that iteration doesn't break existing SQLResult functionality."""
     sql_stmt = SQL("SELECT * FROM users")
     test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
-
     assert len(result) == 2
     assert result[0]["name"] == "Alice"
     assert result[1]["name"] == "Bob"
@@ -137,7 +165,6 @@ def test_sql_result_iteration_preserves_existing_functionality() -> None:
     assert first is not None
     assert first["name"] == "Alice"
     assert not result.is_empty()
-
     for i, row in enumerate(result):
         assert row == result[i]
 
@@ -146,12 +173,9 @@ def test_sql_result_iteration_multiple_times() -> None:
     """Test that SQLResult can be iterated multiple times."""
     sql_stmt = SQL("SELECT * FROM users")
     test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
-
     first_iteration = list(result)
     assert len(first_iteration) == 2
-
     second_iteration = list(result)
     assert len(second_iteration) == 2
     assert first_iteration == second_iteration
@@ -161,15 +185,11 @@ def test_sql_result_iterator_protocol() -> None:
     """Test that SQLResult follows the iterator protocol correctly."""
     sql_stmt = SQL("SELECT * FROM users")
     test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=1)
-
     iterator = iter(result)
     assert hasattr(iterator, "__next__")
-
     first_item = next(iterator)
     assert first_item == {"id": 1, "name": "Alice"}
-
     with pytest.raises(StopIteration):
         next(iterator)
 
@@ -178,9 +198,7 @@ def test_create_sql_result_iteration() -> None:
     """Test that create_sql_result function produces iterable results."""
     sql_stmt = SQL("SELECT * FROM users")
     test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}]
-
     result = create_sql_result(statement=sql_stmt, data=test_data, rows_affected=1)
-
     rows = list(result)
     assert len(rows) == 1
     assert rows[0]["name"] == "Alice"
@@ -200,17 +218,12 @@ def test_sql_result_get_data_with_schema_type() -> None:
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
-
-    # Without schema_type - returns dicts
     data_dicts = result.get_data()
     assert isinstance(data_dicts, list)
     assert len(data_dicts) == 2
     assert isinstance(data_dicts[0], dict)
     assert data_dicts[0]["name"] == "Alice"
-
-    # With schema_type - returns User objects
     users = result.get_data(schema_type=User)
     assert isinstance(users, list)
     assert len(users) == 2
@@ -234,14 +247,11 @@ def test_sql_result_get_data_with_typeddict() -> None:
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
-
-    # With TypedDict schema_type
     users = result.get_data(schema_type=UserDict)
     assert isinstance(users, list)
     assert len(users) == 2
-    assert isinstance(users[0], dict)  # TypedDict is still a dict at runtime
+    assert isinstance(users[0], dict)
     assert users[0]["name"] == "Alice"
     assert users[1]["name"] == "Bob"
 
@@ -249,9 +259,7 @@ def test_sql_result_get_data_with_typeddict() -> None:
 def test_stack_result_from_sql_result() -> None:
     sql_stmt = SQL("SELECT * FROM users")
     sql_result = SQLResult(statement=sql_stmt, data=[{"id": 1}], rows_affected=1, metadata={"warning": "slow"})
-
     stack_result = StackResult.from_sql_result(sql_result)
-
     assert stack_result.rows_affected == 1
     assert stack_result.warning == "slow"
     assert stack_result.result is sql_result
@@ -263,12 +271,10 @@ def test_stack_result_with_error_and_factory() -> None:
     sql_stmt = SQL("SELECT 1")
     sql_result = SQLResult(statement=sql_stmt, data=[{"value": 1}], rows_affected=1)
     stack_result = StackResult(result=sql_result)
-
     updated = stack_result.with_error(ValueError("boom"))
     assert updated.error is not None
     assert updated.result is sql_result
     assert list(updated.get_result()) == list(stack_result.get_result())
-
     failure = StackResult.from_error(RuntimeError("stack"))
     assert failure.is_error()
     assert failure.is_sql_result()
@@ -289,10 +295,8 @@ def test_sql_result_all_with_schema_type() -> None:
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
     users = result.all(schema_type=User)
-
     assert len(users) == 2
     assert isinstance(users[0], User)
     assert users[0].name == "Alice"
@@ -310,10 +314,8 @@ def test_sql_result_one_with_schema_type() -> None:
 
     sql_stmt = SQL("SELECT * FROM users WHERE id = 1")
     test_data = [{"id": 1, "name": "Alice", "email": "alice@example.com"}]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=1)
     user = result.one(schema_type=User)
-
     assert isinstance(user, User)
     assert user.name == "Alice"
     assert user.email == "alice@example.com"
@@ -330,13 +332,10 @@ def test_sql_result_one_or_none_with_schema_type() -> None:
 
     sql_stmt = SQL("SELECT * FROM users WHERE id = 1")
     test_data = [{"id": 1, "name": "Alice", "email": "alice@example.com"}]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=1)
     user = result.one_or_none(schema_type=User)
-
     assert isinstance(user, User)
     assert user.name == "Alice"
-
     empty_result = SQLResult(statement=sql_stmt, data=[], rows_affected=0)
     none_user = empty_result.one_or_none(schema_type=User)
     assert none_user is None
@@ -356,13 +355,10 @@ def test_sql_result_get_first_with_schema_type() -> None:
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
     ]
-
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
     user = result.get_first(schema_type=User)
-
     assert isinstance(user, User)
     assert user.name == "Alice"
-
     empty_result = SQLResult(statement=sql_stmt, data=[], rows_affected=0)
     none_user = empty_result.get_first(schema_type=User)
     assert none_user is None
@@ -382,17 +378,16 @@ def test_sql_result_reuses_cached_schema_list_conversion() -> None:
         data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
         rows_affected=2,
     )
-
     original_to_schema = result_base.to_schema
     with patch.object(result_base, "to_schema", wraps=original_to_schema) as mocked_to_schema:
         first = result.get_data(schema_type=User)
         second = result.all(schema_type=User)
-
     assert first is second
     assert mocked_to_schema.call_count == 1
 
 
 def test_get_schema_row_uses_requested_row_after_get_data_cache_warm() -> None:
+
     @dataclass
     class User:
         id: int
@@ -400,15 +395,14 @@ def test_get_schema_row_uses_requested_row_after_get_data_cache_warm() -> None:
 
     rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
     result = SQLResult(statement=SQL("SELECT id, name FROM users"), data=rows, rows_affected=2)
-
     cached_rows = result.get_data(schema_type=User)
     row = result._get_schema_row(User, rows[1])
-
     assert row == User(id=2, name="Bob")
     assert row is not cached_rows[0]
 
 
 def test_get_schema_row_uses_requested_row_after_all_cache_warm() -> None:
+
     @dataclass
     class User:
         id: int
@@ -416,15 +410,14 @@ def test_get_schema_row_uses_requested_row_after_all_cache_warm() -> None:
 
     rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
     result = SQLResult(statement=SQL("SELECT id, name FROM users"), data=rows, rows_affected=2)
-
     cached_rows = result.all(schema_type=User)
     row = result._get_schema_row(User, rows[1])
-
     assert row == User(id=2, name="Bob")
     assert row is not cached_rows[0]
 
 
 def test_get_schema_row_populates_single_row_cache_when_rows_cache_is_warm() -> None:
+
     @dataclass
     class User:
         id: int
@@ -432,10 +425,8 @@ def test_get_schema_row_populates_single_row_cache_when_rows_cache_is_warm() -> 
 
     rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
     result = SQLResult(statement=SQL("SELECT id, name FROM users"), data=rows, rows_affected=2)
-
     result.all(schema_type=User)
     row = result._get_schema_row(User, rows[1])
-
     assert result._schema_row_cache is not None
     assert result._schema_row_cache[User] is row
 
@@ -452,247 +443,217 @@ def test_sql_result_reuses_cached_single_row_schema_conversion() -> None:
     result = SQLResult(
         statement=SQL("SELECT id, name FROM users WHERE id = 1"), data=[{"id": 1, "name": "Alice"}], rows_affected=1
     )
-
     original_to_schema = result_base.to_schema
     with patch.object(result_base, "to_schema", wraps=original_to_schema) as mocked_to_schema:
         first = result.get_first(schema_type=User)
         second = result.one(schema_type=User)
         third = result.one_or_none(schema_type=User)
-
     assert isinstance(first, User)
     assert first is second
     assert second is third
     assert mocked_to_schema.call_count == 1
 
 
-class TestTupleFormatSchemaType:
-    """Tests for schema_type with raw tuple data (the real driver path)."""
+def test_tuple_format_schema_type_get_data_materializes_tuples_to_dicts() -> None:
+    """Tuple-format data should be materialized to dicts by get_data()."""
+    sql_stmt = SQL("SELECT id, name, email FROM users")
+    raw_tuples: list[Any] = [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name", "email"], row_format="tuple"
+    )
+    assert result.data is not None
+    assert result.data[0] == (1, "Alice", "alice@example.com")
+    data = result.get_data()
+    assert len(data) == 2
+    assert isinstance(data[0], dict)
+    assert data[0] == {"id": 1, "name": "Alice", "email": "alice@example.com"}
+    assert data[1] == {"id": 2, "name": "Bob", "email": "bob@example.com"}
 
-    def test_get_data_materializes_tuples_to_dicts(self) -> None:
-        """Tuple-format data should be materialized to dicts by get_data()."""
-        sql_stmt = SQL("SELECT id, name, email FROM users")
-        raw_tuples: list[Any] = [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")]
 
-        result = SQLResult(
-            statement=sql_stmt,
-            data=raw_tuples,
-            rows_affected=2,
-            column_names=["id", "name", "email"],
-            row_format="tuple",
-        )
+def test_tuple_format_schema_type_get_data_with_schema_type_from_tuples() -> None:
+    """schema_type should work through the full tuple -> dict -> schema pipeline."""
+    from dataclasses import dataclass
 
-        # .data returns raw tuples
-        assert result.data is not None
-        assert result.data[0] == (1, "Alice", "alice@example.com")
+    @dataclass
+    class User:
+        id: int
+        name: str
+        email: str
 
-        # .get_data() materializes to dicts
-        data = result.get_data()
-        assert len(data) == 2
-        assert isinstance(data[0], dict)
-        assert data[0] == {"id": 1, "name": "Alice", "email": "alice@example.com"}
-        assert data[1] == {"id": 2, "name": "Bob", "email": "bob@example.com"}
+    sql_stmt = SQL("SELECT id, name, email FROM users")
+    raw_tuples: list[Any] = [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name", "email"], row_format="tuple"
+    )
+    users = result.get_data(schema_type=User)
+    assert len(users) == 2
+    assert isinstance(users[0], User)
+    assert users[0].name == "Alice"
+    assert users[0].email == "alice@example.com"
+    assert users[1].name == "Bob"
 
-    def test_get_data_with_schema_type_from_tuples(self) -> None:
-        """schema_type should work through the full tuple -> dict -> schema pipeline."""
-        from dataclasses import dataclass
 
-        @dataclass
-        class User:
-            id: int
-            name: str
-            email: str
+def test_tuple_format_schema_type_all_with_schema_type_from_tuples() -> None:
+    """all(schema_type=...) should work with tuple-format data."""
+    from dataclasses import dataclass
 
-        sql_stmt = SQL("SELECT id, name, email FROM users")
-        raw_tuples: list[Any] = [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")]
+    @dataclass
+    class User:
+        id: int
+        name: str
 
-        result = SQLResult(
-            statement=sql_stmt,
-            data=raw_tuples,
-            rows_affected=2,
-            column_names=["id", "name", "email"],
-            row_format="tuple",
-        )
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
+    )
+    users = result.all(schema_type=User)
+    assert len(users) == 2
+    assert isinstance(users[0], User)
+    assert users[0].name == "Alice"
 
-        users = result.get_data(schema_type=User)
-        assert len(users) == 2
-        assert isinstance(users[0], User)
-        assert users[0].name == "Alice"
-        assert users[0].email == "alice@example.com"
-        assert users[1].name == "Bob"
 
-    def test_all_with_schema_type_from_tuples(self) -> None:
-        """all(schema_type=...) should work with tuple-format data."""
-        from dataclasses import dataclass
+def test_tuple_format_schema_type_one_with_schema_type_from_tuples() -> None:
+    """one(schema_type=...) should work with tuple-format data."""
+    from dataclasses import dataclass
 
-        @dataclass
-        class User:
-            id: int
-            name: str
+    @dataclass
+    class User:
+        id: int
+        name: str
 
-        sql_stmt = SQL("SELECT id, name FROM users")
-        raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+    sql_stmt = SQL("SELECT id, name FROM users WHERE id = 1")
+    raw_tuples: list[Any] = [(1, "Alice")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
+    )
+    user = result.one(schema_type=User)
+    assert isinstance(user, User)
+    assert user.name == "Alice"
 
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
-        )
 
-        users = result.all(schema_type=User)
-        assert len(users) == 2
-        assert isinstance(users[0], User)
-        assert users[0].name == "Alice"
+def test_tuple_format_schema_type_one_or_none_with_schema_type_from_tuples() -> None:
+    """one_or_none(schema_type=...) should work with tuple-format data."""
+    from dataclasses import dataclass
 
-    def test_one_with_schema_type_from_tuples(self) -> None:
-        """one(schema_type=...) should work with tuple-format data."""
-        from dataclasses import dataclass
+    @dataclass
+    class User:
+        id: int
+        name: str
 
-        @dataclass
-        class User:
-            id: int
-            name: str
+    sql_stmt = SQL("SELECT id, name FROM users WHERE id = 1")
+    raw_tuples: list[Any] = [(1, "Alice")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
+    )
+    user = result.one_or_none(schema_type=User)
+    assert isinstance(user, User)
+    assert user.name == "Alice"
+    empty = SQLResult(statement=sql_stmt, data=[], rows_affected=0, column_names=["id", "name"], row_format="tuple")
+    assert empty.one_or_none(schema_type=User) is None
 
-        sql_stmt = SQL("SELECT id, name FROM users WHERE id = 1")
-        raw_tuples: list[Any] = [(1, "Alice")]
 
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
-        )
+def test_tuple_format_schema_type_get_first_with_schema_type_from_tuples() -> None:
+    """get_first(schema_type=...) should work with tuple-format data."""
+    from dataclasses import dataclass
 
-        user = result.one(schema_type=User)
-        assert isinstance(user, User)
-        assert user.name == "Alice"
+    @dataclass
+    class User:
+        id: int
+        name: str
 
-    def test_one_or_none_with_schema_type_from_tuples(self) -> None:
-        """one_or_none(schema_type=...) should work with tuple-format data."""
-        from dataclasses import dataclass
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
+    )
+    user = result.get_first(schema_type=User)
+    assert isinstance(user, User)
+    assert user.name == "Alice"
+    empty = SQLResult(statement=sql_stmt, data=[], rows_affected=0, column_names=["id", "name"], row_format="tuple")
+    assert empty.get_first(schema_type=User) is None
 
-        @dataclass
-        class User:
-            id: int
-            name: str
 
-        sql_stmt = SQL("SELECT id, name FROM users WHERE id = 1")
-        raw_tuples: list[Any] = [(1, "Alice")]
+def test_tuple_format_schema_type_get_data_with_typeddict_from_tuples() -> None:
+    """TypedDict schema_type should work with tuple-format data."""
+    from typing import TypedDict
 
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
-        )
+    class UserDict(TypedDict):
+        id: int
+        name: str
 
-        user = result.one_or_none(schema_type=User)
-        assert isinstance(user, User)
-        assert user.name == "Alice"
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
+    )
+    users = result.get_data(schema_type=UserDict)
+    assert len(users) == 2
+    assert isinstance(users[0], dict)
+    assert users[0]["name"] == "Alice"
 
-        empty = SQLResult(statement=sql_stmt, data=[], rows_affected=0, column_names=["id", "name"], row_format="tuple")
-        assert empty.one_or_none(schema_type=User) is None
 
-    def test_get_first_with_schema_type_from_tuples(self) -> None:
-        """get_first(schema_type=...) should work with tuple-format data."""
-        from dataclasses import dataclass
+def test_tuple_format_schema_type_record_format_materializes_to_dicts() -> None:
+    """Record-format data (dict-like objects) should materialize via dict()."""
 
-        @dataclass
-        class User:
-            id: int
-            name: str
+    class FakeRecord:
+        """Simulates asyncpg.Record or sqlite3.Row."""
 
-        sql_stmt = SQL("SELECT id, name FROM users")
-        raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+        def __init__(self, data: dict[str, Any]) -> None:
+            self._data = data
 
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
-        )
+        def keys(self) -> Any:
+            return self._data.keys()
 
-        user = result.get_first(schema_type=User)
-        assert isinstance(user, User)
-        assert user.name == "Alice"
+        def __getitem__(self, key: str) -> Any:
+            return self._data[key]
 
-        empty = SQLResult(statement=sql_stmt, data=[], rows_affected=0, column_names=["id", "name"], row_format="tuple")
-        assert empty.get_first(schema_type=User) is None
+    sql_stmt = SQL("SELECT id, name FROM users")
+    records: list[Any] = [FakeRecord({"id": 1, "name": "Alice"}), FakeRecord({"id": 2, "name": "Bob"})]
+    result = SQLResult(
+        statement=sql_stmt, data=records, rows_affected=2, column_names=["id", "name"], row_format="record"
+    )
+    data = result.get_data()
+    assert len(data) == 2
+    assert isinstance(data[0], dict)
+    assert data[0] == {"id": 1, "name": "Alice"}
 
-    def test_get_data_with_typeddict_from_tuples(self) -> None:
-        """TypedDict schema_type should work with tuple-format data."""
-        from typing import TypedDict
 
-        class UserDict(TypedDict):
-            id: int
-            name: str
+def test_tuple_format_schema_type_iteration_over_tuple_format_yields_dicts() -> None:
+    """Iterating SQLResult with tuple data should yield dicts, not tuples."""
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
+    )
+    rows = list(result)
+    assert len(rows) == 2
+    assert isinstance(rows[0], dict)
+    assert rows[0]["name"] == "Alice"
 
-        sql_stmt = SQL("SELECT id, name FROM users")
-        raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
 
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
-        )
+def test_tuple_format_schema_type_getitem_on_tuple_format_returns_dict() -> None:
+    """Indexing SQLResult with tuple data should return a dict."""
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
+    )
+    row = result[0]
+    assert isinstance(row, dict)
+    assert row == {"id": 1, "name": "Alice"}
 
-        users = result.get_data(schema_type=UserDict)
-        assert len(users) == 2
-        assert isinstance(users[0], dict)
-        assert users[0]["name"] == "Alice"
 
-    def test_record_format_materializes_to_dicts(self) -> None:
-        """Record-format data (dict-like objects) should materialize via dict()."""
-
-        class FakeRecord:
-            """Simulates asyncpg.Record or sqlite3.Row."""
-
-            def __init__(self, data: dict[str, Any]) -> None:
-                self._data = data
-
-            def keys(self) -> Any:
-                return self._data.keys()
-
-            def __getitem__(self, key: str) -> Any:
-                return self._data[key]
-
-        sql_stmt = SQL("SELECT id, name FROM users")
-        records: list[Any] = [FakeRecord({"id": 1, "name": "Alice"}), FakeRecord({"id": 2, "name": "Bob"})]
-
-        result = SQLResult(
-            statement=sql_stmt, data=records, rows_affected=2, column_names=["id", "name"], row_format="record"
-        )
-
-        data = result.get_data()
-        assert len(data) == 2
-        assert isinstance(data[0], dict)
-        assert data[0] == {"id": 1, "name": "Alice"}
-
-    def test_iteration_over_tuple_format_yields_dicts(self) -> None:
-        """Iterating SQLResult with tuple data should yield dicts, not tuples."""
-        sql_stmt = SQL("SELECT id, name FROM users")
-        raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
-
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
-        )
-
-        rows = list(result)
-        assert len(rows) == 2
-        assert isinstance(rows[0], dict)
-        assert rows[0]["name"] == "Alice"
-
-    def test_getitem_on_tuple_format_returns_dict(self) -> None:
-        """Indexing SQLResult with tuple data should return a dict."""
-        sql_stmt = SQL("SELECT id, name FROM users")
-        raw_tuples: list[Any] = [(1, "Alice")]
-
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
-        )
-
-        row = result[0]
-        assert isinstance(row, dict)
-        assert row == {"id": 1, "name": "Alice"}
-
-    def test_lazy_materialization_caches_result(self) -> None:
-        """_get_rows() should cache the materialized dicts."""
-        sql_stmt = SQL("SELECT id, name FROM users")
-        raw_tuples: list[Any] = [(1, "Alice")]
-
-        result = SQLResult(
-            statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
-        )
-
-        first_call = result.get_data()
-        second_call = result.get_data()
-        assert first_call is second_call  # Same list object, not re-materialized
+def test_tuple_format_schema_type_lazy_materialization_caches_result() -> None:
+    """_get_rows() should cache the materialized dicts."""
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=1, column_names=["id", "name"], row_format="tuple"
+    )
+    first_call = result.get_data()
+    second_call = result.get_data()
+    assert first_call is second_call
 
 
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
@@ -701,7 +662,6 @@ def test_sql_result_to_arrow(sql_result: SQLResult) -> None:
     import pyarrow as pa
 
     table = sql_result.to_arrow()
-
     assert isinstance(table, pa.Table)
     assert table.num_rows == 3
     assert table.column_names == ["id", "name", "age"]
@@ -714,9 +674,7 @@ def test_sql_result_to_arrow_empty_data() -> None:
 
     stmt = SQL("SELECT * FROM users WHERE 1=0")
     result = SQLResult(statement=stmt, data=[])
-
     table = result.to_arrow()
-
     assert isinstance(table, pa.Table)
     assert table.num_rows == 0
 
@@ -724,9 +682,7 @@ def test_sql_result_to_arrow_empty_data() -> None:
 def test_sql_result_to_pandas(sql_result: SQLResult) -> None:
     """Test converting SQLResult to pandas DataFrame."""
     pandas = pytest.importorskip("pandas")
-
     df = sql_result.to_pandas()
-
     assert isinstance(df, pandas.DataFrame)
     assert len(df) == 3
     assert list(df.columns) == ["id", "name", "age"]
@@ -736,12 +692,9 @@ def test_sql_result_to_pandas(sql_result: SQLResult) -> None:
 def test_sql_result_to_pandas_empty_data() -> None:
     """Test to_pandas() with empty data list."""
     pandas = pytest.importorskip("pandas")
-
     stmt = SQL("SELECT * FROM users WHERE 1=0")
     result = SQLResult(statement=stmt, data=[])
-
     df = result.to_pandas()
-
     assert isinstance(df, pandas.DataFrame)
     assert len(df) == 0
 
@@ -749,7 +702,6 @@ def test_sql_result_to_pandas_empty_data() -> None:
 def test_sql_result_to_pandas_with_null_values() -> None:
     """Test to_pandas() correctly handles NULL values."""
     pandas = pytest.importorskip("pandas")
-
     data: list[dict[str, Any]] = [
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": None},
@@ -757,9 +709,7 @@ def test_sql_result_to_pandas_with_null_values() -> None:
     ]
     stmt = SQL("SELECT * FROM users")
     result = SQLResult(statement=stmt, data=data)
-
     df = result.to_pandas()
-
     assert pandas.isna(df.loc[1, "email"])
     assert pandas.isna(df.loc[2, "name"])
 
@@ -767,9 +717,7 @@ def test_sql_result_to_pandas_with_null_values() -> None:
 def test_sql_result_to_polars(sql_result: SQLResult) -> None:
     """Test converting SQLResult to Polars DataFrame."""
     polars = pytest.importorskip("polars")
-
     df = sql_result.to_polars()
-
     assert isinstance(df, polars.DataFrame)
     assert len(df) == 3
     assert df.columns == ["id", "name", "age"]
@@ -779,12 +727,9 @@ def test_sql_result_to_polars(sql_result: SQLResult) -> None:
 def test_sql_result_to_polars_empty_data() -> None:
     """Test to_polars() with empty data list."""
     polars = pytest.importorskip("polars")
-
     stmt = SQL("SELECT * FROM users WHERE 1=0")
     result = SQLResult(statement=stmt, data=[])
-
     df = result.to_polars()
-
     assert isinstance(df, polars.DataFrame)
     assert len(df) == 0
 
@@ -792,7 +737,6 @@ def test_sql_result_to_polars_empty_data() -> None:
 def test_sql_result_to_polars_with_null_values() -> None:
     """Test to_polars() correctly handles NULL values."""
     pytest.importorskip("polars")
-
     data: list[dict[str, Any]] = [
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": None},
@@ -800,9 +744,7 @@ def test_sql_result_to_polars_with_null_values() -> None:
     ]
     stmt = SQL("SELECT * FROM users")
     result = SQLResult(statement=stmt, data=data)
-
     df = result.to_polars()
-
     assert df["email"][1] is None
     assert df["name"][2] is None
 
@@ -811,10 +753,8 @@ def test_sql_result_methods_with_none_data_raise() -> None:
     """Test that methods raise ValueError when data is None."""
     stmt = SQL("SELECT * FROM users")
     result = SQLResult(statement=stmt, data=None)
-
     with pytest.raises(ValueError, match="No data available"):
         result.to_pandas()
-
     with pytest.raises(ValueError, match="No data available"):
         result.to_polars()
 
@@ -824,7 +764,6 @@ def test_sql_result_to_arrow_with_none_data_raises() -> None:
     """Test that to_arrow() raises ValueError when data is None."""
     stmt = SQL("SELECT * FROM users")
     result = SQLResult(statement=stmt, data=None)
-
     with pytest.raises(ValueError, match="No data available"):
         result.to_arrow()
 
@@ -832,9 +771,7 @@ def test_sql_result_to_arrow_with_none_data_raises() -> None:
 def test_arrow_result_to_pandas(arrow_result: ArrowResult) -> None:
     """Test converting ArrowResult to pandas DataFrame."""
     pandas = pytest.importorskip("pandas")
-
     df = arrow_result.to_pandas()
-
     assert isinstance(df, pandas.DataFrame)
     assert len(df) == 3
     assert list(df.columns) == ["id", "name", "age"]
@@ -844,9 +781,7 @@ def test_arrow_result_to_pandas(arrow_result: ArrowResult) -> None:
 def test_arrow_result_to_polars(arrow_result: ArrowResult) -> None:
     """Test converting ArrowResult to Polars DataFrame."""
     polars = pytest.importorskip("polars")
-
     df = arrow_result.to_polars()
-
     assert isinstance(df, polars.DataFrame)
     assert len(df) == 3
     assert df.columns == ["id", "name", "age"]
@@ -856,7 +791,6 @@ def test_arrow_result_to_polars(arrow_result: ArrowResult) -> None:
 def test_arrow_result_to_dict(arrow_result: ArrowResult) -> None:
     """Test converting ArrowResult to list of dicts."""
     result = arrow_result.to_dict()
-
     assert isinstance(result, list)
     assert len(result) == 3
     assert result[0] == {"id": 1, "name": "Alice", "age": 30}
@@ -872,7 +806,6 @@ def test_arrow_result_len(arrow_result: ArrowResult) -> None:
 def test_arrow_result_iter(arrow_result: ArrowResult) -> None:
     """Test __iter__() yields rows as dicts."""
     rows = list(arrow_result)
-
     assert len(rows) == 3
     assert rows[0] == {"id": 1, "name": "Alice", "age": 30}
     assert rows[1] == {"id": 2, "name": "Bob", "age": 25}
@@ -882,7 +815,6 @@ def test_arrow_result_iter(arrow_result: ArrowResult) -> None:
 def test_arrow_result_iter_in_for_loop(arrow_result: ArrowResult) -> None:
     """Test iterating over ArrowResult in for loop."""
     names = [row["name"] for row in arrow_result]
-
     assert names == ["Alice", "Bob", "Charlie"]
 
 
@@ -899,9 +831,7 @@ def test_arrow_result_to_pandas_with_null_values() -> None:
     table = pa.Table.from_pydict(data)
     stmt = SQL("SELECT * FROM users")
     result = ArrowResult(statement=stmt, data=table)
-
     df = result.to_pandas()
-
     assert pandas.isna(df.loc[1, "email"])
     assert pandas.isna(df.loc[2, "name"])
 
@@ -913,7 +843,6 @@ def test_arrow_result_empty_table() -> None:
     empty_table = pa.Table.from_pydict(cast(dict[str, Any], {}))
     stmt = SQL("SELECT * FROM users WHERE 1=0")
     result = ArrowResult(statement=stmt, data=empty_table)
-
     assert len(result) == 0
     assert result.to_dict() == []
     assert list(result) == []
@@ -923,18 +852,13 @@ def test_arrow_result_methods_with_none_data_raise() -> None:
     """Test that methods raise ValueError when data is None."""
     stmt = SQL("SELECT * FROM users")
     result = ArrowResult(statement=stmt, data=None)
-
     with pytest.raises(ValueError, match="No Arrow table available"):
         result.to_pandas()
-
     with pytest.raises(ValueError, match="No Arrow table available"):
         result.to_polars()
-
     with pytest.raises(ValueError, match="No Arrow table available"):
         result.to_dict()
-
     with pytest.raises(ValueError, match="No Arrow table available"):
         len(result)
-
     with pytest.raises(ValueError, match="No Arrow table available"):
         list(result)

@@ -206,19 +206,19 @@ exclude = [
   "sqlspec/config.py",                      # Main config
   "sqlspec/**/__init__.py",                 # Init files (usually just imports)
   "sqlspec/protocols.py",                   # Protocol definitions
-  "sqlspec/migrations/commands.py",         # Migration command CLI (dynamic imports)
+  "sqlspec/migrations/commands.py",         # Migration command orchestration: _with_command_span uses inspect.signature/functools.wraps on coroutines (also: branch-local rich.prompt imports)
   "sqlspec/dialects/postgres/_pgvector.py", # SQLGlot subclass/registration module stays interpreted
   "sqlspec/dialects/postgres/_paradedb.py", # SQLGlot subclass/registration module stays interpreted
   "sqlspec/dialects/spanner/_spanner.py",   # SQLGlot subclass/registration module stays interpreted
   "sqlspec/dialects/spanner/_spangres.py",  # SQLGlot subclass/registration module stays interpreted
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted
-  "sqlspec/extensions/events/_channel.py",  # Dynamic native backend import/lifecycle stays interpreted
-  "sqlspec/extensions/events/_models.py",   # Runtime dataclass annotations/slots stay interpreted
-  "sqlspec/extensions/events/_queue.py",    # Table queue class flags/listener ack paths stay interpreted
+  # Deferred _channel.py split: importlib.import_module only accounts for native backend loading.
+  # AsyncEventChannel still uses inspect.isawaitable and async-generator iter_events,
+  # so the channel classes remain interpreted until those blockers are removed.
+  "sqlspec/extensions/events/_channel.py",
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/adapters/**/data_dictionary.py", # Cross-module inheritance causes mypyc segfaults
-  "sqlspec/observability/_formatting.py",   # Inherits from non-compiled logging.Formatter
   "sqlspec/utils/arrow_helpers.py",         # Arrow operations cause segfaults when compiled
   "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
@@ -228,10 +228,10 @@ include = [
   "sqlspec/exceptions.py",                         # Exceptions module
   "sqlspec/loader.py",                             # Loader module
   "sqlspec/observability/**/*.py",                 # Observability utilities
+  "sqlspec/observability/_formatting.py",          # OTel console formatter
   "sqlspec/driver/**/*.py",                        # Driver module
   "sqlspec/adapters/**/pool.py",                   # Adapter pool runtimes proven without driver subclasses
   "sqlspec/migrations/**/*.py",                    # Migration runtime, excluding command CLI
-  "sqlspec/dialects/_compat.py",                   # SQLGlot compiled-class compatibility helpers
   "sqlspec/dialects/postgres/_generators.py",      # Postgres custom dialect render hooks
   "sqlspec/dialects/postgres/_operators.py",       # Postgres extension operator registry
   "sqlspec/dialects/spanner/_generators.py",       # Spanner custom dialect render hooks
@@ -240,9 +240,14 @@ include = [
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
+  "sqlspec/storage/_utils.py",                      # Storage optional dependency import helpers
+  "sqlspec/service.py",                            # Service base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
+  "sqlspec/extensions/events/_models.py",          # Event message value object
+  "sqlspec/extensions/events/_names.py",           # Event channel/table name validators
   "sqlspec/extensions/events/_payload.py",         # Event JSON payload codec helpers
+  "sqlspec/extensions/events/_queue.py",           # Table-backed event queue
   "sqlspec/extensions/adk/_types.py",              # ADK session/event record types
   "sqlspec/extensions/adk/memory/_types.py",       # ADK memory record types
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
@@ -254,6 +259,7 @@ include = [
   "sqlspec/adapters/oracledb/_vector_handlers.py", # DB_TYPE_VECTOR inputtypehandler / outputtypehandler dispatch
   "sqlspec/utils/text.py",                         # Text utilities
   "sqlspec/utils/sync_tools.py",                   # Synchronous utility functions
+  "sqlspec/utils/module_loader.py",                # Optional dependency loader helpers
   "sqlspec/utils/type_guards.py",                  # Type guard utilities
   "sqlspec/utils/fixtures.py",                     # File fixture loading
   "sqlspec/utils/config_tools.py",                 # Configuration utilities
@@ -264,7 +270,6 @@ include = [
   "sqlspec/utils/type_converters.py",              # Adapter type converters
   "sqlspec/utils/correlation.py",                  # Correlation context helpers
   "sqlspec/utils/portal.py",                       # Thread portal utilities
-  "sqlspec/utils/singleton.py",                    # Lightweight singleton helpers
   "sqlspec/utils/schema.py",                       # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                        # UUID utilities
 ]
@@ -332,7 +337,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn"
+ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin"
 skip = 'uv.lock'
 
 [tool.coverage.run]

@@ -152,18 +152,12 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         return PsycopgSyncDriver.dispatch_execute_script(self, cursor, statement)
 
     def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return self._dispatch_execute_impl(cursor, statement)
         return self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
     def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return self._dispatch_execute_many_impl(cursor, statement)
         return self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
     def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return self._dispatch_execute_script_impl(cursor, statement)
         return self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachPsycopgSyncExceptionHandler":  # type: ignore[override]
@@ -173,7 +167,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
     def data_dictionary(self) -> "CockroachPsycopgSyncDataDictionary":  # type: ignore[override]
         if self._data_dictionary is None:
             # Intentionally assign CockroachDB-specific data dictionary to parent slot
-            self._data_dictionary = CockroachPsycopgSyncDataDictionary()
+            self._data_dictionary = CockroachPsycopgSyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgSyncDataDictionary", self._data_dictionary)
 
 
@@ -245,18 +239,12 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         return await PsycopgAsyncDriver.dispatch_execute_script(self, cursor, statement)
 
     async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return await self._dispatch_execute_impl(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
 
     async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return await self._dispatch_execute_many_impl(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
 
     async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return await self._dispatch_execute_script_impl(cursor, statement)
         return await self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachPsycopgAsyncExceptionHandler":  # type: ignore[override]
@@ -266,7 +254,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
     def data_dictionary(self) -> "CockroachPsycopgAsyncDataDictionary":  # type: ignore[override]
         if self._data_dictionary is None:
             # Intentionally assign CockroachDB-specific data dictionary to parent slot
-            self._data_dictionary = CockroachPsycopgAsyncDataDictionary()
+            self._data_dictionary = CockroachPsycopgAsyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgAsyncDataDictionary", self._data_dictionary)
 
 

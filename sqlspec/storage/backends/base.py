@@ -135,31 +135,16 @@ class AsyncChunkedBytesIterator:
 class AsyncObStoreStreamIterator:
     """Async iterator wrapper for obstore streaming."""
 
-    __slots__ = ("_buffer", "_chunk_size", "_stream", "_stream_exhausted")
+    __slots__ = ("_chunk_size", "_stream")
 
     def __init__(self, stream: Any, chunk_size: "int | None" = None) -> None:
         self._stream = stream
-        self._buffer = bytearray()
         self._chunk_size = chunk_size if chunk_size is not None and chunk_size > 0 else None
-        self._stream_exhausted = False
 
     def __aiter__(self) -> "AsyncObStoreStreamIterator":
         return self
 
     def __anext__(self) -> Any:
-        # For obstore, we MUST be async. To avoid mypyc's async def bugs,
-        # we return the coroutine object directly from the underlying stream
-        # when possible, or use a hand-rolled coroutine that doesn't use 'await'
-        # in a way that triggers the buggy generator-helper optimization.
-
-        if self._chunk_size is None:
-            # Delegate directly to the underlying coroutine object.
-            # Mypyc handles this safely because it's a simple function return.
-            return self._stream.__anext__()
-
-        # For re-chunking, we use a module-level helper to avoid class-level state
-        # machine issues if possible, but for now we'll stick to delegating
-        # when chunk_size is None as that is the common case.
         return self._stream.__anext__()
 
 

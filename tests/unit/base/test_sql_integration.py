@@ -21,24 +21,24 @@ from sqlspec.loader import SQLFileLoader
 def test_init_without_loader() -> None:
     """Test SQLSpec initialization without a loader."""
     sql_spec = SQLSpec()
-    assert sql_spec._sql_files._loader is None
+    assert sql_spec._loader is None
 
 
 def test_init_with_loader() -> None:
     """Test SQLSpec initialization with a provided loader."""
     loader = SQLFileLoader()
     sql_spec = SQLSpec(loader=loader)
-    assert sql_spec._sql_files._loader is loader
+    assert sql_spec._loader is loader
 
 
 def test_lazy_loader_initialization() -> None:
     """Test that loader is created lazily when first needed."""
     sql_spec = SQLSpec()
-    assert sql_spec._sql_files._loader is None
+    assert sql_spec._loader is None
 
     # Trigger lazy initialization by calling a method that needs the loader
     sql_spec.add_named_sql("test", "SELECT 1")
-    assert isinstance(sql_spec._sql_files._loader, SQLFileLoader)
+    assert isinstance(sql_spec._loader, SQLFileLoader)
 
 
 def test_add_named_sql() -> None:
@@ -50,7 +50,7 @@ def test_add_named_sql() -> None:
     assert sql_spec.has_sql_query("test_query")
     sql_obj = sql_spec.get_sql("test_query")
     assert isinstance(sql_obj, SQL)
-    assert "SELECT 1 AS result" in sql_obj.sql
+    assert "SELECT 1 AS result" in sql_obj.raw_sql
 
 
 def test_add_named_sql_with_dialect() -> None:
@@ -143,6 +143,21 @@ def test_reload_sql_files_with_loader() -> None:
     assert not sql_spec.has_sql_query("test_query")
 
 
+def test_reload_sql_files_can_reload_current_files(tmp_path: Path) -> None:
+    """Test reloading tracked SQL files after clearing the cache."""
+    sql_file = tmp_path / "queries.sql"
+    sql_file.write_text("-- name: test_query\nSELECT 1;")
+    sql_spec = SQLSpec()
+    sql_spec.load_sql_files(sql_file)
+
+    assert sql_spec.has_sql_query("test_query")
+
+    sql_file.write_text("-- name: test_query\nSELECT 2;")
+    sql_spec.reload_sql_files(reload=True)
+
+    assert "SELECT 2" in sql_spec.get_sql("test_query").raw_sql
+
+
 def test_get_sql_files_empty() -> None:
     """Test getting file list when none are loaded."""
     sql_spec = SQLSpec()
@@ -168,7 +183,7 @@ SELECT 'Hello, World!' as greeting;
 
         test_sql = sql_spec.get_sql("hello_world")
         assert isinstance(test_sql, SQL)
-        assert "SELECT 'Hello, World!'" in test_sql.sql
+        assert "SELECT 'Hello, World!'" in test_sql.raw_sql
 
 
 def test_provided_loader_is_used() -> None:
@@ -219,12 +234,12 @@ def test_sql_loader_cleanup_on_cache_clear() -> None:
     sql_spec.add_named_sql("query1", "SELECT 1")
     sql_spec.add_named_sql("query2", "SELECT 2")
 
-    assert sql_spec._sql_files._loader is not None
+    assert sql_spec._loader is not None
     assert len(sql_spec.list_sql_queries()) == 2
 
     sql_spec.clear_sql_cache()
 
-    assert sql_spec._sql_files._loader is not None
+    assert sql_spec._loader is not None
     assert len(sql_spec.list_sql_queries()) == 0
 
 

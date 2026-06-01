@@ -61,6 +61,10 @@ __all__ = (
 # Type alias for condition factory functions
 ConditionFactory = Callable[[exp.Expr, exp.Placeholder], exp.Expr]
 
+_TABLE_QUALIFIED_PARTS = 2
+_DATABASE_QUALIFIED_PARTS = 3
+_CATALOG_QUALIFIED_PARTS = 4
+
 
 # =============================================================================
 # Expression Factories
@@ -153,8 +157,13 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
 
     if isinstance(column, str):
         if "." in column:
-            parts = column.split(".", 1)
-            return exp.column(parts[1], table=parts[0])
+            parts = column.split(".")
+            if len(parts) == _TABLE_QUALIFIED_PARTS:
+                return exp.column(parts[1], table=parts[0])
+            if len(parts) == _DATABASE_QUALIFIED_PARTS:
+                return exp.column(parts[2], table=parts[1], db=parts[0])
+            if len(parts) == _CATALOG_QUALIFIED_PARTS:
+                return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0])
         return exp.column(column)
 
     return exp.column(str(column))

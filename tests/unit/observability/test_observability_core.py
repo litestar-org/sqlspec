@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, cast
+from unittest.mock import patch
 
 from typing_extensions import Self
 
@@ -15,6 +16,7 @@ from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.observability import LifecycleDispatcher, compute_sql_hash, get_trace_context, resolve_db_system
 from sqlspec.storage import StorageTelemetry
@@ -23,7 +25,6 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_events,
     reset_storage_bridge_metrics,
 )
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.utils.correlation import CorrelationContext
 from tests.conftest import requires_interpreted
 
@@ -424,6 +425,31 @@ def test_driver_dispatch_records_query_span() -> None:
     assert span_manager.finished[0].closed is True
 
 
+@requires_interpreted
+def test_driver_dispatch_computes_single_sql_hash_for_span_and_observer() -> None:
+    observed: list[dict[str, Any]] = []
+
+    def observer(event: Any) -> None:
+        observed.append(event.as_dict())
+
+    span_manager = _FakeSpanManager()
+    runtime = ObservabilityRuntime(
+        ObservabilityConfig(print_sql=True, statement_observers=(cast(StatementObserver, observer),)),
+        config_name="DummyAdapter",
+    )
+    runtime.span_manager = cast(Any, span_manager)
+    statement_config = StatementConfig()
+    driver = _DummyDriver(connection=object(), statement_config=statement_config, observability=runtime)
+    statement = SQL("SELECT 1", statement_config=statement_config)
+
+    with patch("sqlspec.observability._runtime.compute_sql_hash", return_value="precomputed") as hash_mock:
+        driver.dispatch_statement_execution(statement, driver.connection)
+
+    assert hash_mock.call_count == 1
+    assert span_manager.started[0].attributes["connection_info"]["sqlspec.statement.hash"] == "precomputed"
+    assert observed[0]["sql_hash"] == "precomputed"
+
+
 def test_runtime_query_span_omits_sql_unless_print_sql_enabled() -> None:
     """Query spans should only include SQL when print_sql is enabled."""
 
@@ -599,6 +625,15 @@ def test_resolve_db_system_sqlite() -> None:
 
 def test_resolve_db_system_unknown() -> None:
     assert resolve_db_system("UnknownDriver") == "other_sql"
+
+
+def test_resolve_db_system_is_lru_cached() -> None:
+    resolve_db_system.cache_clear()
+
+    assert resolve_db_system("AsyncpgDriver") == "postgresql"
+    assert resolve_db_system("AsyncpgDriver") == "postgresql"
+
+    assert resolve_db_system.cache_info().hits == 1
 
 
 def test_compute_sql_hash() -> None:

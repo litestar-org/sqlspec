@@ -139,8 +139,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        extra = config.pop("extra", {})
-        config.update(extra)
         return PyMysqlConnectionPool(
             config,
             recycle_seconds=pool_recycle,

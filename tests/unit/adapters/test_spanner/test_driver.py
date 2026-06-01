@@ -190,6 +190,44 @@ def test_dispatch_execute_script_insert_detected_as_non_select(mock_transaction:
     mock_transaction.execute_sql.assert_not_called()
 
 
+def test_dispatch_execute_script_reuses_coerced_params_and_inferred_types(
+    mock_transaction: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    driver = SpannerSyncDriver(mock_transaction)
+    script = """
+    UPDATE users SET name = @name WHERE id = @id;
+    UPDATE users SET name = @name WHERE id = @id;
+    UPDATE users SET name = @name WHERE id = @id;
+    """
+    params = {"id": 1, "name": "Alice"}
+    coerce_calls = 0
+    infer_calls = 0
+
+    monkeypatch.setattr(SpannerSyncDriver, "_get_compiled_sql", lambda _self, _statement, _config: (script, params))
+
+    def coerce(script_params: dict[str, object] | None) -> dict[str, object] | None:
+        nonlocal coerce_calls
+        coerce_calls += 1
+        return script_params
+
+    def infer(coerced_params: dict[str, object] | None) -> dict[str, str]:
+        nonlocal infer_calls
+        infer_calls += 1
+        assert coerced_params == params
+        return {"id": "INT64", "name": "STRING"}
+
+    monkeypatch.setattr(SpannerSyncDriver, "_coerce_params", lambda _self, script_params: coerce(script_params))
+    monkeypatch.setattr(SpannerSyncDriver, "_infer_param_types", lambda _self, coerced_params: infer(coerced_params))
+    mock_transaction.execute_update.return_value = 1
+    statement = driver.prepare_statement(script, statement_config=driver.statement_config)
+
+    driver.dispatch_execute_script(mock_transaction, statement)
+
+    assert coerce_calls == 1
+    assert infer_calls == 1
+    assert mock_transaction.execute_update.call_count == 3
+
+
 def test_dispatch_execute_many_no_shadowed_local_aliases() -> None:
     source = inspect.getsource(SpannerSyncDriver.dispatch_execute_many)
 

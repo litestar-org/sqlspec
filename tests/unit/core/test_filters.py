@@ -13,6 +13,7 @@ import pytest
 from sqlglot import exp
 from typing_extensions import assert_type
 
+import sqlspec.core.filters as filters_module
 from sqlspec import sql as sql_builder
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
@@ -20,6 +21,8 @@ from sqlspec.core import (
     SQL,
     AnyCollectionFilter,
     BeforeAfterFilter,
+    BooleanFilter,
+    ChoicesFilter,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
@@ -27,6 +30,8 @@ from sqlspec.core import (
     NullFilter,
     OrderByFilter,
     SearchFilter,
+    StatementConfig,
+    StatementFilter,
     apply_filter,
     canonicalize_filters,
 )
@@ -45,6 +50,26 @@ if TYPE_CHECKING:
 def test_public_canonicalize_filters_uses_statement_filter_implementation() -> None:
     """The public core export canonicalizes SQL statement filters."""
     assert canonicalize_filters.__module__ == "sqlspec.core.filters"
+
+
+def test_statement_filter_get_column_expression_delegates_to_parse_column_for_condition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """StatementFilter should use the shared fast column parser."""
+    calls: list[str | exp.Expression] = []
+    original = StatementFilter._get_column_expression
+
+    def fake_parse(field_name: str | exp.Expression) -> exp.Expr:
+        calls.append(field_name)
+        return exp.column("parsed")
+
+    monkeypatch.setattr("sqlspec.core.filters.parse_column_for_condition", fake_parse)
+
+    result = original(SearchFilter("name", "needle"), "users.name")
+
+    assert isinstance(result, exp.Column)
+    assert result.name == "parsed"
+    assert calls == ["users.name"]
 
 
 def test_canonicalize_filters_deduplicates_and_sorts_by_class_and_field() -> None:
@@ -160,6 +185,40 @@ def test_limit_offset_filter_uses_descriptive_parameters() -> None:
     assert named["offset"] == 50
 
 
+def test_limit_offset_filter_has_no_pagination_intermediate_base() -> None:
+    """LimitOffsetFilter should inherit directly from StatementFilter."""
+    assert "PaginationFilter" not in {cls.__name__ for cls in LimitOffsetFilter.__mro__}
+    assert LimitOffsetFilter.__mro__[1] is StatementFilter
+
+
+def test_limit_offset_filter_raw_sql_only_path() -> None:
+    """LimitOffsetFilter handles statements configured without parsing."""
+    statement = SQL("SELECT * FROM users", statement_config=StatementConfig(enable_parsing=False))
+
+    result = apply_filter(statement, LimitOffsetFilter(limit=10, offset=5))
+
+    sql_text = result.raw_sql.upper()
+    assert "SELECT" in sql_text
+    assert "LIMIT" in sql_text
+    assert "OFFSET" in sql_text
+    assert result.named_parameters["limit"] == 10
+    assert result.named_parameters["offset"] == 5
+
+
+def test_limit_offset_filter_uses_processed_state_expression() -> None:
+    """LimitOffsetFilter can reuse a compiled statement expression."""
+    statement = SQL("SELECT * FROM users")
+    statement.compile()
+
+    result = apply_filter(statement, LimitOffsetFilter(limit=3, offset=6))
+
+    sql_text = result.raw_sql.upper()
+    assert "LIMIT" in sql_text
+    assert "OFFSET" in sql_text
+    assert result.named_parameters["limit"] == 3
+    assert result.named_parameters["offset"] == 6
+
+
 def test_order_by_filter_no_parameters() -> None:
     """Test that OrderByFilter doesn't use parameters."""
     filter_obj = OrderByFilter("created_at", "desc")
@@ -168,6 +227,47 @@ def test_order_by_filter_no_parameters() -> None:
 
     assert positional == []
     assert named == {}
+
+
+def test_order_by_filter_raw_sql_only_path() -> None:
+    """OrderByFilter handles statements configured without parsing."""
+    statement = SQL("SELECT * FROM users", statement_config=StatementConfig(enable_parsing=False))
+
+    result = apply_filter(statement, OrderByFilter("created_at", "desc"))
+
+    sql_text = result.raw_sql.upper()
+    assert "SELECT" in sql_text
+    assert "ORDER BY" in sql_text
+    assert "CREATED_AT DESC" in sql_text
+
+
+def test_order_by_filter_uses_processed_state_expression() -> None:
+    """OrderByFilter can reuse a compiled statement expression."""
+    statement = SQL("SELECT * FROM users")
+    statement.compile()
+
+    result = apply_filter(statement, OrderByFilter("created_at", "asc"))
+
+    sql_text = result.raw_sql.upper()
+    assert "ORDER BY" in sql_text
+    assert "CREATED_AT" in sql_text
+
+
+def test_filter_expression_modification_helper_returns_copy() -> None:
+    """Mutating a filter expression copy must not alter cached statement state."""
+    statement = SQL("SELECT * FROM users")
+    statement.compile()
+    original_expression = statement.statement_expression
+    assert original_expression is not None
+    original_sql = original_expression.sql()
+
+    expression = statement._get_expression_for_filter_modification()
+    expression.set("limit", exp.Limit(expression=exp.Literal.number(1)))
+
+    current_expression = statement.statement_expression
+    assert current_expression is not None
+    assert current_expression.sql() == original_sql
+    assert "LIMIT" not in current_expression.sql().upper()
 
 
 def test_filter_parameter_conflict_resolution() -> None:
@@ -214,7 +314,7 @@ def test_multiple_filters_preserve_column_names() -> None:
     assert params["limit"] == 10
     assert params["offset"] == 0
 
-    sql_text = result.sql.upper()
+    sql_text = result.raw_sql.upper()
     assert "SELECT" in sql_text
     assert "FROM" in sql_text
     assert "WHERE" in sql_text
@@ -277,15 +377,15 @@ def test_filter_sql_generation_preserves_parameter_names() -> None:
     search_filter = SearchFilter("name", "john")
     result = apply_filter(sql_stmt, search_filter)
 
-    assert ":name_search" in result.sql
+    assert ":name_search" in result.raw_sql
     assert "name_search" in result.parameters
     assert result.parameters["name_search"] == "%john%"
 
     in_filter = InCollectionFilter("status", ["active", "pending"])
     result = apply_filter(result, in_filter)
 
-    assert ":status_in_0" in result.sql
-    assert ":status_in_1" in result.sql
+    assert ":status_in_0" in result.raw_sql
+    assert ":status_in_1" in result.raw_sql
     assert "status_in_0" in result.parameters
     assert "status_in_1" in result.parameters
     assert result.parameters["status_in_0"] == "active"
@@ -389,7 +489,7 @@ def test_null_filter_generates_is_null_clause() -> None:
     null_filter = NullFilter("email")
     result = apply_filter(sql_stmt, null_filter)
 
-    sql_text = result.sql.upper()
+    sql_text = result.raw_sql.upper()
     assert "SELECT" in sql_text
     assert "FROM" in sql_text
     assert "WHERE" in sql_text
@@ -403,7 +503,7 @@ def test_not_null_filter_generates_is_not_null_clause() -> None:
     not_null_filter = NotNullFilter("email_verified_at")
     result = apply_filter(sql_stmt, not_null_filter)
 
-    sql_text = result.sql.upper()
+    sql_text = result.raw_sql.upper()
     assert "SELECT" in sql_text
     assert "FROM" in sql_text
     assert "WHERE" in sql_text
@@ -477,7 +577,7 @@ def test_null_filter_with_other_filters() -> None:
     result = apply_filter(sql_stmt, status_filter)
     result = apply_filter(result, null_filter)
 
-    sql_text = result.sql.upper()
+    sql_text = result.raw_sql.upper()
     assert "STATUS IN" in sql_text
     assert "DELETED_AT IS NULL" in sql_text
 
@@ -498,7 +598,7 @@ def test_not_null_filter_with_other_filters() -> None:
     result = apply_filter(sql_stmt, search_filter)
     result = apply_filter(result, not_null_filter)
 
-    sql_text = result.sql.upper()
+    sql_text = result.raw_sql.upper()
     assert "NAME LIKE" in sql_text
     # NotNullFilter generates "NOT column IS NULL" which is equivalent to "column IS NOT NULL"
     assert "NOT EMAIL_VERIFIED_AT IS NULL" in sql_text
@@ -518,7 +618,7 @@ def test_null_and_not_null_filters_together() -> None:
     result = apply_filter(sql_stmt, null_filter)
     result = apply_filter(result, not_null_filter)
 
-    sql_text = result.sql.upper()
+    sql_text = result.raw_sql.upper()
     assert "DELETED_AT IS NULL" in sql_text
     # NotNullFilter generates "NOT column IS NULL" which is equivalent to "column IS NOT NULL"
     assert "NOT EMAIL_VERIFIED_AT IS NULL" in sql_text
@@ -662,19 +762,19 @@ def test_search_filter_multi_field_placeholder_independence() -> None:
     sql_stmt = SQL("SELECT * FROM items")
 
     result = apply_filter(sql_stmt, filter_obj)
-    rendered = result.sql.upper()
+    rendered = result.raw_sql.upper()
 
     # Both fields must appear with LIKE conditions
     assert "LIKE" in rendered
     like_count = rendered.count("LIKE")
-    assert like_count == 2, f"Expected 2 LIKE conditions for 2 fields, got {like_count}. SQL: {result.sql}"
+    assert like_count == 2, f"Expected 2 LIKE conditions for 2 fields, got {like_count}. SQL: {result.raw_sql}"
 
     # The placeholder should appear for each field condition
     param_name = filter_obj.get_param_name()
     assert param_name is not None
-    placeholder_count = result.sql.count(f":{param_name}")
+    placeholder_count = result.raw_sql.count(f":{param_name}")
     assert placeholder_count == 2, (
-        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.raw_sql}"
     )
 
     # Only 1 named parameter value (shared across both placeholders)
@@ -691,16 +791,16 @@ def test_search_filter_three_fields_placeholder_independence() -> None:
     sql_stmt = SQL("SELECT * FROM items")
 
     result = apply_filter(sql_stmt, filter_obj)
-    rendered = result.sql.upper()
+    rendered = result.raw_sql.upper()
 
     like_count = rendered.count("LIKE")
-    assert like_count == 3, f"Expected 3 LIKE conditions for 3 fields, got {like_count}. SQL: {result.sql}"
+    assert like_count == 3, f"Expected 3 LIKE conditions for 3 fields, got {like_count}. SQL: {result.raw_sql}"
 
     param_name = filter_obj.get_param_name()
     assert param_name is not None
-    placeholder_count = result.sql.count(f":{param_name}")
+    placeholder_count = result.raw_sql.count(f":{param_name}")
     assert placeholder_count == 3, (
-        f"Expected 3 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+        f"Expected 3 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.raw_sql}"
     )
 
     positional, named = filter_obj.extract_parameters()
@@ -716,18 +816,18 @@ def test_not_in_search_filter_multi_field_placeholder_independence() -> None:
     sql_stmt = SQL("SELECT * FROM items")
 
     result = apply_filter(sql_stmt, filter_obj)
-    rendered = result.sql.upper()
+    rendered = result.raw_sql.upper()
 
     # Both fields must appear with NOT LIKE conditions
     assert "LIKE" in rendered
     like_count = rendered.count("LIKE")
-    assert like_count == 2, f"Expected 2 NOT LIKE conditions for 2 fields, got {like_count}. SQL: {result.sql}"
+    assert like_count == 2, f"Expected 2 NOT LIKE conditions for 2 fields, got {like_count}. SQL: {result.raw_sql}"
 
     param_name = filter_obj.get_param_name()
     assert param_name is not None
-    placeholder_count = result.sql.count(f":{param_name}")
+    placeholder_count = result.raw_sql.count(f":{param_name}")
     assert placeholder_count == 2, (
-        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.sql}"
+        f"Expected 2 occurrences of :{param_name}, got {placeholder_count}. SQL: {result.raw_sql}"
     )
 
     positional, named = filter_obj.extract_parameters()
@@ -743,15 +843,15 @@ def test_search_filter_single_field_unchanged() -> None:
     sql_stmt = SQL("SELECT * FROM items")
 
     result = apply_filter(sql_stmt, filter_obj)
-    rendered = result.sql.upper()
+    rendered = result.raw_sql.upper()
 
     assert "LIKE" in rendered
     like_count = rendered.count("LIKE")
-    assert like_count == 1, f"Expected 1 LIKE condition for single field, got {like_count}. SQL: {result.sql}"
+    assert like_count == 1, f"Expected 1 LIKE condition for single field, got {like_count}. SQL: {result.raw_sql}"
 
     param_name = filter_obj.get_param_name()
     assert param_name == "name_search"
-    assert f":{param_name}" in result.sql
+    assert f":{param_name}" in result.raw_sql
 
     positional, named = filter_obj.extract_parameters()
     assert positional == []
@@ -802,9 +902,9 @@ def test_search_filter_ignore_case_none_behaves_as_false() -> None:
     result_false = apply_filter(sql_stmt, f_false)
 
     # Both should produce LIKE, not ILIKE
-    assert "ILIKE" not in result_none.sql.upper()
-    assert "LIKE" in result_none.sql.upper()
-    assert result_none.sql == result_false.sql
+    assert "ILIKE" not in result_none.raw_sql.upper()
+    assert "LIKE" in result_none.raw_sql.upper()
+    assert result_none.raw_sql == result_false.raw_sql
 
 
 def test_search_filter_ignore_case_true_uses_ilike() -> None:
@@ -814,7 +914,38 @@ def test_search_filter_ignore_case_true_uses_ilike() -> None:
 
     sql_stmt = SQL("SELECT * FROM t")
     result = apply_filter(sql_stmt, f)
-    assert "ILIKE" in result.sql.upper()
+    assert "ILIKE" in result.raw_sql.upper()
+
+
+def test_search_filter_ignore_case_property_is_bool() -> None:
+    """ignore_case is normalized at construction and exposed as bool."""
+
+    assert type(SearchFilter("name", "test", ignore_case=None).ignore_case) is bool
+
+
+def test_order_by_filter_rejects_invalid_sort_order_at_construction() -> None:
+    """Invalid sort order should fail before append_to_statement."""
+
+    with pytest.raises(ValueError, match="sort_order"):
+        OrderByFilter("name", "BAD")  # type: ignore[arg-type]
+
+
+def test_not_in_search_filter_declares_empty_slots() -> None:
+    """NotInSearchFilter should not allocate an instance dict."""
+
+    assert NotInSearchFilter.__slots__ == ()
+
+
+def test_dead_create_filters_api_removed() -> None:
+    """The create_filters helper was redundant with tuple()."""
+
+    assert not hasattr(filters_module, "create_filters")
+
+
+def test_not_in_collection_parameter_suffix_is_literal() -> None:
+    """The not-in suffix should be the direct literal used in parameter names."""
+
+    assert NotInCollectionFilter._parameter_suffix == "notin"
 
 
 # --- Task 1.4: InCollectionFilter edge cases ---
@@ -825,7 +956,7 @@ def test_in_collection_filter_empty_collection_returns_false() -> None:
     sql_stmt = SQL("SELECT * FROM t")
     f: InCollectionFilter[str] = InCollectionFilter("status", [])
     result = apply_filter(sql_stmt, f)
-    assert "FALSE" in result.sql.upper()
+    assert "FALSE" in result.raw_sql.upper()
 
 
 def test_in_collection_filter_none_values_returns_unchanged() -> None:
@@ -833,7 +964,7 @@ def test_in_collection_filter_none_values_returns_unchanged() -> None:
     sql_stmt = SQL("SELECT * FROM t")
     f: InCollectionFilter[str] = InCollectionFilter("status", None)
     result = apply_filter(sql_stmt, f)
-    assert result.sql == sql_stmt.sql
+    assert result.raw_sql == sql_stmt.raw_sql
 
 
 # --- Task 1.4: NotInCollectionFilter edge cases ---
@@ -844,7 +975,7 @@ def test_not_in_collection_filter_empty_values_returns_unchanged() -> None:
     sql_stmt = SQL("SELECT * FROM t")
     f: NotInCollectionFilter[str] = NotInCollectionFilter("status", [])
     result = apply_filter(sql_stmt, f)
-    assert result.sql == sql_stmt.sql
+    assert result.raw_sql == sql_stmt.raw_sql
 
 
 def test_not_in_collection_filter_none_values_returns_unchanged() -> None:
@@ -852,7 +983,7 @@ def test_not_in_collection_filter_none_values_returns_unchanged() -> None:
     sql_stmt = SQL("SELECT * FROM t")
     f: NotInCollectionFilter[str] = NotInCollectionFilter("status", None)
     result = apply_filter(sql_stmt, f)
-    assert result.sql == sql_stmt.sql
+    assert result.raw_sql == sql_stmt.raw_sql
 
 
 # --- Task 1.5: Parameter conflict resolution and compound filters ---
@@ -890,7 +1021,7 @@ def test_multiple_filters_sequential_compound_where() -> None:
     result = apply_filter(result, f2)
     result = apply_filter(result, f3)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "WHERE" in sql_upper
     assert "STATUS IN" in sql_upper
     assert "NOT" in sql_upper
@@ -915,7 +1046,7 @@ def test_query_builder_apply_filters_in_collection() -> None:
 
     result = builder.apply_filters(f)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "WHERE" in sql_upper
     assert "STATUS IN" in sql_upper
     assert result.parameters["status_in_0"] == "active"
@@ -933,7 +1064,7 @@ def test_query_builder_apply_filters_multiple() -> None:
 
     result = builder.apply_filters(f1, f2, f3)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "STATUS IN" in sql_upper
     assert "LIKE" in sql_upper
     assert "LIMIT" in sql_upper
@@ -951,7 +1082,7 @@ def test_query_builder_apply_filters_not_in_collection() -> None:
 
     result = builder.apply_filters(f)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "WHERE" in sql_upper
     assert "NOT" in sql_upper
     assert "STATUS" in sql_upper
@@ -967,7 +1098,7 @@ def test_query_builder_apply_filters_empty() -> None:
 
     result = builder.apply_filters()
 
-    assert "WHERE" not in result.sql.upper()
+    assert "WHERE" not in result.raw_sql.upper()
 
 
 def test_search_filter_with_qualified_name_uses_sanitized_parameters() -> None:
@@ -990,7 +1121,7 @@ def test_search_filter_with_qualified_name_appends_to_statement_correctly() -> N
 
     result = apply_filter(statement, filter_obj)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "U.NAME LIKE" in sql_upper or '"U"."NAME" LIKE' in sql_upper or 'U."NAME" LIKE' in sql_upper
     assert "u_name_search" in result.named_parameters
     assert result.named_parameters["u_name_search"] == "%john%"
@@ -1017,7 +1148,7 @@ def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() ->
 
     result = apply_filter(statement, filter_obj)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "ORDER BY U.CREATED_AT DESC" in sql_upper or 'ORDER BY "U"."CREATED_AT" DESC' in sql_upper
 
 
@@ -1033,7 +1164,7 @@ def test_order_by_filter_with_expression_appends_to_statement_correctly() -> Non
 
     result = apply_filter(statement, filter_obj)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "ORDER BY COALESCE(LINES, OCCURRENCES, 0) DESC" in sql_upper
 
 
@@ -1048,7 +1179,7 @@ def test_search_filter_with_expression_in_set_appends_to_statement_correctly() -
 
     result = apply_filter(statement, filter_obj)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "UPPER(NAME) LIKE" in sql_upper
     assert "EMAIL LIKE" in sql_upper
     assert "OR" in sql_upper
@@ -1077,7 +1208,7 @@ def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
 
     result = builder.apply_filters(f1, f2, f3)
 
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "SELECT" in sql_upper
     assert "FROM USERS" in sql_upper.replace('"', "")
     assert "STATUS IN" in sql_upper
@@ -1373,8 +1504,8 @@ def test_search_filter_accepts_expression_field_name() -> None:
     sql_stmt = SQL("SELECT id, name FROM things")
     f = SearchFilter(field_name=exp.Lower(this=exp.column("name")), value="foo")
     result = f.append_to_statement(sql_stmt)
-    assert "WHERE" in result.sql.upper()
-    assert "LOWER" in result.sql.upper()
+    assert "WHERE" in result.raw_sql.upper()
+    assert "LOWER" in result.raw_sql.upper()
     assert any(v == "%foo%" for v in result.parameters.values())
 
 
@@ -1383,7 +1514,7 @@ def test_not_in_search_filter_accepts_expression_field_name() -> None:
     sql_stmt = SQL("SELECT id, name FROM things")
     f = NotInSearchFilter(field_name=exp.Lower(this=exp.column("name")), value="foo")
     result = f.append_to_statement(sql_stmt)
-    sql_upper = result.sql.upper()
+    sql_upper = result.raw_sql.upper()
     assert "WHERE" in sql_upper
     assert "NOT" in sql_upper and "LIKE" in sql_upper
 
@@ -1395,6 +1526,35 @@ def test_search_filter_escape_like_value() -> None:
     assert SearchFilter.escape_like_value("50% off") == "50\\% off"
     assert SearchFilter.escape_like_value("a_b") == "a\\_b"
     assert SearchFilter.escape_like_value("a\\b") == "a\\\\b"
-    # Backslash escapes apply first, so "%" inside an already-backslashed string
-    # is escaped exactly once.
     assert SearchFilter.escape_like_value("\\%_") == "\\\\\\%\\_"
+
+
+def test_boolean_filter_uses_column_based_parameters() -> None:
+    """Test that BooleanFilter uses column-based parameter names and builds AST."""
+    sql_stmt = SQL("SELECT id, name FROM things")
+    filter_obj = BooleanFilter("is_active", True)
+    positional, named = filter_obj.extract_parameters()
+    assert positional == []
+    assert named == {"is_active_boolean": True}
+    result = filter_obj.append_to_statement(sql_stmt)
+    assert "WHERE" in result.raw_sql.upper()
+    assert "is_active_boolean" in result.parameters
+    assert result.parameters["is_active_boolean"] is True
+    assert filter_obj.get_cache_key() == ("BooleanFilter", "is_active", True)
+    assert filter_obj._reconstruction_args() == ("is_active", True)
+
+
+def test_choices_filter_uses_column_based_parameters() -> None:
+    """Test that ChoicesFilter uses column-based parameter names and builds AST."""
+    sql_stmt = SQL("SELECT id, name FROM things")
+    filter_obj = ChoicesFilter("status", ["active", "pending"])
+    positional, named = filter_obj.extract_parameters()
+    assert positional == []
+    assert named == {"status_choices_0": "active", "status_choices_1": "pending"}
+    result = filter_obj.append_to_statement(sql_stmt)
+    assert "WHERE" in result.raw_sql.upper()
+    assert "status_choices_0" in result.parameters
+    assert result.parameters["status_choices_0"] == "active"
+    assert result.parameters["status_choices_1"] == "pending"
+    assert filter_obj.get_cache_key() == ("ChoicesFilter", "status", ("active", "pending"))
+    assert filter_obj._reconstruction_args() == ("status", ["active", "pending"])

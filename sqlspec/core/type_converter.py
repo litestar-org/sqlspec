@@ -151,7 +151,7 @@ def parse_datetime_rfc3339(dt_str: str) -> "datetime":
     """
     if dt_str.endswith("Z"):
         dt_str = dt_str[:-1] + "+00:00"
-    return datetime.fromisoformat(dt_str)
+    return convert_iso_datetime(dt_str)
 
 
 _TYPE_CONVERTERS: Final[dict[str, Callable[[str], Any]]] = {

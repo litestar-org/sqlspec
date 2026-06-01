@@ -44,6 +44,7 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "data_dictionary_loader",
         "data_dictionary_registry",
         "event_payload",
+        "event_queue",
         "fastapi_providers",
         "litestar_providers",
         "migration_runner",

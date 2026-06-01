@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 
 if TYPE_CHECKING:
-    from sqlspec.typing import TableMetadata, VersionInfo
+    from sqlspec.data_dictionary import TableMetadata, VersionInfo
 
 __all__ = (
     "extract_mssql_version_value",
@@ -17,7 +17,6 @@ __all__ = (
     "mssql_supports_string_agg",
     "parse_mssql_engine_edition",
     "parse_mssql_version_components",
-    "resolve_mssql_default_schema",
     "resolve_mssql_feature_flag",
 )
 
@@ -116,11 +115,6 @@ def parse_mssql_engine_edition(value: Any) -> int | None:
 def is_mssql_azure_sql(engine_edition: int | None) -> bool:
     """Return whether an EngineEdition value represents Azure SQL."""
     return engine_edition in MSSQL_ENGINE_EDITION_AZURE_SET
-
-
-def resolve_mssql_default_schema() -> str:
-    """Return the default MSSQL schema used for introspection."""
-    return "dbo"
 
 
 def mssql_supports_json_functions(major: int) -> bool:

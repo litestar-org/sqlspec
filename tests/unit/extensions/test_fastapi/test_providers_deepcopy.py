@@ -21,6 +21,8 @@ _FACTORIES: "dict[str, Any]" = {
     "_OrderByProvider": lambda cls: cls("id", {"sort_field": "id"}),
     "_CollectionFilterProvider": lambda cls: cls(FieldNameType("status", str), negated=False),
     "_NullFilterProvider": lambda cls: cls("deleted_at", negated=False),
+    "_BooleanFilterProvider": lambda cls: cls("is_active"),
+    "_ChoicesFilterProvider": lambda cls: cls("status", ["active", "pending"]),
 }
 
 
@@ -41,6 +43,18 @@ def _state_attrs(inst: Any) -> "tuple[str, ...]":
     mypyc_attrs = getattr(type(inst), "__mypyc_attrs__", None)
     if mypyc_attrs is not None:
         return tuple(mypyc_attrs)
+    slot_attrs: list[str] = []
+    for cls in reversed(type(inst).__mro__):
+        slots = getattr(cls, "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        slot_attrs.extend(
+            slot
+            for slot in slots
+            if slot not in {"__dict__", "__weakref__"} and not slot.startswith("__") and hasattr(inst, slot)
+        )
+    if slot_attrs:
+        return tuple(dict.fromkeys(slot_attrs))
     return tuple(k for k in vars(inst) if not k.startswith("__"))
 
 

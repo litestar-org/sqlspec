@@ -211,10 +211,7 @@ def is_async_readable(obj: Any) -> "TypeGuard[AsyncReadableProtocol]":
 
 def is_notification(obj: Any) -> "TypeGuard[NotificationProtocol]":
     """Check if an object is a database notification with channel and payload."""
-    try:
-        return hasattr(obj, "channel") and hasattr(obj, "payload")
-    except AttributeError:
-        return False
+    return hasattr(obj, "channel") and hasattr(obj, "payload")
 
 
 def has_pipeline_capability(obj: Any) -> "TypeGuard[PipelineCapableProtocol]":
@@ -227,26 +224,17 @@ def has_pipeline_capability(obj: Any) -> "TypeGuard[PipelineCapableProtocol]":
 
 def has_query_result_metadata(obj: Any) -> "TypeGuard[QueryResultProtocol]":
     """Check if an object has query result metadata (tag/status)."""
-    try:
-        return hasattr(obj, "tag") or hasattr(obj, "status")
-    except AttributeError:
-        return False
+    return hasattr(obj, "tag") or hasattr(obj, "status")
 
 
 def has_array_interface(obj: Any) -> "TypeGuard[SupportsArrayProtocol]":
     """Check if an object supports the array interface (like NumPy arrays)."""
-    try:
-        return hasattr(obj, "__array__")
-    except AttributeError:
-        return False
+    return hasattr(obj, "__array__")
 
 
 def has_cursor_metadata(obj: Any) -> "TypeGuard[CursorMetadataProtocol]":
     """Check if an object has cursor metadata (description)."""
-    try:
-        return hasattr(obj, "description")
-    except AttributeError:
-        return False
+    return hasattr(obj, "description")
 
 
 def has_add_listener(obj: Any) -> "TypeGuard[HasAddListenerProtocol]":
@@ -259,66 +247,42 @@ def has_add_listener(obj: Any) -> "TypeGuard[HasAddListenerProtocol]":
 
 def has_notifies(obj: Any) -> "TypeGuard[HasNotifiesProtocol]":
     """Check if an object exposes notifies."""
-    try:
-        return hasattr(obj, "notifies")
-    except AttributeError:
-        return False
+    return hasattr(obj, "notifies")
 
 
 def has_extension_config(obj: Any) -> "TypeGuard[HasExtensionConfigProtocol]":
     """Check if an object exposes extension_config mapping."""
-    try:
-        return hasattr(obj, "extension_config")
-    except AttributeError:
-        return False
+    return hasattr(obj, "extension_config")
 
 
 def has_config_attribute(obj: Any) -> "TypeGuard[HasConfigProtocol]":
     """Check if an object exposes config attribute."""
-    try:
-        return hasattr(obj, "config")
-    except AttributeError:
-        return False
+    return hasattr(obj, "config")
 
 
 def has_connection_config(obj: Any) -> "TypeGuard[HasConnectionConfigProtocol]":
     """Check if an object exposes connection_config mapping."""
-    try:
-        return hasattr(obj, "connection_config")
-    except AttributeError:
-        return False
+    return hasattr(obj, "connection_config")
 
 
 def has_database_url_and_bind_key(obj: Any) -> "TypeGuard[HasDatabaseUrlAndBindKeyProtocol]":
     """Check if an object exposes database_url and bind_key."""
-    try:
-        return hasattr(obj, "database_url") and hasattr(obj, "bind_key")
-    except AttributeError:
-        return False
+    return hasattr(obj, "database_url") and hasattr(obj, "bind_key")
 
 
 def has_name(obj: Any) -> "TypeGuard[HasNameProtocol]":
     """Check if an object exposes __name__."""
-    try:
-        return hasattr(obj, "__name__")
-    except AttributeError:
-        return False
+    return hasattr(obj, "__name__")
 
 
 def has_field_name(obj: Any) -> "TypeGuard[HasFieldNameProtocol]":
     """Check if an object exposes field_name attribute."""
-    try:
-        return hasattr(obj, "field_name")
-    except AttributeError:
-        return False
+    return hasattr(obj, "field_name")
 
 
 def has_filter_attributes(obj: Any) -> "TypeGuard[HasFilterAttributesProtocol]":
     """Check if an object exposes filter attribute set."""
-    try:
-        return hasattr(obj, "field_name") and hasattr(obj, "operation") and hasattr(obj, "value")
-    except AttributeError:
-        return False
+    return hasattr(obj, "field_name") and hasattr(obj, "operation") and hasattr(obj, "value")
 
 
 def has_get_data(obj: Any) -> "TypeGuard[HasGetDataProtocol]":
@@ -331,98 +295,62 @@ def has_get_data(obj: Any) -> "TypeGuard[HasGetDataProtocol]":
 
 def has_arrow_table_stats(obj: Any) -> "TypeGuard[ArrowTableStatsProtocol]":
     """Check if an object exposes Arrow row/byte stats."""
-    try:
-        return hasattr(obj, "num_rows") and hasattr(obj, "nbytes")
-    except AttributeError:
-        return False
+    return hasattr(obj, "num_rows") and hasattr(obj, "nbytes")
 
 
 def has_rowcount(obj: Any) -> "TypeGuard[HasRowcountProtocol]":
     """Check if a cursor exposes rowcount metadata."""
-    try:
-        return hasattr(obj, "rowcount")
-    except AttributeError:
-        return False
+    return hasattr(obj, "rowcount")
 
 
 def has_lastrowid(obj: Any) -> "TypeGuard[HasLastRowIdProtocol]":
     """Check if a cursor exposes lastrowid metadata."""
-    try:
-        return hasattr(obj, "lastrowid")
-    except AttributeError:
-        return False
+    return hasattr(obj, "lastrowid")
 
 
 def has_dtype_str(obj: Any) -> "TypeGuard[SupportsDtypeStrProtocol]":
     """Check if a dtype exposes string descriptor."""
-    try:
-        return hasattr(obj, "str")
-    except AttributeError:
-        return False
+    return hasattr(obj, "str")
 
 
 def has_statement_type(obj: Any) -> "TypeGuard[HasStatementTypeProtocol]":
     """Check if a cursor exposes statement_type metadata."""
-    try:
-        return hasattr(obj, "statement_type")
-    except AttributeError:
-        return False
+    return hasattr(obj, "statement_type")
 
 
 def has_typecode(obj: Any) -> "TypeGuard[HasTypecodeProtocol]":
     """Check if an array-like object exposes typecode."""
-    try:
-        return hasattr(obj, "typecode")
-    except AttributeError:
-        return False
+    return hasattr(obj, "typecode")
 
 
 def has_typecode_and_len(obj: Any) -> "TypeGuard[HasTypecodeSizedProtocol]":
     """Check if an array-like object exposes typecode and length."""
-    try:
-        return hasattr(obj, "typecode") and hasattr(obj, "__len__")
-    except AttributeError:
-        return False
+    return hasattr(obj, "typecode") and hasattr(obj, "__len__")
 
 
 def has_type_code(obj: Any) -> "TypeGuard[HasTypeCodeProtocol]":
     """Check if an object exposes type_code."""
-    try:
-        return hasattr(obj, "type_code")
-    except AttributeError:
-        return False
+    return hasattr(obj, "type_code")
 
 
 def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
     """Check if an exception exposes sqlstate."""
-    try:
-        return hasattr(obj, "sqlstate")
-    except AttributeError:
-        return False
+    return hasattr(obj, "sqlstate")
 
 
 def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
     """Check if an exception exposes sqlite error details."""
-    try:
-        return hasattr(obj, "sqlite_errorcode")
-    except AttributeError:
-        return False
+    return hasattr(obj, "sqlite_errorcode")
 
 
 def has_value_attribute(obj: Any) -> "TypeGuard[HasValueProtocol]":
     """Check if an object exposes a value attribute."""
-    try:
-        return hasattr(obj, "value")
-    except AttributeError:
-        return False
+    return hasattr(obj, "value")
 
 
 def has_errors(obj: Any) -> "TypeGuard[HasErrorsProtocol]":
     """Check if an exception exposes errors."""
-    try:
-        return hasattr(obj, "errors")
-    except AttributeError:
-        return False
+    return hasattr(obj, "errors")
 
 
 def has_span_attribute(obj: Any) -> "TypeGuard[SpanAttributeProtocol]":
@@ -459,10 +387,7 @@ def supports_async_write_bytes(obj: Any) -> "TypeGuard[AsyncWriteBytesProtocol]"
 
 def supports_json_type(obj: Any) -> "TypeGuard[SupportsJsonTypeProtocol]":
     """Check if an object exposes JSON type support."""
-    try:
-        return hasattr(obj, "JSON")
-    except AttributeError:
-        return False
+    return hasattr(obj, "JSON")
 
 
 def supports_close(obj: Any) -> "TypeGuard[SupportsCloseProtocol]":
@@ -1381,7 +1306,11 @@ def has_expression_and_sql(obj: Any) -> "TypeGuard[HasExpressionAndSQLProtocol]"
     Returns:
         True if the object has both attributes, False otherwise
     """
-    return isinstance(obj, HasExpressionAndSQLProtocol)
+    if not hasattr(obj, "expression"):
+        return False
+    if hasattr(obj, "raw_sql"):
+        return True
+    return hasattr(obj, "sql")
 
 
 def has_expression_and_parameters(obj: Any) -> "TypeGuard[HasExpressionAndParametersProtocol]":

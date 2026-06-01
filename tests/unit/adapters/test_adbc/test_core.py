@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc.core import (
+    _prepare_batch_with_casts,
     collect_rows,
     get_statement_config,
     prepare_parameters_with_casts,
@@ -101,6 +102,36 @@ def test_prepare_parameters_with_casts_uses_type_converter_factory(monkeypatch: 
     assert factory_calls == [("postgres", 5000)]
 
 
+def test_prepare_batch_with_casts_creates_converter_once(monkeypatch: Any) -> None:
+    statement_config = get_statement_config("postgres")
+    factory_calls: list[tuple[str, int]] = []
+
+    class FakeConverter:
+        def convert_dict(self, value: dict[str, Any]) -> str:
+            return f"factory:{sorted(value.items())!r}"
+
+    def fake_factory(dialect: str, cache_size: int = 5000) -> FakeConverter:
+        factory_calls.append((dialect, cache_size))
+        return FakeConverter()
+
+    monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
+
+    prepared = _prepare_batch_with_casts(
+        [(1, {"name": "alice"}), (2, {"name": "bob"}), (3, {"name": "carol"})],
+        {1: "INT"},
+        statement_config,
+        dialect="postgres",
+        json_serializer=lambda value: str(value),
+    )
+
+    assert prepared == [
+        (1, "factory:[('name', 'alice')]"),
+        (2, "factory:[('name', 'bob')]"),
+        (3, "factory:[('name', 'carol')]"),
+    ]
+    assert factory_calls == [("postgres", 5000)]
+
+
 def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None:
     class MyInt(int):
         pass
@@ -184,3 +215,9 @@ def test_normalize_postgres_empty_parameters_returns_none_for_pgvector() -> None
 def test_normalize_postgres_empty_parameters_returns_none_for_paradedb() -> None:
     """paradedb empty dict parameters should use the PostgreSQL empty-params path."""
     assert adbc_core.normalize_postgres_empty_parameters("paradedb", {}) is None
+
+
+def test_base_type_coercion_map_replaces_getter_function() -> None:
+    assert isinstance(adbc_core._BASE_TYPE_COERCION_MAP, dict)
+    assert not hasattr(adbc_core, "_get_type_coercion_map")
+    assert adbc_core.driver_profile is not None

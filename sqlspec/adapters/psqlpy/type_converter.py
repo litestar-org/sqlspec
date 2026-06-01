@@ -86,9 +86,7 @@ class PostgreSQLOutputConverter(CachedOutputConverter):
 
         match = PG_SPECIFIC_REGEX.match(value)
         if match:
-            for group_name in ["interval", "pg_array"]:
-                if match.group(group_name):
-                    return group_name
+            return match.lastgroup
 
         return None
 

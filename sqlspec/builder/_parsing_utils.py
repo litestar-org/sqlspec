@@ -30,6 +30,7 @@ __all__ = (
 )
 
 ALIAS_PARTS_EXPECTED_COUNT = 2
+_PARAMETER_VALIDATOR = ParameterValidator()
 
 
 def extract_column_name(column: str | exp.Column) -> str:
@@ -96,7 +97,9 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
             return column_input.expression
 
         _merge_sql_parameters(column_input, builder)
-        sql_str = column_input.sql
+        sql_str = getattr(column_input, "raw_sql", None)
+        if sql_str is None:
+            sql_str = column_input.sql
         return exp.maybe_parse(sql_str) or exp.column(sql_str)
 
     if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
@@ -194,8 +197,7 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
     if not isinstance(condition_input, str):
         condition_input = str(condition_input)
 
-    validator = ParameterValidator()
-    param_info = validator.extract_parameters(condition_input)
+    param_info = _PARAMETER_VALIDATOR.extract_parameters(condition_input)
 
     if param_info:
         converted_condition = condition_input
@@ -251,7 +253,9 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
         return value.expression
 
     _merge_sql_parameters(value, builder)
-    sql_text = value.sql if not callable(value.sql) else str(value)
+    sql_text = getattr(value, "raw_sql", None)
+    if sql_text is None:
+        sql_text = value.sql if not callable(value.sql) else str(value)
 
     return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
 

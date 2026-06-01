@@ -7,6 +7,7 @@ via connection type handlers. Uses stdlib uuid (no external dependencies).
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._json_handlers import _ChainedInputHandler, _ChainedOutputHandler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
 from sqlspec.utils.logging import get_logger
 
@@ -129,35 +130,5 @@ def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     except AttributeError:
         existing_output = None
 
-    connection.inputtypehandler = _UuidInputHandler(existing_input)
-    connection.outputtypehandler = _UuidOutputHandler(existing_output)
-
-
-class _UuidInputHandler:
-    __slots__ = ("_fallback",)
-
-    def __init__(self, fallback: "Any | None") -> None:
-        self._fallback = fallback
-
-    def __call__(self, cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-        result = _input_type_handler(cursor, value, arraysize)
-        if result is not None:
-            return result
-        if self._fallback is not None:
-            return self._fallback(cursor, value, arraysize)
-        return None
-
-
-class _UuidOutputHandler:
-    __slots__ = ("_fallback",)
-
-    def __init__(self, fallback: "Any | None") -> None:
-        self._fallback = fallback
-
-    def __call__(self, cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-        result = _output_type_handler(cursor, metadata)
-        if result is not None:
-            return result
-        if self._fallback is not None:
-            return self._fallback(cursor, metadata)
-        return None
+    connection.inputtypehandler = _ChainedInputHandler(_input_type_handler, existing_input)
+    connection.outputtypehandler = _ChainedOutputHandler(_output_type_handler, existing_output)

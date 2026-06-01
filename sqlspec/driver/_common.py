@@ -31,7 +31,7 @@ from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
 from sqlspec.core.statement import ProcessedState
-from sqlspec.data_dictionary._loader import get_data_dictionary_loader
+from sqlspec.data_dictionary import ForeignKeyMetadata, VersionCacheResult, VersionInfo, get_data_dictionary_loader
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
 from sqlspec.driver._storage_helpers import (
@@ -46,7 +46,6 @@ from sqlspec.driver._storage_helpers import (
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
-from sqlspec.typing import VersionCacheResult, VersionInfo
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
@@ -79,7 +78,7 @@ if TYPE_CHECKING:
         StorageTelemetry,
         SyncStoragePipeline,
     )
-    from sqlspec.typing import ArrowTable, ForeignKeyMetadata, SchemaT, StatementParameters
+    from sqlspec.typing import ArrowTable, SchemaT, StatementParameters
 
 
 __all__ = (
@@ -117,19 +116,36 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
     return float("inf")
 
 
-def _select_dominant_style(
-    style_counts: "dict[ParameterStyle, int]", precedence: "dict[ParameterStyle, int]"
-) -> "ParameterStyle":
-    best_style: ParameterStyle | None = None
-    best_count = -1
-    best_precedence = 100
-    for style, count in style_counts.items():
-        current_precedence = precedence.get(style, 99)
-        if count > best_count or (count == best_count and current_precedence < best_precedence):
-            best_style = style
-            best_count = count
-            best_precedence = current_precedence
-    return cast("ParameterStyle", best_style)
+def _lazy_copy_coerce_dict(parameters: "dict[str, Any]", coerce_value: Any, type_coercion_map: Any) -> "dict[str, Any]":
+    result: dict[str, Any] | None = None
+    for key, value in parameters.items():
+        coerced_value = coerce_value(value, type_coercion_map)
+        if result is None:
+            if coerced_value is value:
+                continue
+            result = dict(parameters)
+        result[key] = coerced_value
+    if result is None:
+        return parameters
+    return result
+
+
+def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
+    return ProcessedState(
+        compiled_sql=processed.compiled_sql,
+        execution_parameters=processed.execution_parameters,
+        parsed_expression=processed.parsed_expression,
+        operation_type=processed.operation_type,
+        input_named_parameters=processed.input_named_parameters,
+        applied_wrap_types=processed.applied_wrap_types,
+        filter_hash=processed.filter_hash,
+        parameter_fingerprint=processed.parameter_fingerprint,
+        parameter_casts=dict(processed.parameter_casts),
+        validation_errors=processed.validation_errors.copy(),
+        parameter_profile=processed.parameter_profile,
+        operation_profile=processed.operation_profile,
+        is_many=False,
+    )
 
 
 def _extract_pagination_placeholders_from_expression(expression: "exp.Expr") -> "set[str]":
@@ -519,7 +535,7 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     if isinstance(statement, str):
         return statement
     if isinstance(statement, StatementProtocol):
-        return statement.raw_sql or statement.sql
+        return statement.raw_sql or repr(statement)
     return repr(statement)
 
 
@@ -1005,7 +1021,7 @@ class CommonDriverAttributesMixin:
         raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
 
     def _release_pooled_statement(self, statement: "SQL") -> None:
-        if getattr(statement, "_pooled", False):
+        if statement._pooled:
             self._statement_pool.release(statement)
 
     def stmt_cache_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
@@ -1072,6 +1088,11 @@ class CommonDriverAttributesMixin:
             is_many=False,
         )
         # Fast-path: directly set internal attributes to avoid constructor overhead.
+        return SQL._create_cached_direct(sql, self.statement_config, direct_state)
+
+    def _build_direct_sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
+        direct_state = self._processed_state_pool.acquire()
+        ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
         return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
     def _stmt_cache_prepare_direct(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQL | None":
@@ -1245,27 +1266,13 @@ class CommonDriverAttributesMixin:
         # Store a stable snapshot for cache metadata. Some call paths execute
         # pooled SQL objects that are reset/recycled after dispatch, and the
         # cache must not hold references to a mutable pooled ProcessedState.
-        cached_state = ProcessedState(
-            compiled_sql=processed.compiled_sql,
-            execution_parameters=processed.execution_parameters,
-            parsed_expression=processed.parsed_expression,
-            operation_type=processed.operation_type,
-            input_named_parameters=processed.input_named_parameters,
-            applied_wrap_types=processed.applied_wrap_types,
-            filter_hash=processed.filter_hash,
-            parameter_fingerprint=processed.parameter_fingerprint,
-            parameter_casts=dict(processed.parameter_casts),
-            validation_errors=processed.validation_errors.copy(),
-            parameter_profile=processed.parameter_profile,
-            operation_profile=processed.operation_profile,
-            is_many=False,
-        )
+        cached_state = _clone_processed_state(processed)
         cached = CachedQuery(
             compiled_sql=processed.compiled_sql,
             parameter_profile=param_profile,
             input_named_parameters=processed.input_named_parameters,
             applied_wrap_types=processed.applied_wrap_types,
-            parameter_casts=dict(processed.parameter_casts),
+            parameter_casts=cached_state.parameter_casts,
             operation_type=processed.operation_type,
             operation_profile=processed.operation_profile,
             param_count=param_profile.total_count,
@@ -1554,7 +1561,7 @@ class CommonDriverAttributesMixin:
             needs_rebuild = True
 
         if needs_rebuild:
-            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql or sql_statement.sql
+            statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
             if sql_statement.is_many and sql_statement.parameters:
                 return SQL(statement_seed, sql_statement.parameters, statement_config=statement_config, is_many=True)
             if sql_statement.named_parameters:
@@ -1743,17 +1750,17 @@ class CommonDriverAttributesMixin:
             return [self._apply_coercion_with_fallback(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
-            coerced_mapping: dict[str, Any] | None = None
+            result_mapping: dict[str, Any] | None = None
             for key, value in parameters.items():
                 coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
-                if coerced_mapping is None:
+                if result_mapping is None:
                     if coerced_value is value:
                         continue
-                    coerced_mapping = dict(parameters)
-                coerced_mapping[key] = coerced_value
-            if coerced_mapping is None:
+                    result_mapping = dict(parameters)
+                result_mapping[key] = coerced_value
+            if result_mapping is None:
                 return parameters
-            return coerced_mapping
+            return result_mapping
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
@@ -1795,17 +1802,7 @@ class CommonDriverAttributesMixin:
                 ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
                 or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                updated_mapping: dict[str, Any] | None = None
-                for key, value in parameters.items():
-                    coerced_value = coerce_value(value, type_coercion_map)
-                    if updated_mapping is None:
-                        if coerced_value is value:
-                            continue
-                        updated_mapping = dict(parameters)
-                    updated_mapping[key] = coerced_value
-                if updated_mapping is None:
-                    return parameters
-                return updated_mapping
+                return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map)
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
@@ -1814,17 +1811,7 @@ class CommonDriverAttributesMixin:
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
                 return [coerce_value(value, type_coercion_map) for _, value in sorted_items]
 
-            coerced_mapping: dict[str, Any] | None = None
-            for key, value in parameters.items():
-                coerced_value = coerce_value(value, type_coercion_map)
-                if coerced_mapping is None:
-                    if coerced_value is value:
-                        continue
-                    coerced_mapping = dict(parameters)
-                coerced_mapping[key] = coerced_value
-            if coerced_mapping is None:
-                return parameters
-            return coerced_mapping
+            return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map)
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
@@ -1878,13 +1865,15 @@ class CommonDriverAttributesMixin:
         # FAST PATH: Statement already compiled - reuse its processed state
         # This is the key optimization: avoid double compilation
         if statement.is_processed:
-            if getattr(statement, "_compiled_from_cache", False):
+            if statement._compiled_from_cache:
                 compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
                     execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 cached_statement = CachedStatement(
-                    compiled_sql=compiled_sql, parameters=prepared_parameters, expression=statement.expression
+                    compiled_sql=compiled_sql,
+                    parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
+                    expression=statement.expression,
                 )
                 self._stmt_cache_store(statement)
                 return cached_statement, prepared_parameters
@@ -1893,7 +1882,7 @@ class CommonDriverAttributesMixin:
             # DIRECT FAST PATH: When _is_cache_direct is set, execution_parameters
             # already went through prepare_driver_parameters.
             # Skip the redundant parameter processing and store entirely.
-            if getattr(statement, "_is_cache_direct", False):
+            if statement._is_cache_direct:
                 prepared_parameters = processed.execution_parameters
                 cached_statement = CachedStatement(
                     compiled_sql=processed.compiled_sql,
@@ -1910,7 +1899,7 @@ class CommonDriverAttributesMixin:
             )
             cached_statement = CachedStatement(
                 compiled_sql=processed.compiled_sql,
-                parameters=prepared_parameters,
+                parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
                 expression=processed.parsed_expression,
             )
             self._stmt_cache_store(statement)
@@ -1937,22 +1926,26 @@ class CommonDriverAttributesMixin:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
-            if cached_result is not None and isinstance(cached_result, CachedStatement):
+            if cached_result is not None:
+                if __debug__:
+                    assert isinstance(cached_result, CachedStatement), (
+                        f"Statement cache corruption: expected CachedStatement, got {type(cached_result)!r}"
+                    )
+                if not isinstance(cached_result, CachedStatement):
+                    cached_result = None
+            if cached_result is not None:
                 # Structural fingerprinting means same SQL structure = same cache entry,
                 # but we must still use the caller's actual parameter values.
-                # Compile with the statement's parameters to get correctly processed values.
-                compiled_sql, execution_parameters = statement.compile()
                 prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+                    statement.parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                 )
                 # Return cached SQL metadata but with newly processed parameters
                 # Preserve list type for execute_many operations (some drivers require list, not tuple)
                 updated_cached = CachedStatement(
                     compiled_sql=cached_result.compiled_sql,
-                    parameters=prepared_parameters,
+                    parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
                     expression=cached_result.expression,
                 )
-                self._stmt_cache_store(statement)
                 return updated_cached, prepared_parameters
 
         # Compile the statement directly (no need for prepare_statement indirection)
@@ -1964,7 +1957,9 @@ class CommonDriverAttributesMixin:
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
-            compiled_sql=compiled_sql, parameters=cached_parameters, expression=statement.expression
+            compiled_sql=compiled_sql,
+            parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", cached_parameters),
+            expression=statement.expression,
         )
 
         if cache_key is not None and cache is not None:
@@ -2002,12 +1997,13 @@ class CommonDriverAttributesMixin:
         params = statement.parameters
 
         if params is None or (isinstance(params, (list, tuple, dict)) and not params):
-            return f"compiled:{hash(statement.sql)}:{context_hash}"
+            return f"compiled:{hash(statement.raw_sql)}:{context_hash}"
 
         if isinstance(params, tuple) and all(isinstance(p, (int, str, bytes, bool, type(None))) for p in params):
             try:
                 return (
-                    f"compiled:{hash((statement.sql, params, statement.is_many, statement.is_script))}:{context_hash}"
+                    f"compiled:{hash((statement.raw_sql, params, statement.is_many, statement.is_script))}:"
+                    f"{context_hash}"
                 )
             except TypeError:
                 pass
@@ -2019,38 +2015,8 @@ class CommonDriverAttributesMixin:
             params_fingerprint = value_fingerprint(params)
         else:
             params_fingerprint = structural_fingerprint(params)
-        base_hash = hash((statement.sql, params_fingerprint, statement.is_many, statement.is_script))
+        base_hash = hash((statement.raw_sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
-
-    def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "ParameterStyle | None":
-        """Determine the dominant parameter style from parameter info list.
-
-        Args:
-            parameters: List of ParameterInfo objects from validator.extract_parameters()
-
-        Returns:
-            The dominant parameter style, or None if no parameters
-
-        """
-        if not parameters:
-            return None
-
-        style_counts: dict[ParameterStyle, int] = {}
-        for param in parameters:
-            style_counts[param.style] = style_counts.get(param.style, 0) + 1
-
-        precedence = {
-            ParameterStyle.QMARK: 1,
-            ParameterStyle.NUMERIC: 2,
-            ParameterStyle.POSITIONAL_COLON: 3,
-            ParameterStyle.POSITIONAL_PYFORMAT: 4,
-            ParameterStyle.NAMED_AT: 5,
-            ParameterStyle.NAMED_DOLLAR: 6,
-            ParameterStyle.NAMED_COLON: 7,
-            ParameterStyle.NAMED_PYFORMAT: 8,
-        }
-
-        return _select_dominant_style(style_counts, precedence)
 
     @staticmethod
     def find_filter(

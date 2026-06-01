@@ -140,8 +140,6 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         Executes DDL statements via database.update_ddl() which is the
         recommended approach for Spanner schema changes.
 
-        Raises:
-            google.api_core.exceptions.AlreadyExists: If table or index exists.
         """
         config = self._config
         if not isinstance(config, SpannerSyncConfig):
@@ -166,8 +164,6 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         Executes DDL statements via database.update_ddl() which is the
         recommended approach for Spanner schema changes.
 
-        Raises:
-            google.api_core.exceptions.NotFound: If table or index does not exist.
         """
         config = self._config
         if not isinstance(config, SpannerSyncConfig):

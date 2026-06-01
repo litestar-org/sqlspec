@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter, build_uuid_coercions
+from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
@@ -45,7 +45,7 @@ __all__ = (
 )
 
 
-_TIME_TO_ISO = build_time_iso_converter()
+_TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
@@ -63,18 +63,14 @@ SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
-    parts = [part for part in cleaned.split(".") if part]
-    formatted = ".".join(quote_identifier(part) for part in parts)
-    return formatted or quote_identifier(cleaned)
+    if "." not in cleaned:
+        return quote_identifier(cleaned)
+    return ".".join(quote_identifier(part) for part in cleaned.split(".") if part)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
@@ -299,6 +295,10 @@ def build_profile() -> "DriverParameterProfile":
         },
         default_dialect="sqlite",
     )
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
 
 
 driver_profile = build_profile()

@@ -38,7 +38,6 @@ EVENT_ATTRS: tuple[LifecycleEvent, ...] = (
     "on_query_complete",
     "on_error",
 )
-GUARD_ATTRS = tuple(f"has_{name[3:]}" for name in EVENT_ATTRS)
 
 
 class LifecycleDispatcher:
@@ -73,10 +72,11 @@ class LifecycleDispatcher:
         self.has_error = False
 
         normalized: dict[LifecycleEvent, list[LifecycleHook]] = {}
-        for event_name, guard_attr in zip(EVENT_ATTRS, GUARD_ATTRS, strict=False):
+        for event_name in EVENT_ATTRS:
             callables = hooks.get(event_name) if hooks else None
             normalized[event_name] = list(callables) if callables else []
-            setattr(self, guard_attr, bool(normalized[event_name]))
+            if normalized[event_name]:
+                self._enable_event_guard(event_name)
         self._hooks: dict[LifecycleEvent, list[LifecycleHook]] = normalized
         self._counters: dict[LifecycleEvent, int] = dict.fromkeys(EVENT_ATTRS, 0)
         self._is_enabled = any(self._hooks.values())
@@ -108,7 +108,7 @@ class LifecycleDispatcher:
         if not callbacks:
             return
         self._counters["on_pool_destroying"] += 1
-        for callback in list(callbacks):
+        for callback in callbacks:
             try:
                 result = callback(context)
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -129,8 +129,7 @@ class LifecycleDispatcher:
 
         callbacks = self._hooks.setdefault(event, [])
         callbacks.append(callback)
-        guard_attr = f"has_{event[3:]}"
-        setattr(self, guard_attr, True)
+        self._enable_event_guard(event)
         self._is_enabled = True
 
     def emit_pool_destroy(self, context: "LifecycleContext") -> None:
@@ -183,6 +182,29 @@ class LifecycleDispatcher:
                 key = f"{prefix}.{key}"
             metrics[key] = count
         return metrics
+
+    def _enable_event_guard(self, event: LifecycleEvent) -> None:
+        match event:
+            case "on_pool_create":
+                self.has_pool_create = True
+            case "on_pool_destroying":
+                self.has_pool_destroying = True
+            case "on_pool_destroy":
+                self.has_pool_destroy = True
+            case "on_connection_create":
+                self.has_connection_create = True
+            case "on_connection_destroy":
+                self.has_connection_destroy = True
+            case "on_session_start":
+                self.has_session_start = True
+            case "on_session_end":
+                self.has_session_end = True
+            case "on_query_start":
+                self.has_query_start = True
+            case "on_query_complete":
+                self.has_query_complete = True
+            case "on_error":
+                self.has_error = True
 
     def _emit(self, event: LifecycleEvent, context: "LifecycleContext") -> None:
         callbacks = self._hooks.get(event)

@@ -2,12 +2,15 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 if TYPE_CHECKING:  # pragma: no cover - imported for typing only
     from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("StackExecutionMetrics",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StackExecutionMetrics:
     """Capture telemetry facts about a stack execution."""
 

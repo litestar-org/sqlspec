@@ -2,9 +2,9 @@
 
 import pytest
 
-pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
-
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _validate_sql_identifier
+
+pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
 
 @pytest.mark.parametrize("identifier", ["my_openai_secret", "openai", "S3", "s3", "r2", "secret_1"])
@@ -25,7 +25,6 @@ def test_create_connection_raises_for_malicious_secret_name() -> None:
             {"name": "evil; DROP TABLE secrets--", "secret_type": "s3", "value": {"key_id": "abc", "secret": "xyz"}}
         ],
     )
-
     with pytest.raises(ValueError, match="secret_name"):
         pool._create_connection()
 
@@ -41,6 +40,34 @@ def test_create_connection_raises_for_malicious_secret_type() -> None:
             }
         ],
     )
-
     with pytest.raises(ValueError, match="secret_type"):
         pool._create_connection()
+
+
+pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
+
+
+def test_pool_memory_leak_pool_has_no_connection_times_attribute() -> None:
+    pool = DuckDBConnectionPool({"database": ":memory:"})
+    assert not hasattr(pool, "_connection_times")
+
+
+def test_pool_memory_leak_pool_has_no_created_connections_attribute() -> None:
+    pool = DuckDBConnectionPool({"database": ":memory:"})
+    assert not hasattr(pool, "_created_connections")
+
+
+def test_pool_memory_leak_pool_slots_do_not_contain_removed_attrs() -> None:
+    slots = DuckDBConnectionPool.__slots__
+    assert "_connection_times" not in slots
+    assert "_created_connections" not in slots
+
+
+def test_pool_memory_leak_pool_creates_connection_after_attribute_removal() -> None:
+    pool = DuckDBConnectionPool({"database": ":memory:"})
+    try:
+        conn = pool.acquire()
+        row = conn.execute("SELECT 42").fetchone()
+    finally:
+        pool.close()
+    assert row == (42,)

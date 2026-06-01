@@ -87,9 +87,9 @@ def test_complex_postgresql_queries(fixtures_path: Path) -> None:
     for query_name in postgres_queries:
         sql = loader.get_sql(query_name)
         assert isinstance(sql, SQL)
-        assert len(sql.sql.strip()) > 0
+        assert len(sql.raw_sql.strip()) > 0
 
-        sql_text = sql.sql.upper()
+        sql_text = sql.raw_sql.upper()
 
         if any(
             pattern in sql_text
@@ -119,9 +119,9 @@ def test_complex_mysql_queries(fixtures_path: Path) -> None:
     for query_name in mysql_queries:
         sql = loader.get_sql(query_name)
         assert isinstance(sql, SQL)
-        assert len(sql.sql.strip()) > 0
+        assert len(sql.raw_sql.strip()) > 0
 
-        sql_text = sql.sql.upper()
+        sql_text = sql.raw_sql.upper()
 
         if any(
             pattern in sql_text
@@ -153,7 +153,7 @@ def test_parameter_styles_detection(fixtures_path: Path) -> None:
     for query_name in queries:
         try:
             sql = loader.get_sql(query_name)
-            sql_text = sql.sql
+            sql_text = sql.raw_sql
 
             if ":" in sql_text and any(
                 pattern in sql_text for pattern in [":PKEY", ":DMA_SOURCE_ID", ":database_name"]
@@ -212,11 +212,11 @@ def test_asset_maintenance_query(fixtures_path: Path) -> None:
         sql = loader.get_sql("asset_maintenance_alert")
 
         assert isinstance(sql, SQL)
-        assert "inserted_data" in sql.sql
-        assert ":date_start" in sql.sql
-        assert ":date_end" in sql.sql
-        assert "alert_users" in sql.sql
-        assert "CONFLICT" in sql.sql.upper()
+        assert "inserted_data" in sql.raw_sql
+        assert ":date_start" in sql.raw_sql
+        assert ":date_end" in sql.raw_sql
+        assert "alert_users" in sql.raw_sql
+        assert "CONFLICT" in sql.raw_sql.upper()
         console.print("[green]✓[/green] Asset maintenance query validated")
     else:
         console.print("[yellow]Asset maintenance query not found in fixtures[/yellow]")
@@ -242,7 +242,7 @@ def test_query_text_retrieval(fixtures_path: Path) -> None:
             assert len(text.strip()) > 0
 
             sql = loader.get_sql(query_name)
-            assert text == sql.sql
+            assert text == sql.raw_sql
             tested_count += 1
         except Exception:
             continue
@@ -375,7 +375,7 @@ def test_mixed_dialect_queries(fixtures_path: Path) -> None:
             assert isinstance(pg_sql, SQL)
             assert isinstance(mysql_sql, SQL)
 
-            assert pg_sql.sql != mysql_sql.sql
+            assert pg_sql.raw_sql != mysql_sql.raw_sql
 
             console.print(f"[green]✓[/green] Tested mixed dialects: {postgres_query}, {mysql_query}")
         except Exception as e:
@@ -408,8 +408,8 @@ def test_specific_real_world_patterns(fixtures_path: Path) -> None:
     for query_name in queries:
         try:
             sql = loader.get_sql(query_name)
-            sql_text = sql.sql.upper()
-            original_sql = sql.sql
+            sql_text = sql.raw_sql.upper()
+            original_sql = sql.raw_sql
 
             if "WITH " in sql_text:
                 pattern_counts["ctes"] += 1
@@ -503,24 +503,24 @@ left join users on users.id = inserted_data.user_id
 
     pg_sql = loader.get_sql("postgres_cte_complex")
     assert isinstance(pg_sql, SQL)
-    assert "WITH" in pg_sql.sql.upper()
-    assert ":database_name" in pg_sql.sql
-    assert ":target_oid" in pg_sql.sql
-    assert "pg_database_size" in pg_sql.sql
+    assert "WITH" in pg_sql.raw_sql.upper()
+    assert ":database_name" in pg_sql.raw_sql
+    assert ":target_oid" in pg_sql.raw_sql
+    assert "pg_database_size" in pg_sql.raw_sql
 
     mysql_sql = loader.get_sql("mysql_hint_complex")
     assert isinstance(mysql_sql, SQL)
-    assert "/*+" in mysql_sql.sql
-    assert "@PKEY" in mysql_sql.sql
-    assert "@DMA_SOURCE_ID" in mysql_sql.sql
-    assert "information_schema" in mysql_sql.sql.lower()
+    assert "/*+" in mysql_sql.raw_sql
+    assert "@PKEY" in mysql_sql.raw_sql
+    assert "@DMA_SOURCE_ID" in mysql_sql.raw_sql
+    assert "information_schema" in mysql_sql.raw_sql.lower()
 
     conflict_sql = loader.get_sql("conflict_handling_complex")
     assert isinstance(conflict_sql, SQL)
-    assert "CONFLICT" in conflict_sql.sql.upper()
-    assert ":date_start" in conflict_sql.sql
-    assert ":date_end" in conflict_sql.sql
-    assert "to_jsonb" in conflict_sql.sql
+    assert "CONFLICT" in conflict_sql.raw_sql.upper()
+    assert ":date_start" in conflict_sql.raw_sql
+    assert ":date_end" in conflict_sql.raw_sql
+    assert "to_jsonb" in conflict_sql.raw_sql
 
     for sql_obj in [pg_sql, mysql_sql, conflict_sql]:
         assert sql_obj.parameters == []
@@ -551,7 +551,7 @@ def test_query_name_normalization_with_hyphens() -> None:
 
         sql1 = loader.get_sql(original_name)
         sql2 = loader.get_sql(underscore_name)
-        assert sql1.sql == sql2.sql
+        assert sql1.raw_sql == sql2.raw_sql
 
     console.print(f"[green]✓[/green] All {len(fixture_names)} hyphenated names normalize correctly")
 
@@ -634,12 +634,12 @@ limit :result_limit
 
     sql = loader.get_sql("large_database_analysis")
     assert isinstance(sql, SQL)
-    assert len(sql.sql) > 1000
-    assert sql.sql.count("select") >= 4
-    assert sql.sql.count("with") >= 1
-    assert ":min_modifications" in sql.sql
-    assert ":min_hit_ratio" in sql.sql
-    assert ":result_limit" in sql.sql
+    assert len(sql.raw_sql) > 1000
+    assert sql.raw_sql.count("select") >= 4
+    assert sql.raw_sql.count("with") >= 1
+    assert ":min_modifications" in sql.raw_sql
+    assert ":min_hit_ratio" in sql.raw_sql
+    assert ":result_limit" in sql.raw_sql
 
     start_time = time.perf_counter()
     for _ in range(100):
@@ -650,5 +650,5 @@ limit :result_limit
         f"Large query retrieval too slow: {elapsed:.3f}s for 100 calls "
         f"(threshold {MAX_LARGE_QUERY_LOOKUP_SECONDS:.2f}s)"
     )
-    console.print(f"[green]✓[/green] Large query ({len(sql.sql)} chars) handled efficiently")
+    console.print(f"[green]✓[/green] Large query ({len(sql.raw_sql)} chars) handled efficiently")
     console.print(f"  • Performance: {elapsed * 1000:.1f}ms for 100 calls ({elapsed * 10.0:.1f}ms per call)")

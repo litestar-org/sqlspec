@@ -22,18 +22,6 @@ __all__ = ("PyMysqlADKMemoryStore", "PyMysqlADKStore")
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
-def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
-    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
-    if not references_match:
-        return (column_ddl.strip(), "")
-
-    col_def = column_ddl[: references_match.start()].strip()
-    fk_clause = references_match.group(1).strip()
-    col_name = col_def.split()[0]
-    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
-    return (col_def, fk_constraint)
-
-
 class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
     """MySQL/MariaDB ADK store using PyMySQL.
 
@@ -655,3 +643,15 @@ class PyMysqlADKMemoryStore(BaseAsyncADKMemoryStore["PyMysqlConfig"]):
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         return await async_(self._delete_entries_older_than)(days)
+
+
+def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
+    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
+    if not references_match:
+        return (column_ddl.strip(), "")
+
+    col_def = column_ddl[: references_match.start()].strip()
+    fk_clause = references_match.group(1).strip()
+    col_name = col_def.split()[0]
+    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
+    return (col_def, fk_constraint)

@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver

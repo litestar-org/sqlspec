@@ -44,7 +44,7 @@ SELECT id, name FROM users WHERE active = true;
 
     user_count_sql = loader.get_sql("get_user_count")
     assert isinstance(user_count_sql, SQL)
-    assert "COUNT(*)" in user_count_sql.sql
+    assert "COUNT(*)" in user_count_sql.raw_sql
 
 
 def test_load_multiple_files_from_filesystem(tmp_path: Path) -> None:
@@ -177,7 +177,7 @@ SELECT 'original' as version;
     loader.load_sql(sql_file)
 
     sql = loader.get_sql("original_query")
-    assert "original" in sql.sql
+    assert "original" in sql.raw_sql
 
     modified_content = """
 -- name: modified_query
@@ -695,7 +695,7 @@ SELECT 'Unicode: 测试 тест עברית' as multilingual_message,
     assert "unicode_content_query" in queries
 
     sql = loader.get_sql("unicode_content_query")
-    assert "Unicode: 测试 тест עברית" in sql.sql
+    assert "Unicode: 测试 тест עברית" in sql.raw_sql
 
 
 def test_mixed_encoding_handling(tmp_path: Path) -> None:

@@ -63,9 +63,10 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.stack import StackOperation
+    from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters, VersionInfo
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = (
     "OracleAsyncDriver",
@@ -371,10 +372,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Execution result with affected row count
-
-        Raises:
-            ValueError: If no parameters are provided
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -544,14 +541,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 msg = "Oracle native Arrow support is not available for this connection."
                 raise ImproperConfigurationError(msg) from exc
             return super().select_to_arrow(
-                statement,
-                *parameters,
-                statement_config=statement_config,
+                prepared_statement,
+                statement_config=config,
                 return_format=return_format,
                 native_only=native_only,
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
-                **kwargs,
             )
 
         arrow_table = pa.table(oracle_df)
@@ -886,10 +881,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Execution result with affected row count
-
-        Raises:
-            ValueError: If no parameters are provided
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -1062,14 +1053,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 msg = "Oracle native Arrow support is not available for this connection."
                 raise ImproperConfigurationError(msg) from exc
             return await super().select_to_arrow(
-                statement,
-                *parameters,
-                statement_config=statement_config,
+                prepared_statement,
+                statement_config=config,
                 return_format=return_format,
                 native_only=native_only,
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
-                **kwargs,
             )
 
         arrow_table = pa.table(oracle_df)
