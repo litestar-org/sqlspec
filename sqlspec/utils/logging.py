@@ -31,29 +31,31 @@ __all__ = (
 )
 
 POOL_LOGGER_NAME = "sqlspec.pool"
-"""Logger name for connection pool operations.
+"""
+Logger name for connection pool operations.
 
 Use this constant to configure pool log levels independently::
 
-    import logging
-    from sqlspec.utils.logging import POOL_LOGGER_NAME
+ import logging
+ from sqlspec.utils.logging import POOL_LOGGER_NAME
 
-    # Show pool operations at DEBUG for troubleshooting
-    logging.getLogger(POOL_LOGGER_NAME).setLevel(logging.DEBUG)
+ # Show pool operations at DEBUG for troubleshooting
+ logging.getLogger(POOL_LOGGER_NAME).setLevel(logging.DEBUG)
 """
 
 SQL_LOGGER_NAME = "sqlspec.sql"
-"""Logger name for SQL execution logs.
+"""
+Logger name for SQL execution logs.
 
 Use this constant to configure SQL execution log levels independently
 from other SQLSpec logs::
 
-    import logging
-    from sqlspec.utils.logging import SQL_LOGGER_NAME
+ import logging
+ from sqlspec.utils.logging import SQL_LOGGER_NAME
 
-    # Show SQL queries at INFO, suppress internal debug logs
-    logging.getLogger("sqlspec").setLevel(logging.WARNING)
-    logging.getLogger(SQL_LOGGER_NAME).setLevel(logging.INFO)
+ # Show SQL queries at INFO, suppress internal debug logs
+ logging.getLogger("sqlspec").setLevel(logging.WARNING)
+ logging.getLogger(SQL_LOGGER_NAME).setLevel(logging.INFO)
 """
 
 _BASE_RECORD_KEYS: "set[str] | None" = None
@@ -158,9 +160,9 @@ class SqlglotCommandFallbackFilter(logging.Filter):
     """Filter to suppress sqlglot warnings we consider benign.
 
     - "Falling back to parsing as a 'Command'": emitted when sqlglot hits syntax it
-      intentionally downgrades; expected in SQLSpec usage.
+     intentionally downgrades; expected in SQLSpec usage.
     - "Cannot traverse scope …": emitted by sqlglot's scope analysis in cases where
-      SQLSpec feeds partially constructed expressions; harmless for our flows.
+     SQLSpec feeds partially constructed expressions; harmless for our flows.
     """
 
     _suppressed_substrings = (

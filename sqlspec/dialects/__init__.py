@@ -6,7 +6,7 @@ assignment. Entry-point registration (``sqlglot.dialects`` group in
 
 Import this module to ensure all sqlspec dialects are available::
 
-    import sqlspec.dialects  # registers spanner, spangres, etc.
+ import sqlspec.dialects  # registers spanner, spangres, etc.
 """
 
 from sqlglot.dialects.dialect import Dialect

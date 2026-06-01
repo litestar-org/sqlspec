@@ -178,9 +178,9 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         """Create USING clause expression from dict or list of dicts.
 
         Uses JSON-based approach for type-safe bulk operations:
-        - PostgreSQL: json_populate_recordset(NULL::table_name, $1::jsonb)
-        - Oracle: JSON_TABLE(:payload, '$[*]' COLUMNS (...))
-        - Others: Fall back to SELECT with parameterized values
+            - PostgreSQL: json_populate_recordset(NULL::table_name, $1::jsonb)
+            - Oracle: JSON_TABLE(:payload, '$[*]' COLUMNS (...))
+            - Others: Fall back to SELECT with parameterized values
 
         Args:
             source: Dict or list of dicts for USING clause
@@ -756,7 +756,7 @@ class Merge(
         return super().build(dialect=dialect)
 
     def _normalize_merge_conditions_for_dialect(self, dialect_name: str | None) -> None:
-        """Normalize WHEN clause conditions for dialect quirks (e.g., Oracle).
+        """Normalize WHEN clause conditions for dialect quirks.
 
         Oracle requires conditional logic on UPDATE/DELETE branches to live in the
         clause-specific WHERE, not on the WHEN predicate. Move the condition down

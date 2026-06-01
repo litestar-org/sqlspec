@@ -355,12 +355,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         Returns:
             ArrowResult with native Arrow data
-
-        Example:
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM users WHERE age > $1", 18
-            ... )
-            >>> df = result.to_pandas()  # Fast zero-copy conversion
         """
         ensure_pyarrow()
 

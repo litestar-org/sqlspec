@@ -43,21 +43,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
 
     Args:
         config: SQLSpec database configuration with extension_config["litestar"] settings.
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://..."},
-            extension_config={"litestar": {"session_table": "my_sessions"}}
-        )
-        store = AsyncpgStore(config)
-        await store.create_table()
-
-    Notes:
-        Configuration is read from config.extension_config["litestar"]:
-        - session_table: Table name (default: "litestar_session")
     """
 
     __slots__ = ("_config", "_table_name")
@@ -67,10 +52,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads table_name from config.extension_config["litestar"]["session_table"].
-            Defaults to "litestar_session" if not specified.
         """
         self._config = config
         self._table_name = self._get_table_name_from_config()
@@ -81,9 +62,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
 
         Returns:
             Table name for the session store.
-
-        Notes:
-            Accepts ``session_table: True`` for default name or a string for custom name.
         """
         default_name = "litestar_session"
         if has_extension_config(self._config):
@@ -199,10 +177,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         Returns:
             List of SQL statements to drop the table and all indexes.
             Order matters: drop indexes before table.
-
-        Notes:
-            Should use IF EXISTS or dialect-specific error handling
-            to allow idempotent migrations.
         """
         raise NotImplementedError
 
@@ -279,12 +253,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
 
         Raises:
             ValueError: If table name is invalid.
-
-        Notes:
-            - Must start with letter or underscore
-            - Can only contain letters, numbers, and underscores
-            - Maximum length is 63 characters (PostgreSQL limit)
-            - Prevents SQL injection in table names
         """
         if not table_name:
             msg = "Table name cannot be empty"

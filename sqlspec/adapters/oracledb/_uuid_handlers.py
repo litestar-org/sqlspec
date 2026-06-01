@@ -115,7 +115,7 @@ def uuid_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> A
 def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register UUID type handlers with chaining support.
 
-    Chains to existing type handlers (e.g., NumPy vectors) to avoid conflicts.
+    Chains to existing type handlers to avoid conflicts.
     Works for both sync and async connections.
 
     Args:

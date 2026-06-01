@@ -85,9 +85,9 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     """CockroachDB driver feature configuration.
 
     on_connection_create: Callback executed when a connection is acquired from pool.
-        For sync: Callable[[CockroachSyncConnection], None]
-        For async: Callable[[CockroachAsyncConnection], Awaitable[None]]
-        Called after internal setup.
+     For sync: Callable[[CockroachSyncConnection], None]
+     For async: Callable[[CockroachAsyncConnection], Awaitable[None]]
+     Called after internal setup.
     """
 
     enable_auto_retry: NotRequired[bool]

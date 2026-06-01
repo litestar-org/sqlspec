@@ -104,7 +104,7 @@ class StatementEvent:
         self.span_id = span_id
         self.sampled = sampled
 
-    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+    def __hash__(self) -> int:  # pragma: no cover
         msg = "StatementEvent objects are mutable and unhashable"
         raise TypeError(msg)
 
@@ -325,7 +325,7 @@ def create_event(
     span_id: "str | None" = None,
     sampled: bool = True,
 ) -> StatementEvent:
-    """Factory helper used by runtime to build statement events."""
+    """Factory helper for runtime statement events."""
 
     return StatementEvent(
         sql=sql,

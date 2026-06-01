@@ -490,9 +490,9 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. Native psycopg exception types via adapter-local dispatch table
-    2. SQLSTATE code via centralized utility
-    3. Generic SQLSpecError fallback
+        1. Native psycopg exception types via adapter-local dispatch table
+        2. SQLSTATE code via centralized utility
+        3. Generic SQLSpecError fallback
 
     Args:
         error: The psycopg exception to map

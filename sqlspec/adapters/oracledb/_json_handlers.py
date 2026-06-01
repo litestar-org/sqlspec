@@ -7,23 +7,23 @@ Routing matrix (input):
 
 * Oracle 21c+ native ``JSON``: bind via ``DB_TYPE_JSON`` (binary OSON).
 * Oracle 19c-20c with ``BLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_BLOB`` with
-  UTF-8 JSON bytes.
+ UTF-8 JSON bytes.
 * Oracle 12c-18c with ``CLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_CLOB`` with
-  serialized JSON string.
+ serialized JSON string.
 * Server major version is read from ``connection._sqlspec_oracle_major`` (set in
-  ``OracleSyncConfig._init_connection`` / ``OracleAsyncConfig._init_connection``).
-  When unknown, default to 21c+ behavior.
+ ``OracleSyncConfig._init_connection`` / ``OracleAsyncConfig._init_connection``).
+ When unknown, default to 21c+ behavior.
 
 Routing matrix (output):
 
 * ``DB_TYPE_JSON``: passthrough (python-oracledb already returns ``dict``).
 * ``DB_TYPE_BLOB`` with ``JSON`` in column ``type_name``: parse via
-  ``json_converter_out_blob``.
+ ``json_converter_out_blob``.
 * ``DB_TYPE_CLOB`` with ``JSON`` in column ``type_name``: parse via
-  ``json_converter_out_clob``.
+ ``json_converter_out_clob``.
 
 Handlers chain to any pre-existing ``inputtypehandler`` / ``outputtypehandler``
-registered on the connection (e.g. NumPy vector, UUID), so registration order
+registered on the connection, so registration order
 matters: register JSON after numpy, before UUID is also safe because each
 handler returns ``None`` for values it does not own.
 """

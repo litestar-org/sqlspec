@@ -27,38 +27,15 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     using SQLite via the asynchronous aiosqlite driver.
 
     Provides:
-    - Session state management with JSON storage (as TEXT)
-    - Event history tracking with full-event JSON storage
-    - Julian Day timestamps (REAL) for efficient date operations
-    - Foreign key constraints with cascade delete
-    - Atomic event+state writes via append_event_and_update_state
-    - PRAGMA optimization profile for file-based databases
+        - Session state management with JSON storage (as TEXT)
+        - Event history tracking with full-event JSON storage
+        - Julian Day timestamps (REAL) for efficient date operations
+        - Foreign key constraints with cascade delete
+        - Atomic event+state writes via append_event_and_update_state
+        - PRAGMA optimization profile for file-based databases
 
     Args:
         config: AiosqliteConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
-
-        config = AiosqliteConfig(
-            connection_config={"database": ":memory:"},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events"
-                }
-            }
-        )
-        store = AiosqliteADKStore(config)
-        await store.ensure_tables()
-
-    Notes:
-        - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
-        - Timestamps as REAL (Julian day: julianday('now'))
-        - Full event stored as JSON TEXT in event_data column
-        - PRAGMA foreign_keys = ON (enable per connection)
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -68,11 +45,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Args:
             config: AiosqliteConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
         """
         super().__init__(config)
 
@@ -81,11 +53,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Args:
             connection: Aiosqlite connection.
-
-        Notes:
-            Enables foreign keys and applies performance PRAGMAs.
-            For file-based databases, adds cache_size, mmap_size,
-            and journal_size_limit optimizations.
         """
         await connection.execute("PRAGMA foreign_keys = ON")
         await connection.execute("PRAGMA cache_size = -64000")
@@ -97,13 +64,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - TEXT for IDs, names, and JSON state
-            - REAL for Julian Day timestamps
-            - Optional owner ID column for multi-tenant scenarios
-            - Composite index on (app_name, user_id)
-            - Index on update_time DESC for recent session queries
         """
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -129,13 +89,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             SQL statement to create adk_events table with indexes.
-
-        Notes:
-            - TEXT for IDs and indexed scalars
-            - TEXT for full event JSON (event_data)
-            - REAL for Julian Day timestamps
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -156,10 +109,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            SQLite automatically drops indexes when dropping tables.
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
@@ -184,10 +133,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses Julian Day for create_time and update_time.
-            State is always JSON-serialized (empty dict becomes '{}', never NULL).
         """
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
@@ -225,10 +170,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            SQLite returns Julian Day (REAL) for timestamps.
-            JSON is parsed from TEXT storage.
         """
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -264,11 +205,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current Julian Day.
-            Empty dict is serialized as '{}', never NULL.
         """
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
@@ -293,9 +229,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
         """
         if user_id is None:
             sql = f"""
@@ -341,9 +274,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = ?"
 
@@ -358,10 +288,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Args:
             event_record: Event record with 5 keys: session_id, invocation_id,
                 author, timestamp, event_json.
-
-        Notes:
-            Uses Julian Day for timestamp.
-            event_json dict is serialized to TEXT as event_data column.
         """
         import uuid
 
@@ -468,10 +394,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Returns:
             List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            Parses event_data TEXT back to dict for event_json field.
         """
         where_clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
@@ -526,31 +448,6 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
     Args:
         config: AiosqliteConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.adk import AiosqliteADKMemoryStore
-
-        config = AiosqliteConfig(
-            connection_config={"database": ":memory:"},
-            extension_config={
-                "adk": {
-                    "memory_table": "adk_memory_entries",
-                    "memory_use_fts": False,
-                    "memory_max_results": 20,
-                }
-            }
-        )
-        store = AiosqliteADKMemoryStore(config)
-        await store.ensure_tables()
-
-    Notes:
-        - JSON stored as TEXT with SQLSpec serializers
-        - REAL for Julian Day timestamps
-        - event_id UNIQUE constraint for deduplication
-        - Composite index on (app_name, user_id, timestamp DESC)
-        - Optional FTS5 virtual table for full-text search
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -560,14 +457,6 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         Args:
             config: AiosqliteConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         super().__init__(config)
 
@@ -576,14 +465,6 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         Returns:
             SQL statement to create memory table with indexes.
-
-        Notes:
-            - TEXT for IDs, names, and JSON content
-            - REAL for Julian Day timestamps
-            - UNIQUE constraint on event_id for deduplication
-            - Composite index on (app_name, user_id, timestamp DESC)
-            - Optional owner ID column for multi-tenancy
-            - Optional FTS5 virtual table for full-text search
         """
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -803,10 +684,6 @@ def _datetime_to_julian(dt: datetime) -> float:
 
     Returns:
         Julian Day number as REAL.
-
-    Notes:
-        Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
-        This enables direct comparison with julianday('now') in SQL queries.
     """
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)

@@ -49,7 +49,6 @@ def stringify_storage_target(target: "StorageDestination | None") -> str | None:
 
     Returns:
         String representation of the path or None.
-
     """
     if target is None:
         return None
@@ -102,7 +101,6 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
 
     Returns:
         StorageTelemetry dict with row/byte counts.
-
     """
     telemetry = _build_ingest_telemetry_impl(table, format_label=format_label)
     return cast("StorageTelemetry", telemetry)
@@ -114,7 +112,6 @@ def attach_partition_telemetry(telemetry: "StorageTelemetry", partitioner: "dict
     Args:
         telemetry: Telemetry dict to update.
         partitioner: Partitioner configuration or None.
-
     """
     if not partitioner:
         return
@@ -135,7 +132,6 @@ def create_storage_job(
 
     Returns:
         StorageBridgeJob instance.
-
     """
     merged = cast("StorageTelemetry", dict(produced))
     if provided:

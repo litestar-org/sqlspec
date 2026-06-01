@@ -38,28 +38,6 @@ class SQLSpecPlugin:
 
     Provides Sanic-native configuration parsing and request helper methods.
     Runtime listener and middleware behavior is registered by ``init_app``.
-
-    Example:
-        from sanic import Sanic
-        from sqlspec import SQLSpec
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.extensions.sanic import SQLSpecPlugin
-
-        sqlspec = SQLSpec()
-        sqlspec.add_config(
-            AsyncpgConfig(
-                connection_config={"dsn": "postgresql://localhost/mydb"},
-                extension_config={
-                    "sanic": {
-                        "commit_mode": "autocommit",
-                        "session_key": "db",
-                    }
-                },
-            )
-        )
-
-        app = Sanic("app")
-        db_ext = SQLSpecPlugin(sqlspec, app)
     """
 
     __slots__ = ("_config_states", "_extractor", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")

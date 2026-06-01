@@ -179,26 +179,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         The Litestar extension includes migrations for creating session storage tables.
         To include these migrations in your database migration workflow, add 'litestar'
         to the include_extensions list in your migration configuration.
-
-    Example:
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/db"},
-            extension_config={
-                "litestar": {
-                    "session_table": "custom_sessions"  # Optional custom table name
-                }
-            },
-            migration_config={
-                "script_location": "migrations",
-                "include_extensions": ["litestar"],  # Simple string list only
-            }
-        )
-
-        The session table migration will automatically use the appropriate column types
-        for your database dialect (JSONB for PostgreSQL, JSON for MySQL, TEXT for SQLite).
-
-        Extension migrations use the ext_litestar_ prefix (e.g., ext_litestar_0001) to
-        prevent version conflicts with application migrations.
     """
 
     __slots__ = ("_correlation_headers", "_enable_sqlcommenter_middleware", "_plugin_configs", "_sqlspec")
@@ -598,7 +578,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Provide a database session for the specified configuration key from request scope.
 
-        This method requires the connection to already exist in scope (e.g., from DI injection).
+        This method requires the connection to already exist in scope.
         For on-demand connection creation, use ``provide_request_session_sync`` or
         ``provide_request_session_async`` instead.
 
@@ -733,7 +713,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> Any:
         """Provide a database connection for the specified configuration key from request scope.
 
-        This method requires the connection to already exist in scope (e.g., from DI injection).
+        This method requires the connection to already exist in scope.
         For on-demand connection creation, use ``provide_request_connection_sync`` or
         ``provide_request_connection_async`` instead.
 

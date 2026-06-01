@@ -466,7 +466,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 if started_transaction:
                     try:
                         self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                    except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
                 raise
 
@@ -956,7 +956,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 if started_transaction:
                     try:
                         await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                    except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
                 raise
 

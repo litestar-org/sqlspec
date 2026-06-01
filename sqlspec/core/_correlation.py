@@ -20,33 +20,14 @@ class CorrelationExtractor:
     """Extracts correlation IDs from HTTP request headers.
 
     This class provides configurable header extraction with:
-    - Configurable primary header (highest priority)
-    - Additional custom headers (middle priority)
-    - Standard trace context headers as fallbacks
-    - Automatic UUID generation when no header found
-    - Input sanitization (max length, whitespace trimming)
+        - Configurable primary header (highest priority)
+        - Additional custom headers (middle priority)
+        - Standard trace context headers as fallbacks
+        - Automatic UUID generation when no header found
+        - Input sanitization (max length, whitespace trimming)
 
     The extractor follows a priority order: primary header first, then
     configured headers, then trace context fallbacks (if enabled).
-
-    Example:
-        ```python
-        extractor = CorrelationExtractor(
-            primary_header="x-request-id",
-            additional_headers=("x-correlation-id",),
-            auto_trace_headers=True,
-        )
-
-        # In Starlette/FastAPI:
-        correlation_id = extractor.extract(
-            lambda h: request.headers.get(h)
-        )
-
-        # In Flask:
-        correlation_id = extractor.extract(
-            lambda h: request.headers.get(h)
-        )
-        ```
     """
 
     __slots__ = ("_headers", "_max_length")
@@ -61,17 +42,18 @@ class CorrelationExtractor:
         "x-client-trace-id",
         "grpc-trace-bin",
     )
-    """Default trace context headers to check as fallbacks.
+    """
+    Default trace context headers to check as fallbacks.
 
     These headers cover:
-    - x-request-id: Common request ID header
-    - x-correlation-id: Common correlation ID header
-    - traceparent: W3C Trace Context standard
-    - x-cloud-trace-context: Google Cloud trace header
-    - x-amzn-trace-id: AWS X-Ray trace header
-    - x-b3-traceid: Zipkin B3 propagation
-    - x-client-trace-id: Envoy proxy trace header
-    - grpc-trace-bin: gRPC binary trace header
+        - x-request-id: Common request ID header
+        - x-correlation-id: Common correlation ID header
+        - traceparent: W3C Trace Context standard
+        - x-cloud-trace-context: Google Cloud trace header
+        - x-amzn-trace-id: AWS X-Ray trace header
+        - x-b3-traceid: Zipkin B3 propagation
+        - x-client-trace-id: Envoy proxy trace header
+        - grpc-trace-bin: gRPC binary trace header
     """
 
     DEFAULT_MAX_LENGTH: ClassVar[int] = 128
@@ -128,21 +110,6 @@ class CorrelationExtractor:
 
         Returns:
             The extracted or generated correlation ID.
-
-        Example:
-            ```python
-            # With Starlette Request
-            correlation_id = extractor.extract(
-                lambda h: request.headers.get(h)
-            )
-
-            # With Flask request
-            from flask import request
-
-            correlation_id = extractor.extract(
-                lambda h: request.headers.get(h)
-            )
-            ```
         """
         for header in self._headers:
             value = get_header(header)

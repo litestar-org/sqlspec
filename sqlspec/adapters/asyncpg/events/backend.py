@@ -181,7 +181,7 @@ class AsyncpgEventsBackend:
 def create_event_backend(
     config: "AsyncpgConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> AsyncpgEventsBackend | AsyncpgHybridEventsBackend | None:
-    """Factory used by EventChannel to create the native backend."""
+    """EventChannel factory for the native backend."""
     match backend_name:
         case "listen_notify":
             try:

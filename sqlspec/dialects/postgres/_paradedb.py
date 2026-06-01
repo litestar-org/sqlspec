@@ -1,21 +1,21 @@
 """ParadeDB dialect extending PGVector with pg_search BM25/search operators.
 
 Adds support for ParadeDB search operators:
-- @@@  : BM25 full-text search
-- &&&  : Boolean AND search
-- |||  : Boolean OR search
-- ===  : Exact term match
-- ###  : Score/rank retrieval
-- ##   : Snippet/highlight retrieval
-- ##>  : Snippet/highlight with options
+    - @@@ : BM25 full-text search
+    - &&& : Boolean AND search
+    - ||| : Boolean OR search
+    - === : Exact term match
+    - ### : Score/rank retrieval
+    - ## : Snippet/highlight retrieval
+    - ##> : Snippet/highlight with options
 
 Also inherits pgvector distance operators from PGVector:
-- <->  : L2 (Euclidean) distance
-- <#>  : Negative inner product
-- <=>  : Cosine distance
-- <+>  : L1 (Taxicab/Manhattan) distance
-- <~>  : Hamming distance (binary vectors)
-- <%>  : Jaccard distance (binary vectors)
+    - <-> : L2 (Euclidean) distance
+    - <#> : Negative inner product
+    - <=> : Cosine distance
+    - <+> : L1 (Taxicab/Manhattan) distance
+    - <~> : Hamming distance (binary vectors)
+    - <%> : Jaccard distance (binary vectors)
 """
 
 from sqlglot.dialects.dialect import Dialect

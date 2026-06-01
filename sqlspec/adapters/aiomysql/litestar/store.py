@@ -33,18 +33,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
     Args:
         config: AiomysqlConfig instance.
-
-    Example:
-        from sqlspec.adapters.aiomysql import AiomysqlConfig
-        from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
-
-        config = AiomysqlConfig(connection_config={"host": "localhost", ...})
-        store = AiomysqlStore(config)
-        await store.create_table()
-
-    Notes:
-        MySQL DATETIME is timezone-naive, so UTC datetimes are stored without
-        timezone info and timezone conversion is handled in Python layer.
     """
 
     __slots__ = ()
@@ -54,9 +42,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
         Args:
             config: AiomysqlConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -65,16 +50,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses DATETIME(6) for microsecond precision timestamps
-            - MySQL doesn't have TIMESTAMPTZ, so we store UTC as timezone-naive
-            - LONGBLOB for large session data support (up to 4GB)
-            - InnoDB engine for ACID compliance and proper transaction support
-            - UTF8MB4 for full Unicode support (including emoji)
-            - Index on expires_at for efficient cleanup queries
-            - Auto-update of updated_at timestamp on row modification
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -114,10 +89,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
         Returns:
             Session data as bytes if found and not expired, None otherwise.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for microsecond precision current time in MySQL.
-            Compares expires_at as UTC datetime (timezone-naive in MySQL).
         """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -163,11 +134,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Uses INSERT ... ON DUPLICATE KEY UPDATE for efficient UPSERT.
-            Stores UTC datetime as timezone-naive DATETIME in MySQL.
-            Uses alias syntax (AS new) instead of deprecated VALUES() function.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -230,9 +196,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
         Returns:
             True if the session exists and is not expired.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for microsecond precision current time comparison.
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -261,10 +224,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
-
-        Notes:
-            MySQL DATETIME is timezone-naive, but we treat it as UTC.
-            Compare against UTC now in Python layer for accuracy.
         """
         sql = f"""
         SELECT expires_at FROM {self._table_name}
@@ -296,10 +255,6 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
 
         Returns:
             Number of sessions deleted.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for microsecond precision current time comparison.
-            ROW_COUNT() returns the number of affected rows.
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 

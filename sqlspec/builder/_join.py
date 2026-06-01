@@ -262,16 +262,6 @@ class JoinClauseMixin:
 
         Returns:
             Self for method chaining
-
-        Example:
-            ```python
-            query = (
-                sql
-                .select("u.name", "arr.value")
-                .from_("users u")
-                .lateral_join("UNNEST(u.tags)", alias="arr")
-            )
-            ```
         """
         return self.join(table, on=on, alias=alias, join_type="INNER", lateral=True)
 
@@ -305,30 +295,7 @@ class JoinClauseMixin:
 
 @final
 class JoinBuilder:
-    """Builder for JOIN operations with fluent syntax.
-
-    Example:
-        ```python
-        from sqlspec import sql
-
-        # sql.left_join_("posts").on("users.id = posts.user_id")
-        join_clause = sql.left_join_("posts").on(
-            "users.id = posts.user_id"
-        )
-
-        # Or with query builder
-        query = (
-            sql
-            .select("users.name", "posts.title")
-            .from_("users")
-            .join(
-                sql.left_join_("posts").on(
-                    "users.id = posts.user_id"
-                )
-            )
-        )
-        ```
-    """
+    """Builder for JOIN operations with fluent syntax."""
 
     __slots__ = ("_alias", "_as_of", "_as_of_type", "_join_type", "_lateral", "_table")
 
@@ -378,7 +345,7 @@ class JoinBuilder:
         """Set the join condition and build the JOIN expression.
 
         Args:
-            condition: JOIN condition (e.g., "users.id = posts.user_id")
+            condition: JOIN condition
 
         Returns:
             Complete JOIN expression

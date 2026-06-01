@@ -30,7 +30,7 @@ class MigrationContext:
     config: "Any | None" = None
     """Database configuration object."""
     dialect: "str | None" = None
-    """Database dialect (e.g., 'postgres', 'mysql', 'sqlite')."""
+    """Database dialect."""
     metadata: "dict[str, Any] | None" = None
     """Additional metadata for the migration."""
     extension_config: "dict[str, Any] | None" = None

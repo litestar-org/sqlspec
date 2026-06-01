@@ -133,7 +133,7 @@ class PsycopgAsyncListenerHub:
 
     def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
         task = asyncio.current_task()
-        if task is None:  # pragma: no cover - coroutine dequeue calls always run in a task
+        if task is None:  # pragma: no cover
             msg = "PsycopgAsyncListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
         queues = self._queues.get(channel)
@@ -185,7 +185,7 @@ class PsycopgAsyncListenerHub:
                         self._dispatch(notify.channel, notify.payload)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:  # pragma: no cover - pump resilience path
+                except Exception as exc:  # pragma: no cover
                     if self._stopping or getattr(connection, "closed", False):
                         return
                     logger.warning("psycopg async notify pump error: %s", exc)
@@ -354,7 +354,7 @@ class PsycopgSyncListenerHub:
                     if self._stopping.is_set():
                         return
                     self._dispatch(notify.channel, notify.payload)
-            except Exception as exc:  # pragma: no cover - pump resilience path
+            except Exception as exc:  # pragma: no cover
                 if self._stopping.is_set() or getattr(connection, "closed", False):
                     return
                 logger.warning("psycopg sync notify worker error: %s", exc)

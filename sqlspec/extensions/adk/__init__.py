@@ -25,26 +25,26 @@ Example (with extension_config):
     from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
     from sqlspec.extensions.adk import SQLSpecSessionService
 
-    config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://..."},
-        extension_config={
-            "adk": {
-                "session_table": "my_sessions",
-                "events_table": "my_events",
-                "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
-            }
-        }
-    )
+ config = AsyncpgConfig(
+ connection_config={"dsn": "postgresql://..."},
+ extension_config={
+ "adk": {
+ "session_table": "my_sessions",
+ "events_table": "my_events",
+ "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
+ }
+ }
+ )
 
-    store = AsyncpgADKStore(config)
-    await store.ensure_tables()
+ store = AsyncpgADKStore(config)
+ await store.ensure_tables()
 
-    service = SQLSpecSessionService(store)
-    session = await service.create_session(
-        app_name="my_app",
-        user_id="user123",
-        state={"key": "value"}
-    )
+ service = SQLSpecSessionService(store)
+ session = await service.create_session(
+ app_name="my_app",
+ user_id="user123",
+ state={"key": "value"}
+ )
 """
 
 from sqlspec.config import ADKConfig

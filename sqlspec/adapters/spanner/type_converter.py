@@ -5,15 +5,15 @@ Combines output conversion (database results → Python) and input conversion
 compilation with no nested functions.
 
 Output conversion handles:
-- UUID detection and conversion from strings/bytes
-- JSON detection and deserialization
+    - UUID detection and conversion from strings/bytes
+    - JSON detection and deserialization
 
 Input conversion handles:
-- UUID → base64-encoded bytes
-- bytes → base64-encoded bytes
-- datetime timezone awareness
-- dict/list → JsonObject wrapping
-- param_types inference
+    - UUID → base64-encoded bytes
+    - bytes → base64-encoded bytes
+    - datetime timezone awareness
+    - dict/list → JsonObject wrapping
+    - param_types inference
 """
 
 import base64
@@ -253,11 +253,11 @@ def coerce_params_for_spanner(
     """Coerce Python types to Spanner-compatible formats.
 
     Handles:
-    - UUID → base64-encoded bytes
-    - bytes → base64-encoded bytes
-    - datetime timezone awareness
-    - dict → JsonObject for JSON columns
-    - nested sequences → JsonObject for JSON arrays
+        - UUID → base64-encoded bytes
+        - bytes → base64-encoded bytes
+        - datetime timezone awareness
+        - dict → JsonObject for JSON columns
+        - nested sequences → JsonObject for JSON arrays
 
     Args:
         params: Parameter dictionary or None.

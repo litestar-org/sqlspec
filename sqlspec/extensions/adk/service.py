@@ -33,23 +33,7 @@ class SQLSpecSessionService(BaseSessionService):
     Delegates all database operations to a store implementation.
 
     Args:
-        store: Database store implementation (e.g., AsyncpgADKStore).
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
-        from sqlspec.extensions.adk.service import SQLSpecSessionService
-
-        config = AsyncpgConfig(connection_config={"dsn": "postgresql://..."})
-        store = AsyncpgADKStore(config)
-        await store.ensure_tables()
-
-        service = SQLSpecSessionService(store)
-        session = await service.create_session(
-            app_name="my_app",
-            user_id="user123",
-            state={"key": "value"}
-        )
+        store: Database store implementation.
     """
 
     def __init__(self, store: "BaseAsyncADKStore") -> None:

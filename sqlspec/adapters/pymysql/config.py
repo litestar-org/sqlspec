@@ -55,12 +55,12 @@ class PyMysqlDriverFeatures(TypedDict):
     """PyMySQL driver feature flags.
 
     json_serializer: Custom JSON serializer function.
-        Defaults to sqlspec.utils.serializers.to_json.
+     Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
-        Defaults to sqlspec.utils.serializers.from_json.
+     Defaults to sqlspec.utils.serializers.from_json.
     on_connection_create: Callback executed when a connection is created.
-        Receives the raw pymysql connection for low-level driver configuration.
-        Runs after connection creation.
+     Receives the raw pymysql connection for low-level driver configuration.
+     Runs after connection creation.
     enable_events: Enable database event channel support.
     events_backend: Event channel backend selection.
     """

@@ -43,15 +43,15 @@ class LocalStore:
         """Initialize local storage backend.
 
         Args:
-            uri: File URI or path (e.g., "file:///path" or "/path")
+            uri: File URI or path
             **kwargs: Additional options including:
-                - base_path: Subdirectory relative to URI path. If relative, it's combined
-                  with the URI path. If absolute, it takes precedence (backward compatible).
+            - base_path: Subdirectory relative to URI path. If relative, it's combined
+                with the URI path. If absolute, it takes precedence (backward compatible).
 
-        The URI may be a file:// path (Windows style like file:///C:/path is supported).
-        When both URI and base_path are provided, they are combined:
-        - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
-        - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
+            The URI may be a file:// path (Windows style like file:///C:/path is supported).
+            When both URI and base_path are provided, they are combined:
+                - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
+                - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
         """
         if uri.startswith("file://"):
             parsed = urlparse(uri)
@@ -145,8 +145,8 @@ class LocalStore:
             recursive: Whether to walk subdirectories.
             **kwargs: Additional backend-specific options (currently unused).
 
-        When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
-        Paths outside base_path are returned with their absolute names.
+            When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
+            Paths outside base_path are returned with their absolute names.
         """
         if prefix and (prefix.endswith("/") or "/" in prefix):
             search_path = self._resolve_path(prefix)
@@ -329,7 +329,7 @@ class LocalStore:
 
         Raises:
             NotImplementedError: Local file storage does not require URL signing.
-                Local files are accessed directly via file:// URIs.
+            Local files are accessed directly via file:// URIs.
         """
         msg = "URL signing is not applicable to local file storage. Use file:// URIs directly."
         raise NotImplementedError(msg)

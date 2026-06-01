@@ -199,10 +199,10 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. SQLite extended error codes (most reliable)
-    2. SQLite error names
-    3. Error message patterns
-    4. Default SQLSpecError fallback
+        1. SQLite extended error codes (most reliable)
+        2. SQLite error names
+        3. Error message patterns
+        4. Default SQLSpecError fallback
 
     Args:
         error: The SQLite exception to map

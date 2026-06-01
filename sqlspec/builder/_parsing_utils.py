@@ -70,13 +70,13 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
     """Parse a column input that might be a complex expression.
 
     Handles cases like:
-    - Simple column names: "name" -> Column(this=name)
-    - Qualified names: "users.name" -> Column(table=users, this=name)
-    - Aliased columns: "name AS user_name" -> Alias(this=Column(name), alias=user_name)
-    - Function calls: "MAX(price)" -> Max(this=Column(price))
-    - Complex expressions: "CASE WHEN ... END" -> Case(...)
-    - Custom Column objects from our builder
-    - SQL objects with raw SQL expressions
+        - Simple column names: "name" -> Column(this=name)
+        - Qualified names: "users.name" -> Column(table=users, this=name)
+        - Aliased columns: "name AS user_name" -> Alias(this=Column(name), alias=user_name)
+        - Function calls: "MAX(price)" -> Max(this=Column(price))
+        - Complex expressions: "CASE WHEN ... END" -> Case(...)
+        - Custom Column objects from our builder
+        - SQL objects with raw SQL expressions
 
     Args:
         column_input: String, SQLGlot expression, SQL object, or Column object
@@ -133,10 +133,10 @@ def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:
     """Parse an ORDER BY expression that might include direction.
 
     Handles cases like:
-    - Simple column: "name" -> Column(this=name)
-    - With direction: "name DESC" -> Ordered(this=Column(name), desc=True)
-    - Qualified: "users.name ASC" -> Ordered(this=Column(table=users, this=name), desc=False)
-    - Function: "COUNT(*) DESC" -> Ordered(this=Count(this=Star), desc=True)
+        - Simple column: "name" -> Column(this=name)
+        - With direction: "name DESC" -> Ordered(this=Column(name), desc=True)
+        - Qualified: "users.name ASC" -> Ordered(this=Column(table=users, this=name), desc=False)
+        - Function: "COUNT(*) DESC" -> Ordered(this=Count(this=Star), desc=True)
 
     Args:
         order_input: String or SQLGlot expression for ORDER BY
@@ -158,10 +158,10 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
     """Parse a condition that might be complex SQL.
 
     Handles cases like:
-    - Simple conditions: "name = 'John'" -> EQ(Column(name), Literal('John'))
-    - Tuple format: ("name", "John") -> EQ(Column(name), Literal('John'))
-    - Complex conditions: "age > 18 AND status = 'active'" -> And(GT(...), EQ(...))
-    - Function conditions: "LENGTH(name) > 5" -> GT(Length(Column(name)), Literal(5))
+        - Simple conditions: "name = 'John'" -> EQ(Column(name), Literal('John'))
+        - Tuple format: ("name", "John") -> EQ(Column(name), Literal('John'))
+        - Complex conditions: "age > 18 AND status = 'active'" -> And(GT(...), EQ(...))
+        - Function conditions: "LENGTH(name) > 5" -> GT(Length(Column(name)), Literal(5))
 
     Args:
         condition_input: String, tuple, or SQLGlot expression for condition
@@ -169,10 +169,6 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
 
     Returns:
         exp.Expr: Parsed SQLGlot expression (usually a comparison or logical op)
-
-    Notes:
-        Database-specific parameter placeholders such as $1, %s, and :1 are rewritten to :param_N format
-        so SQLGlot can parse them consistently.
     """
     if isinstance(condition_input, exp.Expr):
         return condition_input
@@ -225,11 +221,11 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
     """Extract SQLGlot expression from SQL object value with parameter merging.
 
     Handles the common pattern of:
-    1. Check if value has expression and SQL attributes
-    2. Try to get expression first, merge parameters if available
-    3. Fall back to parsing raw SQL text if expression is None
-    4. Merge parameters in both cases
-    5. Handle callable SQL text
+        1. Check if value has expression and SQL attributes
+        2. Try to get expression first, merge parameters if available
+        3. Fall back to parsing raw SQL text if expression is None
+        4. Merge parameters in both cases
+        5. Handle callable SQL text
 
     This consolidates duplicated logic across builder files that process
     SQL objects (like those from sql.raw() calls).

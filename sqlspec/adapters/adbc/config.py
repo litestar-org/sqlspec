@@ -78,20 +78,20 @@ class AdbcDriverFeatures(TypedDict):
     Attributes:
         json_serializer: JSON serialization function to use.
             Callable that takes Any and returns str (JSON string).
-            Default: sqlspec.utils.serializers.to_json
+        Default: sqlspec.utils.serializers.to_json
         enable_cast_detection: Enable cast-aware parameter processing.
-            When True, detects SQL casts (e.g., ::JSONB) and applies appropriate
+            When True, detects SQL casts and applies appropriate
             serialization. Currently used for PostgreSQL JSONB handling.
-            Default: True
+        Default: True
         enable_strict_type_coercion: Enforce strict type coercion rules.
             When True, raises errors for unsupported type conversions.
             When False, attempts best-effort conversion.
-            Default: False
+        Default: False
         strict_type_coercion: Alias for enable_strict_type_coercion.
         enable_arrow_extension_types: Enable PyArrow extension type support.
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
-            Default: True
+        Default: True
         arrow_extension_types: Alias for enable_arrow_extension_types.
         enable_pgvector: Enable automatic pgvector extension detection.
             When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
@@ -106,7 +106,7 @@ class AdbcDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             ADBC does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
     """
@@ -171,14 +171,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
     Supports multiple database backends including PostgreSQL, SQLite, DuckDB,
     BigQuery, and Snowflake with automatic driver detection and loading.
-
-    Example::
-
-        config = AdbcConfig(
-            connection_config=AdbcConnectionParams(
-                uri="postgresql://user:pass@localhost/db"
-            )
-        )
     """
 
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
@@ -217,7 +209,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config: Default SQL statement configuration
             driver_features: Driver feature configuration (AdbcDriverFeatures)
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """

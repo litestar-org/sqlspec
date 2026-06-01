@@ -1,8 +1,8 @@
 """Google Cloud Spanner SQL dialect (GoogleSQL variant).
 
 Extends the BigQuery dialect with Spanner-only DDL features:
-`INTERLEAVE IN PARENT` for interleaved tables and `ROW DELETION POLICY`
-for row-level time-to-live policies (GoogleSQL).
+    `INTERLEAVE IN PARENT` for interleaved tables and `ROW DELETION POLICY`
+    for row-level time-to-live policies (GoogleSQL).
 """
 
 import re

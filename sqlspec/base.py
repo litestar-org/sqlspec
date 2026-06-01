@@ -529,7 +529,7 @@ class SQLSpec:
 
         Args:
             name: Name of the statement from SQL file comments.
-                  Hyphens in names are converted to underscores.
+                Hyphens in names are converted to underscores.
 
         Returns:
             SQL object ready for execution.
@@ -570,10 +570,6 @@ class SQLSpec:
 
         Args:
             reload: Reload currently tracked files after clearing the cache.
-
-        Note:
-            When ``reload`` is false, this clears the cache and requires
-            calling load_sql_files again.
         """
         if self._loader is None:
             return
@@ -645,7 +641,7 @@ class SQLSpec:
         """Close a pool, returning an error string when it fails."""
         try:
             config.close_pool()
-        except Exception as exc:  # pragma: no cover - best effort cleanup
+        except Exception as exc:  # pragma: no cover
             return f"{config.__class__.__name__}: {exc}"
         return None
 
@@ -689,12 +685,12 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
             self._value = driver
             connection = driver.connection
             if connection is not None:
-                self._runtime.emit_connection_create(connection)
-            self._runtime.emit_session_start(driver)
+                self._runtime.emit_connection_create_sync(connection)
+            self._runtime.emit_session_start_sync(driver)
             return cast("ContextValueT", driver)
 
         self._value = value
-        self._runtime.emit_connection_create(value)
+        self._runtime.emit_connection_create_sync(value)
         return cast("ContextValueT", value)
 
     def __exit__(
@@ -706,12 +702,12 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
             value = self._value
             if value is not None:
                 if self._config is None:
-                    self._runtime.emit_connection_destroy(value)
+                    self._runtime.emit_connection_destroy_sync(value)
                 else:
-                    self._runtime.emit_session_end(value)
+                    self._runtime.emit_session_end_sync(value)
                     connection = value.connection
                     if connection is not None:
-                        self._runtime.emit_connection_destroy(connection)
+                        self._runtime.emit_connection_destroy_sync(connection)
                 self._value = None
 
 
@@ -738,12 +734,12 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             self._value = driver
             connection = driver.connection
             if connection is not None:
-                self._runtime.emit_connection_create(connection)
-            self._runtime.emit_session_start(driver)
+                await self._runtime.emit_connection_create_async(connection)
+            await self._runtime.emit_session_start_async(driver)
             return cast("ContextValueT", driver)
 
         self._value = value
-        self._runtime.emit_connection_create(value)
+        await self._runtime.emit_connection_create_async(value)
         return cast("ContextValueT", value)
 
     async def __aexit__(
@@ -755,10 +751,10 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             value = self._value
             if value is not None:
                 if self._config is None:
-                    self._runtime.emit_connection_destroy(value)
+                    await self._runtime.emit_connection_destroy_async(value)
                 else:
-                    self._runtime.emit_session_end(value)
+                    await self._runtime.emit_session_end_async(value)
                     connection = value.connection
                     if connection is not None:
-                        self._runtime.emit_connection_destroy(connection)
+                        await self._runtime.emit_connection_destroy_async(connection)
                 self._value = None

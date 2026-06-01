@@ -83,19 +83,6 @@ def convert_dict_to_arrow(
 
     Returns:
         ArrowTable or ArrowRecordBatch depending on return_format.
-
-    Examples:
-        >>> data = [
-        ...     {"id": 1, "name": "Alice"},
-        ...     {"id": 2, "name": "Bob"},
-        ... ]
-        >>> table = convert_dict_to_arrow(data, return_format="table")
-        >>> print(table.num_rows)
-        2
-
-        >>> batch = convert_dict_to_arrow(data, return_format="batch")
-        >>> print(batch.num_rows)
-        2
     """
     ensure_pyarrow()
     import pyarrow as pa

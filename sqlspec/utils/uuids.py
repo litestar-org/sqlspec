@@ -45,7 +45,7 @@ __all__ = (
 _uuid_utils_mod: Any | None = None
 try:
     import uuid_utils as _uuid_utils_imported  # pyright: ignore[reportMissingImports]
-except ImportError:  # pragma: no cover - optional dependency availability varies
+except ImportError:  # pragma: no cover
     pass
 else:
     _uuid_utils_mod = _uuid_utils_imported
@@ -53,7 +53,7 @@ else:
 _fastnanoid_mod: Any | None = None
 try:
     import fastnanoid as _fastnanoid_imported  # pyright: ignore[reportMissingImports]
-except ImportError:  # pragma: no cover - optional dependency availability varies
+except ImportError:  # pragma: no cover
     pass
 else:
     _fastnanoid_mod = _fastnanoid_imported

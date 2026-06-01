@@ -55,7 +55,6 @@ class PortalProvider:
 
         Returns:
             Portal instance.
-
         """
         return Portal(self)
 
@@ -65,7 +64,6 @@ class PortalProvider:
 
         Returns:
             True if thread is alive, False otherwise.
-
         """
         return self._loop_thread is not None and self._loop_thread.is_alive()
 
@@ -75,7 +73,6 @@ class PortalProvider:
 
         Returns:
             True if ready event is set, False otherwise.
-
         """
         return self._ready_event.is_set()
 
@@ -88,7 +85,6 @@ class PortalProvider:
 
         Raises:
             ImproperConfigurationError: If portal provider not started.
-
         """
         if self._loop is None:
             msg = "Portal provider not started. Call start() first."
@@ -166,7 +162,6 @@ class PortalProvider:
 
         Raises:
             ImproperConfigurationError: If portal provider not started or timeout reached.
-
         """
         timeout: float = float(kwargs.pop("timeout", 300.0))
         if self._loop is None or not self.is_running:
@@ -214,7 +209,6 @@ class PortalProvider:
         Args:
             future: The completed future.
             local_result_queue: Queue to put result in.
-
         """
         try:
             result = future.result()
@@ -231,7 +225,6 @@ class Portal:
 
         Args:
             provider: The portal provider instance.
-
         """
         self._provider = provider
 
@@ -245,7 +238,6 @@ class Portal:
 
         Returns:
             Result of the async function.
-
         """
         return self._provider.call(func, *args, **kwargs)
 
@@ -256,12 +248,6 @@ class PortalManager:
     Provides a global portal for use by sync_tools and other utilities
     that need to call async functions from synchronous contexts without
     an existing event loop.
-
-    Example:
-        manager = PortalManager()
-        portal = manager.get_or_create_portal()
-        result = portal.call(some_async_function, arg1, arg2)
-
     """
 
     _instance: "ClassVar[PortalManager | None]" = None
@@ -296,7 +282,6 @@ class PortalManager:
 
         Returns:
             Global portal instance.
-
         """
         current_pid = os.getpid()
         if self._needs_restart(current_pid):
@@ -339,7 +324,6 @@ class PortalManager:
 
         Returns:
             True if portal provider exists and is running, False otherwise.
-
         """
         return self._provider is not None and self._provider.is_running
 
@@ -375,6 +359,5 @@ def get_global_portal() -> Portal:
 
     Returns:
         Global portal instance.
-
     """
     return PortalManager().get_or_create_portal()

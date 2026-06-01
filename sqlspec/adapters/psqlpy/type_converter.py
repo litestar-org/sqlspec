@@ -5,11 +5,11 @@ Combines output conversion (database results → Python) and input conversion
 compilation with no nested functions.
 
 Output conversion handles:
-- PostgreSQL-specific types like intervals and arrays
-- Standard type detection (UUID, JSON, datetime, etc.)
+    - PostgreSQL-specific types like intervals and arrays
+    - Standard type detection (UUID, JSON, datetime, etc.)
 
 Input conversion handles:
-- pgvector type handlers (placeholder for future support)
+    - pgvector type handlers (placeholder for future support)
 """
 
 import re
@@ -100,12 +100,6 @@ def register_pgvector(connection: "Connection") -> None:
 
     Args:
         connection: Psqlpy connection instance.
-
-    Note:
-        When psqlpy adds type handler support, this function will:
-        - Register pgvector extension on the connection
-        - Enable automatic NumPy array <-> PostgreSQL vector conversion
-        - Support vector similarity search operations
     """
     if not PGVECTOR_INSTALLED:
         return

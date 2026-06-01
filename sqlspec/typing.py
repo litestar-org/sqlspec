@@ -185,23 +185,25 @@ SupportedSchemaModel: TypeAlias = (
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
 StatementParameters: TypeAlias = "dict[str, object] | list[object] | tuple[object, ...] | object | None"
-"""Type alias for statement parameters.
+"""
+Type alias for statement parameters.
 
 Represents:
-- :type:`dict[str, object]`
-- :type:`list[object]`
-- :type:`tuple[object, ...]`
-- :type:`object`
-- :type:`None`
+    - :type:`dict[str, object]`
+    - :type:`list[object]`
+    - :type:`tuple[object, ...]`
+    - :type:`object`
+    - :type:`None`
 """
 ArrowReturnFormat: TypeAlias = Literal["table", "reader", "batch", "batches"]
-"""Type alias for Apache Arrow return format options.
+"""
+Type alias for Apache Arrow return format options.
 
 Represents:
-- :literal:`"table"` - Return PyArrow Table
-- :literal:`"reader"` - Return PyArrow RecordBatchReader
-- :literal:`"batch"` - Return single PyArrow RecordBatch
-- :literal:`"batches"` - Return list of PyArrow RecordBatches
+    - :literal:`"table"` - Return PyArrow Table
+    - :literal:`"reader"` - Return PyArrow RecordBatchReader
+    - :literal:`"batch"` - Return single PyArrow RecordBatch
+    - :literal:`"batches"` - Return list of PyArrow RecordBatches
 """
 
 

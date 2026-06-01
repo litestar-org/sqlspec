@@ -92,15 +92,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     Args:
         config: OracleAsyncConfig with extension_config["adk"] settings.
-
-    Notes:
-        - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
-        - event_json stored as JSON (21c+) or BLOB (older versions)
-        - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
-        - Named parameters using :param_name
-        - State merging handled at application level
-        - owner_id_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
@@ -110,13 +101,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Args:
             config: OracleAsyncConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
@@ -148,14 +132,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
         """
         if self._json_storage_type is not None:
             return self._json_storage_type
@@ -203,10 +179,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             Deserialized state dictionary.
-
-        Notes:
-            Handles LOB reading if data has read() method.
-            Oracle JSON type may return dict directly.
         """
         if is_async_readable(data):
             data = await data.read()
@@ -378,10 +350,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            Oracle automatically drops indexes when dropping tables.
         """
         return [
             f"""
@@ -437,12 +405,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         ]
 
     async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist.
-
-        Notes:
-            Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
-        """
+        """Create both sessions and events tables if they don't exist."""
         storage_type = await self._detect_json_storage_type()
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
@@ -465,11 +428,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses SYSTIMESTAMP for create_time and update_time.
-            State is serialized using version-appropriate format.
-            owner_id is ignored if owner_id_column not configured.
         """
         state_data = await self._serialize_state(state)
 
@@ -507,10 +465,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            Oracle returns datetime objects for TIMESTAMP columns.
-            State is deserialized using version-appropriate format.
         """
 
         try:
@@ -553,11 +507,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current timestamp.
-            State is serialized using version-appropriate format.
         """
         state_data = await self._serialize_state(state)
 
@@ -577,9 +526,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = :id"
 
@@ -597,10 +543,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
-            State is deserialized using version-appropriate format.
         """
 
         if user_id is None:
@@ -816,15 +758,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
     Args:
         config: OracleSyncConfig with extension_config["adk"] settings.
-
-    Notes:
-        - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
-        - event_json stored as JSON (21c+) or BLOB (older versions)
-        - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
-        - Named parameters using :param_name
-        - State merging handled at application level
-        - owner_id_column supports NUMBER, VARCHAR2, RAW for Oracle FK types
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
@@ -834,13 +767,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Args:
             config: OracleSyncConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
@@ -872,14 +798,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Returns:
             Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
         """
         if self._json_storage_type is not None:
             return self._json_storage_type
@@ -927,10 +845,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Returns:
             Deserialized state dictionary.
-
-        Notes:
-            Handles LOB reading if data has read() method.
-            Oracle JSON type may return dict directly.
         """
         if is_readable(data):
             data = data.read()
@@ -1098,10 +1012,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            Oracle automatically drops indexes when dropping tables.
         """
         return [
             f"""
@@ -1157,12 +1067,7 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         ]
 
     def _create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist.
-
-        Notes:
-            Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
-        """
+        """Create both sessions and events tables if they don't exist."""
         storage_type = self._detect_json_storage_type()
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
@@ -1191,11 +1096,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses SYSTIMESTAMP for create_time and update_time.
-            State is serialized using version-appropriate format.
-            owner_id is ignored if owner_id_column not configured.
         """
         state_data = self._serialize_state(state)
 
@@ -1243,10 +1143,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            Oracle returns datetime objects for TIMESTAMP columns.
-            State is deserialized using version-appropriate format.
         """
 
         sql = f"""
@@ -1292,11 +1188,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current timestamp.
-            State is serialized using version-appropriate format.
         """
         state_data = self._serialize_state(state)
 
@@ -1320,9 +1211,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = :id"
 
@@ -1344,10 +1232,6 @@ class OracleSyncADKStore(BaseAsyncADKStore["OracleSyncConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
-            State is deserialized using version-appropriate format.
         """
 
         if user_id is None:

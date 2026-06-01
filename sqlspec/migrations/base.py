@@ -92,14 +92,14 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """Get SQL builder for creating the tracking table.
 
         Schema includes both legacy and new versioning columns:
-        - version_num: Migration version (sequential or timestamp format)
-        - version_type: Format indicator ('sequential' or 'timestamp')
-        - execution_sequence: Auto-incrementing application order
-        - description: Human-readable migration description
-        - applied_at: Timestamp when migration was applied
-        - execution_time_ms: Migration execution duration
-        - checksum: MD5 hash for content verification
-        - applied_by: User who applied the migration
+            - version_num: Migration version (sequential or timestamp format)
+            - version_type: Format indicator ('sequential' or 'timestamp')
+            - execution_sequence: Auto-incrementing application order
+            - description: Human-readable migration description
+            - applied_at: Timestamp when migration was applied
+            - execution_time_ms: Migration execution duration
+            - checksum: MD5 hash for content verification
+            - applied_by: User who applied the migration
 
         Returns:
             SQL builder object for table creation.
@@ -526,7 +526,7 @@ The timestamp is automatically generated in UTC timezone.
 
 Migrations are applied in chronological order based on their timestamps.
 The database tracks both version and execution order separately to handle
-out-of-order migrations gracefully (e.g., from late-merging branches).
+out-of-order migrations gracefully.
 """
 
     def _get_init_init_content(self) -> str:

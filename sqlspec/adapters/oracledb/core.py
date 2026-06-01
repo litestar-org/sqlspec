@@ -240,7 +240,7 @@ def coerce_large_parameters_sync(
 
     Routing order:
         1. ``OracleClob`` / ``OracleBlob`` / ``OracleJson`` wrappers — explicit user
-           intent, length-thresholds bypassed.
+            intent, length-thresholds bypassed.
         2. Plain ``str`` whose UTF-8 encoding exceeds ``varchar2_byte_limit`` → CLOB.
         3. Plain ``bytes``/``bytearray`` longer than ``raw_byte_limit`` → BLOB.
 
@@ -566,7 +566,6 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
 
     Returns:
         Tuple of coerced values with LOBs read to strings/bytes.
-
     """
     coerced_values: list[Any] | None = None
     for index, value in enumerate(row):
@@ -612,7 +611,6 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
 
     Returns:
         Tuple of coerced values with LOBs read to strings/bytes.
-
     """
     coerced_values: list[Any] | None = None
     for index, value in enumerate(row):

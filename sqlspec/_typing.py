@@ -3,7 +3,7 @@
 
 Public consumers should import from :mod:`sqlspec.typing`. This module is kept
 private because it centralizes optional dependency fallbacks, compatibility
-aliases, and mypyc-excluded type boundaries used by the package internals.
+aliases, and mypyc-excluded type boundaries for package internals.
 """
 
 import enum

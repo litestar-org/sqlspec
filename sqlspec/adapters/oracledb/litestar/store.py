@@ -56,33 +56,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
     Args:
         config: OracleAsyncConfig with extension_config["litestar"] settings.
-
-    Example:
-        from sqlspec.adapters.oracledb import OracleAsyncConfig
-        from sqlspec.adapters.oracledb.litestar.store import OracleAsyncStore
-
-        config = OracleAsyncConfig(
-            connection_config={"dsn": "oracle://..."},
-            extension_config={
-                "litestar": {
-                    "session_table": "my_sessions",
-                    "in_memory": True
-                }
-            }
-        )
-        store = OracleAsyncStore(config)
-        await store.create_table()
-
-    Notes:
-        Configuration is read from config.extension_config["litestar"]:
-        - session_table: Session table name (default: "litestar_session")
-        - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False, Oracle-specific)
-
-        When in_memory=True, the table is created with INMEMORY PRIORITY HIGH clause for
-        faster read operations. PRIORITY HIGH ensures the table is populated into the
-        In-Memory column store at database startup for immediate performance benefits.
-        This requires Oracle Database 12.1.0.2+ with the Database In-Memory option licensed.
-        If In-Memory is not available, the table creation will fail with ORA-00439 or ORA-62142.
     """
 
     __slots__ = ("_in_memory",)
@@ -92,11 +65,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         Args:
             config: OracleAsyncConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["litestar"]:
-            - session_table: Session table name (default: "litestar_session")
-            - in_memory: Enable INMEMORY clause (default: False)
         """
         super().__init__(config)
 
@@ -108,15 +76,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMP WITH TIME ZONE for timezone-aware expiration timestamps
-            - Index on expires_at for efficient cleanup queries
-            - BLOB type for data storage (Oracle native binary type)
-            - Audit columns (created_at, updated_at) help with debugging
-            - Table name is internally controlled, not user input (S608 suppressed)
-            - INMEMORY PRIORITY HIGH clause added when in_memory=True for faster reads
-            - HIGH priority ensures table population at database startup
         """
         inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
         return f"""
@@ -192,10 +151,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         Returns:
             Session data as bytes if found and not expired, None otherwise.
-
-        Notes:
-            Uses SYSTIMESTAMP for Oracle current timestamp.
-            The query uses the index for expires_at > SYSTIMESTAMP.
         """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -234,11 +189,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Uses MERGE for atomic UPSERT operation in Oracle.
-            Updates updated_at timestamp on every write for audit trail.
-            For large BLOBs, uses empty_blob() and then writes data separately.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -324,9 +274,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         Returns:
             True if the session exists and is not expired.
-
-        Notes:
-            Uses SYSTIMESTAMP for consistency with get() method.
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -382,10 +329,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         Returns:
             Number of sessions deleted.
-
-        Notes:
-            Uses SYSTIMESTAMP for consistency.
-            Oracle automatically commits DDL, so we explicitly commit for DML.
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= SYSTIMESTAMP"
 
@@ -408,45 +351,14 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     an async interface compatible with the Store protocol.
 
     Provides efficient session management with:
-    - Sync operations wrapped for async compatibility
-    - MERGE statement for atomic UPSERT
-    - Automatic expiration handling
-    - Efficient cleanup of expired sessions
-    - Optional In-Memory Column Store support (requires Oracle Database In-Memory license)
-
-    Note:
-        For high-concurrency applications, consider using OracleAsyncStore instead,
-        as it provides native async operations without threading overhead.
+        - Sync operations wrapped for async compatibility
+        - MERGE statement for atomic UPSERT
+        - Automatic expiration handling
+        - Efficient cleanup of expired sessions
+        - Optional In-Memory Column Store support (requires Oracle Database In-Memory license)
 
     Args:
         config: OracleSyncConfig with extension_config["litestar"] settings.
-
-    Example:
-        from sqlspec.adapters.oracledb import OracleSyncConfig
-        from sqlspec.adapters.oracledb.litestar.store import OracleSyncStore
-
-        config = OracleSyncConfig(
-            connection_config={"dsn": "oracle://..."},
-            extension_config={
-                "litestar": {
-                    "session_table": "my_sessions",
-                    "in_memory": True
-                }
-            }
-        )
-        store = OracleSyncStore(config)
-        await store.create_table()
-
-    Notes:
-        Configuration is read from config.extension_config["litestar"]:
-        - session_table: Session table name (default: "litestar_session")
-        - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False, Oracle-specific)
-
-        When in_memory=True, the table is created with INMEMORY PRIORITY HIGH clause for
-        faster read operations. PRIORITY HIGH ensures the table is populated into the
-        In-Memory column store at database startup for immediate performance benefits.
-        This requires Oracle Database 12.1.0.2+ with the Database In-Memory option licensed.
-        If In-Memory is not available, the table creation will fail with ORA-00439 or ORA-62142.
     """
 
     __slots__ = ("_in_memory",)
@@ -456,11 +368,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         Args:
             config: OracleSyncConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["litestar"]:
-            - session_table: Session table name (default: "litestar_session")
-            - in_memory: Enable INMEMORY clause (default: False)
         """
         super().__init__(config)
 
@@ -472,15 +379,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMP WITH TIME ZONE for timezone-aware expiration timestamps
-            - Index on expires_at for efficient cleanup queries
-            - BLOB type for data storage (Oracle native binary type)
-            - Audit columns (created_at, updated_at) help with debugging
-            - Table name is internally controlled, not user input (S608 suppressed)
-            - INMEMORY PRIORITY HIGH clause added when in_memory=True for faster reads
-            - HIGH priority ensures table population at database startup
         """
         inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
         return f"""
@@ -552,11 +450,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Synchronous implementation of get.
-
-        Notes:
-            Uses SYSTIMESTAMP for Oracle current timestamp.
-        """
+        """Synchronous implementation of get."""
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = :session_id
@@ -599,11 +493,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         return await async_(self._get)(key, renew_for)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Synchronous implementation of set.
-
-        Notes:
-            Uses MERGE for atomic UPSERT operation in Oracle.
-        """
+        """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
 

@@ -469,7 +469,7 @@ def is_mapping_like(obj: Any) -> "TypeGuard[MappingLikeProtocol]":
 
 
 def has_asdict_method(obj: Any) -> "TypeGuard[HasAsDictProtocol]":
-    """Check if an object has _asdict() method (e.g., NamedTuple).
+    """Check if an object has _asdict() method.
 
     Args:
         obj: The object to check
@@ -690,8 +690,8 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     """Detect the rename pattern by comparing field name transformations.
 
     Args:
-        field_name: Original field name (e.g., "user_id")
-        encode_name: Encoded field name (e.g., "userId")
+        field_name: Original field name
+        encode_name: Encoded field name
 
     Returns:
         The detected rename pattern ("camel", "kebab", "pascal") or None
@@ -710,7 +710,7 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
 def get_msgspec_rename_config(schema_type: type) -> "str | None":
     """Extract msgspec rename configuration from a struct type.
 
-    Analyzes field name transformations to detect the rename pattern used by msgspec.
+    Analyzes field name transformations to detect the msgspec rename pattern.
     Since msgspec doesn't store the original rename parameter directly, we infer it
     by comparing field names with their encode_name values.
 
@@ -720,17 +720,6 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
     Returns:
         The rename configuration value ("camel", "kebab", "pascal", etc.) if detected,
         None if no rename configuration exists or if not a msgspec struct.
-
-    Examples:
-        >>> class User(msgspec.Struct, rename="camel"):
-        ...     user_id: int
-        >>> get_msgspec_rename_config(User)
-        "camel"
-
-        >>> class Product(msgspec.Struct):
-        ...     product_id: int
-        >>> get_msgspec_rename_config(Product)
-        None
     """
     if not MSGSPEC_INSTALLED:
         return None
@@ -1335,23 +1324,15 @@ def is_local_path(uri: str) -> bool:
     r"""Check if URI represents a local filesystem path.
 
     Detects local paths including:
-    - file:// URIs
-    - Absolute paths (Unix: /, Windows: C:\\)
-    - Relative paths (., .., ~)
+        - file:// URIs
+        - Absolute paths (Unix: /, Windows: C:\)
+        - Relative paths (., .., ~)
 
     Args:
         uri: URI or path string to check.
 
     Returns:
         True if uri is a local path, False for remote URIs.
-
-    Examples:
-        >>> is_local_path("file:///data/file.txt")
-        True
-        >>> is_local_path("/absolute/path")
-        True
-        >>> is_local_path("s3://bucket/key")
-        False
     """
     if not uri:
         return False
@@ -1385,12 +1366,6 @@ def supports_arrow_results(obj: Any) -> "TypeGuard[SupportsArrowResults]":
 
     Returns:
         True if object implements SupportsArrowResults protocol.
-
-    Examples:
-        >>> from sqlspec.adapters.duckdb import DuckDBDriver
-        >>> driver = DuckDBDriver(...)
-        >>> supports_arrow_results(driver)
-        True
     """
     return isinstance(obj, SupportsArrowResults)
 

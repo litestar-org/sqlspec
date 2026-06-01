@@ -33,12 +33,6 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
     - Microsecond-precision timestamps
     - Foreign key constraints with cascade delete
     - Efficient upserts using ON DUPLICATE KEY UPDATE
-
-    Notes:
-        - MySQL JSON type used (not JSONB) - requires MySQL 5.7.8+
-        - TIMESTAMP(6) provides microsecond precision
-        - InnoDB engine required for foreign key support
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -110,12 +104,6 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         Returns:
             SQL statement to create adk_events table with indexes.
-
-        Notes:
-            Post clean-break schema: 5 columns only.
-            - session_id, invocation_id, author: indexed scalars
-            - timestamp: microsecond-precision TIMESTAMP
-            - event_json: full Event as native JSON
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (

@@ -1,11 +1,11 @@
 """Spanner event queue store with GoogleSQL-optimized DDL.
 
 Spanner requires:
-- STRING instead of VARCHAR
-- INT64 instead of INTEGER
-- No DEFAULT clause for non-computed columns
-- Separate index creation statements (no IF NOT EXISTS)
-- PRIMARY KEY declared inline in CREATE TABLE
+    - STRING instead of VARCHAR
+    - INT64 instead of INTEGER
+    - No DEFAULT clause for non-computed columns
+    - Separate index creation statements (no IF NOT EXISTS)
+    - PRIMARY KEY declared inline in CREATE TABLE
 """
 
 import logging
@@ -28,21 +28,6 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
 
     Args:
         config: SpannerSyncConfig with extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-
-    Example:
-        from sqlspec.adapters.spanner import SpannerSyncConfig
-        from sqlspec.adapters.spanner.events import SpannerSyncEventQueueStore
-
-        config = SpannerSyncConfig(
-            connection_config={"project": "my-project", "instance": "my-instance", "database": "my-db"},
-            extension_config={"events": {"queue_table": "my_events"}}
-        )
-        store = SpannerSyncEventQueueStore(config)
-        store.create_table()
     """
 
     __slots__ = ()

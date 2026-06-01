@@ -1,12 +1,12 @@
 """PGVector dialect extending Postgres with vector distance operators.
 
 Adds support for pgvector distance operators:
-- <-> : L2 (Euclidean) distance (already in base Postgres)
-- <#> : Negative inner product
-- <=> : Cosine distance
-- <+> : L1 (Taxicab/Manhattan) distance
-- <~> : Hamming distance (binary vectors)
-- <%> : Jaccard distance (binary vectors)
+    - <-> : L2 (Euclidean) distance (already in base Postgres)
+    - <#> : Negative inner product
+    - <=> : Cosine distance
+    - <+> : L1 (Taxicab/Manhattan) distance
+    - <~> : Hamming distance (binary vectors)
+    - <%> : Jaccard distance (binary vectors)
 """
 
 from sqlglot.dialects.dialect import Dialect

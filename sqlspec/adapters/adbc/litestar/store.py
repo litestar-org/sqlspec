@@ -5,12 +5,12 @@ PostgreSQL, SQLite, DuckDB, BigQuery, MySQL, and Snowflake. This store automatic
 detects the dialect and adapts SQL syntax accordingly.
 
 Supports:
-- PostgreSQL: BYTEA data type, TIMESTAMPTZ, $1 parameters, ON CONFLICT
-- SQLite: BLOB data type, DATETIME, ? parameters, INSERT OR REPLACE
-- DuckDB: BLOB data type, TIMESTAMP, ? parameters, ON CONFLICT
-- MySQL/MariaDB: BLOB data type, DATETIME, %s parameters, ON DUPLICATE KEY UPDATE
-- BigQuery: BYTES data type, TIMESTAMP, @param parameters, MERGE
-- Snowflake: BINARY data type, TIMESTAMP WITH TIME ZONE, ? parameters, MERGE
+    - PostgreSQL: BYTEA data type, TIMESTAMPTZ, $1 parameters, ON CONFLICT
+    - SQLite: BLOB data type, DATETIME, ? parameters, INSERT OR REPLACE
+    - DuckDB: BLOB data type, TIMESTAMP, ? parameters, ON CONFLICT
+    - MySQL/MariaDB: BLOB data type, DATETIME, %s parameters, ON DUPLICATE KEY UPDATE
+    - BigQuery: BYTES data type, TIMESTAMP, @param parameters, MERGE
+    - Snowflake: BINARY data type, TIMESTAMP WITH TIME ZONE, ? parameters, MERGE
 """
 
 from datetime import datetime, timedelta, timezone
@@ -39,25 +39,13 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
     other backends that support TIMESTAMPTZ and BYTEA equivalents.
 
     Provides efficient session management with:
-    - Sync operations wrapped for async compatibility
-    - INSERT ON CONFLICT (UPSERT) for PostgreSQL
-    - Automatic expiration handling with TIMESTAMPTZ
-    - Efficient cleanup of expired sessions
+        - Sync operations wrapped for async compatibility
+        - INSERT ON CONFLICT (UPSERT) for PostgreSQL
+        - Automatic expiration handling with TIMESTAMPTZ
+        - Efficient cleanup of expired sessions
 
     Args:
         config: AdbcConfig instance.
-
-    Example:
-        from sqlspec.adapters.adbc import AdbcConfig
-        from sqlspec.adapters.adbc.litestar.store import ADBCStore
-
-        config = AdbcConfig(
-            connection_config={
-                "uri": "postgresql://user:pass@localhost/db"
-            }
-        )
-        store = ADBCStore(config)
-        await store.create_table()
     """
 
     __slots__ = ("_dialect",)
@@ -67,9 +55,6 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         Args:
             config: AdbcConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
         self._dialect: str | None = None
@@ -95,15 +80,6 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            Automatically adapts to the detected database dialect:
-            - PostgreSQL: BYTEA, TIMESTAMPTZ with partial index
-            - SQLite: BLOB, DATETIME
-            - DuckDB: BLOB, TIMESTAMP
-            - MySQL/MariaDB: BLOB, DATETIME
-            - BigQuery: BYTES, TIMESTAMP
-            - Snowflake: BINARY, TIMESTAMP WITH TIME ZONE
         """
         dialect = self._get_dialect()
 
@@ -190,7 +166,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             position: 1-based parameter position.
 
         Returns:
-            Parameter placeholder string (e.g., '$1', '?', '%s', '@param1').
+            Parameter placeholder string.
         """
         dialect = self._get_dialect()
 

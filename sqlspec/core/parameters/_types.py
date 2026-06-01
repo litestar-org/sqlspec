@@ -41,7 +41,8 @@ ParameterPayload: TypeAlias = "ParameterMapping | ParameterSequence | object | N
 
 
 ConvertedParameters: TypeAlias = "dict[str, Any] | list[Any] | tuple[Any, ...] | object | None"
-"""Type alias for parameters after conversion to driver-consumable format.
+"""
+Type alias for parameters after conversion to driver-consumable format.
 
 This type represents the concrete output of parameter conversion functions.
 Unlike :data:`ParameterPayload` (which represents inputs and can include abstract
@@ -50,10 +51,10 @@ types and scalar objects that database drivers can directly consume.
 
 The union includes:
 
-- ``dict[str, Any]``: Named parameters (e.g., ``{"name": "Alice", "age": 30}``)
-- ``list[Any]``: Positional parameters as list (e.g., ``["Alice", 30]``)
-- ``tuple[Any, ...]``: Positional parameters as tuple (e.g., ``("Alice", 30)``)
-- ``object``: Scalar parameter payloads after type coercion (e.g., ``3.14``)
+- ``dict[str, Any]``: Named parameters
+- ``list[Any]``: Positional parameters as list
+- ``tuple[Any, ...]``: Positional parameters as tuple
+- ``object``: Scalar parameter payloads after type coercion
 - ``None``: When parameters are statically embedded in SQL string
 """
 

@@ -45,7 +45,7 @@ class OracleVersionInfo(VersionInfo):
         """Initialize Oracle version info.
 
         Args:
-            major: Major version number (e.g., 19, 21, 23).
+            major: Major version number.
             minor: Minor version number.
             patch: Patch version number.
             compatible: Compatible parameter value.

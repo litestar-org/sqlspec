@@ -33,33 +33,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
     Extends Starlette integration with dependency injection helpers for FastAPI's
     Depends() system.
-
-    Example:
-        from fastapi import Depends, FastAPI
-        from sqlspec import SQLSpec
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.extensions.fastapi import SQLSpecPlugin
-
-        sqlspec = SQLSpec()
-        config = sqlspec.add_config(
-            AsyncpgConfig(
-                connection_config={"dsn": "postgresql://localhost/mydb"},
-                extension_config={
-                    "fastapi": {
-                        "commit_mode": "autocommit",
-                        "session_key": "db"
-                    }
-                }
-            )
-        )
-
-        app = FastAPI()
-        db_ext = SQLSpecPlugin(sqlspec, app)
-
-        @app.get("/users")
-        async def list_users(db = Depends(db_ext.provide_session())):
-            result = await db.execute("SELECT * FROM users")
-            return {"users": result.all()}
     """
 
     def __init__(self, sqlspec: SQLSpec, app: "FastAPI | None" = None) -> None:
@@ -144,30 +117,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Dependency callable for FastAPI Depends().
-
-        Example:
-            # No args - returns union type
-            @app.get("/users")
-            async def get_users(db = Depends(db_ext.provide_session())):
-                return await db.execute("SELECT * FROM users")
-
-            # String key for multi-database
-            @app.get("/products")
-            async def get_products(db = Depends(db_ext.provide_session("products"))):
-                return await db.execute("SELECT * FROM products")
-
-            # Config instance for type narrowing
-            config = AsyncpgConfig(...)
-            @app.get("/typed")
-            async def typed_query(db = Depends(db_ext.provide_session(config))):
-                # db is properly typed as AsyncDriverAdapterBase
-                return await db.execute("SELECT 1")
-
-            # Config type/class for type narrowing
-            @app.get("/typed2")
-            async def typed_query2(db = Depends(db_ext.provide_session(AsyncpgConfig))):
-                # db is properly typed as AsyncDriverAdapterBase
-                return await db.execute("SELECT 1")
         """
         # Extract string key if provided, ignore config types/instances (used only for type narrowing)
         session_key = key if isinstance(key, str) or key is None else None
@@ -188,17 +137,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Dependency callable that returns AsyncDriverAdapterBase.
-
-        Example:
-            @app.get("/users")
-            async def get_users(db = Depends(db_ext.provide_async_session())):
-                # db is AsyncDriverAdapterBase
-                return await db.execute("SELECT * FROM users")
-
-            @app.get("/products")
-            async def get_products(db = Depends(db_ext.provide_async_session("products_db"))):
-                # db is AsyncDriverAdapterBase for "products_db" key
-                return await db.execute("SELECT * FROM products")
         """
 
         def dependency(request: Request) -> _AsyncSession:
@@ -217,12 +155,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Dependency callable that returns SyncDriverAdapterBase.
-
-        Example:
-            @app.get("/users")
-            def get_users(db = Depends(db_ext.provide_sync_session())):
-                # db is SyncDriverAdapterBase
-                return db.execute("SELECT * FROM users")
         """
 
         def dependency(request: Request) -> _SyncSession:
@@ -262,29 +194,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Dependency callable for FastAPI Depends().
-
-        Example:
-            # No args
-            @app.get("/raw")
-            async def raw_query(conn = Depends(db_ext.provide_connection())):
-                cursor = await conn.cursor()
-                await cursor.execute("SELECT 1")
-                return await cursor.fetchone()
-
-            # With config instance
-            config = AsyncpgConfig(...)
-            @app.get("/typed")
-            async def typed_query(conn = Depends(db_ext.provide_connection(config))):
-                cursor = await conn.cursor()
-                await cursor.execute("SELECT 1")
-                return await cursor.fetchone()
-
-            # With config type/class
-            @app.get("/typed2")
-            async def typed_query2(conn = Depends(db_ext.provide_connection(AsyncpgConfig))):
-                cursor = await conn.cursor()
-                await cursor.execute("SELECT 1")
-                return await cursor.fetchone()
         """
         # Extract string key if provided, ignore config types/instances (used only for type narrowing)
         connection_key = key if isinstance(key, str) or key is None else None
@@ -305,13 +214,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Dependency callable for async connection.
-
-        Example:
-            @app.get("/raw")
-            async def raw_query(conn = Depends(db_ext.provide_async_connection())):
-                cursor = await conn.cursor()
-                await cursor.execute("SELECT 1")
-                return await cursor.fetchone()
         """
 
         def dependency(request: Request) -> Any:
@@ -330,13 +232,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Dependency callable for sync connection.
-
-        Example:
-            @app.get("/raw")
-            def raw_query(conn = Depends(db_ext.provide_sync_connection())):
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                return cursor.fetchone()
         """
 
         def dependency(request: Request) -> Any:
@@ -360,29 +255,6 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         Returns:
             Callable for use with Depends() that returns list of filters.
-
-        Example:
-            from fastapi import Depends
-            from sqlspec.extensions.fastapi import FilterConfig
-
-            @app.get("/users")
-            async def list_users(
-                db = Depends(db_ext.provide_session()),
-                filters = Depends(
-                    db_ext.provide_filters({
-                        "id_filter": UUID,
-                        "search": "name,email",
-                        "search_ignore_case": True,
-                        "pagination_type": "limit_offset",
-                        "sort_field": ["created_at", "uploaded_collections"],
-                    })
-                ),
-            ):
-                stmt = sql("SELECT * FROM users")
-                for filter in filters:
-                    stmt = filter.append_to_statement(stmt)
-                result = await db.execute(stmt)
-                return result.all()
         """
 
         if dep_defaults is None:

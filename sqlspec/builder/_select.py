@@ -1284,7 +1284,7 @@ class SetOperationMixin:
             combined = exp.intersect(left_expr, right_expr, distinct=distinct)
         elif operator == "except":
             combined = exp.except_(left_expr, right_expr)
-        else:  # pragma: no cover - defensive
+        else:  # pragma: no cover
             msg = f"Unsupported set operation: {operator}"
             raise SQLBuilderError(msg)
 
@@ -1336,13 +1336,6 @@ class Select(
 
     Provides a fluent interface for constructing SQL SELECT statements
     with parameter binding and validation.
-
-    Example:
-        >>> class User(BaseModel):
-        ...     id: int
-        ...     name: str
-        >>> builder = Select("id", "name").from_("users")
-        >>> result = driver.execute(builder)
     """
 
     __slots__ = ("_hints",)
@@ -1352,12 +1345,8 @@ class Select(
         """Initialize SELECT with optional columns.
 
         Args:
-            *columns: Column names to select (e.g., "id", "name", "u.email")
+            *columns: Column names to select
             **kwargs: Additional QueryBuilder arguments (dialect, schema, etc.)
-
-        Examples:
-            Select("id", "name")  # Shorthand for Select().select("id", "name")
-            Select()              # Same as Select() - start empty
         """
         (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
             self._parse_query_builder_kwargs(kwargs)
@@ -1399,7 +1388,7 @@ class Select(
         """Attach an optimizer or dialect-specific hint to the query.
 
         Args:
-            hint: The raw hint string (e.g., 'INDEX(users idx_users_name)').
+            hint: The raw hint string.
             location: Where to apply the hint ('statement', 'table').
             table: Table name if the hint is for a specific table.
             dialect: Restrict the hint to a specific dialect (optional).

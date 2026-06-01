@@ -1,7 +1,7 @@
 """Base store classes for ADK artifact metadata backend (sync and async).
 
 These abstract base classes define the database operations needed to manage
-artifact version metadata.  Content storage is handled separately by
+artifact version metadata. Content storage is handled separately by
 ``sqlspec/storage/`` backends; these stores only manage the relational
 metadata rows.
 
@@ -35,7 +35,7 @@ MAX_TABLE_NAME_LENGTH: Final = 63
 class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
     """Base class for async SQLSpec-backed ADK artifact metadata stores.
 
-    Manages artifact version metadata in a SQL table.  Content bytes are
+    Manages artifact version metadata in a SQL table. Content bytes are
     stored externally via ``sqlspec/storage/`` backends and referenced
     by canonical URI in each metadata row.
 
@@ -43,10 +43,6 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - artifact_table: Artifact versions table name (default: "adk_artifact_versions")
     """
 
     __slots__ = ("_artifact_table", "_config")
@@ -112,7 +108,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         """List distinct artifact filenames.
 
         When ``session_id`` is provided, returns filenames from both
-        session-scoped and user-scoped artifacts.  When None, returns
+        session-scoped and user-scoped artifacts. When None, returns
         only user-scoped artifact filenames.
 
         Args:
@@ -147,7 +143,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         """Delete all version records for an artifact and return them.
 
         The caller uses the returned records to clean up content from
-        object storage.  Metadata is deleted first (fail-fast); content
+        object storage. Metadata is deleted first (fail-fast); content
         cleanup is best-effort.
 
         Args:

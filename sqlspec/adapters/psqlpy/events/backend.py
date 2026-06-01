@@ -183,7 +183,7 @@ class PsqlpyHybridEventsBackend:
 def create_event_backend(
     config: "PsqlpyConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> PsqlpyEventsBackend | PsqlpyHybridEventsBackend | None:
-    """Factory used by EventChannel to create the native psqlpy backend."""
+    """EventChannel factory for the native psqlpy backend."""
     match backend_name:
         case "listen_notify":
             try:

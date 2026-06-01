@@ -24,25 +24,6 @@ class SamplingConfig:
         force_sample_on_error: If True, always sample when an error occurs.
         force_sample_slow_queries_ms: If set, always sample queries slower than this threshold.
         deterministic: If True, use hash-based sampling for consistency across distributed systems.
-
-    Example:
-        ```python
-        # Sample 10% of requests, but always sample errors and slow queries
-        config = SamplingConfig(
-            sample_rate=0.1,
-            force_sample_on_error=True,
-            force_sample_slow_queries_ms=100.0,
-            deterministic=True,
-        )
-
-        # Check if a request should be sampled
-        if config.should_sample(
-            correlation_id="abc-123",
-            is_error=False,
-            duration_ms=50.0,
-        ):
-            emit_logs()
-        ```
     """
 
     __slots__ = ("deterministic", "force_sample_on_error", "force_sample_slow_queries_ms", "sample_rate")
@@ -105,20 +86,6 @@ class SamplingConfig:
 
         Returns:
             True if the request should be sampled, False otherwise.
-
-        Example:
-            ```python
-            # Always sampled due to error
-            config.should_sample(is_error=True)  # True
-
-            # Always sampled due to slow query (>100ms default)
-            config.should_sample(duration_ms=150.0)  # True
-
-            # Rate-based sampling
-            config.should_sample(
-                correlation_id="abc-123"
-            )  # depends on rate
-            ```
         """
         # Force sample conditions take precedence
         if force:

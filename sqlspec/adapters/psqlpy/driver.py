@@ -169,11 +169,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         Returns:
             ExecutionResult with script execution metadata
-
-        Notes:
-            Uses execute() with empty parameters for each statement instead of execute_batch().
-            execute_batch() uses simple query protocol which can break subsequent queries
-            that rely on extended protocol (e.g., information_schema queries with name type).
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)

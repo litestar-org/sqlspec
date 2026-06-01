@@ -68,25 +68,25 @@ class AsyncmyDriverFeatures(TypedDict):
     """Asyncmy driver feature flags.
 
     MySQL/MariaDB handle JSON natively, but custom serializers can be provided
-    for specialized use cases (e.g., orjson for performance, msgspec for type safety).
+    for specialized use cases.
 
     json_serializer: Custom JSON serializer function.
-        Defaults to sqlspec.utils.serializers.to_json.
-        Use for performance (orjson) or custom encoding.
+     Defaults to sqlspec.utils.serializers.to_json.
+     Use for performance (orjson) or custom encoding.
     json_deserializer: Custom JSON deserializer function.
-        Defaults to sqlspec.utils.serializers.from_json.
-        Use for performance (orjson) or custom decoding.
+     Defaults to sqlspec.utils.serializers.from_json.
+     Use for performance (orjson) or custom decoding.
     on_connection_create: Async callback executed when a connection is acquired from pool.
-        Receives the raw asyncmy connection for low-level driver configuration.
-        Called exactly once per physical connection using WeakSet tracking.
+     Receives the raw asyncmy connection for low-level driver configuration.
+     Called exactly once per physical connection using WeakSet tracking.
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
-        Provides pub/sub capabilities via table-backed queue (MySQL/MariaDB have no native pub/sub).
-        Requires extension_config["events"] for migration setup.
+     Defaults to True when extension_config["events"] is configured.
+     Provides pub/sub capabilities via table-backed queue (MySQL/MariaDB have no native pub/sub).
+     Requires extension_config["events"] for migration setup.
     events_backend: Event channel backend selection.
-        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
-        MySQL/MariaDB do not have native pub/sub, so table_queue is the only backend.
-        Defaults to "table_queue".
+     Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+     MySQL/MariaDB do not have native pub/sub, so table_queue is the only backend.
+     Defaults to "table_queue".
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -150,16 +150,7 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
-    """Configuration for Asyncmy database connections.
-
-    Example::
-
-        config = AsyncmyConfig(
-            connection_config=AsyncmyPoolParams(
-                host="localhost", user="root", database="mydb"
-            )
-        )
-    """
+    """Configuration for Asyncmy database connections."""
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
@@ -195,7 +186,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             statement_config: Statement configuration override
             driver_features: Driver feature configuration (TypedDict or dict)
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
@@ -234,8 +225,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
 
-        Future driver_features can be added here if needed (e.g., custom connection
-        initialization, specialized type handling).
+        Future driver_features can be added here if needed.
         """
         return cast("AsyncmyPool", await asyncmy.create_pool(**dict(self.connection_config)))
 

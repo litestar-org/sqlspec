@@ -61,19 +61,18 @@ class ObStoreBackend:
 
         Args:
             uri: Storage URI. Supported formats:
-                - file:///absolute/path - Local filesystem
-                - s3://bucket/prefix - AWS S3
-                - gs://bucket/prefix - Google Cloud Storage
-                - az://container/prefix - Azure Blob Storage
-                - memory:// - In-memory storage (for testing)
+            - file:///absolute/path - Local filesystem
+            - s3://bucket/prefix - AWS S3
+            - gs://bucket/prefix - Google Cloud Storage
+            - az://container/prefix - Azure Blob Storage
+            - memory:// - In-memory storage (for testing)
             **kwargs: Additional options:
-                - base_path (str): For local files (file://), this is combined with
-                  the URI path to form the storage root. For example:
-                  uri="file:///data" + base_path="uploads" → /data/uploads
-                  If base_path is absolute, it overrides the URI path (backward compat).
-                  For cloud storage, base_path is used as an object key prefix.
-                - Other obstore configuration options (timeouts, credentials, etc.)
-
+            - base_path (str): For local files (file://), this is combined with
+            the URI path to form the storage root. For example:
+            uri="file:///data" + base_path="uploads" → /data/uploads
+                If base_path is absolute, it overrides the URI path (backward compat).
+                For cloud storage, base_path is used as an object key prefix.
+            - Other obstore configuration options (timeouts, credentials, etc.)
         """
         ensure_obstore()
         base_path = kwargs.pop("base_path", "")

@@ -44,11 +44,11 @@ class MigrationVersion:
     """Parsed migration version with structured comparison support.
 
     Attributes:
-        raw: Original version string (e.g., "0001", "20251011120000", "ext_litestar_0001").
+        raw: Original version string.
         type: Version format type (sequential or timestamp).
-        sequence: Numeric value for sequential versions (e.g., 1, 2, 42).
+        sequence: Numeric value for sequential versions.
         timestamp: Parsed datetime for timestamp versions (UTC).
-        extension: Extension name for extension-prefixed versions (e.g., "litestar").
+        extension: Extension name for extension-prefixed versions.
     """
 
     raw: str
@@ -170,18 +170,6 @@ def is_sequential_version(version_str: "str | None") -> bool:
 
     Returns:
         True if sequential format, False if None or whitespace.
-
-    Examples:
-        >>> is_sequential_version("0001")
-        True
-        >>> is_sequential_version("42")
-        True
-        >>> is_sequential_version("10000")
-        True
-        >>> is_sequential_version("20251011120000")
-        False
-        >>> is_sequential_version(None)
-        False
     """
     if version_str is None or not version_str.strip():
         return False
@@ -198,14 +186,6 @@ def is_timestamp_version(version_str: "str | None") -> bool:
 
     Returns:
         True if timestamp format, False if None or whitespace.
-
-    Examples:
-        >>> is_timestamp_version("20251011120000")
-        True
-        >>> is_timestamp_version("0001")
-        False
-        >>> is_timestamp_version(None)
-        False
     """
     if version_str is None or not version_str.strip():
         return False
@@ -236,21 +216,6 @@ def parse_version(version_str: "str | None") -> MigrationVersion:
 
     Raises:
         ValueError: If version format is invalid, None, or whitespace-only.
-
-    Examples:
-        >>> v = parse_version("0001")
-        >>> v.type == VersionType.SEQUENTIAL
-        True
-        >>> v.sequence
-        1
-
-        >>> v = parse_version("20251011120000")
-        >>> v.type == VersionType.TIMESTAMP
-        True
-
-        >>> v = parse_version("ext_litestar_0001")
-        >>> v.extension
-        'litestar'
     """
     if version_str is None or not version_str.strip():
         msg = "Invalid migration version: version string is None or empty"
@@ -301,13 +266,6 @@ def generate_timestamp_version() -> str:
 
     Returns:
         Timestamp version string.
-
-    Examples:
-        >>> version = generate_timestamp_version()
-        >>> len(version)
-        14
-        >>> is_timestamp_version(version)
-        True
     """
     return datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
 
@@ -321,29 +279,11 @@ def get_next_sequential_number(migrations: "list[MigrationVersion]", extension: 
 
     Args:
         migrations: List of parsed migration versions.
-        extension: Optional extension name to filter by (e.g., "litestar", "adk").
-                  None means core migrations only.
+        extension: Optional extension name to filter by.
+            None means core migrations only.
 
     Returns:
         Next available sequential number (1 if no sequential migrations exist).
-
-    Examples:
-        >>> v1 = parse_version("0001")
-        >>> v2 = parse_version("0002")
-        >>> get_next_sequential_number([v1, v2])
-        3
-
-        >>> get_next_sequential_number([])
-        1
-
-        >>> ext = parse_version("ext_litestar_0001")
-        >>> core = parse_version("0001")
-        >>> get_next_sequential_number([ext, core])
-        2
-
-        >>> ext1 = parse_version("ext_litestar_0001")
-        >>> get_next_sequential_number([ext1], extension="litestar")
-        2
     """
     sequential = [
         m.sequence for m in migrations if m.type == VersionType.SEQUENTIAL and m.extension == extension and m.sequence
@@ -370,21 +310,6 @@ def convert_to_sequential_version(timestamp_version: MigrationVersion, sequence_
 
     Raises:
         ValueError: If input is not a timestamp version.
-
-    Examples:
-        >>> v = parse_version("20251011120000")
-        >>> convert_to_sequential_version(v, 3)
-        '0003'
-
-        >>> v = parse_version("ext_litestar_20251011120000")
-        >>> convert_to_sequential_version(v, 1)
-        'ext_litestar_0001'
-
-        >>> v = parse_version("0001")
-        >>> convert_to_sequential_version(v, 2)
-        Traceback (most recent call last):
-            ...
-        ValueError: Can only convert timestamp versions to sequential
     """
     if timestamp_version.type != VersionType.TIMESTAMP:
         msg = "Can only convert timestamp versions to sequential"
@@ -410,29 +335,6 @@ def generate_conversion_map(migrations: "list[tuple[str, Any]]") -> "dict[str, s
 
     Returns:
         Dictionary mapping old timestamp versions to new sequential versions.
-
-    Examples:
-        >>> migrations = [
-        ...     ("0001", Path("0001_init.sql")),
-        ...     ("0002", Path("0002_users.sql")),
-        ...     ("20251011120000", Path("20251011120000_products.sql")),
-        ...     ("20251012130000", Path("20251012130000_orders.sql")),
-        ... ]
-        >>> result = generate_conversion_map(migrations)
-        >>> result
-        {'20251011120000': '0003', '20251012130000': '0004'}
-
-        >>> migrations = [
-        ...     ("20251011120000", Path("20251011120000_first.sql")),
-        ...     ("20251010090000", Path("20251010090000_earlier.sql")),
-        ... ]
-        >>> result = generate_conversion_map(migrations)
-        >>> result
-        {'20251010090000': '0001', '20251011120000': '0002'}
-
-        >>> migrations = []
-        >>> generate_conversion_map(migrations)
-        {}
     """
     if not migrations:
         return {}

@@ -225,10 +225,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. Specific error codes (most reliable for MySQL)
-    2. SQLSTATE codes (where available)
-    3. Generic error code ranges
-    4. Default SQLSpecError fallback
+        1. Specific error codes (most reliable for MySQL)
+        2. SQLSTATE codes (where available)
+        3. Generic error code ranges
+        4. Default SQLSpecError fallback
 
     Args:
         error: The mysql-connector exception to map

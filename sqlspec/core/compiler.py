@@ -1,9 +1,9 @@
 """SQL compilation and caching.
 
 Components:
-- CompiledSQL: Immutable compilation result
-- SQLProcessor: SQL compiler with caching
-- Parameter processing via ParameterProcessor
+    - CompiledSQL: Immutable compilation result
+    - SQLProcessor: SQL compiler with caching
+    - Parameter processing via ParameterProcessor
 """
 
 import logging

@@ -816,7 +816,6 @@ class ParameterProcessor:
     ) -> tuple[Any, ...]:
         if param_fingerprint is None:
             # For static script compilation, we must include actual values in the fingerprint
-            # because the SQL will have values embedded directly (e.g., VALUES (1, 'foo'))
             if config.needs_static_script_compilation:
                 param_fingerprint = value_fingerprint(parameters)
             else:
@@ -824,7 +823,6 @@ class ParameterProcessor:
                 param_fingerprint = structural_fingerprint(parameters, is_many)
         dialect_marker = dialect or "default"
         # Include both input and execution parameter styles to avoid cache collisions
-        # (e.g., MySQL asyncmy uses ? for input but %s for execution)
         input_style = config.default_parameter_style.value if config.default_parameter_style else "unknown"
         exec_style = (
             config.default_execution_parameter_style.value if config.default_execution_parameter_style else input_style

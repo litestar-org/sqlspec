@@ -5,9 +5,9 @@ The TIMESTAMP type provides microsecond precision for event ordering.
 
 Configuration (optional):
     extension_config={
-        "events": {
-            "queue_table": "custom_event_queue",  # Override default table name
-        }
+    "events": {
+    "queue_table": "custom_event_queue", # Override default table name
+    }
     }
 """
 
@@ -25,25 +25,6 @@ class DuckDBEventQueueStore(BaseEventQueueStore[DuckDBConfig]):
 
     Args:
         config: DuckDBConfig with optional extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-
-        DuckDB does not support native pub/sub, so events use the table-backed
-        queue backend which provides durable, exactly-once delivery semantics.
-
-    Example:
-        from sqlspec.adapters.duckdb import DuckDBConfig
-        from sqlspec.adapters.duckdb.events import DuckDBEventQueueStore
-
-        config = DuckDBConfig(
-            connection_config={"database": "events.db"},
-            extension_config={"events": {"queue_table": "my_events"}}
-        )
-        store = DuckDBEventQueueStore(config)
-        for stmt in store.create_statements():
-            driver.execute_script(stmt)
     """
 
     __slots__ = ()

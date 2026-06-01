@@ -302,7 +302,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
                 raise SQLSpecError(msg)
 
     elif isinstance(parameters, (list, tuple)):
-        msg = "BigQuery driver requires named parameters (e.g., @name); positional parameters are not supported"
+        msg = "BigQuery driver requires named parameters; positional parameters are not supported"
         raise SQLSpecError(msg)
 
     return bq_parameters
@@ -710,9 +710,9 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. HTTP status codes from BigQuery API
-    2. Message pattern matching for specific errors
-    3. Default SQLSpecError fallback
+        1. HTTP status codes from BigQuery API
+        2. Message pattern matching for specific errors
+        3. Default SQLSpecError fallback
 
     Args:
         error: The BigQuery exception to map

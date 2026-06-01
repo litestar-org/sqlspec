@@ -108,17 +108,17 @@ class MysqlConnectorDriverFeatures(TypedDict):
     """MysqlConnector driver feature flags.
 
     json_serializer: Custom JSON serializer function.
-        Defaults to sqlspec.utils.serializers.to_json.
+     Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
-        Defaults to sqlspec.utils.serializers.from_json.
+     Defaults to sqlspec.utils.serializers.from_json.
     on_connection_create: Callback executed when a connection is acquired.
-        For sync: Callable[[MysqlConnectorSyncConnection], None]
-        For async: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]
-        Called exactly once per physical connection using WeakSet tracking.
+     For sync: Callable[[MysqlConnectorSyncConnection], None]
+     For async: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]
+     Called exactly once per physical connection using WeakSet tracking.
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
+     Defaults to True when extension_config["events"] is configured.
     events_backend: Event channel backend selection.
-        Only option: "table_queue".
+     Only option: "table_queue".
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]

@@ -81,7 +81,7 @@ class ADBCOutputConverter(CachedOutputConverter):
         """Check if dialect supports native handling of a type.
 
         Args:
-            type_name: Type name to check (e.g., 'uuid', 'json')
+            type_name: Type name to check
 
         Returns:
             True if dialect supports native handling, False otherwise.

@@ -31,14 +31,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
     Args:
         config: PsycopgAsyncConfig instance.
-
-    Example:
-        from sqlspec.adapters.psycopg import PsycopgAsyncConfig
-        from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore
-
-        config = PsycopgAsyncConfig(connection_config={"conninfo": "postgresql://..."})
-        store = PsycopgAsyncStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -48,9 +40,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         Args:
             config: PsycopgAsyncConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -59,13 +48,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMPTZ for timezone-aware expiration timestamps
-            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
-            - FILLFACTOR 80 leaves space for HOT updates, reducing table bloat
-            - Audit columns (created_at, updated_at) help with debugging
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -110,10 +92,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         Returns:
             Session data as bytes if found and not expired, None otherwise.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP instead of NOW() for SQL standard compliance.
-            The query planner can use the partial index for expires_at > CURRENT_TIMESTAMP.
         """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -150,10 +128,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Uses EXCLUDED to reference the proposed insert values in ON CONFLICT.
-            Updates updated_at timestamp on every write for audit trail.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -204,9 +178,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         Returns:
             True if the session exists and is not expired.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for consistency with get() method.
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -256,11 +227,6 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         Returns:
             Number of sessions deleted.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for consistency.
-            For very large tables (10M+ rows), consider batching deletes
-            to avoid holding locks too long.
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
@@ -282,25 +248,13 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
     utility to provide an async interface compatible with the Store protocol.
 
     Provides efficient session management with:
-    - Sync operations wrapped for async compatibility
-    - UPSERT support using ON CONFLICT
-    - Automatic expiration handling
-    - Efficient cleanup of expired sessions
-
-    Note:
-        For high-concurrency applications, consider using PsycopgAsyncStore instead,
-        as it provides native async operations without threading overhead.
+        - Sync operations wrapped for async compatibility
+        - UPSERT support using ON CONFLICT
+        - Automatic expiration handling
+        - Efficient cleanup of expired sessions
 
     Args:
         config: PsycopgSyncConfig instance.
-
-    Example:
-        from sqlspec.adapters.psycopg import PsycopgSyncConfig
-        from sqlspec.adapters.psycopg.litestar.store import PsycopgSyncStore
-
-        config = PsycopgSyncConfig(connection_config={"conninfo": "postgresql://..."})
-        store = PsycopgSyncStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -310,9 +264,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
         Args:
             config: PsycopgSyncConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -321,13 +272,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMPTZ for timezone-aware expiration timestamps
-            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
-            - FILLFACTOR 80 leaves space for HOT updates, reducing table bloat
-            - Audit columns (created_at, updated_at) help with debugging
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -368,11 +312,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Synchronous implementation of get.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for SQL standard compliance.
-        """
+        """Synchronous implementation of get."""
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = %s
@@ -413,11 +353,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         return await async_(self._get)(key, renew_for)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Synchronous implementation of set.
-
-        Notes:
-            Uses EXCLUDED to reference the proposed insert values in ON CONFLICT.
-        """
+        """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
 

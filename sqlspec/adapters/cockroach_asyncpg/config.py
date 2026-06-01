@@ -75,8 +75,8 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB AsyncPG adapter.
 
     on_connection_create: Async callback executed when a connection is acquired from pool.
-        Receives the raw asyncpg connection for low-level driver configuration.
-        Called after internal setup (JSON codecs, pgvector registration).
+     Receives the raw asyncpg connection for low-level driver configuration.
+     Called after internal setup (JSON codecs, pgvector registration).
     """
 
     enable_auto_retry: NotRequired[bool]

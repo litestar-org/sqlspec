@@ -190,23 +190,10 @@ class Insert(
 
         Args:
             *columns: Column names that define the conflict. If no columns provided,
-                     creates an ON CONFLICT without specific columns (catches all conflicts).
+                creates an ON CONFLICT without specific columns (catches all conflicts).
 
         Returns:
             A ConflictBuilder instance for chaining conflict resolution methods.
-
-        Example:
-            ```python
-            sql.insert("users").values(id=1, name="John").on_conflict(
-                "id"
-            ).do_nothing()
-
-            sql.insert("users").values(...).on_conflict(
-                "email", "username"
-            ).do_update(updated_at=sql.raw("NOW()"))
-
-            sql.insert("users").values(...).on_conflict().do_nothing()
-            ```
         """
         return ConflictBuilder(self, columns)
 
@@ -215,13 +202,10 @@ class Insert(
 
         Args:
             *columns: Column names that define the conflict. If no columns provided,
-                     creates an ON CONFLICT without specific columns.
+                creates an ON CONFLICT without specific columns.
 
         Returns:
             The current builder instance for method chaining.
-
-        Note:
-            This is a convenience method. For more control, use on_conflict().do_nothing().
         """
         return self.on_conflict(*columns).do_nothing()
 
@@ -233,10 +217,6 @@ class Insert(
 
         Returns:
             The current builder instance for method chaining.
-
-        Note:
-            This method creates MySQL-specific ON DUPLICATE KEY UPDATE syntax.
-            For PostgreSQL, use on_conflict() instead.
         """
         if not kwargs:
             return self
@@ -276,13 +256,6 @@ class ConflictBuilder:
 
         Returns:
             The parent Insert builder for method chaining.
-
-        Example:
-            ```python
-            sql.insert("users").values(id=1, name="John").on_conflict(
-                "id"
-            ).do_nothing()
-            ```
         """
         insert_expr = self._insert_builder.get_insert_expression()
 
@@ -300,15 +273,6 @@ class ConflictBuilder:
 
         Returns:
             The parent Insert builder for method chaining.
-
-        Example:
-            ```python
-            sql.insert("users").values(id=1, name="John").on_conflict(
-                "id"
-            ).do_update(
-                name="Updated Name", updated_at=sql.raw("NOW()")
-            )
-            ```
         """
         insert_expr = self._insert_builder.get_insert_expression()
 

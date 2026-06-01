@@ -904,18 +904,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     ) -> None:
         """Squash multiple sequential migrations into a single file.
 
-        VERSION_RANGE should be in START:END format, e.g., "0001:0004".
-
-        Examples:
-            sqlspec db squash 0001:0004 -m "v1.0 release"
-            sqlspec db squash 0001:0003 -m "initial schema" --dry-run
+        VERSION_RANGE should be in START:END format:0004".
         """
         from sqlspec.migrations.commands import create_migration_commands
 
         ctx = _ensure_click_context()
 
         if ":" not in version_range:
-            console.print("[red]Error: VERSION_RANGE must be in START:END format (e.g., 0001:0004)[/]")
+            console.print("[red]Error: VERSION_RANGE must be in START:END format[/]")
             raise SystemExit(1)
 
         start_version, end_version = version_range.split(":", 1)
@@ -1089,7 +1085,7 @@ def _ensure_click_context() -> "click.Context":
     """Return the active Click context, raising if missing (for type-checkers)."""
 
     context = click.get_current_context()
-    if context is None:  # pragma: no cover - click guarantees context in commands
+    if context is None:  # pragma: no cover
         msg = "SQLSpec CLI commands require an active Click context"
         raise RuntimeError(msg)
     return cast("click.Context", context)

@@ -198,7 +198,7 @@ class DuckDBConnectionPool:
             normalized = self._normalize_flag_value(value)
             try:
                 connection.execute(f"SET {key} = {normalized}")
-            except Exception as exc:  # pragma: no cover - best-effort guard
+            except Exception as exc:  # pragma: no cover
                 log_with_context(
                     logger,
                     logging.DEBUG,

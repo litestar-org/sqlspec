@@ -355,7 +355,7 @@ def create_event_backend(
     | PsycopgAsyncHybridEventsBackend
     | None
 ):
-    """Factory used by EventChannel to create the native psycopg backend."""
+    """EventChannel factory for the native psycopg backend."""
     is_async = config.is_async
     match (backend_name, is_async):
         case ("listen_notify", False):

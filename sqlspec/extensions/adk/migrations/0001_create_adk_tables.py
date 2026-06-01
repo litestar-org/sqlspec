@@ -34,12 +34,6 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     Returns:
         List of SQL statements to execute for upgrade.
-
-    Notes:
-        Configuration is read from context.config.extension_config["adk"].
-        Supports custom table names and optional owner_id_column for linking
-        sessions to owner tables (users, tenants, teams, etc.).
-        Memory table is included if enable_memory or include_memory_migration is True.
     """
     if context is None or context.config is None:
         _raise_missing_config()
@@ -78,11 +72,6 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKSt
 
     Returns:
         Store class matching the config's adapter.
-
-    Notes:
-        Dynamically imports the store class from the config's module path.
-        For example, AsyncpgConfig at 'sqlspec.adapters.asyncpg.config'
-        maps to AsyncpgADKStore at 'sqlspec.adapters.asyncpg.adk.AsyncpgADKStore'.
     """
     if not context or not context.config:
         _raise_missing_config()
@@ -100,11 +89,6 @@ def _get_memory_store_class(
 
     Returns:
         Memory store class matching the config's adapter, or None if not available.
-
-    Notes:
-        Dynamically imports the memory store class from the config's module path.
-        For example, AsyncpgConfig at 'sqlspec.adapters.asyncpg.config'
-        maps to AsyncpgADKMemoryStore at 'sqlspec.adapters.asyncpg.adk.AsyncpgADKMemoryStore'.
     """
     if not context or not context.config:
         return None
@@ -124,10 +108,6 @@ def _is_memory_enabled(context: "MigrationContext | None") -> bool:
 
     Returns:
         True if memory migration should be included, False otherwise.
-
-    Notes:
-        Checks config.extension_config["adk"]["include_memory_migration"].
-        Defaults to True if not specified and enable_memory is True.
     """
     if not context or not context.config:
         return False
@@ -157,10 +137,6 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
 
     Returns:
         List of SQL statements to execute for downgrade.
-
-    Notes:
-        Configuration is read from context.config.extension_config["adk"].
-        Memory table is included if enable_memory or include_memory_migration is True.
     """
     if context is None or context.config is None:
         _raise_missing_config()

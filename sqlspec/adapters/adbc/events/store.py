@@ -1,12 +1,12 @@
 """ADBC event queue store with multi-dialect support.
 
 ADBC supports the following database backends:
-- PostgreSQL (adbc_driver_postgresql)
-- SQLite (adbc_driver_sqlite)
-- DuckDB (adbc_driver_duckdb)
-- Snowflake (adbc_driver_snowflake)
-- BigQuery (adbc_driver_bigquery)
-- FlightSQL (adbc_driver_flightsql)
+    - PostgreSQL (adbc_driver_postgresql)
+    - SQLite (adbc_driver_sqlite)
+    - DuckDB (adbc_driver_duckdb)
+    - Snowflake (adbc_driver_snowflake)
+    - BigQuery (adbc_driver_bigquery)
+    - FlightSQL (adbc_driver_flightsql)
 
 For unsupported databases (Oracle, Spanner, MySQL), use their native adapters instead.
 """
@@ -52,22 +52,6 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
 
     Args:
         config: AdbcConfig with extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-
-    Example:
-        from sqlspec.adapters.adbc import AdbcConfig
-        from sqlspec.adapters.adbc.events import AdbcEventQueueStore
-
-        config = AdbcConfig(
-            connection_config={"driver_name": "postgres", "uri": "postgresql://..."},
-            extension_config={"events": {"queue_table": "my_events"}}
-        )
-        store = AdbcEventQueueStore(config)
-        for stmt in store.create_statements():
-            driver.execute_script(stmt)
     """
 
     __slots__ = ("_dialect",)
@@ -93,11 +77,6 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
 
         Returns:
             Dialect identifier for DDL generation.
-
-        Notes:
-            Called once on first dialect property access. Inspects driver_name
-            and uri from connection_config, then falls back to statement_config
-            dialect if available.
         """
         connection_config = self._config.connection_config
         driver_name = connection_config.get("driver_name", "")

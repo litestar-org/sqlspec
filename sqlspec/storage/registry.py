@@ -36,19 +36,6 @@ class StorageRegistry:
     Allows registering named storage backends that can be accessed from anywhere
     in your application. Backends are automatically selected based on URI scheme
     unless explicitly overridden.
-
-    Examples:
-        backend = registry.get("s3://my-bucket")
-        backend = registry.get("file:///tmp/data")
-        backend = registry.get("gs://my-gcs-bucket")
-
-        registry.register_alias("my_app_store", "file:///tmp/dev_data")
-
-        registry.register_alias("my_app_store", "s3://prod-bucket/data")
-
-        store = registry.get("my_app_store")
-
-        backend = registry.get("s3://bucket", backend="fsspec")
     """
 
     __slots__ = ("_alias_configs", "_instances")
@@ -73,8 +60,8 @@ class StorageRegistry:
         """Register a named alias for a storage configuration.
 
         Args:
-            alias: Unique alias name (e.g., "my_app_store", "user_uploads")
-            uri: Storage URI (e.g., "s3://bucket", "file:///path", "gs://bucket")
+            alias: Unique alias name
+            uri: Storage URI
             backend: Force specific backend ("local", "fsspec", "obstore") instead of auto-detection
             base_path: Base path to prepend to all operations
             **kwargs: Backend-specific configuration options
@@ -100,7 +87,7 @@ class StorageRegistry:
         """Get backend instance using URI-first routing with automatic backend selection.
 
         Args:
-            uri_or_alias: URI to resolve directly OR named alias (e.g., "my_app_store")
+            uri_or_alias: URI to resolve directly OR named alias
             backend: Force specific backend ("local", "fsspec", "obstore") instead of auto-selection
             **kwargs: Additional backend-specific configuration options
 

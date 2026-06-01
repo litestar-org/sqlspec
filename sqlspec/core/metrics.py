@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from mypy_extensions import mypyc_attr
 
-if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+if TYPE_CHECKING:  # pragma: no cover
     from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("StackExecutionMetrics",)

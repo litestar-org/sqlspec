@@ -32,13 +32,13 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     indexed scalar columns for efficient querying.
 
     Provides:
-    - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
-    - Atomic ``append_event_and_update_state`` for durable session mutations
-    - Microsecond-precision timestamps with TIMESTAMPTZ
-    - Foreign key constraints with cascade delete
-    - GIN indexes for JSONB queries
-    - HOT updates with FILLFACTOR 80
+        - Session state management with JSONB storage
+        - Full-fidelity event storage via ``event_json`` JSONB column
+        - Atomic ``append_event_and_update_state`` for durable session mutations
+        - Microsecond-precision timestamps with TIMESTAMPTZ
+        - Foreign key constraints with cascade delete
+        - GIN indexes for JSONB queries
+        - HOT updates with FILLFACTOR 80
 
     Args:
         config: PsycopgAsyncConfig with extension_config["adk"] settings.
@@ -325,13 +325,13 @@ class PsycopgSyncADKStore(BaseAsyncADKStore["PsycopgSyncConfig"]):
     indexed scalar columns for efficient querying.
 
     Provides:
-    - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
-    - Atomic ``create_event_and_update_state`` for durable session mutations
-    - Microsecond-precision timestamps with TIMESTAMPTZ
-    - Foreign key constraints with cascade delete
-    - GIN indexes for JSONB queries
-    - HOT updates with FILLFACTOR 80
+        - Session state management with JSONB storage
+        - Full-fidelity event storage via ``event_json`` JSONB column
+        - Atomic ``create_event_and_update_state`` for durable session mutations
+        - Microsecond-precision timestamps with TIMESTAMPTZ
+        - Foreign key constraints with cascade delete
+        - GIN indexes for JSONB queries
+        - HOT updates with FILLFACTOR 80
 
     Args:
         config: PsycopgSyncConfig with extension_config["adk"] settings.
@@ -776,7 +776,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit)
-                except Exception as exc:  # pragma: no cover - defensive fallback
+                except Exception as exc:  # pragma: no cover
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
@@ -785,16 +785,16 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
     async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
             """
-        SELECT id, session_id, app_name, user_id, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at,
-               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
-        FROM {table}
-        WHERE app_name = %s
-          AND user_id = %s
-          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
-        ORDER BY rank DESC, timestamp DESC
-        LIMIT %s
-        """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+             timestamp, content_json, content_text, metadata_json, inserted_at,
+             ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
+            FROM {table}
+            WHERE app_name = %s
+             AND user_id = %s
+             AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+            ORDER BY rank DESC, timestamp DESC
+            LIMIT %s
+            """
         ).format(table=pg_sql.Identifier(self._memory_table))
         params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
@@ -805,15 +805,15 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
     async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
             """
-        SELECT id, session_id, app_name, user_id, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
-        FROM {table}
-        WHERE app_name = %s
-          AND user_id = %s
-          AND content_text ILIKE %s
-        ORDER BY timestamp DESC
-        LIMIT %s
-        """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+             timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM {table}
+            WHERE app_name = %s
+             AND user_id = %s
+             AND content_text ILIKE %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
         params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)
@@ -970,7 +970,7 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
             if self._use_fts:
                 try:
                     return self._search_entries_fts(query, app_name, user_id, effective_limit)
-                except Exception as exc:  # pragma: no cover - defensive fallback
+                except Exception as exc:  # pragma: no cover
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
@@ -985,16 +985,16 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
             """
-        SELECT id, session_id, app_name, user_id, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at,
-               ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
-        FROM {table}
-        WHERE app_name = %s
-          AND user_id = %s
-          AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
-        ORDER BY rank DESC, timestamp DESC
-        LIMIT %s
-        """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+             timestamp, content_json, content_text, metadata_json, inserted_at,
+             ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
+            FROM {table}
+            WHERE app_name = %s
+             AND user_id = %s
+             AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+            ORDER BY rank DESC, timestamp DESC
+            LIMIT %s
+            """
         ).format(table=pg_sql.Identifier(self._memory_table))
         params: tuple[str, str, str, str, int] = (query, app_name, user_id, query, limit)
         with self._config.provide_connection() as conn, conn.cursor() as cur:
@@ -1005,15 +1005,15 @@ class PsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgSyncConfig"]):
     def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
             """
-        SELECT id, session_id, app_name, user_id, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
-        FROM {table}
-        WHERE app_name = %s
-          AND user_id = %s
-          AND content_text ILIKE %s
-        ORDER BY timestamp DESC
-        LIMIT %s
-        """
+            SELECT id, session_id, app_name, user_id, event_id, author,
+             timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM {table}
+            WHERE app_name = %s
+             AND user_id = %s
+             AND content_text ILIKE %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """
         ).format(table=pg_sql.Identifier(self._memory_table))
         pattern = f"%{query}%"
         params: tuple[str, str, str, int] = (app_name, user_id, pattern, limit)

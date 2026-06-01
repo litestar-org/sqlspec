@@ -196,7 +196,7 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
         native: When ``True``, convert ``uuid_utils.UUID`` → ``uuid.UUID``
             (via ``.bytes``, for drivers that bind ``uuid.UUID`` natively).
             When ``False`` (default), convert to ``str`` (for drivers that
-            need a plain string, e.g. DuckDB/SQLite).
+            need a plain string.
     """
     import uuid as _uuid_mod
 

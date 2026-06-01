@@ -179,10 +179,10 @@ class PermissionDeniedError(DatabaseConnectionError):
     """Database access denied due to insufficient privileges.
 
     Raised when:
-    - User lacks privileges for the operation (SQLSTATE 42501)
-    - Invalid credentials provided (SQLSTATE 28000/28P01)
-    - Database access denied (MySQL 1044/1045/1142)
-    - Oracle insufficient privileges (ORA-01031)
+        - User lacks privileges for the operation (SQLSTATE 42501)
+        - Invalid credentials provided (SQLSTATE 28000/28P01)
+        - Database access denied (MySQL 1044/1045/1142)
+        - Oracle insufficient privileges (ORA-01031)
     """
 
 
@@ -190,10 +190,10 @@ class ConnectionTimeoutError(DatabaseConnectionError):
     """Database connection attempt timed out.
 
     Raised when:
-    - TCP connection timeout to database server
-    - DNS resolution timeout
-    - SSL/TLS handshake timeout
-    - Oracle connect timeout (ORA-12170)
+        - TCP connection timeout to database server
+        - DNS resolution timeout
+        - SSL/TLS handshake timeout
+        - Oracle connect timeout (ORA-12170)
     """
 
 
@@ -213,10 +213,10 @@ class DeadlockError(TransactionError):
     """Deadlock detected during transaction execution.
 
     Raised when:
-    - PostgreSQL deadlock detected (SQLSTATE 40P01)
-    - MySQL deadlock detected (Error 1213)
-    - Oracle deadlock detected (ORA-00060)
-    - SQLite database locked (SQLITE_LOCKED)
+        - PostgreSQL deadlock detected (SQLSTATE 40P01)
+        - MySQL deadlock detected (Error 1213)
+        - Oracle deadlock detected (ORA-00060)
+        - SQLite database locked (SQLITE_LOCKED)
 
     Applications should typically retry the transaction when this error occurs.
     """
@@ -271,15 +271,15 @@ class QueryTimeoutError(OperationalError):
     """Query execution timed out or was canceled.
 
     Raised when:
-    - Statement timeout exceeded (SQLSTATE 57014)
-    - Query canceled by user/operator
-    - Lock wait timeout exceeded (MySQL 1205)
-    - Oracle user requested cancel (ORA-01013)
+        - Statement timeout exceeded (SQLSTATE 57014)
+        - Query canceled by user/operator
+        - Lock wait timeout exceeded (MySQL 1205)
+        - Oracle user requested cancel (ORA-01013)
     """
 
 
 class StorageOperationFailedError(SQLSpecError):
-    """Raised when a storage backend operation fails (e.g., network, permission, API error)."""
+    """Raised when a storage backend operation fails."""
 
 
 class StorageCapabilityError(SQLSpecError):
@@ -384,10 +384,10 @@ class SquashValidationError(MigrationError):
     """Raised when migration squash validation fails.
 
     Squash validation errors occur when:
-    - Version range is invalid (start > end)
-    - Gap detected in version sequence
-    - Mixed migration types that cannot be squashed
-    - Target file already exists
+        - Version range is invalid (start > end)
+        - Gap detected in version sequence
+        - Mixed migration types that cannot be squashed
+        - Target file already exists
     """
 
 
@@ -424,11 +424,11 @@ def map_sqlstate_to_exception(sqlstate: str | None) -> type[SQLSpecError] | None
     """Map a SQLSTATE code to a SQLSpec exception class.
 
     Checks in order of specificity:
-    1. Exact 5-character match (e.g., "23505" → UniqueViolationError)
-    2. 2-character class match (e.g., "23" → IntegrityError)
+        1. Exact 5-character match
+        2. 2-character class match
 
     Args:
-        sqlstate: 5-character SQLSTATE code (e.g., "23505")
+        sqlstate: 5-character SQLSTATE code
 
     Returns:
         Matching exception class or None if not mapped
@@ -459,7 +459,7 @@ def wrap_exceptions(
     Args:
         wrap_exceptions: If True, wrap exceptions in RepositoryError. If False, let them pass through.
         suppress: Exception type(s) to suppress completely (like contextlib.suppress).
-                 If provided, these exceptions are caught and ignored.
+            If provided, these exceptions are caught and ignored.
     """
     try:
         yield

@@ -86,7 +86,7 @@ class BigQueryDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             BigQuery does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
     """
@@ -150,14 +150,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     """BigQuery configuration.
 
     Configuration for Google Cloud BigQuery connections.
-
-    Example::
-
-        config = BigQueryConfig(
-            connection_config=BigQueryConnectionParams(
-                project="my-gcp-project"
-            )
-        )
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
@@ -195,7 +187,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             statement_config: Statement configuration override
             driver_features: BigQuery-specific driver features
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """

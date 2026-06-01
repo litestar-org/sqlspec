@@ -161,13 +161,24 @@ class ObservabilityRuntime:
             span.set_attribute("sqlspec.migration.duration_ms", duration_ms)
         self.span_manager.end_span(span, error=error)
 
-    def emit_pool_create(self, pool: Any) -> None:
+    def emit_pool_create_sync(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.create", subject=pool)
         try:
             if self.lifecycle.has_pool_create:
-                self.lifecycle.emit_pool_create(self._build_context(pool=pool))
+                self.lifecycle.emit_pool_create_sync(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
+
+    async def emit_pool_create_async(self, pool: Any) -> None:
+        span = self._start_lifecycle_span("pool.create", subject=pool)
+        try:
+            if self.lifecycle.has_pool_create:
+                await self.lifecycle.emit_pool_create_async(self._build_context(pool=pool))
+        finally:
+            self.span_manager.end_span(span)
+
+    def emit_pool_create(self, pool: Any) -> None:
+        self.emit_pool_create_sync(pool)
 
     def emit_pool_destroying_sync(self, pool: Any) -> None:
         """Fire pre-destruction lifecycle hooks synchronously."""
@@ -181,70 +192,161 @@ class ObservabilityRuntime:
             return
         await self.lifecycle.emit_pool_destroying_async(self._build_context(pool=pool))
 
-    def emit_pool_destroy(self, pool: Any) -> None:
+    def emit_pool_destroying(self, pool: Any) -> None:
+        self.emit_pool_destroying_sync(pool)
+
+    def emit_pool_destroy_sync(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.destroy", subject=pool)
         try:
             if self.lifecycle.has_pool_destroy:
-                self.lifecycle.emit_pool_destroy(self._build_context(pool=pool))
+                self.lifecycle.emit_pool_destroy_sync(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
+
+    async def emit_pool_destroy_async(self, pool: Any) -> None:
+        span = self._start_lifecycle_span("pool.destroy", subject=pool)
+        try:
+            if self.lifecycle.has_pool_destroy:
+                await self.lifecycle.emit_pool_destroy_async(self._build_context(pool=pool))
+        finally:
+            self.span_manager.end_span(span)
+
+    def emit_pool_destroy(self, pool: Any) -> None:
+        self.emit_pool_destroy_sync(pool)
 
     def register_lifecycle_hook(self, event: str, callback: "LifecycleHook") -> None:
         """Append a lifecycle hook at runtime.
 
-        Intended for components that acquire long-lived resources after config
-        construction (e.g., persistent LISTEN/NOTIFY hubs) and need to plug into
-        teardown. Currently used with ``on_pool_destroying``; other events accept
-        registrations too but most lifecycle hooks are wired declaratively.
+        Async SQLSpec paths await awaitable callback return values through the
+        matching ``emit_*_async`` methods. Sync paths call hooks through
+        ``emit_*_sync`` methods and preserve the unsuffixed ``emit_*`` aliases
+        for existing integrations.
+
+        Supported events are ``on_pool_create``, ``on_pool_destroying``,
+        ``on_pool_destroy``, ``on_connection_create``,
+        ``on_connection_destroy``, ``on_session_start``, ``on_session_end``,
+        ``on_query_start``, ``on_query_complete``, and ``on_error``.
+
+        Args:
+            event: Lifecycle event name.
+            callback: Callable receiving the lifecycle context.
         """
         self.lifecycle.register_hook(event, callback)  # type: ignore[arg-type]
 
-    def emit_connection_create(self, connection: Any) -> None:
+    def emit_connection_create_sync(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)
         try:
             if self.lifecycle.has_connection_create:
-                self.lifecycle.emit_connection_create(self._build_context(connection=connection))
+                self.lifecycle.emit_connection_create_sync(self._build_context(connection=connection))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_connection_create_async(self, connection: Any) -> None:
+        span = self._start_lifecycle_span("connection.create", subject=connection)
+        try:
+            if self.lifecycle.has_connection_create:
+                await self.lifecycle.emit_connection_create_async(self._build_context(connection=connection))
+        finally:
+            self.span_manager.end_span(span)
+
+    def emit_connection_create(self, connection: Any) -> None:
+        self.emit_connection_create_sync(connection)
+
+    def emit_connection_destroy_sync(self, connection: Any) -> None:
+        span = self._start_lifecycle_span("connection.destroy", subject=connection)
+        try:
+            if self.lifecycle.has_connection_destroy:
+                self.lifecycle.emit_connection_destroy_sync(self._build_context(connection=connection))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_connection_destroy_async(self, connection: Any) -> None:
+        span = self._start_lifecycle_span("connection.destroy", subject=connection)
+        try:
+            if self.lifecycle.has_connection_destroy:
+                await self.lifecycle.emit_connection_destroy_async(self._build_context(connection=connection))
         finally:
             self.span_manager.end_span(span)
 
     def emit_connection_destroy(self, connection: Any) -> None:
-        span = self._start_lifecycle_span("connection.destroy", subject=connection)
+        self.emit_connection_destroy_sync(connection)
+
+    def emit_session_start_sync(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.start", subject=session)
         try:
-            if self.lifecycle.has_connection_destroy:
-                self.lifecycle.emit_connection_destroy(self._build_context(connection=connection))
+            if self.lifecycle.has_session_start:
+                self.lifecycle.emit_session_start_sync(self._build_context(session=session))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_session_start_async(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.start", subject=session)
+        try:
+            if self.lifecycle.has_session_start:
+                await self.lifecycle.emit_session_start_async(self._build_context(session=session))
         finally:
             self.span_manager.end_span(span)
 
     def emit_session_start(self, session: Any) -> None:
-        span = self._start_lifecycle_span("session.start", subject=session)
+        self.emit_session_start_sync(session)
+
+    def emit_session_end_sync(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.end", subject=session)
         try:
-            if self.lifecycle.has_session_start:
-                self.lifecycle.emit_session_start(self._build_context(session=session))
+            if self.lifecycle.has_session_end:
+                self.lifecycle.emit_session_end_sync(self._build_context(session=session))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_session_end_async(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.end", subject=session)
+        try:
+            if self.lifecycle.has_session_end:
+                await self.lifecycle.emit_session_end_async(self._build_context(session=session))
         finally:
             self.span_manager.end_span(span)
 
     def emit_session_end(self, session: Any) -> None:
-        span = self._start_lifecycle_span("session.end", subject=session)
-        try:
-            if self.lifecycle.has_session_end:
-                self.lifecycle.emit_session_end(self._build_context(session=session))
-        finally:
-            self.span_manager.end_span(span)
+        self.emit_session_end_sync(session)
+
+    def emit_query_start_sync(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_start:
+            self.lifecycle.emit_query_start_sync(self._build_context(**extras))
+
+    async def emit_query_start_async(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_start:
+            await self.lifecycle.emit_query_start_async(self._build_context(**extras))
 
     def emit_query_start(self, **extras: Any) -> None:
-        if self.lifecycle.has_query_start:
-            self.lifecycle.emit_query_start(self._build_context(**extras))
+        self.emit_query_start_sync(**extras)
+
+    def emit_query_complete_sync(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_complete:
+            self.lifecycle.emit_query_complete_sync(self._build_context(**extras))
+
+    async def emit_query_complete_async(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_complete:
+            await self.lifecycle.emit_query_complete_async(self._build_context(**extras))
 
     def emit_query_complete(self, **extras: Any) -> None:
-        if self.lifecycle.has_query_complete:
-            self.lifecycle.emit_query_complete(self._build_context(**extras))
+        self.emit_query_complete_sync(**extras)
 
-    def emit_error(self, exception: Exception, **extras: Any) -> None:
+    def emit_error_sync(self, exception: Exception, **extras: Any) -> None:
         if self.lifecycle.has_error:
             payload = self._build_context(exception=exception)
             payload.update({key: value for key, value in extras.items() if value is not None})
-            self.lifecycle.emit_error(payload)
+            self.lifecycle.emit_error_sync(payload)
         self.increment_metric("errors", 1.0)
+
+    async def emit_error_async(self, exception: Exception, **extras: Any) -> None:
+        if self.lifecycle.has_error:
+            payload = self._build_context(exception=exception)
+            payload.update({key: value for key, value in extras.items() if value is not None})
+            await self.lifecycle.emit_error_async(payload)
+        self.increment_metric("errors", 1.0)
+
+    def emit_error(self, exception: Exception, **extras: Any) -> None:
+        self.emit_error_sync(exception, **extras)
 
     def emit_statement_event(
         self,

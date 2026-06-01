@@ -37,10 +37,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
-    - No FILLFACTOR (CockroachDB uses different storage engine)
-    - SQL strings require ``.encode()`` for cockroach-psycopg driver
-    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
-    - Native tsvector/tsquery FTS with GIN is supported (v23.1+)
+        - No FILLFACTOR (CockroachDB uses different storage engine)
+        - SQL strings require ``.encode()`` for cockroach-psycopg driver
+        - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
+        - Native tsvector/tsquery FTS with GIN is supported (v23.1+)
     """
 
     __slots__ = ()
@@ -329,9 +329,9 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
-    - No FILLFACTOR (CockroachDB uses different storage engine)
-    - SQL strings require ``.encode()`` for cockroach-psycopg driver
-    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
+        - No FILLFACTOR (CockroachDB uses different storage engine)
+        - SQL strings require ``.encode()`` for cockroach-psycopg driver
+        - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
     """
 
     __slots__ = ()

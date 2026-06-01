@@ -227,29 +227,6 @@ def provide_filters(
 
     Returns:
         A FastAPI dependency callable that returns list of filters.
-
-    Example:
-        from fastapi import Depends, FastAPI
-        from sqlspec.extensions.fastapi import SQLSpecPlugin, FilterConfig
-
-        app = FastAPI()
-        db_ext = SQLSpecPlugin(sql, app)
-
-        @app.get("/users")
-        async def list_users(
-            filters = Depends(
-                db_ext.provide_filters({
-                    "id_filter": UUID,
-                    "search": "name,email",
-                    "pagination_type": "limit_offset",
-                })
-            ),
-        ):
-            stmt = sql("SELECT * FROM users")
-            for filter in filters:
-                stmt = filter.append_to_statement(stmt)
-            result = await db.execute(stmt)
-            return result.all()
     """
     if not _has_filter_config(config):
         return _empty_filter_list

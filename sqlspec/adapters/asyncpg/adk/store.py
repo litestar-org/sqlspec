@@ -28,14 +28,14 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     (``event_json``) alongside indexed scalar columns for efficient querying.
 
     Provides:
-    - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
-    - Atomic ``append_event_and_update_state`` for durable session mutations
-    - Microsecond-precision timestamps with TIMESTAMPTZ
-    - Foreign key constraints with cascade delete
-    - GIN indexes for JSONB queries
-    - HOT updates with FILLFACTOR 80
-    - Optional owner ID column for multi-tenancy
+        - Session state management with JSONB storage
+        - Full-fidelity event storage via ``event_json`` JSONB column
+        - Atomic ``append_event_and_update_state`` for durable session mutations
+        - Microsecond-precision timestamps with TIMESTAMPTZ
+        - Foreign key constraints with cascade delete
+        - GIN indexes for JSONB queries
+        - HOT updates with FILLFACTOR 80
+        - Optional owner ID column for multi-tenancy
 
     Args:
         config: PostgreSQL database config with extension_config["adk"] settings.

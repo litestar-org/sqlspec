@@ -97,6 +97,12 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   checked-out resources before pools close.
 * Added runtime lifecycle hook registration through
   ``ObservabilityRuntime.register_lifecycle_hook()``.
+* Added async lifecycle hook execution for pool, connection, session, query,
+  and error events. Async SQLSpec paths now await hooks registered for
+  ``on_pool_create``, ``on_pool_destroying``, ``on_pool_destroy``,
+  ``on_connection_create``, ``on_connection_destroy``, ``on_session_start``,
+  ``on_session_end``, ``on_query_start``, ``on_query_complete``, and
+  ``on_error``.
 
 **Fixed:**
 

@@ -25,14 +25,13 @@ def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
     """Load and parse a JSON fixture file with compression support.
 
     Supports reading from:
-    - Regular JSON files (.json)
-    - Gzipped JSON files (.json.gz)
-    - Zipped JSON files (.json.zip)
+        - Regular JSON files (.json)
+        - Gzipped JSON files (.json.gz)
+        - Zipped JSON files (.json.zip)
 
     Args:
         fixtures_path: The path to look for fixtures (pathlib.Path)
         fixture_name: The fixture name to load.
-
 
     Returns:
         The parsed JSON data
@@ -52,9 +51,9 @@ async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
     """Load and parse a JSON fixture file asynchronously with compression support.
 
     Supports reading from:
-    - Regular JSON files (.json)
-    - Gzipped JSON files (.json.gz)
-    - Zipped JSON files (.json.zip)
+        - Regular JSON files (.json)
+        - Gzipped JSON files (.json.gz)
+        - Zipped JSON files (.json.zip)
 
     For compressed files, uses sync reading in a thread pool since gzip and zipfile
     don't have native async equivalents.
@@ -62,7 +61,6 @@ async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
     Args:
         fixtures_path: The path to look for fixtures (pathlib.Path)
         fixture_name: The fixture name to load.
-
 
     Returns:
         The parsed JSON data

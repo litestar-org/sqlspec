@@ -31,7 +31,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             PostgreSQL version information or None if detection fails.
-
         """
         driver_id = id(driver)
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
@@ -64,7 +63,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         version_info = self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
@@ -78,7 +76,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             PostgreSQL-specific type name.
-
         """
         config = self.get_dialect_config()
         version_info = self.get_version(driver)
@@ -162,7 +159,6 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
 
         Returns:
             PostgreSQL version information or None if detection fails.
-
         """
         driver_id = id(driver)
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
@@ -195,7 +191,6 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         version_info = await self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
@@ -209,7 +204,6 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
 
         Returns:
             PostgreSQL-specific type name.
-
         """
         config = self.get_dialect_config()
         version_info = await self.get_version(driver)

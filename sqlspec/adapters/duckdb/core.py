@@ -272,11 +272,11 @@ def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseExcepti
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
-    2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
-    3. Type-name substring fallback (for environments without duckdb importable)
-    4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
-    5. Default SQLSpecError fallback
+        1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
+        2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
+        3. Type-name substring fallback (for environments without duckdb importable)
+        4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
+        5. Default SQLSpecError fallback
 
     Args:
         exc_type: The exception type (class)

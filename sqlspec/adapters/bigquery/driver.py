@@ -329,19 +329,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         Raises:
             MissingDependencyError: If pyarrow not installed, or if Storage API not available and native_only=True
-
-        Example:
-            >>> # Will use native Arrow if Storage API available, otherwise converts
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM dataset.users WHERE age > @age",
-            ...     {"age": 18},
-            ... )
-            >>> df = result.to_pandas()
-
-            >>> # Force native Arrow (raises if Storage API unavailable)
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM dataset.users", native_only=True
-            ... )
         """
         ensure_pyarrow()
 

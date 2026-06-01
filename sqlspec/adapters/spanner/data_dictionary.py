@@ -30,7 +30,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             None since Spanner does not expose version information.
-
         """
         _ = driver
         return None
@@ -44,7 +43,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         _ = driver
         return self.resolve_feature_flag(feature, None)
@@ -58,7 +56,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             Spanner-specific type name.
-
         """
         _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)

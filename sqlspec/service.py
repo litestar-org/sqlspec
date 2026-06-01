@@ -162,7 +162,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
     ) -> "SchemaT | dict[str, Any]":
         """Fetch one row or raise :class:`~sqlspec.exceptions.NotFoundError`.
 
-        HTTP status mapping (e.g. translating ``NotFoundError`` to a 404 response)
+        HTTP status mapping
         is the responsibility of the calling framework integration. The Litestar
         extension registers a default mapping; other framework integrations do
         not.
@@ -358,7 +358,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
     ) -> "SchemaT | dict[str, Any]":
         """Fetch one row or raise :class:`~sqlspec.exceptions.NotFoundError`.
 
-        HTTP status mapping (e.g. translating ``NotFoundError`` to a 404 response)
+        HTTP status mapping
         is the responsibility of the calling framework integration. The Litestar
         extension registers a default mapping; other framework integrations do
         not.

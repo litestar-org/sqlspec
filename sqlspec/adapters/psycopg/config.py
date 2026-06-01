@@ -92,33 +92,33 @@ class PsycopgDriverFeatures(TypedDict):
     """Psycopg driver feature flags.
 
     enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
-        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
-        Defaults to True when pgvector-python is installed.
-        Provides automatic conversion between Python objects and PostgreSQL vector types.
-        Enables vector similarity operations and index support.
-        Set to False to disable pgvector support even when package is available.
+     Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+     Defaults to True when pgvector-python is installed.
+     Provides automatic conversion between Python objects and PostgreSQL vector types.
+     Enables vector similarity operations and index support.
+     Set to False to disable pgvector support even when package is available.
     enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-        When enabled and the pg_search extension is detected, the SQL dialect
-        switches to "paradedb" which supports search operators (@@@, &&&, etc.)
-        and inherits all pgvector distance operators.
-        Defaults to True. Independent of enable_pgvector.
+     When enabled and the pg_search extension is detected, the SQL dialect
+     switches to "paradedb" which supports search operators (@@@, &&&, etc.)
+     and inherits all pgvector distance operators.
+     Defaults to True. Independent of enable_pgvector.
     json_serializer: Custom JSON serializer for StatementConfig parameter handling.
     json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
     on_connection_create: Callback executed when a connection is created/acquired from the pool.
-        Receives the raw psycopg connection for low-level driver configuration.
-        Runs after internal setup (pgvector registration).
-        For sync config: Callable[[PsycopgSyncConnection], None]
-        For async config: Callable[[PsycopgAsyncConnection], Awaitable[None]]
+     Receives the raw psycopg connection for low-level driver configuration.
+     Runs after internal setup (pgvector registration).
+     For sync config: Callable[[PsycopgSyncConnection], None]
+     For async config: Callable[[PsycopgAsyncConnection], Awaitable[None]]
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
-        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-        Requires extension_config["events"] for migration setup when using table_queue backend.
+     Defaults to True when extension_config["events"] is configured.
+     Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+     Requires extension_config["events"] for migration setup when using table_queue backend.
     events_backend: Event channel backend selection.
-        Options: "listen_notify", "table_queue", "listen_notify_durable"
-        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
-        - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
-        - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
-        Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
+     Options: "listen_notify", "table_queue", "listen_notify_durable"
+     - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
+     - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
+     - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
+     Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
     """
 
     enable_pgvector: NotRequired[bool]
@@ -182,16 +182,7 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 @mypyc_attr(native_class=False)
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
-    """Configuration for Psycopg synchronous database connections with direct field-based configuration.
-
-    Example::
-
-        config = PsycopgSyncConfig(
-            connection_config=PsycopgPoolParams(
-                conninfo="postgresql://user:pass@localhost/db"
-            )
-        )
-    """
+    """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
@@ -229,7 +220,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             **kwargs: Additional keyword arguments
         """
         connection_config = normalize_connection_config(connection_config)
@@ -450,16 +441,7 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 @mypyc_attr(native_class=False)
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
-    """Configuration for Psycopg asynchronous database connections with direct field-based configuration.
-
-    Example::
-
-        config = PsycopgAsyncConfig(
-            connection_config=PsycopgPoolParams(
-                conninfo="postgresql://user:pass@localhost/db"
-            )
-        )
-    """
+    """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
@@ -497,7 +479,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             statement_config: Default SQL statement configuration
             driver_features: Optional driver feature configuration
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             **kwargs: Additional keyword arguments
         """
         connection_config = normalize_connection_config(connection_config)

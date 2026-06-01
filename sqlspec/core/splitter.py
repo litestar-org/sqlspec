@@ -148,26 +148,26 @@ class DialectConfig(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Name of the dialect (e.g., 'oracle', 'tsql')."""
+        """Name of the dialect."""
 
     @property
     @abstractmethod
     def block_starters(self) -> "set[str]":
-        """Keywords that start a block (e.g., BEGIN, DECLARE)."""
+        """Keywords that start a block."""
 
     @property
     @abstractmethod
     def block_enders(self) -> "set[str]":
-        """Keywords that end a block (e.g., END)."""
+        """Keywords that end a block."""
 
     @property
     @abstractmethod
     def statement_terminators(self) -> "set[str]":
-        """Characters that terminate statements (e.g., ;)."""
+        """Characters that terminate statements."""
 
     @property
     def batch_separators(self) -> "set[str]":
-        """Keywords that separate batches (e.g., GO for T-SQL)."""
+        """Keywords that separate batches."""
         if self._batch_separators is None:
             self._batch_separators = set()
         return self._batch_separators
@@ -457,7 +457,7 @@ class PostgreSQLDialectConfig(DialectConfig):
         """Get PostgreSQL-specific token patterns.
 
         Returns:
-        List of dialect-specific token patterns
+            List of dialect-specific token patterns
         """
         return [(TokenType.STRING_LITERAL, self._handle_dollar_quoted_string)]
 

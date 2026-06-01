@@ -4,18 +4,18 @@ This module provides filters that can be applied to SQL statements to add
 WHERE clauses, ORDER BY clauses, LIMIT/OFFSET, and other modifications.
 
 Components:
-- StatementFilter: Abstract base class for all filters
-- BeforeAfterFilter: Date range filtering
-- InCollectionFilter: IN clause filtering
-- LimitOffsetFilter: Pagination support
-- OrderByFilter: Sorting support
-- SearchFilter: Text search filtering
-- Various collection and negation filters
+    - StatementFilter: Abstract base class for all filters
+    - BeforeAfterFilter: Date range filtering
+    - InCollectionFilter: IN clause filtering
+    - LimitOffsetFilter: Pagination support
+    - OrderByFilter: Sorting support
+    - SearchFilter: Text search filtering
+    - Various collection and negation filters
 
 Features:
-- Parameter conflict resolution
-- Type-safe filter application
-- Cacheable filter configurations
+    - Parameter conflict resolution
+    - Type-safe filter application
+    - Cacheable filter configurations
 """
 
 import uuid
@@ -125,7 +125,7 @@ class StatementFilter(ABC):
         """Parse field name into a qualified column if dotted, else bare column.
 
         Args:
-            field_name: Field name string (e.g. "name" or "users.name") or SQLGlot expression
+            field_name: Field name string or SQLGlot expression
 
         Returns:
             exp.Column | exp.Expression: SQLGlot column expression or provided expression

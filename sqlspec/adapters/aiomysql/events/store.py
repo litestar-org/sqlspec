@@ -1,10 +1,10 @@
 """aiomysql event queue store with MySQL-specific DDL.
 
 MySQL requires:
-- JSON type for payload/metadata (5.7.8+)
-- DATETIME(6) for microsecond precision timestamps
-- Procedural SQL for conditional index creation (no IF NOT EXISTS for indexes)
-- Information schema queries for existence checks
+    - JSON type for payload/metadata (5.7.8+)
+    - DATETIME(6) for microsecond precision timestamps
+    - Procedural SQL for conditional index creation (no IF NOT EXISTS for indexes)
+    - Information schema queries for existence checks
 """
 
 from typing import Final
@@ -26,22 +26,6 @@ class AiomysqlEventQueueStore(BaseEventQueueStore[AiomysqlConfig]):
 
     Args:
         config: AiomysqlConfig with extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-
-    Example:
-        from sqlspec.adapters.aiomysql.config import AiomysqlConfig
-        from sqlspec.adapters.aiomysql.events import AiomysqlEventQueueStore
-
-        config = AiomysqlConfig(
-            connection_config={"host": "localhost", "db": "mydb"},
-            extension_config={"events": {"queue_table": "my_events"}}
-        )
-        store = AiomysqlEventQueueStore(config)
-        for stmt in store.create_statements():
-            await driver.execute_script(stmt)
     """
 
     __slots__ = ()

@@ -4,9 +4,9 @@ This module provides a caching system with LRU eviction and TTL support for
 SQL statement processing and SQLGlot expression caching.
 
 Components:
-- CacheKey: Immutable cache key
-- LRUCache: LRU + TTL cache implementation
-- NamespacedCache: Namespace-aware cache wrapper for statement processing
+    - CacheKey: Immutable cache key
+    - LRUCache: LRU + TTL cache implementation
+    - NamespacedCache: Namespace-aware cache wrapper for statement processing
 """
 
 import logging
@@ -410,7 +410,7 @@ def get_cache_instances() -> "tuple[LRUCache | None, NamespacedCache | None]":
 
 
 def set_cache_instances(default_cache: "LRUCache | None", namespaced_cache: "NamespacedCache | None") -> None:
-    """Replace cache instances (used by tests and diagnostics).
+    """Replace cache instances for tests and diagnostics.
 
     Args:
         default_cache: Default cache instance or None.

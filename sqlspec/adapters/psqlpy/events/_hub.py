@@ -1,4 +1,4 @@
-"""Persistent listener hub used by psqlpy event backends.
+"""Persistent listener hub for psqlpy event backends.
 
 Owns the psqlpy Listener handle for the backend's lifetime. Each channel
 gets a single driver-level callback registered once via ``add_callback``
@@ -165,7 +165,7 @@ class PsqlpyListenerHub:
 
     def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
         task = asyncio.current_task()
-        if task is None:  # pragma: no cover - coroutine dequeue calls always run in a task
+        if task is None:  # pragma: no cover
             msg = "PsqlpyListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
         queues = self._queues.get(channel)

@@ -34,7 +34,6 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             None because BigQuery does not expose version info.
-
         """
         _ = driver
         return None
@@ -48,7 +47,6 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         _ = driver
         return self.resolve_feature_flag(feature, None)
@@ -62,7 +60,6 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             BigQuery-specific type name.
-
         """
         _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)

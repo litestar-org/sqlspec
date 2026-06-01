@@ -51,10 +51,10 @@ class StatementStack:
     def __iter__(self) -> "Iterator[StackOperation]":
         return iter(self._operations)
 
-    def __len__(self) -> int:  # pragma: no cover - trivial
+    def __len__(self) -> int:  # pragma: no cover
         return len(self._operations)
 
-    def __bool__(self) -> bool:  # pragma: no cover - trivial
+    def __bool__(self) -> bool:  # pragma: no cover
         return bool(self._operations)
 
     def __repr__(self) -> str:

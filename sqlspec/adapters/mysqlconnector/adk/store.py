@@ -31,15 +31,11 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     """MySQL/MariaDB ADK store using mysql-connector async driver.
 
     Provides:
-    - Session state management with JSON storage
-    - Full-event JSON storage (single ``event_json`` column)
-    - Atomic event-append + state-update in one transaction
-    - Microsecond-precision timestamps
-    - Foreign key constraints with cascade delete
-
-    Notes:
-        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
-        - Configuration is read from config.extension_config["adk"]
+        - Session state management with JSON storage
+        - Full-event JSON storage (single ``event_json`` column)
+        - Atomic event-append + state-update in one transaction
+        - Microsecond-precision timestamps
+        - Foreign key constraints with cascade delete
     """
 
     __slots__ = ()
@@ -360,15 +356,11 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector sync driver.
 
     Provides:
-    - Session state management with JSON storage
-    - Full-event JSON storage (single ``event_json`` column)
-    - Atomic event-create + state-update in one transaction
-    - Microsecond-precision timestamps
-    - Foreign key constraints with cascade delete
-
-    Notes:
-        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
-        - Configuration is read from config.extension_config["adk"]
+        - Session state management with JSON storage
+        - Full-event JSON storage (single ``event_json`` column)
+        - Atomic event-create + state-update in one transaction
+        - Microsecond-precision timestamps
+        - Foreign key constraints with cascade delete
     """
 
     __slots__ = ()

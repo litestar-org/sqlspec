@@ -38,36 +38,6 @@ class Update(
     """Builder for UPDATE statements.
 
     Constructs SQL UPDATE statements with parameter binding and validation.
-
-    Example:
-        ```python
-        update_query = (
-            Update()
-            .table("users")
-            .set_(name="John Doe")
-            .set_(email="john@example.com")
-            .where("id = 1")
-        )
-
-        update_query = (
-            Update("users").set_(name="John Doe").where("id = 1")
-        )
-
-        update_query = (
-            Update()
-            .table("users")
-            .set_(status="active")
-            .where_eq("id", 123)
-        )
-
-        update_query = (
-            Update()
-            .table("users", "u")
-            .set_(name="Updated Name")
-            .from_("profiles", "p")
-            .where("u.id = p.user_id AND p.is_verified = true")
-        )
-        ```
     """
 
     __slots__ = ()

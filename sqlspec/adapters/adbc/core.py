@@ -164,8 +164,7 @@ def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_diale
     Args:
         connection: ADBC connection with driver metadata.
         logger: Optional logger for diagnostics.
-        fallback_dialect: Pre-resolved dialect from config (e.g. from
-            ``resolve_dialect_from_config``). Used when introspection
+        fallback_dialect: Pre-resolved dialect from config. Used when introspection
             yields no match, before defaulting to ``postgres``.
 
     Returns:
@@ -496,9 +495,9 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. SQLSTATE codes (most reliable for ADBC drivers)
-    2. Error message patterns
-    3. Default SQLSpecError fallback
+        1. SQLSTATE codes (most reliable for ADBC drivers)
+        2. Error message patterns
+        3. Default SQLSpecError fallback
 
     Args:
         error: The ADBC exception to map

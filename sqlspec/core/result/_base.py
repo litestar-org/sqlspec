@@ -464,7 +464,7 @@ class SQLResult(StatementResult):
         return row
 
     def get_count(self) -> int:
-        """Get the number of rows in the current result set (e.g., a page of data).
+        """Get the number of rows in the current result set.
 
         Returns:
             Number of rows in current result set.
@@ -659,12 +659,6 @@ class SQLResult(StatementResult):
 
         Raises:
             ValueError: If no data available.
-
-        Examples:
-            >>> result = session.select("SELECT * FROM users")
-            >>> table = result.to_arrow()
-            >>> print(table.num_rows)
-            3
         """
         if self.data is None:
             msg = "No data available"
@@ -680,11 +674,6 @@ class SQLResult(StatementResult):
 
         Raises:
             ValueError: If no data available.
-
-        Examples:
-            >>> result = session.select("SELECT * FROM users")
-            >>> df = result.to_pandas()
-            >>> print(df.head())
         """
         if self.data is None:
             msg = "No data available"
@@ -703,11 +692,6 @@ class SQLResult(StatementResult):
 
         Raises:
             ValueError: If no data available.
-
-        Examples:
-            >>> result = session.select("SELECT * FROM users")
-            >>> df = result.to_polars()
-            >>> print(df.head())
         """
         if self.data is None:
             msg = "No data available"
@@ -853,11 +837,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             pandas DataFrame containing the result data.
-
-        Examples:
-            >>> result = session.select_to_arrow("SELECT * FROM users")
-            >>> df = result.to_pandas()
-            >>> print(df.head())
         """
         return arrow_table_to_pandas(self._as_table())
 
@@ -866,11 +845,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             Polars DataFrame containing the result data.
-
-        Examples:
-            >>> result = session.select_to_arrow("SELECT * FROM users")
-            >>> df = result.to_polars()
-            >>> print(df.head())
         """
         return arrow_table_to_polars(self._as_table())
 
@@ -879,14 +853,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             List of dictionaries, one per row.
-
-        Examples:
-            >>> result = session.select_to_arrow(
-            ...     "SELECT id, name FROM users"
-            ... )
-            >>> rows = result.to_dict()
-            >>> print(rows[0])
-            {'id': 1, 'name': 'Alice'}
         """
         return arrow_table_to_pylist(self._as_table())
 
@@ -925,11 +891,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             Number of rows.
-
-        Examples:
-            >>> result = session.select_to_arrow("SELECT * FROM users")
-            >>> print(len(result))
-            100
         """
         return arrow_table_num_rows(self._as_table())
 
@@ -938,13 +899,6 @@ class ArrowResult(StatementResult):
 
         Yields:
             Dictionary for each row.
-
-        Examples:
-            >>> result = session.select_to_arrow(
-            ...     "SELECT id, name FROM users"
-            ... )
-            >>> for row in result:
-            ...     print(row["name"])
         """
         yield from arrow_table_to_pylist(self._as_table())
 

@@ -29,10 +29,10 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
-    - No FILLFACTOR (CockroachDB uses different storage engine)
-    - No BRIN indexes (different physical storage layout)
-    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
-    - Native tsvector/tsquery FTS with GIN is supported (v23.1+)
+        - No FILLFACTOR (CockroachDB uses different storage engine)
+        - No BRIN indexes (different physical storage layout)
+        - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
+        - Native tsvector/tsquery FTS with GIN is supported (v23.1+)
     """
 
     __slots__ = ()

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlspec.observability._dispatcher import LifecycleHook
 
-if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+if TYPE_CHECKING:  # pragma: no cover
     from sqlspec.config import LifecycleConfig
     from sqlspec.observability._formatters._base import CloudLogFormatter
     from sqlspec.observability._observer import StatementEvent
@@ -45,7 +45,7 @@ class RedactionConfig:
         self.mask_literals = mask_literals
         self.parameter_allow_list = tuple(parameter_allow_list) if parameter_allow_list is not None else None
 
-    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+    def __hash__(self) -> int:  # pragma: no cover
         msg = "RedactionConfig objects are mutable and unhashable"
         raise TypeError(msg)
 
@@ -86,7 +86,7 @@ class TelemetryConfig:
         self.provider_factory = provider_factory
         self.resource_attributes = dict(resource_attributes) if resource_attributes else None
 
-    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+    def __hash__(self) -> int:  # pragma: no cover
         msg = "TelemetryConfig objects are mutable and unhashable"
         raise TypeError(msg)
 
@@ -137,7 +137,7 @@ class LoggingConfig:
         self.include_trace_context = include_trace_context
         self.include_driver_name = include_driver_name
 
-    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+    def __hash__(self) -> int:  # pragma: no cover
         msg = "LoggingConfig objects are mutable and unhashable"
         raise TypeError(msg)
 
@@ -206,7 +206,7 @@ class ObservabilityConfig:
         self.sampling = sampling
         self.cloud_formatter = cloud_formatter
 
-    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+    def __hash__(self) -> int:  # pragma: no cover
         msg = "ObservabilityConfig objects are mutable and unhashable"
         raise TypeError(msg)
 

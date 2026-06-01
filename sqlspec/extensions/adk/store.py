@@ -40,16 +40,10 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
     - Session and event CRUD operations
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
+    in each adapter directory.
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - session_table: Sessions table name (default: "adk_sessions")
-        - events_table: Events table name (default: "adk_events")
-        - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
     __slots__ = ("_config", "_events_table", "_owner_id_column_ddl", "_owner_id_column_name", "_session_table")
@@ -59,12 +53,6 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads configuration from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config
         store_config = self._get_store_config_from_extension()
@@ -188,7 +176,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """Atomically append an event and update the session's durable state.
 
         This is the authoritative durable write boundary for post-creation
-        session mutations.  The event insert and state update must succeed
+        session mutations. The event insert and state update must succeed
         together or fail together, and the updated session record is returned
         in the same round-trip so callers don't need a follow-up read.
 
@@ -259,10 +247,6 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         Returns:
             List of SQL statements to drop the tables and all indexes.
             Order matters: drop events table before sessions table due to FK.
-
-        Notes:
-            Should use IF EXISTS or dialect-specific error handling
-            to allow idempotent migrations.
         """
         raise NotImplementedError
 
@@ -290,16 +274,10 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
     - Session and event CRUD operations
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/store.py).
+    in each adapter directory.
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - session_table: Sessions table name (default: "adk_sessions")
-        - events_table: Events table name (default: "adk_events")
-        - owner_id_column: Optional owner FK column DDL (default: None)
     """
 
     __slots__ = ("_config", "_events_table", "_owner_id_column_ddl", "_owner_id_column_name", "_session_table")
@@ -309,12 +287,6 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads configuration from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config
         store_config = self._get_store_config_from_extension()
@@ -458,7 +430,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         """Atomically create an event and update the session's durable state.
 
         This is the authoritative durable write boundary for post-creation
-        session mutations.  The event insert and state update must succeed
+        session mutations. The event insert and state update must succeed
         together or fail together.
 
         Args:
@@ -535,22 +507,13 @@ def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
     """Extract column name from owner ID column DDL definition.
 
     Args:
-        owner_id_column_ddl: Full column DDL string (e.g., "user_id INTEGER REFERENCES users(id)").
+        owner_id_column_ddl: Full column DDL string.
 
     Returns:
         Column name only (first word).
 
     Raises:
         ValueError: If DDL format is invalid.
-
-    Examples:
-        "account_id INTEGER NOT NULL" -> "account_id"
-        "user_id UUID REFERENCES users(id)" -> "user_id"
-        "tenant VARCHAR(64) DEFAULT 'public'" -> "tenant"
-
-    Notes:
-        Only the column name is parsed. The rest of the DDL is passed through
-        verbatim to CREATE TABLE statements.
     """
     match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
     if not match:
@@ -568,12 +531,6 @@ def _validate_table_name(table_name: str) -> None:
 
     Raises:
         ValueError: If table name is invalid.
-
-    Notes:
-        - Must start with letter or underscore
-        - Can only contain letters, numbers, and underscores
-        - Maximum length is 63 characters (PostgreSQL limit)
-        - Prevents SQL injection in table names
     """
     if not table_name:
         msg = "Table name cannot be empty"

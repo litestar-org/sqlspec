@@ -36,46 +36,21 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
     transfer across multiple databases (PostgreSQL, SQLite, DuckDB, etc.).
 
     Events use the new 5-column contract: session_id, invocation_id, author,
-    timestamp, and event_json.  The full ADK Event payload is stored as a
+    timestamp, and event_json. The full ADK Event payload is stored as a
     single JSON blob in event_json using a dialect-appropriate column type
     (JSONB for PostgreSQL, JSON for DuckDB, VARIANT for Snowflake, TEXT for
     SQLite and generic fallback).
 
     Provides:
-    - Session state management with JSON serialization
-    - Event history tracking via single event_json blob
-    - Atomic event insert + session state update
-    - Timezone-aware timestamps
-    - Foreign key constraints with cascade delete
-    - Database-agnostic SQL (supports multiple backends)
+        - Session state management with JSON serialization
+        - Event history tracking via single event_json blob
+        - Atomic event insert + session state update
+        - Timezone-aware timestamps
+        - Foreign key constraints with cascade delete
+        - Database-agnostic SQL (supports multiple backends)
 
     Args:
         config: AdbcConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.adbc import AdbcConfig
-        from sqlspec.adapters.adbc.adk import AdbcADKStore
-
-        config = AdbcConfig(
-            connection_config={"driver_name": "sqlite", "uri": ":memory:"},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
-                }
-            }
-        )
-        store = AdbcADKStore(config)
-        store.ensure_tables()
-
-    Notes:
-        - Dialect-appropriate JSON type for event_json storage
-        - TIMESTAMP for timezone-aware timestamps (driver-dependent precision)
-        - Parameter style: ``?`` universally across ADBC backends
-        - State and JSON fields use to_json/from_json for serialization
-        - ADBC drivers handle parameter binding automatically
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ("_dialect",)
@@ -85,12 +60,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Args:
             config: AdbcConfig instance (any ADBC driver).
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
         """
         super().__init__(config)
         self._dialect = self._detect_dialect()
@@ -105,10 +74,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             Dialect identifier for DDL generation.
-
-        Notes:
-            Reads from config.connection_config driver_name.
-            Falls back to generic for unknown drivers.
         """
         driver_name = self._config.connection_config.get("driver_name", "").lower()
 
@@ -305,9 +270,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             SQL to create events table optimized for PostgreSQL.
-
-        Notes:
-            Uses JSONB for event_json to enable indexing and query support.
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -325,9 +287,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             SQL to create events table optimized for SQLite.
-
-        Notes:
-            Uses TEXT for event_json (SQLite has no native JSON column type).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -345,9 +304,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             SQL to create events table optimized for DuckDB.
-
-        Notes:
-            Uses JSON for event_json (DuckDB native JSON type).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -365,9 +321,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             SQL to create events table optimized for Snowflake.
-
-        Notes:
-            Uses VARIANT for event_json (Snowflake semi-structured type).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -385,9 +338,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             SQL to create events table using generic types.
-
-        Notes:
-            Uses TEXT for event_json (maximum portability).
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -405,10 +355,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            Most databases automatically drop indexes when dropping tables.
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
@@ -458,10 +404,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Args:
             cursor: Database cursor.
             conn: Database connection.
-
-        Notes:
-            SQLite requires PRAGMA foreign_keys = ON to be set per connection.
-            This is a no-op for other databases.
         """
         try:
             cursor.execute("PRAGMA foreign_keys = ON")
@@ -529,9 +471,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            State is deserialized from JSON string.
         """
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -575,10 +514,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current timestamp.
         """
         state_json = self._serialize_state(state)
         sql = f"""
@@ -604,9 +539,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
         sql = f"DELETE FROM {self._session_table} WHERE id = ?"
 
@@ -632,9 +564,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
         """
         if user_id is None:
             sql = f"""
@@ -719,7 +648,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """Atomically insert an event and update the session's durable state.
 
         The event insert, state update, and refresh-SELECT are executed within
-        a single connection and committed together.  ADBC drivers wrap a
+        a single connection and committed together. ADBC drivers wrap a
         variety of backends (Postgres, SQLite, DuckDB, ...) so we use a
         SELECT-after-UPDATE rather than relying on RETURNING which not every
         backend supports.
@@ -803,11 +732,6 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Returns:
             List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            Returns the 5-column EventRecord (session_id, invocation_id,
-            author, timestamp, event_json).
         """
         where_clauses = ["session_id = ?"]
         params: list[Any] = [session_id]

@@ -80,41 +80,11 @@ def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]
 
     Args:
         data: The data structure to transform. Can be a dict, list, or any other type.
-        converter: Function to convert string keys (e.g., camelize, kebabize).
+        converter: Function to convert string keys.
 
     Returns:
         The transformed data structure with converted keys. Non-dict values
         are returned unchanged.
-
-    Examples:
-        Transform snake_case keys to camelCase:
-
-        >>> from sqlspec.utils.text import camelize
-        >>> data = {"user_id": 123, "created_at": "2024-01-01"}
-        >>> transform_dict_keys(data, camelize)
-        {"userId": 123, "createdAt": "2024-01-01"}
-
-        Transform nested structures:
-
-        >>> nested = {
-        ...     "user_data": {"first_name": "John", "last_name": "Doe"},
-        ...     "order_items": [
-        ...         {"item_id": 1, "item_name": "Product A"},
-        ...         {"item_id": 2, "item_name": "Product B"},
-        ...     ],
-        ... }
-        >>> transform_dict_keys(nested, camelize)
-        {
-            "userData": {
-                "firstName": "John",
-                "lastName": "Doe"
-            },
-            "orderItems": [
-                {"itemId": 1, "itemName": "Product A"},
-                {"itemId": 2, "itemName": "Product B"}
-            ]
-        }
-
     """
     if isinstance(data, dict):
         return _transform_dict(data, converter)
@@ -132,7 +102,6 @@ def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
 
     Returns:
         Converted key if conversion succeeds, original key otherwise.
-
     """
     if not isinstance(key, str):
         return key
@@ -152,7 +121,6 @@ def _transform_dict(data: dict, converter: Callable[[str], str]) -> dict:
 
     Returns:
         Dictionary with transformed keys and recursively transformed values.
-
     """
     transformed = {}
 
@@ -173,7 +141,6 @@ def _transform_list(data: list, converter: Callable[[str], str]) -> list:
 
     Returns:
         List with recursively transformed elements.
-
     """
     return [transform_dict_keys(item, converter) for item in data]
 
@@ -184,7 +151,7 @@ def _transform_list(data: list, converter: Callable[[str], str]) -> list:
 
 
 def _is_list_type_target(target_type: Any) -> "TypeGuard[list[object]]":
-    """Check if target type is a list type (e.g., list[float])."""
+    """Check if target type is a list type."""
     try:
         origin = target_type.__origin__
     except (AttributeError, TypeError):
@@ -304,7 +271,6 @@ def _default_msgspec_deserializer(
 
     Returns:
         Converted value or original value if conversion not applicable
-
     """
     if NUMPY_INSTALLED:
         import numpy as np
@@ -359,7 +325,6 @@ def _convert_numpy_recursive(obj: Any) -> Any:
 
     Returns:
         Object with all numpy arrays converted to lists
-
     """
     if not NUMPY_INSTALLED:
         return obj
@@ -461,7 +426,6 @@ def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | Non
 
     Returns:
         Converter function if schema_type is a supported schema, None otherwise.
-
     """
     try:
         return _SCHEMA_CONVERTER_CACHE[schema_type]
@@ -499,11 +463,11 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
     """Convert data to a specified schema type.
 
     Supports transformation to various schema types including:
-    - TypedDict
-    - dataclasses
-    - msgspec Structs
-    - Pydantic models
-    - attrs classes
+        - TypedDict
+        - dataclasses
+        - msgspec Structs
+        - Pydantic models
+        - attrs classes
 
     Args:
         data: Input data to convert (dict, list of dicts, or other)
@@ -514,7 +478,6 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
 
     Raises:
         SQLSpecError: If schema_type is not a supported type
-
     """
     if schema_type is None:
         return data
@@ -544,7 +507,6 @@ def _ensure_json_parsed(value: Any) -> Any:
 
     Returns:
         Parsed JSON object if value was a valid JSON string, otherwise the original value.
-
     """
     if isinstance(value, str):
         try:
@@ -562,7 +524,6 @@ def _try_parse_json(value: str) -> Any:
 
     Returns:
         Parsed JSON value, or None if parsing fails.
-
     """
     try:
         return from_json(value)
@@ -590,7 +551,6 @@ def _convert_to_int(value: Any) -> int:
 
     Raises:
         TypeError: If value cannot be converted to int.
-
     """
     if isinstance(value, bool):
         return int(value)
@@ -620,7 +580,6 @@ def _convert_to_float(value: Any) -> float:
 
     Raises:
         TypeError: If value cannot be converted to float.
-
     """
     if isinstance(value, bool):
         return float(value)
@@ -646,7 +605,6 @@ def _convert_to_bool(value: Any) -> bool:
 
     Raises:
         TypeError: If value cannot be converted to bool.
-
     """
     if isinstance(value, bool):
         return value
@@ -669,7 +627,6 @@ def _convert_to_datetime(value: Any) -> datetime.datetime:
 
     Raises:
         TypeError: If value cannot be converted to datetime.
-
     """
     if isinstance(value, datetime.datetime):
         return value
@@ -695,7 +652,6 @@ def _convert_to_date(value: Any) -> datetime.date:
 
     Raises:
         TypeError: If value cannot be converted to date.
-
     """
     if isinstance(value, datetime.datetime):
         return value.date()
@@ -726,7 +682,6 @@ def _convert_to_time(value: Any) -> datetime.time:
 
     Raises:
         TypeError: If value cannot be converted to time.
-
     """
     if isinstance(value, datetime.datetime):
         return value.time()
@@ -752,7 +707,6 @@ def _convert_to_decimal(value: Any) -> Decimal:
 
     Raises:
         TypeError: If value cannot be converted to Decimal.
-
     """
     if isinstance(value, Decimal):
         return value
@@ -776,7 +730,6 @@ def _convert_to_uuid(value: Any) -> UUID:
 
     Raises:
         TypeError: If value cannot be converted to UUID.
-
     """
     if isinstance(value, UUID):
         return value
@@ -805,7 +758,6 @@ def _convert_to_path(value: Any) -> Path:
 
     Raises:
         TypeError: If value cannot be converted to Path.
-
     """
     if isinstance(value, Path):
         return value
@@ -829,7 +781,6 @@ def _convert_to_dict(value: Any) -> dict[str, Any]:
 
     Raises:
         TypeError: If value cannot be converted to dict.
-
     """
     if isinstance(value, dict):
         return value
@@ -858,7 +809,6 @@ def _convert_to_list(value: Any) -> list[Any]:
 
     Raises:
         TypeError: If value cannot be converted to list.
-
     """
     if isinstance(value, list):
         return value
@@ -889,68 +839,19 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
     Args:
         value: The value to convert.
         value_type: The target Python type. Supported types include:
-            - Primitives: int, float, str, bool
-            - Temporal: datetime, date, time
-            - Numeric: Decimal
-            - Identifiers: UUID, Path
-            - Collections: dict, list (for JSON/JSONB columns)
-            - Schema types: Pydantic models, dataclasses, msgspec Structs,
-              attrs classes, TypedDict (for JSONB columns)
+        - Primitives: int, float, str, bool
+        - Temporal: datetime, date, time
+        - Numeric: Decimal
+        - Identifiers: UUID, Path
+        - Collections: dict, list (for JSON/JSONB columns)
+        - Schema types: Pydantic models, dataclasses, msgspec Structs,
+            attrs classes, TypedDict (for JSONB columns)
 
     Returns:
         The converted value of the specified type.
 
     Raises:
         TypeError: If the value cannot be converted to the specified type.
-
-    Examples:
-        Convert string to int:
-
-        >>> to_value_type("42", int)
-        42
-
-        Convert Decimal to float:
-
-        >>> from decimal import Decimal
-        >>> to_value_type(Decimal("3.14"), float)
-        3.14
-
-        Convert string to UUID:
-
-        >>> from uuid import UUID
-        >>> to_value_type("550e8400-e29b-41d4-a716-446655440000", UUID)
-        UUID('550e8400-e29b-41d4-a716-446655440000')
-
-        Convert JSON string to dict:
-
-        >>> to_value_type('{"key": "value"}', dict)
-        {'key': 'value'}
-
-        Convert JSONB to Pydantic model:
-
-        >>> from pydantic import BaseModel
-        >>> class User(BaseModel):
-        ...     name: str
-        ...     email: str
-        >>> to_value_type(
-        ...     '{"name": "Alice", "email": "alice@example.com"}', User
-        ... )
-        User(name='Alice', email='alice@example.com')
-
-        Identity conversion (no overhead when type matches exactly):
-
-        >>> value = 42
-        >>> result = to_value_type(value, int)
-        >>> result is value
-        True
-
-        Bool to int conversion (bool is a subclass of int, but converts correctly):
-
-        >>> to_value_type(True, int)
-        1
-        >>> to_value_type(False, int)
-        0
-
     """
     # Fast path: already correct type (handles ~90% of cases)
     # Uses strict type() identity which correctly handles subclass gotchas:

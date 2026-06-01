@@ -156,7 +156,6 @@ def _extract_pagination_placeholders_from_expression(expression: "exp.Expr") -> 
 
     Returns:
         Set of placeholder names found in LIMIT/OFFSET clauses.
-
     """
     pagination_placeholders: set[str] = set()
 
@@ -192,7 +191,6 @@ def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
 
     Returns:
         Set of placeholder names found in LIMIT/OFFSET clauses.
-
     """
     # First try: use statement_expression if available and has named placeholders
     stmt_expr = original_sql.statement_expression
@@ -318,7 +316,6 @@ def make_cache_key_hashable(obj: Any) -> Any:
     Returns:
         A hashable representation of the object. Collections become tuples,
         arrays become structural tuples like ("ndarray", dtype, shape).
-
     """
     if isinstance(obj, (int, str, bytes, bool, float, type(None))):
         return obj
@@ -411,7 +408,6 @@ def _callable_cache_key(func: Any) -> Any:
 
     Returns:
         Tuple identifying the callable, or None for missing callables.
-
     """
     if func is None:
         return None
@@ -605,7 +601,6 @@ class DataDictionaryDialectMixin:
 
         Returns:
             List of feature names this data dictionary supports
-
         """
         config = self.get_dialect_config()
         features = set(self.get_default_features())
@@ -639,7 +634,6 @@ class DataDictionaryMixin:
         Returns:
             Tuple of (was_cached, version_info). If was_cached is False,
             the caller should fetch the version and call cache_version().
-
         """
         if driver_id in self._version_fetch_attempted:
             return True, self._version_cache.get(driver_id)
@@ -651,7 +645,6 @@ class DataDictionaryMixin:
         Args:
             driver_id: The id() of the driver instance.
             version: The version info to cache (can be None if detection failed).
-
         """
         self._version_fetch_attempted.add(driver_id)
         if version is not None:
@@ -665,7 +658,6 @@ class DataDictionaryMixin:
 
         Returns:
             Tuple of (was_cached, version_info).
-
         """
         return self.get_cached_version(id(driver))
 
@@ -675,7 +667,6 @@ class DataDictionaryMixin:
         Args:
             driver: Database driver instance.
             version: Parsed version info or None.
-
         """
         self.cache_version(id(driver), version)
 
@@ -687,7 +678,6 @@ class DataDictionaryMixin:
 
         Returns:
             VersionInfo instance or None if parsing fails
-
         """
         patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
 
@@ -712,7 +702,6 @@ class DataDictionaryMixin:
 
         Returns:
             VersionInfo instance or None if parsing fails
-
         """
         match = pattern.search(version_str)
         if not match:
@@ -776,7 +765,6 @@ class DataDictionaryMixin:
 
         Returns:
             Version information or None if detection fails
-
         """
         for query in queries:
             with suppress(Exception):
@@ -803,7 +791,6 @@ class DataDictionaryMixin:
 
         Returns:
             Dictionary mapping type categories to generic SQL types
-
         """
         return {
             "json": "TEXT",
@@ -819,7 +806,6 @@ class DataDictionaryMixin:
 
         Returns:
             List of commonly supported feature names
-
         """
         return ["supports_transactions", "supports_prepared_statements"]
 
@@ -832,10 +818,6 @@ class DataDictionaryMixin:
 
         Returns:
             List of table names in topological order (dependencies first).
-
-        Notes:
-            Self-referencing foreign keys are ignored to avoid simple cycles, and every dependency is added with the referencing table depending on its referenced table.
-
         """
         sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
         for table in tables:
@@ -927,7 +909,6 @@ class CommonDriverAttributesMixin:
             statement_config: Statement configuration for the driver
             driver_features: Driver-specific features like extensions, secrets, and connection callbacks
             observability: Optional runtime handling lifecycle hooks, observers, and spans
-
         """
         self.connection = connection
         self.statement_config = statement_config
@@ -961,7 +942,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             False for sync drivers.
-
         """
         return False
 
@@ -980,7 +960,6 @@ class CommonDriverAttributesMixin:
 
         Raises:
             StorageCapabilityError: If storage capabilities are not configured.
-
         """
         capabilities = self.driver_features.get("storage_capabilities")
         if capabilities is None:
@@ -996,7 +975,6 @@ class CommonDriverAttributesMixin:
 
         Raises:
             StorageCapabilityError: If the capability is not available.
-
         """
         capabilities = self.storage_capabilities()
         if capabilities.get(capability_flag, False):
@@ -1014,7 +992,6 @@ class CommonDriverAttributesMixin:
 
         Raises:
             StorageCapabilityError: Always raised.
-
         """
         msg = f"{capability} is not implemented for this driver"
         remediation = "Override storage methods on the adapter to enable this capability."
@@ -1230,12 +1207,12 @@ class CommonDriverAttributesMixin:
         and cache lookup.
 
         Ineligible queries:
-        - QC disabled or config mismatch
-        - Scripts or execute-many (multiple statements/param sets)
-        - Raw expressions (dynamic SQL)
-        - Static script compilation (parameters embedded in SQL)
-        - Filtered statements (dynamic WHERE clauses)
-        - Unprocessed statements (no compiled metadata)
+            - QC disabled or config mismatch
+            - Scripts or execute-many (multiple statements/param sets)
+            - Raw expressions (dynamic SQL)
+            - Static script compilation (parameters embedded in SQL)
+            - Filtered statements (dynamic WHERE clauses)
+            - Unprocessed statements (no compiled metadata)
         """
         if not self._stmt_cache_enabled:
             return
@@ -1254,7 +1231,6 @@ class CommonDriverAttributesMixin:
         if not statement.is_processed:
             return
         # When an AST transformer is configured, compiled SQL may depend on which
-        # parameters are None (e.g. null pruning rewrites placeholders to NULL literals).
         # Don't cache these results as they'd corrupt the cache for non-None calls.
         if statement.statement_config.parameter_config.ast_transformer is not None:
             params = statement.positional_parameters
@@ -1304,11 +1280,11 @@ class CommonDriverAttributesMixin:
         """Convert data to a specified schema type.
 
         Supports transformation to various schema types including:
-        - TypedDict
-        - dataclasses
-        - msgspec Structs
-        - Pydantic models
-        - attrs classes
+            - TypedDict
+            - dataclasses
+            - msgspec Structs
+            - Pydantic models
+            - attrs classes
 
         Args:
             data: Input data to convert (dict, list of dicts, or other).
@@ -1316,8 +1292,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Converted data in the specified schema type, or original data if schema_type is None.
-
-
         """
         return _to_schema_impl(data, schema_type=schema_type)
 
@@ -1357,7 +1331,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             ExecutionResult configured for the specified operation type
-
         """
         # Positional arguments are slightly faster for NamedTuple
         return ExecutionResult(
@@ -1385,7 +1358,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             SQLResult with complete execution data
-
         """
         if execution_result.is_script_result:
             return SQLResult(
@@ -1434,7 +1406,6 @@ class CommonDriverAttributesMixin:
         Returns:
             True when cursor metadata indicates a row-returning operation despite a
             generic command operation type; otherwise False.
-
         """
         if statement.operation_type != "COMMAND":
             return False
@@ -1470,7 +1441,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Prepared SQL statement
-
         """
         if statement_config is None:
             statement_config = self.statement_config
@@ -1598,7 +1568,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             A list of individual SQL statements
-
         """
         return [
             sql_script.strip()
@@ -1628,7 +1597,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
-
         """
         if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
             return None
@@ -1683,7 +1651,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Coerced value with TypedParameter unwrapped
-
         """
         unwrapped_value = value.value if isinstance(value, TypedParameter) else value
         if not type_coercion_map:
@@ -1738,7 +1705,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Processed parameter set with individual values coerced but structure preserved
-
         """
         if not parameters:
             return []
@@ -1786,7 +1752,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Processed parameter set with TypedParameter objects unwrapped and type coercion applied
-
         """
         if not parameters:
             return []
@@ -1846,7 +1811,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             Tuple of (compiled_sql, parameters)
-
         """
         compiled_statement, prepared_parameters = self._get_compiled_statement(
             statement, statement_config, flatten_single_parameters=flatten_single_parameters
@@ -1906,7 +1870,6 @@ class CommonDriverAttributesMixin:
             return cached_statement, prepared_parameters
 
         # Materialize iterators before cache key generation to prevent exhaustion.
-        # If statement.parameters is an iterator (e.g., generator), structural_fingerprint
         # will consume it during cache key generation, leaving empty parameters for execution.
         params = statement.parameters
         if params is not None and not isinstance(params, (list, tuple, dict)):
@@ -2031,7 +1994,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             The match filter instance or None
-
         """
         return _find_filter_impl(filter_type, filters)
 
@@ -2164,11 +2126,6 @@ class CommonDriverAttributesMixin:
 
         Raises:
             ImproperConfigurationError: If the SQL is not a SELECT statement.
-
-        Example:
-            Original: SELECT id, name FROM users WHERE status = :status LIMIT 10
-            Result: SELECT id, name, COUNT(*) OVER() AS _total_count FROM users WHERE status = :status LIMIT 10
-
         """
         if not original_sql.expression:
             original_sql.compile()

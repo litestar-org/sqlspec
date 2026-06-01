@@ -956,7 +956,7 @@ class SQL:
         Auto-generated parameters are namespaced to prevent conflicts.
 
         Args:
-            base_name: The base name for the parameter (e.g., column name)
+            base_name: The base name for the parameter
 
         Returns:
             A unique parameter name that doesn't exist in current parameters
@@ -1208,7 +1208,7 @@ class SQL:
 
         Args:
             column: Column name or expression
-            pattern: LIKE pattern (e.g., '%search%')
+            pattern: LIKE pattern
 
         Returns:
             New SQL instance with WHERE condition applied
@@ -1227,7 +1227,7 @@ class SQL:
 
         Args:
             column: Column name or expression
-            pattern: ILIKE pattern (e.g., '%search%')
+            pattern: ILIKE pattern
 
         Returns:
             New SQL instance with WHERE condition applied
@@ -1423,11 +1423,6 @@ class SQL:
 
         Returns:
             New SQL instance with LIMIT and OFFSET applied
-
-        Example:
-            # Get page 3 with 20 items per page
-            stmt = SQL("SELECT * FROM users").paginate(3, 20)
-            # Results in: SELECT * FROM users LIMIT 20 OFFSET 40
         """
         if page < 1:
             msg = "paginate page must be >= 1"
@@ -1456,16 +1451,6 @@ class SQL:
 
         Returns:
             New SQL instance with only the specified columns
-
-        Example:
-            stmt = SQL("SELECT * FROM users WHERE active = 1")
-            narrow = stmt.select_only("id", "name", "email")
-            # Results in: SELECT id, name, email FROM users WHERE active = 1
-
-            # With column pruning on a subquery:
-            stmt = SQL("SELECT * FROM (SELECT id, name, email, created_at FROM users) AS u")
-            narrow = stmt.select_only("id", "name", prune_columns=True)
-            # Results in: SELECT id, name FROM (SELECT id, name FROM users) AS u
         """
         if not columns:
             return self
@@ -1500,14 +1485,6 @@ class SQL:
 
         Returns:
             New SQL instance containing the EXPLAIN statement
-
-        Examples:
-            Basic EXPLAIN:
-                stmt = SQL("SELECT * FROM users")
-                explain_stmt = stmt.explain()
-
-            With options:
-                explain_stmt = stmt.explain(analyze=True, format="json")
         """
         from sqlspec.builder import Explain
 
@@ -1531,10 +1508,6 @@ class SQL:
 
         Raises:
             SQLBuilderError: If the statement cannot be parsed.
-
-        Notes:
-            Statements outside the DML set return an ExpressionBuilder without
-            DML-specific helper methods.
         """
         if self._is_many:
             msg = "QueryBuilder does not support execute_many SQL statements."

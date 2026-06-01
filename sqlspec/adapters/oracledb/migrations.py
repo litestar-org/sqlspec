@@ -27,8 +27,8 @@ class OracleMigrationTrackerMixin:
     """Mixin providing Oracle-specific migration table creation and querying.
 
     Oracle has unique identifier handling rules:
-    - Unquoted identifiers are case-insensitive and stored as UPPERCASE
-    - Quoted identifiers are case-sensitive and stored exactly as written
+        - Unquoted identifiers are case-insensitive and stored as UPPERCASE
+        - Quoted identifiers are case-sensitive and stored exactly as written
 
     This mixin overrides SQL builder methods to add quoted identifiers for
     all column references, ensuring they match the lowercase column names

@@ -16,18 +16,6 @@ class AWSLogFormatter:
     - xray_trace_id for X-Ray integration
     - ISO 8601 timestamp
 
-    Example:
-        ```python
-        formatter = AWSLogFormatter()
-        entry = formatter.format(
-            "INFO",
-            "Query executed",
-            correlation_id="abc-123",
-            trace_id="1-5f84c7a1-sample",
-            duration_ms=15.5,
-        )
-        ```
-
     Reference:
         https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AnalyzingLogData.html
     """

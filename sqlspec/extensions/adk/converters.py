@@ -3,7 +3,7 @@
 Implements full-event JSON storage: the entire Event is serialized via
 ``Event.model_dump_json(exclude_none=True)`` into a single ``event_json``
 column, with a small set of indexed scalar columns extracted alongside for
-query performance.  Reconstruction uses ``Event.model_validate_json()``.
+query performance. Reconstruction uses ``Event.model_validate_json()``.
 
 Also provides scoped-state helpers that normalise ADK state prefixes
 (``app:``, ``user:``, ``temp:``) so the shared service layer can split,
@@ -110,7 +110,7 @@ def event_to_record(event: "Event", session_id: str) -> EventRecord:
     """Convert ADK Event to database record using full-event JSON storage.
 
     The entire Event is serialized into ``event_json`` via Pydantic's
-    ``model_dump_json(exclude_none=True)``.  A small number of indexed scalar
+    ``model_dump_json(exclude_none=True)``. A small number of indexed scalar
     columns are extracted alongside for query performance.
 
     Args:

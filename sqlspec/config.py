@@ -171,27 +171,23 @@ class MigrationConfig(TypedDict):
     """
 
     exclude_extensions: NotRequired["list[str]"]
-    """List of extension names to exclude from automatic migration inclusion.
+    """
+    List of extension names to exclude from automatic migration inclusion.
 
     When an extension is configured in ``extension_config``, its migrations are automatically
     included. Use this to prevent that for specific extensions:
-
-    Example:
-        migration_config={
-            "exclude_extensions": ["events"]  # Use ephemeral listen_notify, skip queue table
-        }
     """
 
     transactional: NotRequired[bool]
     """Wrap migrations in transactions when supported. When enabled (default for adapters that support it), each migration runs in a transaction that is committed on success or rolled back on failure. This prevents partial migrations from leaving the database in an inconsistent state. Requires adapter support for transactional DDL. Defaults to True for PostgreSQL, SQLite, and DuckDB; False for MySQL, Oracle, and BigQuery. Individual migrations can override this with a '-- transactional: false' comment."""
 
     use_logger: NotRequired[bool]
-    """Use Python logger instead of Rich console for migration output.
+    """
+    Use Python logger instead of Rich console for migration output.
 
     When True, migration progress is logged via structlog/logging instead of being
     printed to the console with Rich formatting. This is useful for programmatic
-    usage where console output is not desired (e.g., in tests, automated scripts,
-    or production deployments with structured logging).
+    usage where console output is not desired.
 
     Can be overridden per-call via the ``use_logger`` parameter on ``migrate_up()``
     and ``migrate_down()`` methods.
@@ -222,23 +218,6 @@ class FlaskConfig(TypedDict):
     """Configuration options for Flask SQLSpec extension.
 
     All fields are optional with sensible defaults. Use in extension_config["flask"]:
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "flask": {
-                    "commit_mode": "autocommit",
-                    "session_key": "db"
-                }
-            }
-        )
-
-    Notes:
-        This TypedDict provides type safety for extension config.
-        Flask extension uses g object for request-scoped storage.
     """
 
     connection_key: NotRequired[str]
@@ -336,22 +315,6 @@ class StarletteConfig(TypedDict):
     """Configuration options for Starlette SQLSpec extension.
 
     All fields are optional with sensible defaults. Use in extension_config["starlette"]:
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "starlette": {
-                    "commit_mode": "autocommit",
-                    "session_key": "db"
-                }
-            }
-        )
-
-    Notes:
-        This TypedDict provides type safety for extension config.
     """
 
     connection_key: NotRequired[str]
@@ -372,18 +335,10 @@ class StarletteConfig(TypedDict):
     """
 
     extra_commit_statuses: NotRequired[set[int]]
-    """Additional HTTP status codes that trigger commit. Default: set()
-
-    Example:
-        extra_commit_statuses={201, 202}
-    """
+    """Additional HTTP status codes that trigger commit. Default: set()"""
 
     extra_rollback_statuses: NotRequired[set[int]]
-    """Additional HTTP status codes that trigger rollback. Default: set()
-
-    Example:
-        extra_rollback_statuses={409}
-    """
+    """Additional HTTP status codes that trigger rollback. Default: set()"""
 
     disable_di: NotRequired[bool]
     """Disable built-in dependency injection. Default: False.
@@ -410,19 +365,6 @@ class FastAPIConfig(StarletteConfig):
 
     All fields are optional with sensible defaults. Use in ``extension_config["fastapi"]``.
     SQLCommenter defaults the framework attribute to ``"fastapi"``.
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "fastapi": {
-                    "commit_mode": "autocommit",
-                    "session_key": "db"
-                }
-            }
-        )
     """
 
 
@@ -430,24 +372,6 @@ class SanicConfig(TypedDict):
     """Configuration options for Sanic SQLSpec extension.
 
     All fields are optional with sensible defaults. Use in ``extension_config["sanic"]``.
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "sanic": {
-                    "commit_mode": "autocommit",
-                    "session_key": "db"
-                }
-            }
-        )
-
-    Notes:
-        This TypedDict provides type safety for extension config.
-        Sanic extension uses ``app.ctx`` for pools and ``request.ctx`` for
-        request-scoped connections and sessions.
     """
 
     connection_key: NotRequired[str]
@@ -508,23 +432,13 @@ class ADKPartitionConfig(TypedDict):
 
     Controls how ADK tables are partitioned across backends that support it.
     Backends without native partitioning support ignore these settings.
-
-    Example:
-        extension_config={
-            "adk": {
-                "partitioning": {
-                    "strategy": "range",
-                    "partition_key": "created_at",
-                    "interval": "month",
-                }
-            }
-        }
     """
 
     strategy: NotRequired[Literal["range", "list", "hash"]]
-    """Partitioning strategy. Default: None (no partitioning).
+    """
+    Partitioning strategy. Default: None (no partitioning).
 
-    - range: Partition by range of values (e.g., time-based)
+    - range: Partition by range of values
     - list: Partition by discrete value lists
     - hash: Partition by hash of the partition key
 
@@ -551,7 +465,6 @@ class ADKPartitionConfig(TypedDict):
     interval: NotRequired[str]
     """Partition interval for range partitioning.
 
-    Examples: 'day', 'week', 'month', 'year'.
     Only meaningful when strategy is 'range'.
     """
 
@@ -568,17 +481,6 @@ class ADKRetentionConfig(TypedDict):
     Controls automatic cleanup of expired data. Backends with native TTL support
     (CockroachDB Row-Level TTL, Spanner Row Deletion Policy) use database-level
     enforcement. Others fall back to application-level sweep queries.
-
-    Example:
-        extension_config={
-            "adk": {
-                "retention": {
-                    "session_ttl_seconds": 86400,
-                    "event_ttl_seconds": 604800,
-                    "memory_ttl_seconds": 0,
-                }
-            }
-        }
     """
 
     session_ttl_seconds: NotRequired[int]
@@ -613,16 +515,6 @@ class ADKCompressionConfig(TypedDict):
     """Configuration for table-level compression.
 
     Controls compression of ADK table storage. Support and algorithms vary by backend.
-
-    Example:
-        extension_config={
-            "adk": {
-                "compression": {
-                    "enabled": True,
-                    "algorithm": "zstd",
-                }
-            }
-        }
     """
 
     enabled: NotRequired[bool]
@@ -633,13 +525,8 @@ class ADKCompressionConfig(TypedDict):
     """
 
     algorithm: NotRequired[str]
-    """Compression algorithm name. Backend-specific.
-
-    Examples:
-        - PostgreSQL (with TOAST): 'pglz', 'lz4' (PG14+)
-        - MySQL/InnoDB: 'zlib'
-        - Oracle: 'basic', 'oltp', 'query_high', 'archive_high'
-        - DuckDB: 'zstd', 'snappy'
+    """
+    Compression algorithm name. Backend-specific.
 
     When omitted, the backend default is used.
     """
@@ -656,17 +543,6 @@ class ADKSqliteOptimizationConfig(TypedDict):
 
     Controls SQLite performance tuning parameters applied at connection time.
     These settings are ignored by non-SQLite adapters.
-
-    Example:
-        extension_config={
-            "adk": {
-                "sqlite_optimization": {
-                    "cache_size": -64000,
-                    "mmap_size": 31457280,
-                    "journal_size_limit": 67108864,
-                }
-            }
-        }
     """
 
     cache_size: NotRequired[int]
@@ -696,29 +572,9 @@ class ADKConfig(TypedDict):
     All fields are optional with sensible defaults. Use in extension_config["adk"]:
 
     Configuration supports three deployment scenarios:
-    1. SQLSpec manages everything (runtime + migrations)
-    2. SQLSpec runtime only (external migration tools like Alembic/Flyway)
-    3. Selective features (sessions OR memory, not both)
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "memory_table": "my_memories",
-                    "memory_use_fts": True,
-                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
-                }
-            }
-        )
-
-    Notes:
-        This TypedDict provides type safety for extension config but is not required.
-        You can use plain dicts as well.
+        1. SQLSpec manages everything (runtime + migrations)
+        2. SQLSpec runtime only (external migration tools like Alembic/Flyway)
+        3. Selective features (sessions OR memory, not both)
     """
 
     enable_sessions: NotRequired[bool]
@@ -750,51 +606,24 @@ class ADKConfig(TypedDict):
     """
 
     session_table: NotRequired[str]
-    """Name of the sessions table. Default: 'adk_sessions'
-
-    Examples:
-        "agent_sessions"
-        "my_app_sessions"
-        "tenant_acme_sessions"
-    """
+    """Name of the sessions table. Default: 'adk_sessions'"""
 
     events_table: NotRequired[str]
-    """Name of the events table. Default: 'adk_events'
-
-    Examples:
-        "agent_events"
-        "my_app_events"
-        "tenant_acme_events"
-    """
+    """Name of the events table. Default: 'adk_events'"""
 
     memory_table: NotRequired[str]
-    """Name of the memory entries table. Default: 'adk_memory_entries'
-
-    Examples:
-        "agent_memories"
-        "my_app_memories"
-        "tenant_acme_memories"
-    """
+    """Name of the memory entries table. Default: 'adk_memory_entries'"""
 
     artifact_table: NotRequired[str]
-    """Name of the artifact versions table. Default: 'adk_artifact_versions'
-
-    Examples:
-        "agent_artifacts"
-        "my_app_artifact_versions"
-    """
+    """Name of the artifact versions table. Default: 'adk_artifact_versions'"""
 
     artifact_storage_uri: NotRequired[str]
-    """Base URI for artifact content storage.
+    """
+    Base URI for artifact content storage.
 
     Points to a ``sqlspec/storage/`` backend where artifact binary content
-    is stored.  Can be a direct URI (``s3://bucket/path``, ``file:///path``)
+    is stored. Can be a direct URI (``s3://bucket/path``, ``file:///path``)
     or a registered alias in the storage registry.
-
-    Examples:
-        "s3://my-bucket/adk-artifacts/"
-        "file:///var/data/artifacts/"
-        "gcs://my-gcs-bucket/artifacts/"
     """
 
     memory_use_fts: NotRequired[bool]
@@ -819,7 +648,8 @@ class ADKConfig(TypedDict):
     """
 
     owner_id_column: NotRequired[str]
-    """Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity.
+    """
+    Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity.
 
     Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]"
 
@@ -835,38 +665,11 @@ class ADKConfig(TypedDict):
         - CASCADE options: ON DELETE CASCADE, ON UPDATE CASCADE
         - Dialect-specific options (DEFERRABLE, ENABLE VALIDATE, etc.)
         - Plain columns without FK (just extra column storage)
-
-    Examples:
-        PostgreSQL with UUID FK:
-            "account_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE"
-
-        MySQL with BIGINT FK:
-            "user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT"
-
-        Oracle with NUMBER FK:
-            "user_id NUMBER(10) REFERENCES users(id) ENABLE VALIDATE"
-
-        SQLite with INTEGER FK:
-            "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
-
-        Nullable FK (optional relationship):
-            "workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL"
-
-        No FK (just extra column):
-            "organization_name VARCHAR(128) NOT NULL"
-
-        Deferred constraint (PostgreSQL):
-            "user_id UUID REFERENCES users(id) DEFERRABLE INITIALLY DEFERRED"
-
-    Notes:
-        - Column name (first word) is extracted for INSERT/SELECT queries
-        - Rest of definition is passed through to CREATE TABLE DDL
-        - Database validates the DDL syntax (fail-fast on errors)
-        - Works with all database dialects (PostgreSQL, MySQL, SQLite, Oracle, etc.)
     """
 
     in_memory: NotRequired[bool]
-    """Enable in-memory table storage (Oracle-specific). Default: False.
+    """
+    Enable in-memory table storage (Oracle-specific). Default: False.
 
     When enabled, tables are created with the INMEMORY clause for Oracle Database,
     which stores table data in columnar format in memory for faster query performance.
@@ -877,23 +680,6 @@ class ADKConfig(TypedDict):
         - Sufficient INMEMORY_SIZE configured in the database instance
 
     Other database adapters ignore this setting.
-
-    Examples:
-        Oracle with in-memory enabled:
-            config = OracleAsyncConfig(
-                connection_config={"dsn": "oracle://..."},
-                extension_config={
-                    "adk": {
-                        "in_memory": True
-                    }
-                }
-            )
-
-    Notes:
-        - Improves query performance for analytics (10-100x faster)
-        - Tables created with INMEMORY clause
-        - Requires Oracle Database In-Memory option license
-        - Ignored by non-Oracle adapters
     """
 
     shard_count: NotRequired[int]
@@ -906,9 +692,10 @@ class ADKConfig(TypedDict):
     """
 
     session_table_options: NotRequired[str]
-    """Adapter-specific table OPTIONS/clauses for the sessions table.
+    """
+    Adapter-specific table OPTIONS/clauses for the sessions table.
 
-    Passed verbatim when supported (e.g., Spanner columnar/tiered storage). Ignored by
+    Passed verbatim when supported. Ignored by
     adapters without table OPTIONS support.
     """
 
@@ -924,28 +711,26 @@ class ADKConfig(TypedDict):
     # --- Capability-based configuration (Chapter 2: schema-capability-config) ---
 
     fts_language: NotRequired[str]
-    """Language configuration for full-text search indexing. Default: 'english'.
+    """
+    Language configuration for full-text search indexing. Default: 'english'.
 
-    Controls the language dictionary/stemmer used by FTS implementations:
-    - PostgreSQL: to_tsvector/to_tsquery language parameter
-    - SQLite FTS5: tokenizer language for unicode61/porter
-    - MySQL: FULLTEXT parser language (with ngram for CJK on 5.7.6+)
-    - Oracle: CTXSYS.CONTEXT lexer language
-    - Spanner: TOKENIZE_FULLTEXT language parameter
-    - DuckDB: FTS stemmer language
+    Controls the language dictionary/stemmer for FTS implementations:
+        - PostgreSQL: to_tsvector/to_tsquery language parameter
+        - SQLite FTS5: tokenizer language for unicode61/porter
+        - MySQL: FULLTEXT parser language (with ngram for CJK on 5.7.6+)
+        - Oracle: CTXSYS.CONTEXT lexer language
+        - Spanner: TOKENIZE_FULLTEXT language parameter
+        - DuckDB: FTS stemmer language
 
     Only takes effect when ``memory_use_fts`` is True.
 
     Common values: 'english', 'simple', 'german', 'french', 'spanish',
     'portuguese', 'italian', 'dutch', 'russian', 'chinese', 'japanese', 'korean'.
-
-    Notes:
-        Available languages vary by backend. Backends that do not support the
-        specified language will fall back to 'simple' or 'english'.
     """
 
     schema_version: NotRequired[int]
-    """Explicit schema version for ADK tables. Default: None (auto-detect).
+    """
+    Explicit schema version for ADK tables. Default: None (auto-detect).
 
     When set, locks the ADK schema to a specific version. This is useful for:
     - Preventing automatic schema upgrades in production
@@ -954,12 +739,6 @@ class ADKConfig(TypedDict):
 
     When None, the ADK extension auto-detects the current schema version
     and applies any pending upgrades during initialization.
-
-    Notes:
-        Schema versions are monotonically increasing integers managed by
-        the ADK extension migration system. Setting this to a version
-        lower than the current database schema will raise a configuration
-        error at startup.
     """
 
     partitioning: NotRequired[ADKPartitionConfig]
@@ -1034,9 +813,10 @@ class EventsConfig(TypedDict):
     """Skip JSON encoding/decoding for payloads. Defaults to False."""
 
     in_memory: NotRequired[bool]
-    """Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False.
+    """
+    Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False.
 
-    Note: To skip events migrations (e.g., when using ephemeral 'listen_notify' backend),
+    Note: To skip events migrations,
     use ``migration_config={"exclude_extensions": ["events"]}``.
     """
 
@@ -1378,7 +1158,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     ) -> Callable[[dict[str, Any]], None]:
         try:
             hook_signature: Signature = signature(callback)
-        except (TypeError, ValueError):  # pragma: no cover - builtins without signatures
+        except (TypeError, ValueError):  # pragma: no cover
             hook_signature = Signature()
 
         positional_params = [
@@ -1946,7 +1726,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             self._pool_lock,
             lambda: self.connection_instance,
             self._create_pool,
-            self.get_observability_runtime().emit_pool_create,
+            self.get_observability_runtime().emit_pool_create_sync,
         )
         self.connection_instance = created_pool
         return cast("PoolT", created_pool)
@@ -1955,7 +1735,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """Close the connection pool."""
         pool = self.connection_instance
         runtime = self.get_observability_runtime()
-        close_sync_pool(pool, self._close_pool, runtime.emit_pool_destroy, runtime.emit_pool_destroying_sync)
+        close_sync_pool(pool, self._close_pool, runtime.emit_pool_destroy_sync, runtime.emit_pool_destroying_sync)
         self.connection_instance = None
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -2053,7 +1833,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
             self._pool_lock,
             lambda: self.connection_instance,
             self._create_pool,
-            self.get_observability_runtime().emit_pool_create,
+            self.get_observability_runtime().emit_pool_create_async,
         )
         self.connection_instance = created_pool
         return cast("PoolT", created_pool)
@@ -2062,7 +1842,9 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         """Close the connection pool."""
         pool = self.connection_instance
         runtime = self.get_observability_runtime()
-        await close_async_pool(pool, self._close_pool, runtime.emit_pool_destroy, runtime.emit_pool_destroying_async)
+        await close_async_pool(
+            pool, self._close_pool, runtime.emit_pool_destroy_async, runtime.emit_pool_destroying_async
+        )
         self.connection_instance = None
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:

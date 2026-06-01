@@ -346,18 +346,7 @@ class ConstraintDefinition:
 
 
 class CreateTable(DDLBuilder):
-    """Builder for CREATE TABLE statements with columns and constraints.
-
-    Example:
-        builder = (
-            CreateTable("users")
-            .column("id", "SERIAL", primary_key=True)
-            .column("email", "VARCHAR(255)", not_null=True, unique=True)
-            .column("created_at", "TIMESTAMP", default="CURRENT_TIMESTAMP")
-            .foreign_key_constraint("org_id", "organizations", "id")
-        )
-        sql = builder.build().sql
-    """
+    """Builder for CREATE TABLE statements with columns and constraints."""
 
     __slots__ = (
         "_columns",
@@ -871,7 +860,7 @@ class CreateIndex(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        """Build the CREATE INDEX expression used by this builder.
+        """Build the CREATE INDEX expression for this builder.
 
         Columns are turned into raw expressions (not ``Ordered``) to preserve natural NULL ordering,
         string ``where`` clauses become expressions, and the final ``exp.Index`` is wrapped in an ``exp.Create`` with the configured flags.
@@ -1040,16 +1029,6 @@ class CreateSchema(DDLBuilder):
 
 class CreateTableAsSelect(DDLBuilder):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
-
-    Example:
-        builder = (
-            CreateTableAsSelectBuilder()
-            .name("my_table")
-            .if_not_exists()
-            .columns("id", "name")
-            .as_select(select_builder)
-        )
-        sql = builder.build().sql
 
     Methods:
         - name(table_name: str): Set the table name.
@@ -1294,16 +1273,7 @@ class CreateView(DDLBuilder):
 
 
 class AlterTable(DDLBuilder):
-    """Builder for ALTER TABLE operations.
-
-    Example:
-        builder = (
-            AlterTable("users")
-            .add_column("email", "VARCHAR(255)", not_null=True)
-            .drop_column("old_field")
-            .add_constraint("check_age", "CHECK (age >= 18)")
-        )
-    """
+    """Builder for ALTER TABLE operations."""
 
     __slots__ = ("_if_exists", "_operations", "_schema", "_table_name")
 

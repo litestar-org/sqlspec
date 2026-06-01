@@ -54,9 +54,8 @@ class AiomysqlCursor:
 
     Provides automatic cursor acquisition and cleanup for database operations.
 
-    The optional ``cursor_class`` argument forces a specific cursor type (e.g.,
-    the tuple-returning ``AiomysqlRawCursor``) regardless of the user's
-    ``cursor_class`` setting in ``AiomysqlConnectionParams``. This is used by
+    The optional ``cursor_class`` argument forces a specific cursor type regardless of the user's
+    ``cursor_class`` setting in ``AiomysqlConnectionParams``. This lets
     first-party store code (ADK, Litestar, Events) that relies on positional
     row access and must not be broken when a user configures ``DictCursor`` at
     the connection level.

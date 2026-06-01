@@ -4,11 +4,11 @@ Overrides sqlglot's built-in version_sql generators to produce dialect-specific
 time-travel query syntax. Uses sqlglot's exp.Version and Table.version slot.
 
 Supported syntax by dialect:
-- BigQuery: table FOR SYSTEM_TIME AS OF timestamp (built-in)
-- Oracle: table AS OF TIMESTAMP timestamp / AS OF SCN scn
-- Snowflake: table AT (TIMESTAMP => timestamp) / BEFORE (...)
-- DuckDB: table AT (TIMESTAMP => timestamp)
-- CockroachDB (Postgres): table AS OF SYSTEM TIME timestamp
+    - BigQuery: table FOR SYSTEM_TIME AS OF timestamp (built-in)
+    - Oracle: table AS OF TIMESTAMP timestamp / AS OF SCN scn
+    - Snowflake: table AT (TIMESTAMP => timestamp) / BEFORE (...)
+    - DuckDB: table AT (TIMESTAMP => timestamp)
+    - CockroachDB (Postgres): table AS OF SYSTEM TIME timestamp
 """
 
 from sqlglot import exp
@@ -86,26 +86,11 @@ def create_temporal_table(
     Args:
         table: Table name or expression.
         as_of: Timestamp or SCN expression for the point-in-time.
-        kind: Optional version kind (e.g., "TIMESTAMP", "SCN", "SYSTEM TIME").
-              Defaults to dialect-appropriate value.
+        kind: Optional version kind.
+            Defaults to dialect-appropriate value.
 
     Returns:
         Table expression with version clause that generates dialect-specific SQL.
-
-    Notes:
-        Inputs are normalized before building the ``exp.Version`` clause so both string table names and literal timestamps
-        work consistently.
-
-    Example:
-        >>> from sqlspec.builder import create_temporal_table
-        >>> from sqlglot import exp
-        >>> t = create_temporal_table(
-        ...     "orders", exp.Literal.string("2024-01-01")
-        ... )
-        >>> t.sql(dialect="oracle")
-        "orders AS OF TIMESTAMP '2024-01-01'"
-        >>> t.sql(dialect="bigquery")
-        "orders FOR SYSTEM_TIME AS OF '2024-01-01'"
     """
     if isinstance(table, str):
         table_expr = exp.to_table(table)
@@ -133,12 +118,12 @@ def register_version_generators() -> None:
     module is imported.
 
     Registers custom SQL generators for temporal (time-travel) queries:
-    - Default (no dialect): AS OF SYSTEM TIME (CockroachDB style)
-    - BigQuery: FOR SYSTEM_TIME AS OF
-    - Oracle: AS OF TIMESTAMP / AS OF SCN
-    - Snowflake: AT (TIMESTAMP => ...) / BEFORE (...)
-    - DuckDB: AT (TIMESTAMP => ...)
-    - Postgres/CockroachDB: AS OF SYSTEM TIME
+        - Default (no dialect): AS OF SYSTEM TIME (CockroachDB style)
+        - BigQuery: FOR SYSTEM_TIME AS OF
+        - Oracle: AS OF TIMESTAMP / AS OF SCN
+        - Snowflake: AT (TIMESTAMP => ...) / BEFORE (...)
+        - DuckDB: AT (TIMESTAMP => ...)
+        - Postgres/CockroachDB: AS OF SYSTEM TIME
     """
     global _VERSION_GENERATORS_REGISTERED
     if _VERSION_GENERATORS_REGISTERED:

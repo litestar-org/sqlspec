@@ -190,7 +190,6 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        # TODO: Arrow fast paths still bypass query-start observability hooks.
         prepared_statement.compile()
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
         arrow_kwargs = {"batch_size": batch_size} if batch_size is not None else {}
@@ -360,7 +359,6 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         ensure_pyarrow()
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        # TODO: Arrow fast paths still bypass query-start observability hooks.
         prepared_statement.compile()
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
         arrow_kwargs = {"batch_size": batch_size} if batch_size is not None else {}

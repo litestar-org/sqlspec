@@ -5,8 +5,8 @@ Implements ``BaseArtifactService`` by composing SQL-backed metadata storage
 backends (via :class:`StorageRegistry`).
 
 Metadata (version, filename, MIME type, custom metadata, canonical URI) lives
-in a SQL table.  Content bytes live in object storage addressed by canonical
-URI.  Versioning is append-only with monotonically increasing version numbers
+in a SQL table. Content bytes live in object storage addressed by canonical
+URI. Versioning is append-only with monotonically increasing version numbers
 starting from 0.
 """
 
@@ -181,34 +181,15 @@ class SQLSpecArtifactService(BaseArtifactService):
     to provide versioned artifact management for Google ADK.
 
     Metadata (version number, filename, MIME type, custom metadata, canonical
-    URI) is stored in a SQL table managed by the artifact store.  Content
+    URI) is stored in a SQL table managed by the artifact store. Content
     bytes are stored in object storage (S3, GCS, Azure, local filesystem)
     via the storage registry.
 
     Args:
         store: Artifact metadata store implementation.
-        artifact_storage_uri: Base URI for content storage (e.g.,
-            ``"s3://my-bucket/adk-artifacts/"``, ``"file:///var/data/artifacts/"``).
+        artifact_storage_uri: Base URI for content storage.
             Can also be a registered alias in the storage registry.
-        registry: Storage registry to use.  Defaults to the global singleton.
-
-    Example:
-        from sqlspec.extensions.adk.artifact import SQLSpecArtifactService
-
-        artifact_store = MyArtifactMetadataStore(config)
-        await artifact_store.ensure_table()
-
-        service = SQLSpecArtifactService(
-            store=artifact_store,
-            artifact_storage_uri="s3://my-bucket/adk-artifacts/",
-        )
-
-        version = await service.save_artifact(
-            app_name="my_app",
-            user_id="user123",
-            filename="output.png",
-            artifact=part,
-        )
+        registry: Storage registry to use. Defaults to the global singleton.
     """
 
     def __init__(
@@ -241,7 +222,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         """Save an artifact, returning the new version number.
 
         Writes content to object storage first, then inserts the metadata
-        row.  If content write succeeds but metadata insert fails, the
+        row. If content write succeeds but metadata insert fails, the
         orphaned content blob is logged but not automatically cleaned up
         (eventual consistency is acceptable; orphan sweep can be added later).
 
@@ -374,7 +355,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         """List distinct artifact filenames.
 
         When ``session_id`` is provided, returns both session-scoped and
-        user-scoped filenames.  When None, returns only user-scoped filenames.
+        user-scoped filenames. When None, returns only user-scoped filenames.
 
         Args:
             app_name: Application name.

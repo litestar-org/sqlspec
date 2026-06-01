@@ -172,26 +172,11 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
     and propagates them through the request lifecycle via CorrelationContext.
 
     The middleware:
-    1. Extracts correlation ID from configurable headers
-    2. Sets it in the CorrelationContext for async/sync access
-    3. Stores it in request.state.correlation_id
-    4. Adds X-Correlation-ID header to the response
-    5. Cleans up the context on request completion
-
-    Example:
-        ```python
-        from starlette.applications import Starlette
-        from sqlspec.extensions.starlette.middleware import (
-            CorrelationMiddleware,
-        )
-
-        app = Starlette()
-        app.add_middleware(
-            CorrelationMiddleware,
-            primary_header="x-request-id",
-            auto_trace_headers=True,
-        )
-        ```
+        1. Extracts correlation ID from configurable headers
+        2. Sets it in the CorrelationContext for async/sync access
+        3. Stores it in request.state.correlation_id
+        4. Adds X-Correlation-ID header to the response
+        5. Cleans up the context on request completion
     """
 
     def __init__(
@@ -258,7 +243,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
 
         Args:
             app: Starlette application instance.
-            framework: Framework name to include in attributes (e.g. "starlette", "fastapi").
+            framework: Framework name to include in attributes.
         """
         super().__init__(app)
         self._framework = framework

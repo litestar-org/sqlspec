@@ -6,9 +6,9 @@ optimize polling queries that filter by channel and status.
 
 Configuration:
     extension_config={
-        "events": {
-            "queue_table": "my_events"  # Default: "sqlspec_event_queue"
-        }
+    "events": {
+    "queue_table": "my_events" # Default: "sqlspec_event_queue"
+    }
     }
 """
 
@@ -26,28 +26,6 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
     Args:
         config: BigQueryConfig with extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-
-        BigQuery-specific optimizations:
-        - Uses STRING instead of VARCHAR (BigQuery's native string type)
-        - Uses INT64 instead of INTEGER
-        - Uses CLUSTER BY instead of CREATE INDEX
-        - Supports IF NOT EXISTS / IF EXISTS in DDL
-
-    Example:
-        from sqlspec.adapters.bigquery import BigQueryConfig
-        from sqlspec.adapters.bigquery.events import BigQueryEventQueueStore
-
-        config = BigQueryConfig(
-            connection_config={"project": "my-project"},
-            extension_config={"events": {"queue_table": "my_events"}}
-        )
-        store = BigQueryEventQueueStore(config)
-        for stmt in store.create_statements():
-            driver.execute_script(stmt)
     """
 
     __slots__ = ()
@@ -120,10 +98,6 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
         Returns:
             List containing single CREATE TABLE statement.
-
-        Notes:
-            BigQuery uses CLUSTER BY instead of separate index creation,
-            so only one statement is returned.
         """
         return [self._build_create_table_sql()]
 
@@ -132,8 +106,5 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
         Returns:
             List containing single DROP TABLE statement.
-
-        Notes:
-            BigQuery has no index to drop, only the table.
         """
         return [f"DROP TABLE IF EXISTS {self.table_name}"]

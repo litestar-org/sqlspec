@@ -32,12 +32,6 @@ class PyMysqlADKStore(BaseAsyncADKStore["PyMysqlConfig"]):
     - Atomic event-create + state-update in one transaction
     - Microsecond-precision timestamps
     - Foreign key constraints with cascade delete
-
-    Notes:
-        - MySQL JSON type used - requires MySQL 5.7.8+
-        - TIMESTAMP(6) provides microsecond precision
-        - InnoDB engine required for foreign key support
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()

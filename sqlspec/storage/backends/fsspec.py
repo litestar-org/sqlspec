@@ -44,14 +44,9 @@ class FSSpecBackend:
             uri: Filesystem URI (protocol://path).
             **kwargs: Additional fsspec configuration options, including an optional base_path.
 
-        For cloud URIs (S3/GS/Azure) and file:// URIs, we derive a default base_path from the
-        URI path when no explicit base_path is provided. When both URI and base_path are provided,
-        they are combined (base_path is appended to URI-derived path).
-
-        Examples:
-            - FSSpecBackend("s3://bucket/prefix") -> base_path = "bucket/prefix"
-            - FSSpecBackend("file:///home/user/storage") -> base_path = "/home/user/storage"
-            - FSSpecBackend("file:///home/user", base_path="subdir") -> base_path = "/home/user/subdir"
+            For cloud URIs (S3/GS/Azure) and file:// URIs, we derive a default base_path from the
+                URI path when no explicit base_path is provided. When both URI and base_path are provided,
+                they are combined (base_path is appended to URI-derived path).
         """
         ensure_fsspec()
         import fsspec

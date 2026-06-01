@@ -97,64 +97,64 @@ class AsyncpgDriverFeatures(TypedDict):
     """AsyncPG driver feature flags.
 
     json_serializer: Custom JSON serializer function for PostgreSQL JSON/JSONB types.
-        Defaults to sqlspec.utils.serializers.to_json.
-        Use for performance optimization (e.g., orjson) or custom encoding behavior.
-        Applied when enable_json_codecs is True.
+     Defaults to sqlspec.utils.serializers.to_json.
+     Use for performance optimization or custom encoding behavior.
+     Applied when enable_json_codecs is True.
     json_deserializer: Custom JSON deserializer function for PostgreSQL JSON/JSONB types.
-        Defaults to sqlspec.utils.serializers.from_json.
-        Use for performance optimization (e.g., orjson) or custom decoding behavior.
-        Applied when enable_json_codecs is True.
+     Defaults to sqlspec.utils.serializers.from_json.
+     Use for performance optimization or custom decoding behavior.
+     Applied when enable_json_codecs is True.
     enable_json_codecs: Enable automatic JSON/JSONB codec registration on connections.
-        Defaults to True for seamless Python dict/list to PostgreSQL JSON/JSONB conversion.
-        Set to False to disable automatic codec registration (manual handling required).
+     Defaults to True for seamless Python dict/list to PostgreSQL JSON/JSONB conversion.
+     Set to False to disable automatic codec registration (manual handling required).
     enable_pgvector: Enable pgvector extension support for vector similarity search.
-        Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
-        Defaults to True when pgvector-python is installed.
-        Provides automatic conversion between Python objects and PostgreSQL vector types.
-        Enables vector similarity operations and index support.
+     Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
+     Defaults to True when pgvector-python is installed.
+     Provides automatic conversion between Python objects and PostgreSQL vector types.
+     Enables vector similarity operations and index support.
     enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-        When enabled and the pg_search extension is detected, the SQL dialect
-        switches to "paradedb" which supports search operators (@@@, &&&, etc.)
-        and inherits all pgvector distance operators.
-        Defaults to True. Independent of enable_pgvector.
+     When enabled and the pg_search extension is detected, the SQL dialect
+     switches to "paradedb" which supports search operators (@@@, &&&, etc.)
+     and inherits all pgvector distance operators.
+     Defaults to True. Independent of enable_pgvector.
     enable_cloud_sql: Enable Google Cloud SQL connector integration.
-        Requires cloud-sql-python-connector package.
-        Defaults to False (explicit opt-in required).
-        Auto-configures IAM authentication, SSL, and IP routing.
-        Mutually exclusive with enable_alloydb.
+     Requires cloud-sql-python-connector package.
+     Defaults to False (explicit opt-in required).
+     Auto-configures IAM authentication, SSL, and IP routing.
+     Mutually exclusive with enable_alloydb.
     cloud_sql_instance: Cloud SQL instance connection name.
-        Format: "project:region:instance"
-        Required when enable_cloud_sql is True.
+     Format: "project:region:instance"
+     Required when enable_cloud_sql is True.
     cloud_sql_enable_iam_auth: Enable IAM database authentication.
-        Defaults to False for passwordless authentication.
-        When False, requires user/password in connection_config.
+     Defaults to False for passwordless authentication.
+     When False, requires user/password in connection_config.
     cloud_sql_ip_type: IP address type for connection.
-        Options: "PUBLIC", "PRIVATE", "PSC"
-        Defaults to "PRIVATE".
+     Options: "PUBLIC", "PRIVATE", "PSC"
+     Defaults to "PRIVATE".
     enable_alloydb: Enable Google AlloyDB connector integration.
-        Requires cloud-alloydb-python-connector package.
-        Defaults to False (explicit opt-in required).
-        Auto-configures IAM authentication and private networking.
-        Mutually exclusive with enable_cloud_sql.
+     Requires cloud-alloydb-python-connector package.
+     Defaults to False (explicit opt-in required).
+     Auto-configures IAM authentication and private networking.
+     Mutually exclusive with enable_cloud_sql.
     alloydb_instance_uri: AlloyDB instance URI.
-        Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
-        Required when enable_alloydb is True.
+     Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
+     Required when enable_alloydb is True.
     enable_alloydb_iam_auth: Enable IAM database authentication.
-        Defaults to False for passwordless authentication.
+     Defaults to False for passwordless authentication.
     alloydb_ip_type: IP address type for connection.
-        Options: "PUBLIC", "PRIVATE", "PSC"
-        Defaults to "PRIVATE".
+     Options: "PUBLIC", "PRIVATE", "PSC"
+     Defaults to "PRIVATE".
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
-        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-        Requires extension_config["events"] for migration setup when using table_queue backend.
+     Defaults to True when extension_config["events"] is configured.
+     Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+     Requires extension_config["events"] for migration setup when using table_queue backend.
     events_backend: Event channel backend selection.
-        Options: "listen_notify", "table_queue", "listen_notify_durable"
-        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time)
-        - "table_queue": Durable table-backed queue with retries and exactly-once delivery
-        - "listen_notify_durable": Hybrid - combines real-time LISTEN/NOTIFY with table durability (recommended for production)
-        Defaults to "listen_notify" for backward compatibility.
-        Note: "listen_notify_durable" provides best of both worlds - <100ms latency with full durability.
+     Options: "listen_notify", "table_queue", "listen_notify_durable"
+     - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time)
+     - "table_queue": Durable table-backed queue with retries and exactly-once delivery
+     - "listen_notify_durable": Hybrid - combines real-time LISTEN/NOTIFY with table durability (recommended for production)
+     Defaults to "listen_notify" for backward compatibility.
+     Note: "listen_notify_durable" provides best of both worlds - <100ms latency with full durability.
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -246,16 +246,7 @@ class AsyncpgConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
-    """Configuration for AsyncPG database connections using TypedDict.
-
-    Example::
-
-        config = AsyncpgConfig(
-            connection_config=AsyncpgPoolConfig(
-                dsn="postgresql://user:pass@localhost/db"
-            )
-        )
-    """
+    """Configuration for AsyncPG database connections using TypedDict."""
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
     connection_type: "ClassVar[type[AsyncpgConnection]]" = AsyncpgConnection  # type: ignore[assignment]
@@ -292,7 +283,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             statement_config: Statement configuration override
             driver_features: Driver features configuration (TypedDict or dict)
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """

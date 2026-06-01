@@ -40,7 +40,6 @@ def parse_statement_safely(statement: "Statement", dialect: "DialectType | None"
 
     Returns:
         Parsed expression.
-
     """
     try:
         sql_string = str(statement)
@@ -59,7 +58,6 @@ def generate_sql_safely(expression: "exp.Expr", dialect: "DialectType | None", p
 
     Returns:
         Generated SQL string.
-
     """
     try:
         return expression.sql(dialect=dialect, pretty=pretty)
@@ -83,18 +81,6 @@ def convert_to_dialect(
 
     Returns:
         SQL string in target dialect.
-
-    Note:
-        Callers should prefer passing an SQL object with ``.expression`` already
-        set rather than a raw string to avoid redundant ``sqlglot.parse_one``
-        invocations. When an SQL object is provided, the already-parsed
-        ``.expression`` is used directly with no re-parse overhead.
-
-        For raw strings, each call invokes ``sqlglot.parse_one`` unconditionally.
-        There is no per-call parse cache. This function is a public utility
-        helper, not part of the internal query-execution hot path, so raw-string
-        callers accept the parse cost.
-
     """
     parsed_expression: exp.Expr
 
@@ -118,7 +104,6 @@ def raise_statement_parse_error() -> "NoReturn":
 
     Raises:
         SQLConversionError: Always raised.
-
     """
     msg = "Statement could not be parsed"
     raise SQLConversionError(msg)
@@ -132,7 +117,6 @@ def raise_parse_error(e: Exception) -> "NoReturn":
 
     Raises:
         SQLConversionError: Always raised.
-
     """
     error_msg = f"Failed to parse SQL statement: {e!s}"
     raise SQLConversionError(error_msg) from e
@@ -147,7 +131,6 @@ def raise_conversion_error(dialect: "DialectType | None", e: Exception) -> "NoRe
 
     Raises:
         SQLConversionError: Always raised.
-
     """
     error_msg = f"Failed to convert SQL expression to {dialect}: {e!s}"
     raise SQLConversionError(error_msg) from e

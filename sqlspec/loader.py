@@ -261,9 +261,6 @@ class SQLFileLoader:
         Raises:
             SQLFileNotFoundError: If file does not exist.
             SQLFileParseError: If file cannot be read or parsed.
-
-        Notes:
-            File:// URIs are normalized before delegation to the backend, including trimming Windows-style leading slashes so filenames resolve correctly.
         """
         path_str = str(path)
 
@@ -329,7 +326,7 @@ class SQLFileLoader:
 
         Raises:
             SQLFileParseError: If named statements are malformed (duplicate names or
-                              invalid content after parsing).
+                invalid content after parsing).
         """
         statements: dict[str, NamedStatement] = {}
 
@@ -690,7 +687,7 @@ class SQLFileLoader:
 
         Args:
             name: Name of the statement (from -- name: in SQL file).
-                  Hyphens in names are converted to underscores.
+                Hyphens in names are converted to underscores.
 
         Returns:
             SQL object ready for execution.

@@ -236,7 +236,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
         msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
+        raise AssertionError(msg)  # pragma: no cover
 
     def _can_use_execute_many_thin_path(
         self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"

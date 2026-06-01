@@ -104,7 +104,7 @@ class SpanManager:
                 status = self._status_cls(self._status_code_cls.ERROR, str(error))
                 span.set_status(status)
             span.end()
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except Exception as exc:  # pragma: no cover
             logger.debug("Failed to finish span: %s", exc)
 
     def _start_span(self, name: str, attributes: dict[str, Any]) -> Any:
@@ -149,7 +149,7 @@ class SpanManager:
         if self._provider_factory is not None:
             try:
                 provider = self._provider_factory()
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except Exception as exc:  # pragma: no cover
                 logger.debug("Tracer provider factory failed: %s", exc)
         if provider and has_tracer_provider(provider):
             self._tracer = provider.get_tracer("sqlspec.observability")

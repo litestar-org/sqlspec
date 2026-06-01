@@ -35,33 +35,6 @@ class SQLSpecPlugin:
 
     Provides middleware-based session management, automatic transaction handling,
     and connection pooling lifecycle management.
-
-    Example:
-        from starlette.applications import Starlette
-        from sqlspec import SQLSpec
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.extensions.starlette import SQLSpecPlugin
-
-        sqlspec = SQLSpec()
-        sqlspec.add_config(AsyncpgConfig(
-            bind_key="default",
-            connection_config={"dsn": "postgresql://localhost/mydb"},
-            extension_config={
-                "starlette": {
-                    "commit_mode": "autocommit",
-                    "session_key": "db"
-                }
-            }
-        ))
-
-        app = Starlette()
-        db_ext = SQLSpecPlugin(sqlspec, app)
-
-        @app.route("/users")
-        async def list_users(request):
-            db = db_ext.get_session(request)
-            result = await db.execute("SELECT * FROM users")
-            return JSONResponse({"users": result.all()})
     """
 
     __slots__ = ("_config_states", "_correlation_middleware_added", "_sqlcommenter_middleware_added", "_sqlspec")

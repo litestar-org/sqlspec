@@ -45,7 +45,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             SQLite version information or None if detection fails.
-
         """
         driver_id = id(driver)
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
@@ -79,7 +78,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         version_info = self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
@@ -93,7 +91,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             SQLite-specific type name.
-
         """
         config = get_dialect_config(type(self).dialect)
         version_info = self.get_version(driver)

@@ -151,7 +151,7 @@ def await_(
     Args:
         async_function: The async function to convert.
         raise_sync_error: If True, raises RuntimeError when no loop exists.
-                         If False (default), uses portal pattern for automatic bridging.
+            If False (default), uses portal pattern for automatic bridging.
 
     Returns:
         A blocking function that runs the async function.

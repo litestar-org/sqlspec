@@ -1,7 +1,7 @@
 """Shared query modification utilities for SQL and builder classes.
 
 This module provides pure functions for building SQL expressions that can be
-used by both the immutable SQL class and the mutable builder classes. All
+shared by both the immutable SQL class and the mutable builder classes. All
 functions are designed to be mypyc-compatible with no dynamic dispatch.
 
 The utilities are organized in layers:
@@ -9,17 +9,6 @@ The utilities are organized in layers:
     - Condition builders: Create parameterized WHERE conditions
     - Expression modifiers: Apply WHERE, LIMIT, OFFSET to expressions
     - CTE utilities: Safe CTE extraction and reattachment
-
-Example:
-    >>> from sqlspec.core.query_modifiers import (
-    ...     expr_eq,
-    ...     create_condition,
-    ...     apply_where,
-    ... )
-    >>> condition = create_condition(
-    ...     "status", "status_param", expr_eq
-    ... )
-    >>> modified = apply_where(select_expr, condition)
 """
 
 from collections.abc import Callable
@@ -458,9 +447,9 @@ def apply_column_pruning(
     needed by outer queries.
 
     This optimization can improve query performance by:
-    - Reducing I/O by selecting fewer columns from disk
-    - Reducing network transfer when fetching results
-    - Enabling better query plans in some databases
+        - Reducing I/O by selecting fewer columns from disk
+        - Reducing network transfer when fetching results
+        - Enabling better query plans in some databases
 
     Args:
         expression: Base expression (must be SELECT)
@@ -469,13 +458,6 @@ def apply_column_pruning(
 
     Returns:
         Optimized expression with unused columns removed from subqueries
-
-    Example:
-        Before pruning:
-            SELECT id, name FROM (SELECT id, name, email, created_at FROM users)
-
-        After pruning:
-            SELECT id, name FROM (SELECT id, name FROM users)
     """
     from sqlglot.optimizer import pushdown_projections as pushdown_projections_module
     from sqlglot.optimizer import qualify as qualify_module

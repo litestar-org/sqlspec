@@ -153,7 +153,7 @@ def _get_git_config(config_key: str) -> str | None:
     """Retrieve git configuration value.
 
     Args:
-        config_key: Git config key (e.g., 'user.name', 'user.email').
+        config_key: Git config key.
 
     Returns:
         Configuration value if found, None otherwise.
@@ -218,7 +218,7 @@ def _resolve_author_callable(import_path: str, config: "DatabaseConfigProtocol[A
         _raise_callable_error("Author callable must accept zero or one positional argument")
     try:
         result_value: object = candidate() if param_count == 0 else candidate(config)
-    except Exception as exc:  # pragma: no cover - passthrough
+    except Exception as exc:  # pragma: no cover
         msg = f"Author callable '{import_path}' raised an error: {exc}"
         raise TemplateValidationError(msg) from exc
     result_str: str = str(result_value)

@@ -45,7 +45,7 @@ def parse_version_range(range_str: str) -> tuple[str, str]:
             start = parts[0].strip().zfill(4)
             end = parts[1].strip().zfill(4)
             return start, end
-    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END (e.g., 1:7)"
+    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END"
     raise ValueError(msg)
 
 
@@ -62,7 +62,6 @@ def group_migrations_by_type(migrations: list[tuple[str, Path]]) -> list[tuple[s
     Returns:
         List of (type, migrations) tuples where type is "sql" or "py"
         and migrations is the list of (version, path) for that group.
-
     """
     if not migrations:
         return []

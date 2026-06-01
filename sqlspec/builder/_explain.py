@@ -108,8 +108,8 @@ def build_mysql_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build MySQL EXPLAIN statement.
 
     MySQL uses:
-    - EXPLAIN [FORMAT = TRADITIONAL|JSON|TREE] statement
-    - EXPLAIN ANALYZE statement (always TREE format)
+        - EXPLAIN [FORMAT = TRADITIONAL|JSON|TREE] statement
+        - EXPLAIN ANALYZE statement (always TREE format)
 
     Args:
         statement_sql: The SQL statement to explain
@@ -154,9 +154,9 @@ def build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build DuckDB EXPLAIN statement.
 
     DuckDB supports:
-    - EXPLAIN statement
-    - EXPLAIN ANALYZE statement
-    - EXPLAIN (FORMAT JSON) statement
+        - EXPLAIN statement
+        - EXPLAIN ANALYZE statement
+        - EXPLAIN (FORMAT JSON) statement
 
     Args:
         statement_sql: The SQL statement to explain
@@ -178,8 +178,8 @@ def build_oracle_explain(statement_sql: str, options: "ExplainOptions") -> str:
     """Build Oracle EXPLAIN statement.
 
     Oracle requires a two-step process:
-    1. EXPLAIN PLAN FOR statement
-    2. SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())
+        1. EXPLAIN PLAN FOR statement
+        2. SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())
 
     This function returns only the first step. The driver must handle
     executing both statements.
@@ -198,8 +198,8 @@ def build_bigquery_explain(statement_sql: str, options: "ExplainOptions") -> str
     """Build BigQuery EXPLAIN statement.
 
     BigQuery supports:
-    - EXPLAIN statement
-    - EXPLAIN ANALYZE statement (incurs query execution costs!)
+        - EXPLAIN statement
+        - EXPLAIN ANALYZE statement (incurs query execution costs!)
 
     Args:
         statement_sql: The SQL statement to explain
@@ -264,27 +264,6 @@ class Explain:
 
     Provides a fluent API for constructing EXPLAIN statements with
     various options that are translated to dialect-specific syntax.
-
-    Examples:
-        Basic usage:
-            explain = Explain("SELECT * FROM users").build()
-
-        With options:
-            explain = (
-                Explain("SELECT * FROM users", dialect="postgres")
-                .analyze()
-                .format("json")
-                .buffers()
-                .build()
-            )
-
-        From QueryBuilder:
-            explain = (
-                Explain(select_builder, dialect="postgres")
-                .analyze()
-                .verbose()
-                .build()
-            )
     """
 
     __slots__ = ("_dialect", "_options", "_parameters", "_statement_sql")
@@ -545,13 +524,6 @@ class ExplainMixin:
 
     This mixin can be added to any QueryBuilder subclass to provide
     EXPLAIN plan functionality.
-
-    Examples:
-        class Select(QueryBuilder, ExplainMixin):
-            pass
-
-        query = Select().select("*").from_("users")
-        explain = query.explain().analyze().format("json").build()
     """
 
     __slots__ = ()

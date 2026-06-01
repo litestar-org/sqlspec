@@ -39,18 +39,10 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
+    in each adapter directory.
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - memory_table: Memory table name (default: "adk_memory_entries")
-        - memory_use_fts: Enable full-text search when supported (default: False)
-        - memory_max_results: Max search results (default: 20)
-        - owner_id_column: Optional owner FK column DDL (default: None)
-        - enable_memory: Whether memory is enabled (default: True)
     """
 
     __slots__ = (
@@ -68,14 +60,6 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads configuration from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         self._config = config
         store_config = self._get_store_config_from_extension()
@@ -312,18 +296,10 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/store.py).
+    in each adapter directory.
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - memory_table: Memory table name (default: "adk_memory_entries")
-        - memory_use_fts: Enable full-text search when supported (default: False)
-        - memory_max_results: Max search results (default: 20)
-        - owner_id_column: Optional owner FK column DDL (default: None)
-        - enable_memory: Whether memory is enabled (default: True)
     """
 
     __slots__ = (
@@ -341,14 +317,6 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads configuration from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         self._config = config
         store_config = self._get_store_config_from_extension()

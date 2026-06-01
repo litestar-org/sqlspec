@@ -84,7 +84,7 @@ __all__ = (
 
 @runtime_checkable
 class ReadableProtocol(Protocol):
-    """Protocol for objects that have a read method (e.g., LOBs)."""
+    """Protocol for objects that have a read method."""
 
     def read(self, size: "int | None" = None) -> "bytes | str":
         """Read content from the object."""
@@ -398,7 +398,7 @@ class MappingLikeProtocol(Protocol):
 
 @runtime_checkable
 class HasAsDictProtocol(Protocol):
-    """Protocol for objects with _asdict() method (e.g., NamedTuple).
+    """Protocol for objects with _asdict() method.
 
     Used for row types that don't support dict() constructor directly
     but can be converted via _asdict() method.
