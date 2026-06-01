@@ -20,6 +20,7 @@ from sqlspec.core.parameters._types import (
     ParameterStyle,
 )
 from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.utils.deprecation import warn_deprecation
 from sqlspec.utils.type_guards import get_value_attribute
 
 __all__ = (
@@ -29,6 +30,8 @@ __all__ = (
     "replace_placeholders_with_literals",
 )
 
+# Flyweight validator used exclusively by the deprecated no-profile fallback
+# path. Callers that pass validator= bypass this singleton.
 _AST_TRANSFORMER_VALIDATOR: "ParameterValidator" = ParameterValidator()
 
 
@@ -226,6 +229,17 @@ def replace_null_parameters_with_literals(
     validator_instance = validator or _AST_TRANSFORMER_VALIDATOR
     profile = parameter_profile
     if profile is None:
+        warn_deprecation(
+            "0.49",
+            "replace_null_parameters_with_literals",
+            "function",
+            info=(
+                "Calling replace_null_parameters_with_literals without parameter_profile triggers a "
+                "round-trip AST serialization. Pass parameter_profile for efficiency. This fallback will "
+                "be removed in a future version."
+            ),
+            stacklevel=3,
+        )
         parameter_info = validator_instance.extract_parameters(expression.sql(dialect=dialect))
         profile = ParameterProfile(parameter_info)
     validate_parameter_alignment(profile, parameters)

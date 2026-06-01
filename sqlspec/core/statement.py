@@ -319,8 +319,7 @@ class SQL:
             if isinstance(statement, str):
                 self._raw_sql = statement
             else:
-                dialect = self._dialect
-                self._raw_sql = statement.sql(dialect=str(dialect) if dialect else None)
+                self._raw_sql = ""
                 self._raw_expression = statement
 
             self._is_many = is_many if is_many is not None else self._should_auto_detect_many(parameters)
@@ -348,7 +347,7 @@ class SQL:
         return (
             _rebuild_sql,
             (
-                self._raw_sql,
+                self._get_raw_sql(),
                 self._original_parameters,
                 tuple(self._filters),
                 self._statement_config,
@@ -392,6 +391,13 @@ class SQL:
         if isinstance(dialect, str):
             return dialect
         return dialect.__class__.__name__.lower()
+
+    def _get_raw_sql(self) -> str:
+        """Return raw SQL, materializing deferred expression SQL when needed."""
+        if self._raw_sql == "" and self._raw_expression is not None:
+            dialect = self._dialect
+            self._raw_sql = self._raw_expression.sql(dialect=str(dialect) if dialect else None)
+        return self._raw_sql
 
     def _init_from_sql_object(self, sql_obj: "SQL") -> None:
         """Initialize instance attributes from existing SQL object.
@@ -505,7 +511,7 @@ class SQL:
     @property
     def sql(self) -> str:
         """Get the raw SQL string."""
-        return self._raw_sql
+        return self._get_raw_sql()
 
     @property
     def raw_sql(self) -> str:
@@ -514,7 +520,7 @@ class SQL:
         Returns:
             The raw SQL string
         """
-        return self._raw_sql
+        return self._get_raw_sql()
 
     @property
     def parameters(self) -> Any:
@@ -698,7 +704,7 @@ class SQL:
         if self._processed_state is Empty:
             try:
                 config = self._statement_config
-                raw_sql = self._raw_sql
+                raw_sql = self._get_raw_sql()
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
                 param_fingerprint = structural_fingerprint(params, is_many=is_many)
@@ -888,7 +894,7 @@ class SQL:
         logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
         params = self._named_parameters or self._positional_parameters
         return self._build_processed_state(
-            compiled_sql=self._raw_sql,
+            compiled_sql=self._get_raw_sql(),
             execution_parameters=self._named_parameters or self._positional_parameters,
             parsed_expression=None,
             operation_type="COMMAND",
@@ -1555,11 +1561,16 @@ class SQL:
             self._statement_config.parameter_validator
         )
         raw_params = self.parameters
+        raw_sql_for_builder = self._get_raw_sql()
         converted_sql, converted_params = converter.convert_placeholder_style(
-            self._raw_sql, raw_params, ParameterStyle.NAMED_COLON, is_many=False
+            raw_sql_for_builder, raw_params, ParameterStyle.NAMED_COLON, is_many=False
         )
 
-        if self._raw_expression is not None and converted_sql == self._raw_sql and (builder_dialect == self._dialect):
+        if (
+            self._raw_expression is not None
+            and converted_sql == raw_sql_for_builder
+            and (builder_dialect == self._dialect)
+        ):
             expression = self._raw_expression.copy()
         else:
             try:
@@ -1628,7 +1639,7 @@ class SQL:
         if self._hash is None:
             positional_tuple = tuple(self._positional_parameters)
             named_tuple = tuple(sorted(self._named_parameters.items())) if self._named_parameters else ()
-            raw_sql = self._raw_sql
+            raw_sql = self._get_raw_sql()
             is_many = self._is_many
             is_script = self._is_script
             self._hash = hash((raw_sql, positional_tuple, named_tuple, is_many, is_script))
@@ -1639,7 +1650,7 @@ class SQL:
         if not isinstance(other, SQL):
             return False
         return (
-            self._raw_sql == other._raw_sql
+            self._get_raw_sql() == other._get_raw_sql()
             and self._positional_parameters == other._positional_parameters
             and self._named_parameters == other._named_parameters
             and self._is_many == other._is_many
@@ -1662,7 +1673,7 @@ class SQL:
             flags.append("is_script")
         flags_str = f", {', '.join(flags)}" if flags else ""
 
-        return f"SQL({self._raw_sql!r}{params_str}{flags_str})"
+        return f"SQL({self._get_raw_sql()!r}{params_str}{flags_str})"
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

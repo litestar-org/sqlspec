@@ -1028,6 +1028,9 @@ class ParameterProcessor:
 
         if requires_mapping:
             target_style = self._select_execution_style(original_styles, config)
+            mapping_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
+                param_info, target_style
+            )
             processed_sql, processed_parameters = self._converter.convert_placeholder_style(
                 processed_sql,
                 processed_parameters,
@@ -1035,8 +1038,9 @@ class ParameterProcessor:
                 is_many,
                 strict_named_parameters=config.strict_named_parameters,
                 param_info=param_info,
+                precomputed_plan=mapping_plan,
             )
-            param_info = self._converter.convert_parameter_info_style(param_info, target_style)
+            param_info = self._converter.convert_parameter_info_style(param_info, target_style, mapping_plan)
             original_styles = {target_style}
             needs_execution_conversion = False
 
@@ -1160,7 +1164,10 @@ class ParameterProcessor:
             return sql, None, None
 
         target_style = self._select_execution_style(original_styles, config)
-        converted_param_info = self._converter.convert_parameter_info_style(param_info, target_style)
+        execution_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
+            param_info, target_style
+        )
+        converted_param_info = self._converter.convert_parameter_info_style(param_info, target_style, execution_plan)
 
         if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
             processed_sql, _ = self._converter.convert_placeholder_style(
@@ -1170,6 +1177,7 @@ class ParameterProcessor:
                 is_many,
                 strict_named_parameters=config.strict_named_parameters,
                 param_info=param_info,
+                precomputed_plan=execution_plan,
             )
             return processed_sql, parameters, converted_param_info
 
@@ -1180,5 +1188,6 @@ class ParameterProcessor:
             is_many,
             strict_named_parameters=config.strict_named_parameters,
             param_info=param_info,
+            precomputed_plan=execution_plan,
         )
         return processed_sql, processed_parameters, converted_param_info

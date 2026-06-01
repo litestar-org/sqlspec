@@ -613,6 +613,96 @@ def test_statement_transformer_updates_operation_type(basic_statement_config: "S
     assert "DELETE" in result.compiled_sql
 
 
+def test_parameter_casts_detected_with_statement_transformer() -> None:
+    """Parameter casts are detected from the final transformed AST."""
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+    )
+
+    def rename_table(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
+        updated = expression.transform(lambda node: exp.to_table("accounts") if isinstance(node, exp.Table) else node)
+        return updated, parameters
+
+    config = StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_caching=True,
+        enable_parsing=True,
+        enable_validation=False,
+        statement_transformers=(rename_table,),
+    )
+    processor = SQLProcessor(config)
+
+    result = processor.compile("SELECT $1::text FROM users", [1])
+
+    assert result.parameter_casts == {1: "TEXT"}
+    assert "accounts" in result.compiled_sql
+
+
+def test_parse_cache_entry_does_not_store_parameter_casts() -> None:
+    """Parse cache entries should store expression, operation, and profile only."""
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+    )
+    config = StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_caching=True,
+        enable_parsing=True,
+        enable_validation=False,
+    )
+    processor = SQLProcessor(config)
+
+    processor.compile("SELECT $1::text FROM users", [1])
+    cache_entry = next(iter(processor._parse_cache.values()))
+
+    assert len(cache_entry) == 3
+
+
+@requires_interpreted
+def test_detect_parameter_casts_called_exactly_once_with_transformer() -> None:
+    """Transformers should not trigger duplicate parameter-cast AST walks."""
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+    )
+
+    def pass_through(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
+        return expression, parameters
+
+    config = StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_caching=False,
+        enable_parsing=True,
+        enable_validation=False,
+        statement_transformers=(pass_through,),
+    )
+
+    class CountingSQLProcessor(SQLProcessor):
+        def __init__(self, statement_config: "StatementConfig") -> None:
+            super().__init__(statement_config)
+            self.detect_parameter_casts_calls = 0
+
+        def _detect_parameter_casts(self, expression: "exp.Expr | None") -> "dict[int, str]":
+            self.detect_parameter_casts_calls += 1
+            return super()._detect_parameter_casts(expression)
+
+    processor = CountingSQLProcessor(config)
+
+    processor.compile("SELECT $1::text FROM users", [1])
+
+    assert processor.detect_parameter_casts_calls == 1
+
+
 def test_parsing_enabled_optimization(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:

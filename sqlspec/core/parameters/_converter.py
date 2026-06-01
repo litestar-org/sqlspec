@@ -129,6 +129,7 @@ class ParameterConverter:
         *,
         strict_named_parameters: bool = True,
         param_info: "list[ParameterInfo] | None" = None,
+        precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
     ) -> "tuple[str, ConvertedParameters]":
         extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
 
@@ -148,7 +149,7 @@ class ParameterConverter:
             )
             return sql, converted_parameters
 
-        converted_sql = self._convert_placeholders_to_style(sql, extracted_param_info, target_style)
+        converted_sql = self._convert_placeholders_to_style(sql, extracted_param_info, target_style, precomputed_plan)
         converted_parameters = self._convert_parameter_format(
             parameters,
             extracted_param_info,
@@ -174,14 +175,21 @@ class ParameterConverter:
         return ordered_params, unique_params
 
     def _convert_placeholders_to_style(
-        self, sql: str, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
+        self,
+        sql: str,
+        param_info: "list[ParameterInfo]",
+        target_style: "ParameterStyle",
+        precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
     ) -> str:
         generator = self._placeholder_generators.get(target_style)
         if generator is None:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        ordered_params, unique_params = self._build_conversion_plan(param_info, target_style)
+        if precomputed_plan is not None:
+            ordered_params, unique_params = precomputed_plan
+        else:
+            ordered_params, unique_params = self._build_conversion_plan(param_info, target_style)
 
         placeholder_text_len_cache: dict[str, int] = {}
         # Build SQL using forward iteration with list join (O(n) vs O(n^2) string slicing)
@@ -214,14 +222,20 @@ class ParameterConverter:
         return "".join(segments)
 
     def convert_parameter_info_style(
-        self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
+        self,
+        param_info: "list[ParameterInfo]",
+        target_style: "ParameterStyle",
+        precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
     ) -> "list[ParameterInfo]":
         generator = self._placeholder_generators.get(target_style)
         if generator is None:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        ordered_params, unique_params = self._build_conversion_plan(param_info, target_style)
+        if precomputed_plan is not None:
+            ordered_params, unique_params = precomputed_plan
+        else:
+            ordered_params, unique_params = self._build_conversion_plan(param_info, target_style)
         is_positional_style = _is_positional_style(target_style)
         converted_param_info: list[ParameterInfo] = []
         delta = 0

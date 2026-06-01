@@ -107,7 +107,7 @@ COPY_FROM_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM")
 
 COPY_TO_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY_TO",)
 
-ParseCacheEntry = tuple[exp.Expr | None, OperationType, dict[int, str], tuple[bool, bool]]
+ParseCacheEntry = tuple[exp.Expr | None, OperationType, tuple[bool, bool]]
 
 
 def is_copy_operation(operation_type: "OperationType") -> bool:
@@ -366,9 +366,7 @@ class SQLProcessor:
         )
         self._cache_hits = 0
         self._cache_misses = 0
-        self._parse_cache: OrderedDict[
-            Any, tuple[exp.Expr | None, OperationType, dict[int, str], tuple[bool, bool]]
-        ] = OrderedDict()
+        self._parse_cache: OrderedDict[Any, tuple[exp.Expr | None, OperationType, tuple[bool, bool]]] = OrderedDict()
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
         self._last_cache_key: Any | None = None
@@ -519,7 +517,7 @@ class SQLProcessor:
 
     def _parse_expression_uncached(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
-    ) -> "tuple[exp.Expr | None, OperationType, dict[int, str], OperationProfile]":
+    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
         """Parse SQL into an expression without cache.
 
         Args:
@@ -536,19 +534,17 @@ class SQLProcessor:
             else:
                 expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
         except ParseError:
-            return None, "COMMAND", {}, OperationProfile.empty()
+            return None, "COMMAND", OperationProfile.empty()
         else:
             operation_type = self._detect_operation_type(expression)
-            parameter_casts = self._detect_parameter_casts(expression)
             operation_profile = self._build_operation_profile(expression, operation_type)
-            return expression, operation_type, parameter_casts, operation_profile
+            return expression, operation_type, operation_profile
 
     def _store_parse_cache(
         self,
         parse_cache_key: Any,
         expression: "exp.Expr | None",
         operation_type: "OperationType",
-        parameter_casts: "dict[int, str]",
         operation_profile: "OperationProfile",
     ) -> None:
         """Store parsed expression details in cache.
@@ -557,7 +553,6 @@ class SQLProcessor:
             parse_cache_key: Cache key for the parsed SQL.
             expression: Parsed SQLGlot expression.
             operation_type: Detected operation type.
-            parameter_casts: Parameter cast mappings.
             operation_profile: Operation metadata.
         """
         if len(self._parse_cache) >= self._parse_cache_max_size:
@@ -567,13 +562,12 @@ class SQLProcessor:
         self._parse_cache[parse_cache_key] = (
             expression,
             operation_type,
-            parameter_casts,
             (operation_profile.returns_rows, operation_profile.modifies_rows),
         )
 
     def _unpack_parse_cache_entry(
         self, parse_cache_entry: "ParseCacheEntry"
-    ) -> "tuple[exp.Expr | None, OperationType, dict[int, str], OperationProfile]":
+    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
         """Expand cached parse results into runtime objects.
 
         Args:
@@ -582,17 +576,16 @@ class SQLProcessor:
         Returns:
             Parsed expression metadata.
         """
-        cached_expression, cached_operation, cached_casts, cached_profile = parse_cache_entry
+        cached_expression, cached_operation, cached_profile = parse_cache_entry
         # Return expression reference without copying - _apply_ast_transformers will copy
         # if transformers are configured and will modify it. This avoids unnecessary copies
         # when no transformers are active (common case).
         operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
-        # cached_casts is already a dict, no need to copy - it's not mutated by callers
-        return cached_expression, cached_operation, cached_casts, operation_profile
+        return cached_expression, cached_operation, operation_profile
 
     def _resolve_expression(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
-    ) -> "tuple[exp.Expr | None, OperationType, dict[int, str], OperationProfile, Any | None, ParseCacheEntry | None]":
+    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None, ParseCacheEntry | None]":
         """Resolve an SQLGlot expression with caching.
 
         Args:
@@ -613,16 +606,14 @@ class SQLProcessor:
                 self._parse_cache.move_to_end(parse_cache_key)
         if parse_cache_entry is None:
             self._parse_cache_misses += 1
-            expression, operation_type, parameter_casts, operation_profile = self._parse_expression_uncached(
+            expression, operation_type, operation_profile = self._parse_expression_uncached(
                 sqlglot_sql, dialect_str, expression_override
             )
             if parse_cache_key is not None:
-                self._store_parse_cache(parse_cache_key, expression, operation_type, parameter_casts, operation_profile)
+                self._store_parse_cache(parse_cache_key, expression, operation_type, operation_profile)
         else:
-            expression, operation_type, parameter_casts, operation_profile = self._unpack_parse_cache_entry(
-                parse_cache_entry
-            )
-        return expression, operation_type, parameter_casts, operation_profile, parse_cache_key, parse_cache_entry
+            expression, operation_type, operation_profile = self._unpack_parse_cache_entry(parse_cache_entry)
+        return expression, operation_type, operation_profile, parse_cache_key, parse_cache_entry
 
     def _apply_ast_transformers(
         self,
@@ -630,12 +621,11 @@ class SQLProcessor:
         parameters: Any,
         parameter_profile: "ParameterProfile",
         operation_type: "OperationType",
-        parameter_casts: "dict[int, str]",
         operation_profile: "OperationProfile",
         parse_cache_key: "Any | None",
         parse_cache_entry: "ParseCacheEntry | None",
         expression_override: "exp.Expr | None",
-    ) -> "tuple[exp.Expr | None, Any, bool, OperationType, dict[int, str], OperationProfile]":
+    ) -> "tuple[exp.Expr | None, Any, bool, OperationType, OperationProfile]":
         """Apply AST transformers and update metadata.
 
         Args:
@@ -643,7 +633,6 @@ class SQLProcessor:
             parameters: Execution parameters.
             parameter_profile: Parameter profile metadata.
             operation_type: Current operation type.
-            parameter_casts: Current parameter cast mapping.
             operation_profile: Current operation profile.
             parse_cache_key: Parse cache key when used.
             parse_cache_entry: Cached parse entry when available.
@@ -655,7 +644,7 @@ class SQLProcessor:
         statement_transformers = self._config.statement_transformers
         ast_transformer = self._config.parameter_config.ast_transformer
         if expression is None or (not statement_transformers and not ast_transformer):
-            return expression, parameters, False, operation_type, parameter_casts, operation_profile
+            return expression, parameters, False, operation_type, operation_profile
 
         # Must copy the expression before transformers modify it to avoid corrupting:
         # 1. Cache entries (for both cache hits and misses that will be cached)
@@ -679,12 +668,11 @@ class SQLProcessor:
             ast_was_transformed = True
         if ast_was_transformed:
             if expression is None:
-                return expression, parameters, ast_was_transformed, operation_type, parameter_casts, operation_profile
+                return expression, parameters, ast_was_transformed, operation_type, operation_profile
             operation_type = self._detect_operation_type(expression)
-            parameter_casts = self._detect_parameter_casts(expression)
             operation_profile = self._build_operation_profile(expression, operation_type)
 
-        return expression, parameters, ast_was_transformed, operation_type, parameter_casts, operation_profile
+        return expression, parameters, ast_was_transformed, operation_type, operation_profile
 
     def _finalize_compilation(
         self,
@@ -819,27 +807,23 @@ class SQLProcessor:
             parse_cache_entry = None
 
             if self._config.enable_parsing:
-                (expression, operation_type, parameter_casts, operation_profile, parse_cache_key, parse_cache_entry) = (
+                (expression, operation_type, operation_profile, parse_cache_key, parse_cache_entry) = (
                     self._resolve_expression(sqlglot_sql, dialect_str, expression_override)
                 )
-                (
-                    expression,
-                    final_parameters,
-                    ast_was_transformed,
-                    operation_type,
-                    parameter_casts,
-                    operation_profile,
-                ) = self._apply_ast_transformers(
-                    expression,
-                    final_parameters,
-                    parameter_profile,
-                    operation_type,
-                    parameter_casts,
-                    operation_profile,
-                    parse_cache_key,
-                    parse_cache_entry,
-                    expression_override,
+                (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
+                    self._apply_ast_transformers(
+                        expression,
+                        final_parameters,
+                        parameter_profile,
+                        operation_type,
+                        operation_profile,
+                        parse_cache_key,
+                        parse_cache_entry,
+                        expression_override,
+                    )
                 )
+                if expression is not None:
+                    parameter_casts = self._detect_parameter_casts(expression)
 
             final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
                 processed_sql,

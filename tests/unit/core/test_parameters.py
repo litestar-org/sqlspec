@@ -10,6 +10,7 @@ Tests the 2-Phase Parameter Conversion System:
 
 import json
 import math
+import warnings
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -26,6 +27,7 @@ from sqlspec.core import (
     ParameterConverter,
     ParameterInfo,
     ParameterProcessor,
+    ParameterProfile,
     ParameterStyle,
     ParameterStyleConfig,
     ParameterValidator,
@@ -38,6 +40,7 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
+from sqlspec.core.parameters import _converter as _converter_module
 
 # Detect whether the core parameters module is mypyc-compiled.
 # When compiled, `patch.object` on C-extension classes is a no-op,
@@ -48,6 +51,7 @@ from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 
 _VALIDATOR_COMPILED = (_validator_module.__file__ or "").endswith((".so", ".pyd"))
+_CONVERTER_COMPILED = (_converter_module.__file__ or "").endswith((".so", ".pyd"))
 
 _ADAPTER_DRIVER_MODULES: "tuple[str, ...]" = (
     "sqlspec.adapters.adbc.driver",
@@ -380,9 +384,10 @@ def test_replace_null_parameters_with_literals_numeric_dialect() -> None:
     """Null parameters should render as literals and shrink parameter list."""
 
     expression = sqlglot.parse_one("INSERT INTO test VALUES ($1, $2)", dialect="postgres")
-    modified_expression, cleaned_params = replace_null_parameters_with_literals(
-        expression, (42, None), dialect="postgres"
-    )
+    with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
+        modified_expression, cleaned_params = replace_null_parameters_with_literals(
+            expression, (42, None), dialect="postgres"
+        )
 
     assert modified_expression.sql(dialect="postgres") == "INSERT INTO test VALUES ($1, NULL)"
     assert cleaned_params == (42,)
@@ -392,9 +397,10 @@ def test_replace_null_parameters_with_literals_named_bigquery() -> None:
     """Named parameters should inline NULL literals and drop None values."""
 
     expression = sqlglot.parse_one("INSERT INTO test VALUES (@id, @desc)", dialect="bigquery")
-    modified_expression, cleaned_params = replace_null_parameters_with_literals(
-        expression, {"id": 1, "desc": None}, dialect="bigquery"
-    )
+    with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
+        modified_expression, cleaned_params = replace_null_parameters_with_literals(
+            expression, {"id": 1, "desc": None}, dialect="bigquery"
+        )
 
     assert modified_expression.sql(dialect="bigquery") == "INSERT INTO test VALUES (@id, NULL)"
     assert cleaned_params == {"id": 1}
@@ -1293,6 +1299,36 @@ def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterP
     assert result.parameters == [19.99]
 
 
+def test_replace_null_parameters_without_profile_emits_deprecation_warning() -> None:
+    """No-profile NULL pruning warns about the fallback AST round trip."""
+    expression = sqlglot.parse_one("SELECT * FROM t WHERE id = $1", dialect="postgres")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        replace_null_parameters_with_literals(expression, (42,), dialect="postgres")
+
+    deprecation_warnings = [warning for warning in caught if issubclass(warning.category, DeprecationWarning)]
+    assert deprecation_warnings
+    assert any(
+        "round-trip" in str(warning.message).lower() or "parameter_profile" in str(warning.message)
+        for warning in deprecation_warnings
+    )
+
+
+def test_replace_null_parameters_with_profile_emits_no_warning() -> None:
+    """Supplying parameter_profile avoids the deprecated fallback path."""
+    validator = ParameterValidator()
+    expression = sqlglot.parse_one("SELECT * FROM t WHERE id = $1", dialect="postgres")
+    profile = ParameterProfile(validator.extract_parameters(expression.sql(dialect="postgres")))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        replace_null_parameters_with_literals(expression, (42,), dialect="postgres", parameter_profile=profile)
+
+    deprecation_warnings = [warning for warning in caught if issubclass(warning.category, DeprecationWarning)]
+    assert not deprecation_warnings
+
+
 def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:
     """ABC-registered coercions should still resolve for builtin sequence payloads."""
     type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}  # type: ignore[dict-item]
@@ -2039,7 +2075,8 @@ def test_converted_parameters_transformers_null_pruning(processor: ParameterProc
     expression = sqlglot.parse_one(sql, dialect="postgres")
 
     # Test null pruning
-    _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
+    with pytest.warns(DeprecationWarning, match="round-trip AST serialization|parameter_profile"):
+        _transformed_expr, transformed_params = replace_null_parameters_with_literals(expression, parameters)
 
     # Should return concrete type - list or tuple
     assert transformed_params is not None
@@ -2637,3 +2674,84 @@ class TestDuplicateNamedParamsCacheHit:
 
         result2 = processor.process(sql, params, config)
         assert len(result2.parameters) == 3, f"Cache hit produced {len(result2.parameters)} params, expected 3"
+
+
+class _CountingParameterConverter(ParameterConverter):
+    """ParameterConverter that records conversion-plan builds for regression tests."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.build_conversion_plan_calls = 0
+
+    def _build_conversion_plan(
+        self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
+    ) -> "tuple[list[ParameterInfo], dict[str, int]]":
+        self.build_conversion_plan_calls += 1
+        return super()._build_conversion_plan(param_info, target_style)  # pyright: ignore[reportPrivateUsage]
+
+
+def _counting_processor() -> "tuple[ParameterProcessor, _CountingParameterConverter]":
+    converter = _CountingParameterConverter()
+    return ParameterProcessor(converter=converter, cache_max_size=0, validator_cache_max_size=0), converter
+
+
+@pytest.mark.skipif(
+    _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
+)
+def test_build_conversion_plan_called_once_in_execution_conversion() -> None:
+    """Execution-style conversion should build one shared conversion plan."""
+    processor, converter = _counting_processor()
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+
+    result = processor.process("SELECT * FROM t WHERE id = :id AND name = :name", {"id": 1, "name": "alice"}, config)
+
+    assert converter.build_conversion_plan_calls == 1
+    assert result.sql == "SELECT * FROM t WHERE id = $1 AND name = $2"
+
+
+@pytest.mark.skipif(
+    _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
+)
+def test_build_conversion_plan_called_once_in_requires_mapping_branch() -> None:
+    """Mapping-normalization pre-processing should build one shared conversion plan."""
+    processor, converter = _counting_processor()
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        default_execution_parameter_style=ParameterStyle.NAMED_PYFORMAT,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NAMED_PYFORMAT},
+    )
+
+    result = processor.process_for_execution(
+        "SELECT * FROM t WHERE id = $1 AND name = $2", {"id": 42, "name": "bob"}, config
+    )
+
+    assert converter.build_conversion_plan_calls == 1
+    assert result.parameters == {"1": 42, "2": "bob"}
+
+
+@pytest.mark.skipif(
+    _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
+)
+def test_build_conversion_plan_called_once_execute_many_preserve_original_params() -> None:
+    """The execute_many preserve-original path should build one shared conversion plan."""
+    processor, converter = _counting_processor()
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        preserve_original_params_for_many=True,
+    )
+    rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+
+    result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
+
+    assert converter.build_conversion_plan_calls == 1
+    assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
+    assert result.parameters is rows

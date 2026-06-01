@@ -15,8 +15,10 @@ Key Test Coverage:
 8. Edge cases - Complex queries, comments, string literals
 """
 
+import copy
 import logging
 import os
+import pickle
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -332,8 +334,80 @@ def test_sql_initialization_with_expression() -> None:
     expr = exp.select("*").from_("users")
     stmt = SQL(expr)
 
-    assert "SELECT" in stmt._raw_sql
-    assert "users" in stmt._raw_sql
+    assert stmt._raw_sql == ""
+    assert stmt._raw_expression is expr
+
+
+def test_lazy_raw_sql_property_materializes_once() -> None:
+    """Accessing raw_sql materializes a deferred expression once."""
+    expr = exp.select("*").from_("users")
+    stmt = SQL(expr)
+
+    raw_sql = stmt.raw_sql
+
+    assert "SELECT" in raw_sql
+    assert "users" in raw_sql
+    assert stmt._raw_sql == raw_sql
+    assert stmt.raw_sql == raw_sql
+
+
+@requires_interpreted
+def test_lazy_raw_sql_chain_defers_expression_serialization() -> None:
+    """Chained expression modifiers defer SQL serialization until raw_sql access."""
+    expr = exp.select("*").from_("users")
+    sql_call_count = 0
+    original_sql = exp.Expression.sql
+
+    def tracking_sql(self: "exp.Expression", *args: Any, **kwargs: Any) -> str:
+        nonlocal sql_call_count
+        sql_call_count += 1
+        return original_sql(self, *args, **kwargs)
+
+    with patch.object(exp.Expression, "sql", tracking_sql):
+        stmt = SQL(expr).where_eq("id", 1).limit(10).offset(5)
+        assert sql_call_count == 0
+
+        materialized = stmt.raw_sql
+        assert sql_call_count == 1
+        assert "LIMIT" in materialized
+        assert "OFFSET" in materialized
+
+        assert stmt.raw_sql == materialized
+        assert sql_call_count == 1
+
+
+def test_lazy_raw_sql_compile_materializes_deferred_expression() -> None:
+    """compile() materializes deferred raw SQL before entering the pipeline."""
+    expr = exp.select("id", "name").from_("products").where("active = 1")
+    stmt = SQL(expr)
+
+    compiled_sql, params = stmt.compile()
+
+    assert "SELECT" in compiled_sql
+    assert "products" in compiled_sql
+    assert params == []
+
+
+def test_lazy_raw_sql_pickle_and_deepcopy_roundtrip() -> None:
+    """Deferred SQL objects materialize correctly for pickle and deepcopy."""
+    stmt = SQL(exp.select("*").from_("items").where("price > 0"))
+
+    restored = pickle.loads(pickle.dumps(stmt))
+    copied = copy.deepcopy(stmt)
+
+    assert restored.raw_sql == stmt.raw_sql
+    assert copied.raw_sql == stmt.raw_sql
+    assert "items" in restored.raw_sql
+
+
+def test_lazy_raw_sql_repr_hash_and_equality_materialize_consistently() -> None:
+    """repr, hash, and equality use materialized raw SQL for deferred expressions."""
+    stmt1 = SQL(exp.select("*").from_("users").where("active = 1"))
+    stmt2 = SQL(exp.select("*").from_("users").where("active = 1"))
+
+    assert stmt1 == stmt2
+    assert hash(stmt1) == hash(stmt2)
+    assert "users" in repr(stmt1)
 
 
 def test_sql_initialization_with_custom_config() -> None:
@@ -962,7 +1036,7 @@ def test_sql_where_method_compatibility() -> None:
 
     assert "WHERE" not in stmt._raw_sql
 
-    assert "WHERE" in where_stmt._raw_sql or "id > 10" in where_stmt._raw_sql
+    assert "WHERE" in where_stmt.raw_sql or "id > 10" in where_stmt.raw_sql
 
 
 def test_sql_where_method_with_expression() -> None:
@@ -974,7 +1048,7 @@ def test_sql_where_method_with_expression() -> None:
 
     assert where_stmt is not stmt
 
-    assert where_stmt._raw_sql != stmt._raw_sql
+    assert where_stmt.raw_sql != stmt.raw_sql
 
 
 def test_sql_order_by_method_compatibility() -> None:
@@ -986,7 +1060,7 @@ def test_sql_order_by_method_compatibility() -> None:
 
     assert "ORDER BY" not in stmt._raw_sql
 
-    assert "ORDER BY" in order_stmt._raw_sql or "id" in order_stmt._raw_sql
+    assert "ORDER BY" in order_stmt.raw_sql or "id" in order_stmt.raw_sql
 
 
 def test_sql_order_by_method_with_expression() -> None:
@@ -997,7 +1071,7 @@ def test_sql_order_by_method_with_expression() -> None:
 
     assert order_stmt is not stmt
 
-    assert order_stmt._raw_sql != stmt._raw_sql
+    assert order_stmt.raw_sql != stmt.raw_sql
 
 
 def test_sql_order_by_method_without_parsing() -> None:
@@ -1007,7 +1081,7 @@ def test_sql_order_by_method_without_parsing() -> None:
 
     order_stmt = stmt.order_by("id DESC")
 
-    assert "ORDER BY" in order_stmt._raw_sql or "DESC" in order_stmt._raw_sql
+    assert "ORDER BY" in order_stmt.raw_sql or "DESC" in order_stmt.raw_sql
 
 
 def test_sql_filters_property_compatibility() -> None:
