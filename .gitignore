@@ -78,3 +78,4 @@ tools/scripts/profiles/*.prof
 .codex
 .mypy_worker*
 data/
+.antigravitycli/
