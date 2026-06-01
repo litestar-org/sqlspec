@@ -17,7 +17,6 @@ Key Test Coverage:
 
 import copy
 import logging
-import os
 import pickle
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -150,7 +149,7 @@ def test_statement_config_driver_required_attributes() -> None:
     assert hasattr(config.parameter_config, "supported_parameter_styles")
     assert hasattr(config.parameter_config, "type_coercion_map")
     assert hasattr(config.parameter_config, "output_transformer")
-    assert callable(config.parameter_config.hash)
+    assert isinstance(hash(config.parameter_config), int)
 
 
 def test_processed_state_initialization() -> None:
@@ -472,7 +471,14 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
 
         compiled_sql, params = stmt.compile()
 
-        mock_compile.assert_called_once_with(stmt._statement_config, stmt._raw_sql, [], is_many=False, expression=None)
+        mock_compile.assert_called_once_with(
+            stmt._statement_config,
+            stmt._raw_sql,
+            [],
+            is_many=False,
+            expression=None,
+            param_fingerprint=structural_fingerprint([], is_many=False),
+        )
         assert compiled_sql == "SELECT * FROM users"
         assert params == []
 
@@ -492,7 +498,12 @@ def test_sql_compilation_uses_raw_expression() -> None:
         compiled_sql, params = stmt.compile()
 
         mock_compile.assert_called_once_with(
-            stmt._statement_config, stmt._raw_sql, [], is_many=False, expression=expression
+            stmt._statement_config,
+            stmt._raw_sql,
+            [],
+            is_many=False,
+            expression=expression,
+            param_fingerprint=structural_fingerprint([], is_many=False),
         )
         assert compiled_sql == "SELECT * FROM users"
         assert params == []
@@ -1481,10 +1492,9 @@ def test_processed_state_parameter_profile_exposed() -> None:
 
 def test_shared_pipeline_metrics_respects_debug_flag() -> None:
     """Shared pipeline metrics emit data only when debug flag is enabled."""
+    import sqlspec.core.pipeline as pipeline_module
 
-    previous = os.environ.get("SQLSPEC_DEBUG_PIPELINE_CACHE")
-    os.environ["SQLSPEC_DEBUG_PIPELINE_CACHE"] = "1"
-    try:
+    with patch.object(pipeline_module, "_RECORD_PIPELINE_METRICS", True):
         reset_pipeline_registry()
 
         SQL("SELECT 1").compile()
@@ -1493,12 +1503,8 @@ def test_shared_pipeline_metrics_respects_debug_flag() -> None:
         metrics = get_pipeline_metrics()
         total_hits = sum(entry.get("hits", 0) for entry in metrics)
         assert total_hits >= 1
-    finally:
-        if previous is None:
-            os.environ.pop("SQLSPEC_DEBUG_PIPELINE_CACHE", None)
-        else:
-            os.environ["SQLSPEC_DEBUG_PIPELINE_CACHE"] = previous
-        reset_pipeline_registry()
+
+    reset_pipeline_registry()
 
 
 def test_sql_builder_from_named_parameters() -> None:

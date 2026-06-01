@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import sqlspec.exceptions
-from sqlspec.core.parameters._types import ParameterProfile, ParameterStyle
+from sqlspec.core.parameters._types import _NAMED_STYLES, ParameterProfile, ParameterStyle
 
 __all__ = (
     "EXECUTE_MANY_MIN_ROWS",
@@ -119,12 +119,7 @@ def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set
     for parameter in parameters:
         style = parameter.style
         name = parameter.name
-        if style in {
-            ParameterStyle.NAMED_COLON,
-            ParameterStyle.NAMED_AT,
-            ParameterStyle.NAMED_DOLLAR,
-            ParameterStyle.NAMED_PYFORMAT,
-        }:
+        if style in _NAMED_STYLES:
             identifiers.add(("named", name or f"param_{parameter.ordinal}"))
         elif style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
             # When mixed with ordinal styles (like QMARK), use ordinal instead of explicit index

@@ -4,6 +4,7 @@ import bisect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp as _exp
 
 from sqlspec.core.parameters._alignment import (
@@ -13,11 +14,12 @@ from sqlspec.core.parameters._alignment import (
     validate_parameter_alignment,
 )
 from sqlspec.core.parameters._types import (
+    _NAMED_STYLES,
+    _POSITIONAL_STYLES,
     ConvertedParameters,
     ParameterMapping,
     ParameterPayload,
     ParameterProfile,
-    ParameterStyle,
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.deprecation import warn_deprecation
@@ -35,6 +37,7 @@ __all__ = (
 _AST_TRANSFORMER_VALIDATOR: "ParameterValidator" = ParameterValidator()
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPruningTransform:
     __slots__ = ("_dialect", "_validator")
 
@@ -54,6 +57,7 @@ class _NullPruningTransform:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LiteralInliningTransform:
     __slots__ = ("_json_serializer",)
 
@@ -69,6 +73,7 @@ class _LiteralInliningTransform:
         return literal_expression, parameters
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPlaceholderTransformer:
     __slots__ = ("_null_names", "_null_positions", "_qmark_position", "_sorted_null_positions")
 
@@ -115,6 +120,7 @@ class _NullPlaceholderTransformer:
         return node
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _PlaceholderLiteralTransformer:
     __slots__ = ("_json_serializer", "_parameters", "_placeholder_index")
 
@@ -257,26 +263,14 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters)
         return expression, None
 
-    named_styles = {
-        ParameterStyle.NAMED_COLON,
-        ParameterStyle.NAMED_AT,
-        ParameterStyle.NAMED_DOLLAR,
-        ParameterStyle.NAMED_PYFORMAT,
-    }
-    positional_styles = {
-        ParameterStyle.QMARK,
-        ParameterStyle.POSITIONAL_PYFORMAT,
-        ParameterStyle.POSITIONAL_COLON,
-        ParameterStyle.NUMERIC,
-    }
     null_names: set[str] = set()
     positional_null_positions: set[int] = set()
     for parameter in profile.parameters:
         if parameter.ordinal not in null_positions:
             continue
-        if parameter.style in named_styles and parameter.name:
+        if parameter.style in _NAMED_STYLES and parameter.name:
             null_names.add(parameter.name)
-        if parameter.style in positional_styles:
+        if parameter.style in _POSITIONAL_STYLES:
             positional_null_positions.add(parameter.ordinal)
 
     sorted_null_positions = sorted(positional_null_positions)

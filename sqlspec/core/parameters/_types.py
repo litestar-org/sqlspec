@@ -4,7 +4,6 @@ from collections.abc import Callable, Collection, Generator, Iterable, Mapping, 
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
-from functools import singledispatch
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias
 
@@ -142,6 +141,22 @@ class ParameterStyle(str, Enum):
     POSITIONAL_PYFORMAT = "pyformat_positional"
 
 
+_NAMED_STYLES: frozenset["ParameterStyle"] = frozenset({
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.NAMED_AT,
+    ParameterStyle.NAMED_DOLLAR,
+    ParameterStyle.NAMED_PYFORMAT,
+})
+_POSITIONAL_STYLES: frozenset["ParameterStyle"] = frozenset({
+    ParameterStyle.QMARK,
+    ParameterStyle.NUMERIC,
+    ParameterStyle.POSITIONAL_COLON,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+})
+_NAMED_STYLE_VALUES: frozenset[str] = frozenset(style.value for style in _NAMED_STYLES)
+_POSITIONAL_STYLE_VALUES: frozenset[str] = frozenset(style.value for style in _POSITIONAL_STYLES)
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class TypedParameter:
     """Wrapper that preserves original parameter type information."""
@@ -191,39 +206,20 @@ class _TupleAdapter:
         return self._serializer(value)
 
 
-@singledispatch
 def _wrap_parameter_by_type(value: Any, semantic_name: "str | None" = None) -> Any:
+    if isinstance(value, bool):
+        return TypedParameter(value, bool, semantic_name)
+    if isinstance(value, Decimal):
+        return TypedParameter(value, Decimal, semantic_name)
+    if isinstance(value, datetime):
+        return TypedParameter(value, datetime, semantic_name)
+    if isinstance(value, date):
+        return TypedParameter(value, date, semantic_name)
+    if isinstance(value, time):
+        return TypedParameter(value, time, semantic_name)
+    if isinstance(value, bytes):
+        return TypedParameter(value, bytes, semantic_name)
     return value
-
-
-@_wrap_parameter_by_type.register
-def _(value: bool, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, bool, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: Decimal, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, Decimal, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: datetime, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, datetime, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: date, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, date, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: time, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, time, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: bytes, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, bytes, semantic_name)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -322,15 +318,6 @@ class ParameterStyleConfig:
             )
             self._hash_cache = hash(hash_components)
         return self._hash_cache
-
-    def hash(self) -> int:
-        """Return the hash value for caching compatibility.
-
-        Returns:
-            Hash value matching :func:`hash` output for this config.
-        """
-
-        return hash(self)
 
     def __reduce__(self) -> "tuple[Any, ...]":
         """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""

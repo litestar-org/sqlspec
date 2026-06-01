@@ -9,7 +9,7 @@ Components:
 import logging
 from collections import OrderedDict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, final
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -169,6 +169,7 @@ def _assign_placeholder_position(
     return placeholder_positions[placeholder_key]
 
 
+@final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class OperationProfile:
     """Semantic characteristics derived from the parsed SQL expression."""
@@ -202,6 +203,7 @@ def _is_effectively_empty_parameters(value: Any) -> bool:
     return False
 
 
+@final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CompiledSQL:
     """Compiled SQL result.
@@ -297,6 +299,7 @@ class CompiledSQL:
         )
 
 
+@final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class SQLProcessor:
     """SQL processor with compilation and caching.
@@ -382,7 +385,12 @@ class SQLProcessor:
         )
 
     def compile(
-        self, sql: str, parameters: Any = None, is_many: bool = False, expression: "exp.Expr | None" = None
+        self,
+        sql: str,
+        parameters: Any = None,
+        is_many: bool = False,
+        expression: "exp.Expr | None" = None,
+        param_fingerprint: "Any | None" = None,
     ) -> CompiledSQL:
         """Compile SQL statement.
 
@@ -391,6 +399,7 @@ class SQLProcessor:
             parameters: Parameter values for substitution
             is_many: Whether this is for execute_many operation
             expression: Pre-parsed SQLGlot expression to reuse
+            param_fingerprint: Pre-computed parameter fingerprint.
 
         Returns:
             CompiledSQL with execution information
@@ -398,7 +407,8 @@ class SQLProcessor:
         if not self._config.enable_caching or not self._cache_enabled:
             return self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
 
-        param_fingerprint = self._get_param_fingerprint(parameters, is_many)
+        if param_fingerprint is None:
+            param_fingerprint = self._get_param_fingerprint(parameters, is_many)
         cache_key = self._make_cache_key(sql, param_fingerprint, is_many)
 
         # MICRO-CACHE: Fast path for repeating statements
@@ -496,8 +506,9 @@ class SQLProcessor:
             process_result.applied_wrap_types,
         )
 
+    @staticmethod
     def _normalize_expression_override(
-        self, expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str
+        expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str
     ) -> "exp.Expr | None":
         """Validate expression overrides against the input SQL.
 
@@ -536,8 +547,8 @@ class SQLProcessor:
         except ParseError:
             return None, "COMMAND", OperationProfile.empty()
         else:
-            operation_type = self._detect_operation_type(expression)
-            operation_profile = self._build_operation_profile(expression, operation_type)
+            operation_type = SQLProcessor._detect_operation_type(expression)
+            operation_profile = SQLProcessor._build_operation_profile(expression, operation_type)
             return expression, operation_type, operation_profile
 
     def _store_parse_cache(
@@ -565,8 +576,9 @@ class SQLProcessor:
             (operation_profile.returns_rows, operation_profile.modifies_rows),
         )
 
+    @staticmethod
     def _unpack_parse_cache_entry(
-        self, parse_cache_entry: "ParseCacheEntry"
+        parse_cache_entry: "ParseCacheEntry",
     ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
         """Expand cached parse results into runtime objects.
 
@@ -599,7 +611,7 @@ class SQLProcessor:
         parse_cache_key = None
         parse_cache_entry = None
         if self._config.enable_caching and self._parse_cache_max_size > 0:
-            parse_cache_key = self._make_parse_cache_key(sqlglot_sql, dialect_str)
+            parse_cache_key = SQLProcessor._make_parse_cache_key(sqlglot_sql, dialect_str)
             parse_cache_entry = self._parse_cache.get(parse_cache_key)
             if parse_cache_entry is not None:
                 self._parse_cache_hits += 1
@@ -612,7 +624,7 @@ class SQLProcessor:
             if parse_cache_key is not None:
                 self._store_parse_cache(parse_cache_key, expression, operation_type, operation_profile)
         else:
-            expression, operation_type, operation_profile = self._unpack_parse_cache_entry(parse_cache_entry)
+            expression, operation_type, operation_profile = SQLProcessor._unpack_parse_cache_entry(parse_cache_entry)
         return expression, operation_type, operation_profile, parse_cache_key, parse_cache_entry
 
     def _apply_ast_transformers(
@@ -669,8 +681,8 @@ class SQLProcessor:
         if ast_was_transformed:
             if expression is None:
                 return expression, parameters, ast_was_transformed, operation_type, operation_profile
-            operation_type = self._detect_operation_type(expression)
-            operation_profile = self._build_operation_profile(expression, operation_type)
+            operation_type = SQLProcessor._detect_operation_type(expression)
+            operation_profile = SQLProcessor._build_operation_profile(expression, operation_type)
 
         return expression, parameters, ast_was_transformed, operation_type, operation_profile
 
@@ -787,7 +799,6 @@ class SQLProcessor:
         operation_profile = OperationProfile.empty()
 
         try:
-            dialect_str = str(self._config.dialect) if self._config.dialect else None
             (
                 processed_sql,
                 processed_params,
@@ -795,8 +806,10 @@ class SQLProcessor:
                 sqlglot_sql,
                 input_named_parameters,
                 applied_wrap_types,
-            ) = self._prepare_parameters(sql, parameters, is_many, dialect_str, param_fingerprint=param_fingerprint)
-            expression_override = self._normalize_expression_override(expression_override, sqlglot_sql, sql)
+            ) = self._prepare_parameters(
+                sql, parameters, is_many, self._dialect_str, param_fingerprint=param_fingerprint
+            )
+            expression_override = SQLProcessor._normalize_expression_override(expression_override, sqlglot_sql, sql)
 
             final_parameters = processed_params
             ast_was_transformed = False
@@ -808,7 +821,7 @@ class SQLProcessor:
 
             if self._config.enable_parsing:
                 (expression, operation_type, operation_profile, parse_cache_key, parse_cache_entry) = (
-                    self._resolve_expression(sqlglot_sql, dialect_str, expression_override)
+                    self._resolve_expression(sqlglot_sql, self._dialect_str, expression_override)
                 )
                 (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
                     self._apply_ast_transformers(
@@ -823,7 +836,7 @@ class SQLProcessor:
                     )
                 )
                 if expression is not None:
-                    parameter_casts = self._detect_parameter_casts(expression)
+                    parameter_casts = SQLProcessor._detect_parameter_casts(expression)
 
             final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
                 processed_sql,
@@ -832,7 +845,7 @@ class SQLProcessor:
                 final_parameters,
                 parameter_profile,
                 is_many,
-                dialect_str,
+                self._dialect_str,
                 ast_was_transformed,
             )
 
@@ -894,7 +907,8 @@ class SQLProcessor:
             sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many
         )
 
-    def _detect_operation_type(self, expression: "exp.Expr") -> "OperationType":
+    @staticmethod
+    def _detect_operation_type(expression: "exp.Expr") -> "OperationType":
         """Detect operation type from AST.
 
         Args:
@@ -920,7 +934,8 @@ class SQLProcessor:
         # that doesn't fit specific categories
         return "COMMAND"
 
-    def _detect_parameter_casts(self, expression: "exp.Expr | None") -> "dict[int, str]":
+    @staticmethod
+    def _detect_parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
         """Detect explicit type casts on parameters in the AST.
 
         Args:
@@ -991,9 +1006,8 @@ class SQLProcessor:
 
         return sql, parameters
 
-    def _build_operation_profile(
-        self, expression: "exp.Expr | None", operation_type: "OperationType"
-    ) -> "OperationProfile":
+    @staticmethod
+    def _build_operation_profile(expression: "exp.Expr | None", operation_type: "OperationType") -> "OperationProfile":
         if expression is None:
             return OperationProfile.empty()
 
@@ -1034,7 +1048,8 @@ class SQLProcessor:
         self._parse_cache_misses = 0
         self._parameter_processor.clear_cache()
 
-    def _make_parse_cache_key(self, sql: str, dialect: "str | None") -> Any:
+    @staticmethod
+    def _make_parse_cache_key(sql: str, dialect: "str | None") -> Any:
         dialect_marker = dialect or "default"
         # Use tuple as cache key instead of hashing. Python handles tuple keys efficiently.
         return (dialect_marker, sql)

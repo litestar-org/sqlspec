@@ -708,8 +708,16 @@ class SQL:
                 params = self._named_parameters or self._positional_parameters
                 is_many = self._is_many
                 param_fingerprint = structural_fingerprint(params, is_many=is_many)
+                pipeline_fingerprint: Any | None = (
+                    None if config.parameter_config.needs_static_script_compilation else param_fingerprint
+                )
                 compiled_result = pipeline.compile_with_pipeline(
-                    config, raw_sql, params, is_many=is_many, expression=self._raw_expression
+                    config,
+                    raw_sql,
+                    params,
+                    is_many=is_many,
+                    expression=self._raw_expression,
+                    param_fingerprint=pipeline_fingerprint,
                 )
 
                 self._processed_state = self._build_processed_state(
@@ -1844,7 +1852,7 @@ class StatementConfig:
                 self.enable_parameter_type_wrapping,
                 self.enable_caching,
                 str(self.dialect),
-                self.parameter_config.hash(),
+                hash(self.parameter_config),
                 self.execution_mode,
                 self.output_transformer,
                 self.statement_transformers,

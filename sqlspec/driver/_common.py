@@ -1985,7 +1985,7 @@ class CommonDriverAttributesMixin:
             else ()
         )
         context_hash = hash((
-            config.parameter_config.hash(),
+            hash(config.parameter_config),
             config.dialect,
             statement.is_script,
             statement.is_many,

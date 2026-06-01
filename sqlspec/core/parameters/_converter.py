@@ -6,6 +6,7 @@ from typing import Any
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import (
+    _NAMED_STYLES,
     ConvertedParameters,
     NamedParameterOutput,
     ParameterInfo,
@@ -347,15 +348,9 @@ class ParameterConverter:
     def _collect_missing_named_parameters(
         self, param_info: "list[ParameterInfo]", parameters: "ParameterMapping"
     ) -> "list[str]":
-        named_styles = {
-            ParameterStyle.NAMED_COLON,
-            ParameterStyle.NAMED_AT,
-            ParameterStyle.NAMED_DOLLAR,
-            ParameterStyle.NAMED_PYFORMAT,
-        }
         missing: list[str] = []
         for param in param_info:
-            if param.style not in named_styles or not param.name:
+            if param.style not in _NAMED_STYLES or not param.name:
                 continue
             if param.name in parameters or param.placeholder_text in parameters:
                 continue

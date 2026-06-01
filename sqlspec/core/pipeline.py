@@ -25,6 +25,9 @@ def _is_truthy(value: "str | None") -> bool:
     return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
 
 
+_RECORD_PIPELINE_METRICS: Final[bool] = _is_truthy(os.environ.get(DEBUG_ENV_FLAG))
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _PipelineMetrics:
     __slots__ = (
@@ -147,9 +150,17 @@ class _StatementPipeline:
         self._metrics = _PipelineMetrics() if record_metrics else None
 
     def compile(
-        self, sql: str, parameters: Any, is_many: bool, record_metrics: bool, expression: "exp.Expr | None" = None
+        self,
+        sql: str,
+        parameters: Any,
+        is_many: bool,
+        record_metrics: bool,
+        expression: "exp.Expr | None" = None,
+        param_fingerprint: "Any | None" = None,
     ) -> "CompiledSQL":
-        result = self._processor.compile(sql, parameters, is_many=is_many, expression=expression)
+        result = self._processor.compile(
+            sql, parameters, is_many=is_many, expression=expression, param_fingerprint=param_fingerprint
+        )
         if record_metrics and self._metrics is not None:
             self._metrics.update(self._processor.cache_stats)
         return result
@@ -189,10 +200,11 @@ class StatementPipelineRegistry:
         parameters: Any,
         is_many: bool = False,
         expression: "exp.Expr | None" = None,
+        param_fingerprint: "Any | None" = None,
     ) -> "CompiledSQL":
         key = self._fingerprint_config(config)
         pipeline = self._pipelines.get(key)
-        record_metrics = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+        record_metrics = _RECORD_PIPELINE_METRICS
 
         if pipeline is not None:
             self._pipelines.move_to_end(key)
@@ -204,7 +216,9 @@ class StatementPipelineRegistry:
                 self._pipelines.popitem(last=False)
             self._pipelines[key] = pipeline
 
-        return pipeline.compile(sql, parameters, is_many, record_metrics, expression=expression)
+        return pipeline.compile(
+            sql, parameters, is_many, record_metrics, expression=expression, param_fingerprint=param_fingerprint
+        )
 
     def reset(self) -> None:
         for pipeline in self._pipelines.values():
@@ -218,7 +232,7 @@ class StatementPipelineRegistry:
         self.reset()
 
     def metrics(self) -> "list[dict[str, Any]]":
-        if not _is_truthy(os.getenv(DEBUG_ENV_FLAG)):
+        if not _RECORD_PIPELINE_METRICS:
             return []
 
         snapshots: list[dict[str, Any]] = []
@@ -253,12 +267,15 @@ class StatementPipelineRegistry:
     def _fingerprint_config(self, config: "Any") -> str:
         # Optimization: Use cached fingerprint if available
         # Configs are effectively immutable after creation, so caching is safe
-        cached = getattr(config, "_fingerprint_cache", None)
-        if isinstance(cached, str):
-            return cached
+        try:
+            cached = config._fingerprint_cache  # pyright: ignore[reportPrivateUsage]
+            if isinstance(cached, str):
+                return cached
+        except AttributeError:
+            pass
 
         param_config = config.parameter_config
-        param_config_hash = param_config.hash()
+        param_config_hash = hash(param_config)
         converter_type = type(config.parameter_converter) if config.parameter_converter else None
         validator_type = type(config.parameter_validator) if config.parameter_validator else None
         output_transformer_id = id(config.output_transformer) if config.output_transformer else None
@@ -298,8 +315,8 @@ class StatementPipelineRegistry:
         full_fingerprint = f"pipeline::{fingerprint}"
 
         # Cache the fingerprint for future calls - configs are immutable in practice
-        with contextlib.suppress(AttributeError, TypeError):
-            config._fingerprint_cache = full_fingerprint
+        with contextlib.suppress(AttributeError):
+            config._fingerprint_cache = full_fingerprint  # pyright: ignore[reportPrivateUsage]
 
         return full_fingerprint
 
@@ -308,9 +325,16 @@ _PIPELINE_REGISTRY: "StatementPipelineRegistry" = StatementPipelineRegistry()
 
 
 def compile_with_pipeline(
-    config: "Any", sql: str, parameters: Any, is_many: bool = False, expression: "exp.Expr | None" = None
+    config: "Any",
+    sql: str,
+    parameters: Any,
+    is_many: bool = False,
+    expression: "exp.Expr | None" = None,
+    param_fingerprint: "Any | None" = None,
 ) -> "CompiledSQL":
-    return _PIPELINE_REGISTRY.compile(config, sql, parameters, is_many=is_many, expression=expression)
+    return _PIPELINE_REGISTRY.compile(
+        config, sql, parameters, is_many=is_many, expression=expression, param_fingerprint=param_fingerprint
+    )
 
 
 def reset_statement_pipeline_cache() -> None:

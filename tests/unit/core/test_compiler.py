@@ -15,6 +15,7 @@ Test Coverage:
 """
 
 import logging
+import inspect
 import threading
 import time
 from collections import OrderedDict
@@ -29,6 +30,7 @@ from sqlglot.errors import ParseError
 
 from sqlspec.core import (
     CompiledSQL,
+    OperationProfile,
     OperationType,
     ParameterProcessor,
     ParameterProfile,
@@ -687,20 +689,20 @@ def test_detect_parameter_casts_called_exactly_once_with_transformer() -> None:
         statement_transformers=(pass_through,),
     )
 
-    class CountingSQLProcessor(SQLProcessor):
-        def __init__(self, statement_config: "StatementConfig") -> None:
-            super().__init__(statement_config)
-            self.detect_parameter_casts_calls = 0
+    original_detect_parameter_casts = SQLProcessor._detect_parameter_casts
+    detect_parameter_casts_calls = 0
 
-        def _detect_parameter_casts(self, expression: "exp.Expr | None") -> "dict[int, str]":
-            self.detect_parameter_casts_calls += 1
-            return super()._detect_parameter_casts(expression)
+    def count_detect_parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
+        nonlocal detect_parameter_casts_calls
+        detect_parameter_casts_calls += 1
+        return original_detect_parameter_casts(expression)
 
-    processor = CountingSQLProcessor(config)
+    processor = SQLProcessor(config)
 
-    processor.compile("SELECT $1::text FROM users", [1])
+    with patch.object(SQLProcessor, "_detect_parameter_casts", staticmethod(count_detect_parameter_casts)):
+        processor.compile("SELECT $1::text FROM users", [1])
 
-    assert processor.detect_parameter_casts_calls == 1
+    assert detect_parameter_casts_calls == 1
 
 
 def test_parsing_enabled_optimization(
@@ -1180,3 +1182,52 @@ def test_compile_with_pipeline_passes_expression() -> None:
 
         _, kwargs = mock_compile.call_args
         assert kwargs["expression"] is expression
+
+
+def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") -> None:
+    """Verify c11 native-class optimization invariants and compiler behavior."""
+    for cls in (OperationProfile, CompiledSQL, SQLProcessor):
+        source = inspect.getsource(cls)
+        assert source.startswith("@final\n@mypyc_attr(allow_interpreted_subclasses=False)\n")
+
+    for name in (
+        "_normalize_expression_override",
+        "_unpack_parse_cache_entry",
+        "_detect_operation_type",
+        "_detect_parameter_casts",
+        "_build_operation_profile",
+        "_make_parse_cache_key",
+    ):
+        assert isinstance(SQLProcessor.__dict__.get(name), staticmethod)
+
+    source = inspect.getsource(SQLProcessor._compile_uncached)
+    assert "dialect_str = str(self._config.dialect)" not in source
+
+    processor = SQLProcessor(basic_statement_config)
+    select_result = processor.compile("SELECT * FROM users WHERE id = ?", (42,))
+    assert select_result.operation_type == "SELECT"
+    assert select_result.operation_profile.returns_rows is True
+
+    insert_result = processor.compile("INSERT INTO users (name) VALUES (?)", ("alice",))
+    assert insert_result.operation_type == "INSERT"
+    assert insert_result.operation_profile.modifies_rows is True
+
+    ddl_result = processor.compile("CREATE TABLE test (id INTEGER PRIMARY KEY)", None)
+    assert ddl_result.operation_type == "DDL"
+
+    result1 = processor.compile("SELECT id FROM users WHERE id = ?", (1,))
+    result2 = processor.compile("SELECT id FROM users WHERE id = ?", (2,))
+    assert result1.compiled_sql == result2.compiled_sql
+    assert processor._cache_hits >= 1
+
+    assert SQLProcessor._detect_operation_type(sqlglot.parse_one("SELECT 1")) == "SELECT"
+    assert SQLProcessor._make_parse_cache_key("SELECT 1", None) == ("default", "SELECT 1")
+    assert SQLProcessor._make_parse_cache_key("SELECT 1", "postgres") == ("postgres", "SELECT 1")
+    assert SQLProcessor._normalize_expression_override(None, "SELECT 1", "SELECT 1") is None
+
+    profile = SQLProcessor._build_operation_profile(sqlglot.parse_one("SELECT 1"), "SELECT")
+    assert profile.returns_rows is True
+    assert profile.modifies_rows is False
+
+    casts = SQLProcessor._detect_parameter_casts(sqlglot.parse_one("SELECT ?"))
+    assert isinstance(casts, dict)

@@ -9,6 +9,9 @@ from mypy_extensions import mypyc_attr
 from sqlspec.core.parameters._alignment import looks_like_execute_many
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
+    _NAMED_STYLE_VALUES,
+    _NAMED_STYLES,
+    _POSITIONAL_STYLE_VALUES,
     ConvertedParameters,
     ParameterInfo,
     ParameterPayload,
@@ -617,24 +620,12 @@ class ParameterProcessor:
             processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
 
         if processed:
-            positional_styles = {
-                ParameterStyle.QMARK.value,
-                ParameterStyle.NUMERIC.value,
-                ParameterStyle.POSITIONAL_COLON.value,
-                ParameterStyle.POSITIONAL_PYFORMAT.value,
-            }
-            named_styles = {
-                ParameterStyle.NAMED_COLON.value,
-                ParameterStyle.NAMED_AT.value,
-                ParameterStyle.NAMED_DOLLAR.value,
-                ParameterStyle.NAMED_PYFORMAT.value,
-            }
             cached_styles = cached_profile.styles
-            if input_named_parameters and any(style in positional_styles for style in cached_styles):
+            if input_named_parameters and any(style in _POSITIONAL_STYLE_VALUES for style in cached_styles):
                 processed = self._map_named_to_positional(
                     processed, input_named_parameters, is_many, strict=config.strict_named_parameters
                 )
-            elif any(style in named_styles for style in cached_styles):
+            elif any(style in _NAMED_STYLE_VALUES for style in cached_styles):
                 processed = self._map_positional_to_named(processed, cached_profile, is_many)
 
         return processed
@@ -769,16 +760,7 @@ class ParameterProcessor:
         if not payload or not param_info:
             return False
 
-        has_named_placeholders = any(
-            param.style
-            in {
-                ParameterStyle.NAMED_COLON,
-                ParameterStyle.NAMED_AT,
-                ParameterStyle.NAMED_DOLLAR,
-                ParameterStyle.NAMED_PYFORMAT,
-            }
-            for param in param_info
-        )
+        has_named_placeholders = any(param.style in _NAMED_STYLES for param in param_info)
         if has_named_placeholders:
             return False
 

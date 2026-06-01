@@ -12,7 +12,7 @@ import json
 import math
 import warnings
 from collections.abc import Callable, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from importlib import import_module
 from typing import Any
@@ -789,15 +789,15 @@ def test_parameter_style_config_advanced() -> None:
     assert config.strict_named_parameters is False
 
 
-def test_parameter_style_config_hash() -> None:
-    """Test ParameterStyleConfig hash method for caching."""
+def test_parameter_style_config_hash_value() -> None:
+    """Test ParameterStyleConfig built-in hash for caching."""
     config1 = ParameterStyleConfig(ParameterStyle.QMARK)
     config2 = ParameterStyleConfig(ParameterStyle.QMARK)
     config3 = ParameterStyleConfig(ParameterStyle.NAMED_COLON)
 
-    assert config1.hash() == config2.hash()
+    assert hash(config1) == hash(config2)
 
-    assert config1.hash() != config3.hash()
+    assert hash(config1) != hash(config3)
 
 
 def test_parameter_style_config_hash_differs_for_different_output_transformers() -> None:
@@ -1508,8 +1508,8 @@ def test_processor_cache_key_uses_shared_tuple_helper() -> None:
     )
 
 
-def test_singledispatch_type_wrapping_performance() -> None:
-    """Test that singledispatch provides efficient type-based dispatch."""
+def test_isinstance_type_wrapping() -> None:
+    """Test that isinstance dispatch correctly wraps typed parameters."""
 
     bool_result = wrap_with_type(True)
     decimal_result = wrap_with_type(Decimal("123.45"))
@@ -1520,6 +1520,67 @@ def test_singledispatch_type_wrapping_performance() -> None:
 
     assert string_result == "test"
     assert not isinstance(string_result, TypedParameter)
+
+
+def test_parameter_style_constants_are_module_frozensets() -> None:
+    """Style membership constants are hoisted for compiled hot paths."""
+    from sqlspec.core.parameters import _types
+
+    named_styles = getattr(_types, "_NAMED_STYLES", None)
+    positional_styles = getattr(_types, "_POSITIONAL_STYLES", None)
+    named_style_values = getattr(_types, "_NAMED_STYLE_VALUES", None)
+    positional_style_values = getattr(_types, "_POSITIONAL_STYLE_VALUES", None)
+
+    assert isinstance(named_styles, frozenset)
+    assert isinstance(positional_styles, frozenset)
+    assert isinstance(named_style_values, frozenset)
+    assert isinstance(positional_style_values, frozenset)
+    assert named_styles == frozenset({
+        ParameterStyle.NAMED_COLON,
+        ParameterStyle.NAMED_AT,
+        ParameterStyle.NAMED_DOLLAR,
+        ParameterStyle.NAMED_PYFORMAT,
+    })
+    assert positional_styles == frozenset({
+        ParameterStyle.QMARK,
+        ParameterStyle.NUMERIC,
+        ParameterStyle.POSITIONAL_COLON,
+        ParameterStyle.POSITIONAL_PYFORMAT,
+    })
+    assert named_style_values == frozenset(style.value for style in named_styles)
+    assert positional_style_values == frozenset(style.value for style in positional_styles)
+
+
+def test_wrap_with_type_isinstance_chain_semantics() -> None:
+    """The plain dispatch chain preserves prior type-wrapping semantics."""
+    bool_result = wrap_with_type(False)
+    decimal_result = wrap_with_type(Decimal("3.14"))
+    datetime_result = wrap_with_type(datetime(2024, 1, 1, 12, 30))
+    date_result = wrap_with_type(date(2024, 1, 1))
+    time_result = wrap_with_type(time(12, 30))
+    bytes_result = wrap_with_type(b"hello")
+
+    assert isinstance(bool_result, TypedParameter)
+    assert bool_result.original_type is bool
+    assert isinstance(decimal_result, TypedParameter)
+    assert decimal_result.original_type is Decimal
+    assert isinstance(datetime_result, TypedParameter)
+    assert datetime_result.original_type is datetime
+    assert isinstance(date_result, TypedParameter)
+    assert date_result.original_type is date
+    assert isinstance(time_result, TypedParameter)
+    assert time_result.original_type is time
+    assert isinstance(bytes_result, TypedParameter)
+    assert bytes_result.original_type is bytes
+    assert wrap_with_type(42) == 42
+
+
+def test_parameter_style_config_hash_wrapper_removed() -> None:
+    """ParameterStyleConfig only exposes __hash__, not a wrapper method."""
+    config = ParameterStyleConfig(default_parameter_style=ParameterStyle.NAMED_COLON)
+
+    assert not hasattr(config, "hash")
+    assert isinstance(hash(config), int)
 
 
 def test_hash_map_placeholder_generation() -> None:
