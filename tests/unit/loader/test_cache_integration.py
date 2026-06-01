@@ -175,7 +175,7 @@ SELECT 'from cache' as source;
 
         mock_cache.get_file.return_value = cached_file
 
-        with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
+        with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
             loader._load_single_file(tf.name, None)
 
         mock_cache.get_file.assert_called_once()
@@ -231,7 +231,7 @@ SELECT 'original' as version;
 
         mock_cache.get_file.return_value = cached_file
 
-        with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=False):
+        with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=False):
             loader._load_single_file(tf.name, None)
 
         mock_cache.get_file.assert_called_once()
@@ -376,7 +376,7 @@ SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE;
     with (
         patch("sqlspec.loader.get_cache_config") as mock_config,
         patch("sqlspec.loader.get_cache") as mock_cache_factory,
-        patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True),
+        patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True),
     ):
         mock_cache_config = Mock()
         mock_cache_config.compiled_cache_enabled = True
@@ -484,7 +484,7 @@ SELECT 'shared between loaders' as message;
             loader1 = SQLFileLoader()
             shared_cache.get_file.return_value = None
 
-            with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
+            with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
                 loader1._load_single_file(tf.name, None)
 
             shared_cache.put_file.assert_called_once()
@@ -498,7 +498,7 @@ SELECT 'shared between loaders' as message;
             shared_cache.reset_mock()
             shared_cache.get_file.return_value = cached_file
 
-            with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
+            with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
                 loader2._load_single_file(tf.name, None)
 
             shared_cache.get_file.assert_called_once()
@@ -617,7 +617,7 @@ LIMIT 100;
             mock_cache.get_file.return_value = cached_file
             mock_cache.reset_mock()
 
-            with patch("sqlspec.loader.SQLFileLoader._is_file_unchanged", return_value=True):
+            with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
                 loader2._load_single_file(tf.name, None)
 
             assert len(loader2._queries) == 100

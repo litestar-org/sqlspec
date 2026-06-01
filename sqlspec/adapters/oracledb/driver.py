@@ -336,7 +336,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         cursor.execute(sql, prepared_parameters or {})
 
         # SELECT result processing for Oracle
-        if statement.returns_rows():
+        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+
+        if is_select_like:
             fetched_data = cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(

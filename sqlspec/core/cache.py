@@ -12,6 +12,7 @@ Components:
 import logging
 import threading
 import time
+import warnings
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
@@ -435,6 +436,15 @@ def clear_all_caches() -> None:
     reset_statement_pipeline_cache()
 
 
+def reset_stats_only() -> None:
+    """Reset cache statistics without evicting cached entries."""
+    if _default_cache is not None:
+        _default_cache.get_stats().reset()
+    if _namespaced_cache is not None:
+        for cache in _namespaced_cache._caches.values():
+            cache.get_stats().reset()
+
+
 def get_cache_statistics() -> "dict[str, CacheStats]":
     """Get statistics from all cache instances.
 
@@ -556,7 +566,13 @@ def update_cache_config(config: CacheConfig) -> None:
 
 
 def reset_cache_stats() -> None:
-    """Reset all cache statistics."""
+    """Deprecated alias for clearing all cache entries."""
+    warnings.warn(
+        "reset_cache_stats() clears cached data and is deprecated; use clear_all_caches() to evict entries or "
+        "reset_stats_only() to reset counters without eviction.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     clear_all_caches()
 
 

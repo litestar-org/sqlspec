@@ -42,7 +42,7 @@ class CockroachAsyncpgSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[CockroachAsyncpgDriver], CockroachAsyncpgDriver]",
     ) -> None:
@@ -58,8 +58,9 @@ class CockroachAsyncpgSessionContext:
         from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
 
         self._connection = await self._acquire_connection()
+        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
         self._driver = CockroachAsyncpgDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 

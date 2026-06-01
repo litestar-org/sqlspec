@@ -465,10 +465,7 @@ def wrap_exceptions(
         yield
 
     except Exception as exc:
-        if suppress is not None and (
-            (isinstance(suppress, type) and isinstance(exc, suppress))
-            or (isinstance(suppress, tuple) and isinstance(exc, suppress))
-        ):
+        if suppress is not None and isinstance(exc, suppress):
             return
 
         if isinstance(exc, SQLSpecError):

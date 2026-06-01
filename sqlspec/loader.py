@@ -163,7 +163,15 @@ class SQLFileLoader:
     and retrieves them by name.
     """
 
-    __slots__ = ("_files", "_queries", "_query_to_file", "_runtime", "encoding", "storage_registry")
+    __slots__ = (
+        "_compiled_statements",
+        "_files",
+        "_queries",
+        "_query_to_file",
+        "_runtime",
+        "encoding",
+        "storage_registry",
+    )
 
     def __init__(
         self,
@@ -182,6 +190,7 @@ class SQLFileLoader:
         self.encoding = encoding
 
         self.storage_registry = storage_registry or default_storage_registry
+        self._compiled_statements: dict[str, SQL] = {}
         self._queries: dict[str, NamedStatement] = {}
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}
@@ -232,6 +241,11 @@ class SQLFileLoader:
         path_hash = hashlib.md5(path_str.encode(), usedforsecurity=False).hexdigest()
         return f"file:{path_hash[:16]}"
 
+    @staticmethod
+    def _compute_checksum(content: str) -> str:
+        """Compute MD5 checksum from already-read file content."""
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+
     def _calculate_file_checksum(self, path: str | Path) -> str:
         """Calculate checksum for file content validation.
 
@@ -245,7 +259,7 @@ class SQLFileLoader:
             SQLFileParseError: If file cannot be read.
         """
         try:
-            return hashlib.md5(self._read_file_content(path).encode(), usedforsecurity=False).hexdigest()
+            return self._compute_checksum(self._read_file_content(path))
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
@@ -265,6 +279,10 @@ class SQLFileLoader:
             return False
         else:
             return current_checksum == cached_file.sql_file.checksum
+
+    def _is_file_content_unchanged(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
+        """Check if already-read file content matches cached checksum."""
+        return self._compute_checksum(content) == cached_file.sql_file.checksum
 
     def _read_file_content(self, path: str | Path) -> str:
         """Read file content using storage backend.
@@ -498,29 +516,33 @@ class SQLFileLoader:
         cache = get_cache()
         cached_file = cache.get_file(cache_key_str)
 
-        if (
-            cached_file is not None
-            and isinstance(cached_file, SQLFileCacheEntry)
-            and self._is_file_unchanged(file_path, cached_file)
-        ):
-            self._files[path_str] = cached_file.sql_file
-            for name, statement in cached_file.parsed_statements.items():
-                namespaced_name = f"{namespace}.{name}" if namespace else name
-                if namespaced_name in self._queries:
-                    existing_file = self._query_to_file.get(namespaced_name, "unknown")
-                    if existing_file != path_str:
-                        raise SQLFileParseError(
-                            path_str,
-                            path_str,
-                            ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
-                        )
-                self._queries[namespaced_name] = statement
-                self._query_to_file[namespaced_name] = path_str
-            if runtime is not None:
-                runtime.increment_metric("loader.cache.hit")
-            return True
+        if cached_file is not None and isinstance(cached_file, SQLFileCacheEntry):
+            try:
+                file_content = self._read_file_content(file_path)
+            except Exception:
+                file_content = None
 
-        self._load_file_without_cache(file_path, namespace)
+            if file_content is not None and self._is_file_content_unchanged(file_content, cached_file):
+                self._files[path_str] = cached_file.sql_file
+                for name, statement in cached_file.parsed_statements.items():
+                    namespaced_name = f"{namespace}.{name}" if namespace else name
+                    if namespaced_name in self._queries:
+                        existing_file = self._query_to_file.get(namespaced_name, "unknown")
+                        if existing_file != path_str:
+                            raise SQLFileParseError(
+                                path_str,
+                                path_str,
+                                ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                            )
+                    self._queries[namespaced_name] = statement
+                    self._query_to_file[namespaced_name] = path_str
+                if runtime is not None:
+                    runtime.increment_metric("loader.cache.hit")
+                return True
+
+            self._load_file_without_cache(file_path, namespace, content=file_content)
+        else:
+            self._load_file_without_cache(file_path, namespace)
 
         if path_str in self._files:
             sql_file = self._files[path_str]
@@ -541,16 +563,20 @@ class SQLFileLoader:
 
         return True
 
-    def _load_file_without_cache(self, file_path: str | Path, namespace: str | None) -> None:
+    def _load_file_without_cache(
+        self, file_path: str | Path, namespace: "str | None", content: "str | None" = None
+    ) -> None:
         """Load a single SQL file without using cache.
 
         Args:
             file_path: Path to the SQL file.
             namespace: Optional namespace prefix for queries.
+            content: Pre-read file content. If provided, skips the disk read.
         """
         path_str = str(file_path)
         runtime = self._runtime
-        content = self._read_file_content(file_path)
+        if content is None:
+            content = self._read_file_content(file_path)
         statements = self._parse_sql_content(content, path_str)
 
         if not statements:
@@ -663,6 +689,7 @@ class SQLFileLoader:
 
     def clear_cache(self) -> None:
         """Clear all cached files and queries."""
+        self._compiled_statements.clear()
         self._files.clear()
         self._queries.clear()
         self._query_to_file.clear()
@@ -713,6 +740,8 @@ class SQLFileLoader:
 
         if safe_name not in self._queries:
             self._raise_statement_not_found(name, safe_name)
+        if safe_name in self._compiled_statements:
+            return self._compiled_statements[safe_name]
 
         parsed_statement = self._queries[safe_name]
         sqlglot_dialect = None
@@ -724,4 +753,5 @@ class SQLFileLoader:
             sql.compile()
         except Exception as exc:
             raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
+        self._compiled_statements[safe_name] = sql
         return sql

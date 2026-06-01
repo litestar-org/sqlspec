@@ -1401,7 +1401,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         if self._observability_runtime is None:
             self.attach_observability(None)
-        assert self._observability_runtime is not None
+        if self._observability_runtime is None:
+            msg = "ObservabilityRuntime was not set by attach_observability; this is a bug"
+            raise RuntimeError(msg)
         return self._observability_runtime
 
     def _prepare_driver(self, driver: DriverT) -> DriverT:
@@ -1779,7 +1781,6 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             directory = str(migration_config.get("script_location") or "migrations")
 
         commands = self._ensure_migration_commands()
-        assert directory is not None
         commands.init(directory, package)
 
     def stamp_migration(self, revision: str) -> None:
@@ -1943,7 +1944,6 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             directory = str(migration_config.get("script_location") or "migrations")
 
         commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        assert directory is not None
         await commands.init(directory, package)
 
     async def stamp_migration(self, revision: str) -> None:
@@ -2155,7 +2155,6 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             directory = str(migration_config.get("script_location") or "migrations")
 
         commands = self._ensure_migration_commands()
-        assert directory is not None
         commands.init(directory, package)
 
     def stamp_migration(self, revision: str) -> None:
@@ -2367,7 +2366,6 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             directory = str(migration_config.get("script_location") or "migrations")
 
         commands = cast("AsyncMigrationCommands[Any]", self._ensure_migration_commands())
-        assert directory is not None
         await commands.init(directory, package)
 
     async def stamp_migration(self, revision: str) -> None:

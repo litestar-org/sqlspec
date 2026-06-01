@@ -3,8 +3,10 @@
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+import sqlglot as _sqlglot
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.transaction import Transaction
+from sqlglot import exp as _sqlglot_exp
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor
 from sqlspec.adapters.spanner.core import (
@@ -179,21 +181,21 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires at least one parameter set"
             raise SQLConversionError(msg)
 
-        coerce_params = self._coerce_params
-        infer_param_types = self._infer_param_types
+        _coerce = self._coerce_params
+        _infer = self._infer_param_types
         param_types_cache: dict[tuple[tuple[str, type[Any]], ...], dict[str, Any]] = {}
         empty_param_types: dict[str, Any] = {}
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
         append_batch_arg = batch_args.append
         for params in prepared_parameters:
-            coerced_params = coerce_params(cast("dict[str, Any] | None", params))
+            coerced_params = _coerce(cast("dict[str, Any] | None", params))
             if not coerced_params:
                 append_batch_arg((sql, {}, empty_param_types))
                 continue
             signature = build_param_type_signature(coerced_params)
             param_types = param_types_cache.get(signature)
             if param_types is None:
-                param_types = infer_param_types(coerced_params)
+                param_types = _infer(coerced_params)
                 param_types_cache[signature] = param_types
             append_batch_arg((sql, coerced_params, param_types))
 
@@ -212,7 +214,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         count = 0
         script_params = cast("dict[str, Any] | None", params)
         for stmt in statements:
-            is_select = stmt.upper().strip().startswith("SELECT")
+            try:
+                parsed = _sqlglot.parse_one(stmt)
+                is_select = isinstance(parsed, _sqlglot_exp.Select)
+            except Exception:
+                is_select = stmt.upper().strip().startswith("SELECT")
             coerced_params = self._coerce_params(script_params)
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)

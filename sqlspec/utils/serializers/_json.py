@@ -393,7 +393,9 @@ def get_default_serializer() -> JSONSerializer:
         if _default_serializer is None:
             _default_serializer = StandardLibSerializer()
 
-    assert _default_serializer is not None
+    if _default_serializer is None:
+        msg = "No JSON serializer available; this should be unreachable"
+        raise RuntimeError(msg)
     return _default_serializer
 
 

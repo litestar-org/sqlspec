@@ -262,6 +262,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if query_timeout_ms is not None:
             job_config.job_timeout_ms = query_timeout_ms
 
+        # job_timeout_ms intentionally wins when both timeout aliases are configured.
         job_timeout_ms = self.connection_config.get("job_timeout_ms")
         if job_timeout_ms is not None:
             job_config.job_timeout_ms = job_timeout_ms

@@ -22,6 +22,8 @@ from sqlspec.extensions.litestar.handlers import (
 if TYPE_CHECKING:
     from litestar.types import Message, Scope
 
+pytestmark = pytest.mark.anyio
+
 
 async def test_async_manual_handler_closes_connection() -> None:
     """Test async manual handler closes connection on terminus event."""

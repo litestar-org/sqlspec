@@ -8,11 +8,14 @@ Tests cover:
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,
     CockroachAsyncpgDriverFeatures,
     CockroachAsyncpgRetryConfig,
 )
+from sqlspec.core import StatementConfig
 
 
 class TestCockroachAsyncpgConfig:
@@ -123,6 +126,57 @@ class TestCockroachAsyncpgConfig:
 
         register_mock.assert_not_awaited()
         assert events == ["user"]
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_init_connection_registers_pgvector_when_enabled() -> None:
+    config = CockroachAsyncpgConfig(driver_features={"enable_pgvector": True})
+    connection = AsyncMock()
+
+    with (
+        patch("sqlspec.adapters.cockroach_asyncpg.config.register_json_codecs", new_callable=AsyncMock, create=True),
+        patch(
+            "sqlspec.adapters.cockroach_asyncpg.config.register_pgvector_support", new_callable=AsyncMock, create=True
+        ) as register_pgvector,
+    ):
+        await config._init_connection(connection)
+
+    register_pgvector.assert_awaited_once_with(connection)
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_init_connection_skips_pgvector_by_default() -> None:
+    config = CockroachAsyncpgConfig()
+    connection = AsyncMock()
+
+    with (
+        patch("sqlspec.adapters.cockroach_asyncpg.config.register_json_codecs", new_callable=AsyncMock, create=True),
+        patch(
+            "sqlspec.adapters.cockroach_asyncpg.config.register_pgvector_support", new_callable=AsyncMock, create=True
+        ) as register_pgvector,
+    ):
+        await config._init_connection(connection)
+
+    register_pgvector.assert_not_awaited()
+
+
+def test_cockroach_asyncpg_provide_session_uses_lazy_lambda() -> None:
+    config = CockroachAsyncpgConfig()
+
+    session_config = config.provide_session()._statement_config  # pyright: ignore[reportPrivateUsage]
+
+    assert callable(session_config)
+
+
+def test_cockroach_asyncpg_provide_session_reflects_post_construction_dialect_change() -> None:
+    config = CockroachAsyncpgConfig()
+    context = config.provide_session()
+    config.statement_config = StatementConfig(dialect="pgvector")
+
+    session_config = context._statement_config  # pyright: ignore[reportPrivateUsage]
+
+    assert callable(session_config)
+    assert session_config().dialect == "pgvector"
 
 
 class TestCockroachAsyncpgDriverFeatures:

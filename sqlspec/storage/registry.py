@@ -85,6 +85,7 @@ class StorageRegistry:
         if base_path:
             backend_config["base_path"] = base_path
         self._alias_configs[alias] = (backend_cls, uri, backend_config)
+        self.clear_cache(alias)
         log_with_context(
             logger,
             logging.DEBUG,

@@ -15,6 +15,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import (
     CATTRS_INSTALLED,
     NUMPY_INSTALLED,
+    ForeignKeyMetadata,
     SchemaT,
     attrs_asdict,
     cattrs_structure,
@@ -228,21 +229,6 @@ def _detect_schema_type(schema_type: type) -> "str | None":
         if is_attrs_schema(schema_type)
         else None
     )
-
-
-def _is_foreign_key_metadata_type(schema_type: type) -> bool:
-    if schema_type.__name__ != "ForeignKeyMetadata":
-        return False
-
-    # Check module for stronger guarantee without importing
-    module = getattr(schema_type, "__module__", "")
-    if "sqlspec" in module and ("driver" in module or "data_dictionary" in module):
-        return True
-
-    slots = getattr(schema_type, "__slots__", None)
-    if not slots:
-        return False
-    return {"table_name", "column_name", "referenced_table", "referenced_column"}.issubset(set(slots))
 
 
 def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
@@ -517,7 +503,7 @@ def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | Non
             conv = _convert_pydantic
         elif is_attrs_schema(schema_type):
             conv = _convert_attrs
-        elif _is_foreign_key_metadata_type(schema_type):
+        elif isinstance(schema_type, type) and issubclass(schema_type, ForeignKeyMetadata):
             conv = _convert_foreign_key_metadata
         else:
             conv = None

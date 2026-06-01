@@ -265,9 +265,14 @@ class ObservabilityRuntime:
 
         if not self._statement_observers:
             return
+        correlation_id = CorrelationContext.get()
+        sampled = True
+        if self.config.sampling is not None:
+            sampled = self.config.sampling.should_sample(correlation_id=correlation_id, duration_ms=duration_s * 1000)
+            if not sampled:
+                return
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
-        correlation_id = CorrelationContext.get()
         logging_config = self.config.logging
         db_system = resolve_db_system(self.config_name)
         sql_hash = None
@@ -301,6 +306,7 @@ class ObservabilityRuntime:
             sql_original_length=sql_original_length,
             trace_id=trace_id,
             span_id=span_id,
+            sampled=sampled,
         )
         for observer in self._statement_observers:
             observer(event)

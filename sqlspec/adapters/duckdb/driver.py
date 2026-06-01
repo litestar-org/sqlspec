@@ -85,8 +85,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config.replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-
-        statement_config = apply_driver_features(statement_config, driver_features)
+            statement_config = apply_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: DuckDBDataDictionary | None = None

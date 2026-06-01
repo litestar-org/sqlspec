@@ -46,8 +46,6 @@ class AiosqliteCursor:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
-        if exc_type is not None:
-            return
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 await self.cursor.close()

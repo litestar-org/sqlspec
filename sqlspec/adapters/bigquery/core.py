@@ -597,7 +597,7 @@ def build_profile() -> "DriverParameterProfile":
     return DriverParameterProfile(
         name="BigQuery",
         default_style=ParameterStyle.NAMED_AT,
-        supported_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
+        supported_styles={ParameterStyle.NAMED_AT},
         default_execution_style=ParameterStyle.NAMED_AT,
         supported_execution_styles={ParameterStyle.NAMED_AT},
         has_native_list_expansion=True,

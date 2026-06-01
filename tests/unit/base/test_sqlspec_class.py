@@ -152,8 +152,8 @@ def test_get_cache_stats_returns_statistics() -> None:
 
 
 def test_reset_cache_stats_clears_statistics() -> None:
-    """Test that reset_cache_stats clears all cache statistics."""
-    SQLSpec.reset_cache_stats()
+    """Test that reset_stats_only clears all cache statistics."""
+    SQLSpec.reset_stats_only()
     stats = SQLSpec.get_cache_stats()
 
     multi_stats = stats["namespaced"]
@@ -292,7 +292,7 @@ def test_concurrent_statistics_access_is_thread_safe() -> None:
         try:
             for _ in range(50):
                 stats = SQLSpec.get_cache_stats()
-                SQLSpec.reset_cache_stats()
+                SQLSpec.reset_stats_only()
                 multi_stats = stats["namespaced"]
                 total_ops = multi_stats.hits + multi_stats.misses
                 results.append(total_ops)
@@ -565,7 +565,7 @@ def test_statistics_collection_during_configuration_changes() -> None:
             multi_stats = stats["namespaced"]
             assert hasattr(multi_stats, "hit_rate")
 
-            SQLSpec.reset_cache_stats()
+            SQLSpec.reset_stats_only()
 
     finally:
         SQLSpec.update_cache_config(original_config)

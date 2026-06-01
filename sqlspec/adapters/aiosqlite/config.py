@@ -14,7 +14,7 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolConnection,
     AiosqlitePoolConnectionContext,
 )
-from sqlspec.adapters.sqlite.type_converter import register_type_handlers
+from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config

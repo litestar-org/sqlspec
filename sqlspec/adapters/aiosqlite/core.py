@@ -9,10 +9,13 @@ from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     DataError,
+    DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -53,6 +56,11 @@ SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_MISMATCH_CODE = 20
+SQLITE_BUSY_CODE = 5
+SQLITE_LOCKED_CODE = 6
+SQLITE_INTERRUPT_CODE = 9
+SQLITE_PERM_CODE = 3
+SQLITE_READONLY_CODE = 8
 
 
 def _bool_to_int(value: bool) -> int:
@@ -209,11 +217,29 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
         error_name = None
     error_msg = str(error).lower()
 
-    if "locked" in error_msg:
-        msg = f"AIOSQLite database locked: {error}. Consider enabling WAL mode or reducing concurrency."
-        exc = SQLSpecError(msg)
-        exc.__cause__ = error  # pyright: ignore[reportAttributeAccessIssue]
-        return exc
+    # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
+    # SQLITE_BUSY means another process has the database locked
+    # SQLITE_LOCKED means another connection has the table/rows locked
+    if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
+        return _create_aiosqlite_error(error, error_code, DeadlockError, "database busy")
+    if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
+        return _create_aiosqlite_error(error, error_code, DeadlockError, "database locked")
+    if "locked" in error_msg or "busy" in error_msg:
+        return _create_aiosqlite_error(error, error_code or 0, DeadlockError, "database locked")
+
+    # Query interruption (timeout-like behavior)
+    if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
+        return _create_aiosqlite_error(error, error_code, QueryTimeoutError, "query interrupted")
+    if "interrupt" in error_msg:
+        return _create_aiosqlite_error(error, error_code or 0, QueryTimeoutError, "query interrupted")
+
+    # Permission errors
+    if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
+        return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "permission denied")
+    if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
+        return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
+    if "permission denied" in error_msg or "readonly" in error_msg:
+        return _create_aiosqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
 
     if not error_code:
         if "unique constraint" in error_msg:
@@ -255,9 +281,9 @@ def build_profile() -> "DriverParameterProfile":
     return DriverParameterProfile(
         name="AIOSQLite",
         default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK},
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
         default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK},
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
         has_native_list_expansion=False,
         preserve_parameter_format=True,
         needs_static_script_compilation=False,
@@ -286,7 +312,10 @@ def build_statement_config(
     deserializer = json_deserializer or from_json
     profile = driver_profile
     return build_statement_config_from_profile(
-        profile, statement_overrides={"dialect": "sqlite"}, json_serializer=serializer, json_deserializer=deserializer
+        profile,
+        statement_overrides={"dialect": "sqlite", "enable_parameter_type_wrapping": False},
+        json_serializer=serializer,
+        json_deserializer=deserializer,
     )
 
 

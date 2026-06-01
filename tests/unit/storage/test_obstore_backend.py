@@ -46,6 +46,59 @@ class _FakeStore:
         self.put_paths.append(path)
 
 
+class _FakeListingStore:
+    def __init__(self) -> None:
+        self.list_paths: list[str] = []
+        self.list_with_delimiter_paths: list[str] = []
+
+    def list(self, path: str) -> Any:
+        self.list_paths.append(path)
+        return iter([
+            [{"path": "file1.txt", "size": 5, "last_modified": None, "e_tag": None, "version": None}],
+            [
+                {"path": "subdir/file2.txt", "size": 8, "last_modified": None, "e_tag": None, "version": None},
+                {"path": "subdir/file3.txt", "size": 12, "last_modified": None, "e_tag": None, "version": None},
+            ],
+        ])
+
+    def list_with_delimiter(self, path: str) -> dict[str, Any]:
+        self.list_with_delimiter_paths.append(path)
+        return {
+            "objects": [
+                {"path": "dir/file_a.txt", "size": 10, "last_modified": None, "e_tag": None, "version": None},
+                {"path": "dir/file_b.txt", "size": 20, "last_modified": None, "e_tag": None, "version": None},
+            ],
+            "common_prefixes": ["dir/subdir/"],
+        }
+
+
+class _FakeHeadStore:
+    def __init__(self, metadata: dict[str, object] | None = None, *, missing: bool = False) -> None:
+        self.head_paths: list[str] = []
+        self.head_async_paths: list[str] = []
+        self.metadata = metadata or {
+            "path": "object.txt",
+            "size": 12,
+            "last_modified": None,
+            "e_tag": "etag",
+            "version": "1",
+            "metadata": {"owner": "sqlspec"},
+        }
+        self.missing = missing
+
+    def head(self, path: str) -> dict[str, object]:
+        self.head_paths.append(path)
+        if self.missing:
+            raise FileNotFoundError(path)
+        return self.metadata
+
+    async def head_async(self, path: str) -> dict[str, object]:
+        self.head_async_paths.append(path)
+        if self.missing:
+            raise FileNotFoundError(path)
+        return self.metadata
+
+
 class _FakeParquet:
     def __init__(self, result: Any) -> None:
         self.result = result
@@ -187,6 +240,38 @@ def test_list_objects(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_list_objects_sync_non_recursive_uses_list_with_delimiter(tmp_path: Path) -> None:
+    """Non-recursive list results are ListResult dicts, not ListStream batches."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    fake_store = _FakeListingStore()
+    store.store = fake_store
+
+    result = store.list_objects_sync(recursive=False)
+
+    assert fake_store.list_with_delimiter_paths == [""]
+    assert fake_store.list_paths == []
+    assert result == ["dir/file_a.txt", "dir/file_b.txt"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_list_objects_sync_recursive_uses_list_stream(tmp_path: Path) -> None:
+    """Recursive lists still consume the ListStream batch iterator."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    fake_store = _FakeListingStore()
+    store.store = fake_store
+
+    result = store.list_objects_sync(recursive=True)
+
+    assert fake_store.list_paths == [""]
+    assert fake_store.list_with_delimiter_paths == []
+    assert result == ["file1.txt", "subdir/file2.txt", "subdir/file3.txt"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_glob(tmp_path: Path) -> None:
     """Test glob pattern matching."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -218,6 +303,53 @@ def test_get_metadata(tmp_path: Path) -> None:
 
     assert "exists" in metadata
     assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_get_metadata_sync_uses_local_store_path_resolution(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}", base_path="data")
+    fake_store = _FakeHeadStore()
+    store.store = fake_store
+
+    metadata = store.get_metadata_sync("nested/object.txt")
+
+    assert fake_store.head_paths == ["nested/object.txt"]
+    assert metadata["path"] == "nested/object.txt"
+    assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_get_metadata_sync_returns_typed_dict_keys(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore()
+
+    metadata = store.get_metadata_sync("object.txt")
+
+    assert metadata == {
+        "path": "object.txt",
+        "exists": True,
+        "size": 12,
+        "last_modified": None,
+        "e_tag": "etag",
+        "version": "1",
+        "custom_metadata": {"owner": "sqlspec"},
+    }
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_get_metadata_sync_returns_absent_result_for_missing_object(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore(missing=True)
+
+    metadata = store.get_metadata_sync("missing.txt")
+
+    assert metadata == {"path": "missing.txt", "exists": False}
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -459,6 +591,67 @@ async def test_async_get_metadata(tmp_path: Path) -> None:
 
     assert "exists" in metadata
     assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_async_uses_local_store_path_resolution(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}", base_path="data")
+    fake_store = _FakeHeadStore()
+    store.store = fake_store
+
+    metadata = await store.get_metadata_async("nested/object.txt")
+
+    assert fake_store.head_async_paths == ["nested/object.txt"]
+    assert metadata["path"] == "nested/object.txt"
+    assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_async_returns_typed_dict_keys(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore()
+
+    metadata = await store.get_metadata_async("object.txt")
+
+    assert metadata == {
+        "path": "object.txt",
+        "exists": True,
+        "size": 12,
+        "last_modified": None,
+        "e_tag": "etag",
+        "version": "1",
+        "custom_metadata": {"owner": "sqlspec"},
+    }
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_async_returns_absent_result_for_missing_object(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore(missing=True)
+
+    metadata = await store.get_metadata_async("missing.txt")
+
+    assert metadata == {"path": "missing.txt", "exists": False}
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_sync_and_async_result_keys_match(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    metadata = {"path": "object.txt", "size": 42, "last_modified": None, "e_tag": "same", "version": "7"}
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore(metadata)
+
+    sync_metadata = store.get_metadata_sync("object.txt")
+    async_metadata = await store.get_metadata_async("object.txt")
+
+    assert sync_metadata == async_metadata
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")

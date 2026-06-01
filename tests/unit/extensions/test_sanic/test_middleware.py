@@ -14,6 +14,8 @@ from sanic import Sanic
 from sqlspec.extensions.sanic import SQLSpecPlugin
 from sqlspec.extensions.sanic._utils import has_context_value
 
+pytestmark = pytest.mark.anyio
+
 
 async def test_request_middleware_acquires_pooled_connection() -> None:
     """Request middleware should expose pooled connections on request.ctx."""

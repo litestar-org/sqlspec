@@ -10,6 +10,8 @@ from sqlspec.adapters.asyncpg.core import (
     build_connection_config,
     default_statement_config,
     register_json_codecs,
+    register_pgvector_support,
+    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
@@ -154,9 +156,11 @@ class CockroachAsyncpgConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        raw_enable_pgvector = bool(driver_features and driver_features.get("enable_pgvector") is True)
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+        driver_features["enable_pgvector"] = raw_enable_pgvector
 
         driver_features.setdefault("enable_auto_retry", True)
 
@@ -192,6 +196,9 @@ class CockroachAsyncpgConfig(
                 decoder=self.driver_features.get("json_deserializer", from_json),
             )
 
+        if self.driver_features.get("enable_pgvector") is True:
+            await register_pgvector_support(connection)
+
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
 
@@ -224,7 +231,8 @@ class CockroachAsyncpgConfig(
         return CockroachAsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )

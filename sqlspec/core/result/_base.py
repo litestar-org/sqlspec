@@ -384,11 +384,6 @@ class SQLResult(StatementResult):
         return converted_rows
 
     def _get_schema_row(self, schema_type: "type[SchemaT]", row: "dict[str, Any]") -> "SchemaT":
-        rows_cache = self._schema_rows_cache
-        if rows_cache is not None:
-            cached_rows = rows_cache.get(schema_type)
-            if cached_rows:
-                return cast("SchemaT", cached_rows[0])
         row_cache = self._schema_row_cache
         if row_cache is not None:
             cached_row = row_cache.get(schema_type)

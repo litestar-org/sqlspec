@@ -770,6 +770,29 @@ def test_any_subquery() -> None:
     assert isinstance(any_expr, Any)
 
 
+def test_not_any_factory_wraps_any_expression_in_not() -> None:
+    """Test SQLFactory.not_any_ returns NOT ANY instead of bare ANY."""
+    result = SQLFactory.not_any_([1, 2, 3])
+
+    assert isinstance(result.expression, exp.Not)
+    assert isinstance(result.expression.this, exp.Any)
+
+
+def test_any_factory_still_returns_any_expression() -> None:
+    """Test SQLFactory.any remains unchanged."""
+    result = SQLFactory.any([1, 2])
+
+    assert isinstance(result.expression, exp.Any)
+
+
+def test_not_any_factory_where_clause_contains_not() -> None:
+    """Test not_any_ emits NOT when composed into a WHERE clause."""
+    query = sql.select("*").from_("users").where(SQLFactory.not_any_("SELECT id FROM blocked_users").expression)
+    stmt = query.build()
+
+    assert "NOT" in stmt.sql.upper()
+
+
 def test_all_subquery() -> None:
     """Test ALL subquery functionality."""
     subquery = sql.select("salary").from_("employees").where_eq("department", "Sales")

@@ -214,19 +214,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 exc_handler = self.handle_database_exceptions()
                 with exc_handler, self.with_cursor(connection) as cursor:
                     # Logic mirrors the instrumentation path below but without telemetry
-                    if statement.is_script:
+                    special_result = self.dispatch_special_handling(cursor, statement)
+                    if special_result is not None:
+                        result = special_result
+                    elif statement.is_script:
                         execution_result = self.dispatch_execute_script(cursor, statement)
                         result = self.build_statement_result(statement, execution_result)
                     elif statement.is_many:
                         execution_result = self.dispatch_execute_many(cursor, statement)
                         result = self.build_statement_result(statement, execution_result)
                     else:
-                        special_result = self.dispatch_special_handling(cursor, statement)
-                        if special_result is not None:
-                            result = special_result
-                        else:
-                            execution_result = self.dispatch_execute(cursor, statement)
-                            result = self.build_statement_result(statement, execution_result)
+                        execution_result = self.dispatch_execute(cursor, statement)
+                        result = self.build_statement_result(statement, execution_result)
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result

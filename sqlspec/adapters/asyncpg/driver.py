@@ -1,8 +1,9 @@
 """AsyncPG PostgreSQL driver implementation for async PostgreSQL operations."""
 
+import re
 from collections import OrderedDict
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncpg
 
@@ -51,7 +52,19 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
 
+_COPY_FROM_STDIN_RE: re.Pattern[str] = re.compile(
+    r'COPY\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)(?:\s*\([^)]*\))?\s+FROM\s+STDIN', re.IGNORECASE
+)
+_QUALIFIED_TABLE_NAME_PARTS: Final = 2
+
 logger = get_logger("sqlspec.adapters.asyncpg")
+
+
+def _split_copy_table_name(raw_name: str) -> "tuple[str | None, str]":
+    parts = raw_name.split(".", 1)
+    if len(parts) == _QUALIFIED_TABLE_NAME_PARTS:
+        return parts[0].strip('"'), parts[1].strip('"')
+    return None, raw_name.strip('"')
 
 
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
@@ -473,7 +486,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     async def _handle_copy_operation(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
         """Handle PostgreSQL COPY operations.
 
-        Supports both COPY FROM STDIN and COPY TO STDOUT operations.
+        Supports COPY FROM STDIN data import and falls through to cursor.execute
+        for COPY TO STDOUT and file-based COPY variants.
 
         Args:
             cursor: AsyncPG connection object
@@ -483,10 +497,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         execution_args = statement.statement_config.execution_args
         metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
         sql_text, _ = self._get_compiled_sql(statement, statement.statement_config)
-        sql_upper = sql_text.upper()
         copy_data = metadata.get("postgres_copy_data")
 
-        if copy_data and is_copy_from_operation(statement.operation_type) and "FROM STDIN" in sql_upper:
+        if copy_data is not None and is_copy_from_operation(statement.operation_type):
             if isinstance(copy_data, dict):
                 data_str = (
                     str(next(iter(copy_data.values())))
@@ -499,7 +512,30 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 data_str = str(copy_data)
 
             data_io = BytesIO(data_str.encode("utf-8"))
-            await cursor.copy_from_query(sql_text, output=data_io)
+            table_name = cast("str | None", metadata.get("postgres_copy_table"))
+            schema_name: str | None = None
+
+            if table_name is None:
+                match = _COPY_FROM_STDIN_RE.search(sql_text)
+                if match:
+                    table_name = match.group(1)
+
+            if table_name is None:
+                msg = "COPY FROM STDIN requires a table name or postgres_copy_table execution argument"
+                raise SQLSpecError(msg)
+
+            schema_name, table_name = _split_copy_table_name(table_name)
+            copy_kwargs: dict[str, Any] = {"source": data_io}
+            if schema_name is not None:
+                copy_kwargs["schema_name"] = schema_name
+            if "postgres_copy_columns" in metadata:
+                copy_kwargs["columns"] = metadata["postgres_copy_columns"]
+            if "postgres_copy_format" in metadata:
+                copy_kwargs["format"] = metadata["postgres_copy_format"]
+            if "postgres_copy_delimiter" in metadata:
+                copy_kwargs["delimiter"] = metadata["postgres_copy_delimiter"]
+
+            await cursor.copy_to_table(table_name, **copy_kwargs)
             return
 
         await cursor.execute(sql_text)

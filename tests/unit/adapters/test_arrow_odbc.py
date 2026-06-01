@@ -190,6 +190,33 @@ def test_arrow_odbc_field_config_uses_driver_name_for_dialect(monkeypatch: Any) 
         assert session.dialect == "tsql"
 
 
+def test_arrow_odbc_config_init_no_pre_super_assign_connection_string() -> None:
+    """Connection-string input should normalize and populate driver features."""
+    connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=localhost;Database=db;"
+
+    config = ArrowOdbcConfig(connection_config={"connection_string": connection_string})
+
+    assert config.connection_config == {"connection_string": connection_string}
+    assert config.driver_features.get("connection_string") == connection_string
+
+
+def test_arrow_odbc_config_init_no_pre_super_assign_driver_key() -> None:
+    """Driver-key input should populate dbms_name without early slot writes."""
+    config = ArrowOdbcConfig(
+        connection_config={"driver": "ODBC Driver 17 for SQL Server", "server": "myhost", "database": "mydb"}
+    )
+
+    assert config.connection_config["driver"] == "ODBC Driver 17 for SQL Server"
+    assert config.driver_features.get("dbms_name") == "ODBC Driver 17 for SQL Server"
+
+
+def test_arrow_odbc_config_init_no_pre_super_assign_none_input() -> None:
+    """None input should normalize to an empty connection_config dict."""
+    config = ArrowOdbcConfig(connection_config=None)
+
+    assert config.connection_config == {}
+
+
 def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     """SQL Server ODBC connections should compile with sqlglot's tsql dialect."""
     connection = FakeConnection()

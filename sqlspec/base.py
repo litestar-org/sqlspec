@@ -23,6 +23,7 @@ from sqlspec.core import (
     get_cache_statistics,
     log_cache_stats,
     reset_cache_stats,
+    reset_stats_only,
     update_cache_config,
 )
 from sqlspec.exceptions import ImproperConfigurationError
@@ -167,6 +168,10 @@ class _CacheManager:
     @staticmethod
     def reset_cache_stats() -> None:
         reset_cache_stats()
+
+    @staticmethod
+    def reset_stats_only() -> None:
+        reset_stats_only()
 
     @staticmethod
     def log_cache_stats() -> None:
@@ -727,6 +732,11 @@ class SQLSpec:
     def reset_cache_stats() -> None:
         """Reset all cache statistics to zero."""
         _CACHE_MANAGER.reset_cache_stats()
+
+    @staticmethod
+    def reset_stats_only() -> None:
+        """Reset cache statistics without clearing cached data."""
+        _CACHE_MANAGER.reset_stats_only()
 
     @staticmethod
     def log_cache_stats() -> None:

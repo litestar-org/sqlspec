@@ -626,8 +626,9 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async arrow writing not implemented"
         raise NotImplementedError(msg)
 
+    # NOTE: Returns AsyncIterator directly; this is intentionally not async def.
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
-        """Async stream Arrow record batches from matching objects."""
+        """Stream Arrow record batches from matching objects."""
         msg = "Async arrow streaming not implemented"
         raise NotImplementedError(msg)
 

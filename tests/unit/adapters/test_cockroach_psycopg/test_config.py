@@ -13,6 +13,7 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgRetryConfig,
     CockroachPsycopgSyncConfig,
 )
+from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 
 
 class TestCockroachPsycopgSyncConfig:
@@ -158,6 +159,15 @@ class TestCockroachPsycopgAsyncConfig:
         assert CockroachPsycopgAsyncConfig.supports_transactional_ddl is True
         assert CockroachPsycopgAsyncConfig.supports_native_arrow_export is True
         assert CockroachPsycopgAsyncConfig.supports_native_arrow_import is True
+
+    def test_provide_session_uses_default_statement_config_constant_when_config_missing(self) -> None:
+        """Async session fallback should reuse the module-level default config."""
+        config = CockroachPsycopgAsyncConfig()
+        config.statement_config = None  # type: ignore[assignment]
+
+        session_config = config.provide_session()._statement_config  # pyright: ignore[reportPrivateUsage]
+
+        assert session_config is default_statement_config
 
 
 class TestCockroachPsycopgDriverFeatures:

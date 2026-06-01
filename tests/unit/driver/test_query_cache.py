@@ -6,7 +6,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.core import SQL, OperationProfile, OperationType, ParameterProfile, ProcessedState
+from sqlspec.core import (
+    SQL,
+    OperationProfile,
+    OperationType,
+    ParameterInfo,
+    ParameterProfile,
+    ParameterStyle,
+    ProcessedState,
+)
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.exceptions import SQLSpecError
 
@@ -17,6 +25,7 @@ def _make_cached(
     operation_type: OperationType = "SELECT",
     column_names: list[str] | None = None,
     operation_profile: OperationProfile | None = None,
+    parameter_profile: ParameterProfile | None = None,
     processed_state: ProcessedState | None = None,
 ) -> CachedQuery:
     if operation_profile is None:
@@ -27,7 +36,7 @@ def _make_cached(
         )
     return CachedQuery(
         compiled_sql=compiled_sql,
-        parameter_profile=ParameterProfile(),
+        parameter_profile=parameter_profile or ParameterProfile(),
         input_named_parameters=(),
         applied_wrap_types=False,
         parameter_casts={},
@@ -150,6 +159,35 @@ def test_sync_stmt_cache_execute_direct_re_raises_mapped_exception(sqlite_sync_d
 
     with pytest.raises(SQLSpecError, match="SQLite database error: boom"):
         sqlite_sync_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+
+
+def test_stmt_cache_prepare_direct_named_style_sets_needs_rebind(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+    profile = ParameterProfile([ParameterInfo("id", ParameterStyle.NAMED_COLON, 0, 0, ":id")])
+    cached = _make_cached(
+        compiled_sql="SELECT :id",
+        param_count=1,
+        parameter_profile=profile,
+        processed_state=ProcessedState(
+            compiled_sql="SELECT :id", execution_parameters=[1], operation_type="SELECT", parameter_profile=profile
+        ),
+    )
+    sqlite_sync_driver._stmt_cache.set("SELECT :id", cached)
+    sqlite_sync_driver._stmt_cache_enabled = True
+    called = False
+
+    def _fake_rebind(params: tuple[Any, ...] | list[Any], cached_query: CachedQuery) -> tuple[Any, ...] | list[Any]:
+        nonlocal called
+        called = True
+        assert params == (1,)
+        assert cached_query is cached
+        return params
+
+    monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", _fake_rebind)
+
+    prepared = sqlite_sync_driver._stmt_cache_prepare_direct("SELECT :id", (1,))
+
+    assert prepared is not None
+    assert called is True
 
 
 @pytest.mark.anyio

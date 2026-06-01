@@ -168,7 +168,7 @@ def build_profile() -> "DriverParameterProfile":
     """Create the AsyncMy driver parameter profile."""
     coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int, **build_uuid_coercions()}
     return DriverParameterProfile(
-        name="AsyncMy",
+        name="asyncmy",
         default_style=ParameterStyle.QMARK,
         supported_styles={ParameterStyle.QMARK},
         default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,

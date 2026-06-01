@@ -1,3 +1,4 @@
+import inspect
 from unittest.mock import MagicMock, Mock
 
 import pyarrow as pa
@@ -141,3 +142,74 @@ def test_load_from_arrow_caches_inferred_param_types(
     assert result.telemetry["rows_processed"] == 2
     assert infer_call_count == 1
     mock_transaction.batch_update.assert_called_once()
+
+
+def test_dispatch_execute_script_cte_select_detected_as_select(mock_transaction: MagicMock) -> None:
+    driver = SpannerSyncDriver(mock_transaction)
+    mock_result = MagicMock()
+    mock_result.__iter__ = MagicMock(return_value=iter([]))
+    mock_transaction.execute_sql = MagicMock(return_value=mock_result)
+    mock_transaction.execute_sql.return_value = mock_result
+    mock_transaction.execute_update.side_effect = AssertionError("execute_update called for SELECT CTE")
+
+    statement = driver.prepare_statement(
+        "WITH cte AS (SELECT id FROM users) SELECT * FROM cte", statement_config=driver.statement_config
+    )
+    driver.dispatch_execute_script(mock_transaction, statement)
+
+    mock_transaction.execute_sql.assert_called_once()
+    mock_transaction.execute_update.assert_not_called()
+
+
+def test_dispatch_execute_script_plain_select_detected_as_select(mock_transaction: MagicMock) -> None:
+    driver = SpannerSyncDriver(mock_transaction)
+    mock_result = MagicMock()
+    mock_result.__iter__ = MagicMock(return_value=iter([]))
+    mock_transaction.execute_sql = MagicMock(return_value=mock_result)
+    mock_transaction.execute_sql.return_value = mock_result
+    mock_transaction.execute_update.side_effect = AssertionError("execute_update should not be called for SELECT")
+
+    statement = driver.prepare_statement("SELECT 1", statement_config=driver.statement_config)
+    driver.dispatch_execute_script(mock_transaction, statement)
+
+    mock_transaction.execute_sql.assert_called_once()
+    mock_transaction.execute_update.assert_not_called()
+
+
+def test_dispatch_execute_script_insert_detected_as_non_select(mock_transaction: MagicMock) -> None:
+    driver = SpannerSyncDriver(mock_transaction)
+    mock_transaction.execute_sql = MagicMock()
+    mock_transaction.execute_update.return_value = 1
+
+    statement = driver.prepare_statement(
+        "INSERT INTO users (id, name) VALUES (1, 'Alice')", statement_config=driver.statement_config
+    )
+    driver.dispatch_execute_script(mock_transaction, statement)
+
+    mock_transaction.execute_update.assert_called_once()
+    mock_transaction.execute_sql.assert_not_called()
+
+
+def test_dispatch_execute_many_no_shadowed_local_aliases() -> None:
+    source = inspect.getsource(SpannerSyncDriver.dispatch_execute_many)
+
+    assert "coerce_params = self._coerce_params" not in source
+    assert "infer_param_types = self._infer_param_types" not in source
+    assert "_coerce = self._coerce_params" in source
+    assert "_infer = self._infer_param_types" in source
+    assert "_coerce(cast" in source
+    assert "_infer(coerced_params)" in source
+
+
+def test_module_level_coerce_params_not_shadowed_by_local_alias() -> None:
+    import sqlspec.adapters.spanner.driver as driver_module
+    from sqlspec.adapters.spanner.core import coerce_params as core_coerce_params
+
+    assert driver_module.coerce_params is core_coerce_params
+
+
+def test_module_level_infer_param_types_not_shadowed_by_local_alias() -> None:
+    import sqlspec.adapters.spanner.driver as driver_module
+    from sqlspec.adapters.spanner.core import infer_param_types as core_infer_param_types
+
+    assert driver_module.infer_param_types is core_infer_param_types

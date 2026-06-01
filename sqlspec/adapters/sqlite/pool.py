@@ -7,9 +7,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
@@ -18,20 +16,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 __all__ = ("SqliteConnectionPool",)
-
-
-class SqliteConnectionParams(TypedDict):
-    """SQLite connection parameters."""
-
-    database: NotRequired[str]
-    timeout: NotRequired[float]
-    detect_types: NotRequired[int]
-    isolation_level: "NotRequired[str | None]"
-    check_same_thread: NotRequired[bool]
-    factory: "NotRequired[type[SqliteConnection] | None]"
-    cached_statements: NotRequired[int]
-    uri: NotRequired[bool]
-
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlite"

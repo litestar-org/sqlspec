@@ -603,8 +603,18 @@ def test_resolve_db_system_unknown() -> None:
 
 def test_compute_sql_hash() -> None:
     sql = "SELECT 1"
-    expected = hashlib.sha256(sql.encode("utf-8")).hexdigest()[:16]
+    expected = hashlib.sha256(sql.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     assert compute_sql_hash(sql) == expected
+
+
+def test_compute_sql_hash_returns_16_char_hex_string() -> None:
+    first_hash = compute_sql_hash("SELECT 1")
+    second_hash = compute_sql_hash("SELECT 2")
+
+    assert len(first_hash) == 16
+    assert first_hash != second_hash
+    assert first_hash.islower()
+    assert all(character in "0123456789abcdef" for character in first_hash)
 
 
 def test_get_trace_context_without_otel(monkeypatch) -> None:

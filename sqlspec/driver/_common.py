@@ -1105,6 +1105,8 @@ class CommonDriverAttributesMixin:
                 needs_rebind = type(params[0]) in coercion_types
             else:
                 needs_rebind = any(type(p) in coercion_types for p in params)
+        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
+            needs_rebind = True
         if needs_rebind:
             rebound_params = self.stmt_cache_rebind(params, cached)
             params_are_simple = False

@@ -552,6 +552,100 @@ def test_not_null_filter_cache_key_uniqueness() -> None:
     assert key1 == key3
 
 
+def _where_condition(statement: SQL) -> exp.Expression:
+    expr = statement.expression
+    assert isinstance(expr, exp.Select)
+    where_expr = expr.args.get("where")
+    assert isinstance(where_expr, exp.Where)
+    condition = where_expr.this
+    assert isinstance(condition, exp.Expression)
+    return condition
+
+
+def test_before_after_filter_col_nodes_are_independent() -> None:
+    filter_obj = BeforeAfterFilter("created_at", before=datetime(2023, 12, 31), after=datetime(2023, 1, 1))
+
+    condition = _where_condition(apply_filter(SQL("SELECT * FROM items"), filter_obj))
+
+    assert isinstance(condition, exp.And)
+    lt_cond = condition.this
+    gt_cond = condition.expression
+    assert isinstance(lt_cond, exp.LT)
+    assert isinstance(gt_cond, exp.GT)
+    lt_col = lt_cond.this
+    gt_col = gt_cond.this
+
+    assert lt_col is not gt_col
+    lt_col.replace(exp.column("x"))
+    assert lt_cond.this.sql() == "x"
+    assert gt_cond.this.sql() == "created_at"
+
+
+def test_on_before_after_filter_col_nodes_are_independent() -> None:
+    from sqlspec.core.filters import OnBeforeAfterFilter
+
+    filter_obj = OnBeforeAfterFilter(
+        "created_at", on_or_before=datetime(2023, 12, 31), on_or_after=datetime(2023, 1, 1)
+    )
+
+    condition = _where_condition(apply_filter(SQL("SELECT * FROM items"), filter_obj))
+
+    assert isinstance(condition, exp.And)
+    lte_cond = condition.this
+    gte_cond = condition.expression
+    assert isinstance(lte_cond, exp.LTE)
+    assert isinstance(gte_cond, exp.GTE)
+    lte_col = lte_cond.this
+    gte_col = gte_cond.this
+
+    assert lte_col is not gte_col
+    lte_col.replace(exp.column("x"))
+    assert lte_cond.this.sql() == "x"
+    assert gte_cond.this.sql() == "created_at"
+
+
+def test_search_filter_set_case_placeholder_nodes_are_independent() -> None:
+    filter_obj = SearchFilter(field_name={"name", "description"}, value="oracle")
+
+    condition = _where_condition(apply_filter(SQL("SELECT * FROM items"), filter_obj))
+
+    assert isinstance(condition, exp.Or)
+    left_like = condition.this
+    right_like = condition.expression
+    assert isinstance(left_like, exp.Like)
+    assert isinstance(right_like, exp.Like)
+    left_placeholder = left_like.expression
+    right_placeholder = right_like.expression
+
+    assert left_placeholder is not right_placeholder
+    left_placeholder.replace(exp.Placeholder(this="replacement"))
+    assert left_like.expression.sql() == ":replacement"
+    assert right_like.expression.sql() == ":search_value"
+
+
+def test_not_in_search_filter_set_case_placeholder_nodes_are_independent() -> None:
+    filter_obj = NotInSearchFilter(field_name={"name", "description"}, value="oracle")
+
+    condition = _where_condition(apply_filter(SQL("SELECT * FROM items"), filter_obj))
+
+    assert isinstance(condition, exp.And)
+    left_not = condition.this
+    right_not = condition.expression
+    assert isinstance(left_not, exp.Not)
+    assert isinstance(right_not, exp.Not)
+    left_like = left_not.this
+    right_like = right_not.this
+    assert isinstance(left_like, exp.Like)
+    assert isinstance(right_like, exp.Like)
+    left_placeholder = left_like.expression
+    right_placeholder = right_like.expression
+
+    assert left_placeholder is not right_placeholder
+    left_placeholder.replace(exp.Placeholder(this="replacement"))
+    assert left_like.expression.sql() == ":replacement"
+    assert right_like.expression.sql() == ":not_search_value"
+
+
 # --- Bug #379 regression tests: multi-field placeholder independence ---
 
 

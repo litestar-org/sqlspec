@@ -107,6 +107,7 @@ from sqlspec.core.cache import (
     log_cache_stats,
     reset_cache_stats,
     reset_pipeline_registry,
+    reset_stats_only,
     update_cache_config,
 )
 from sqlspec.core.compiler import (
@@ -364,6 +365,7 @@ __all__ = (
     "replace_placeholders_with_literals",
     "reset_cache_stats",
     "reset_pipeline_registry",
+    "reset_stats_only",
     "safe_modify_with_cte",
     "split_sql_script",
     "update_cache_config",

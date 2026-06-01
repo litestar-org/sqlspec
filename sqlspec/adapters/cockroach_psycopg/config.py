@@ -487,7 +487,7 @@ class CockroachPsycopgAsyncConfig(
         return CockroachPsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or build_statement_config(),
+            statement_config=statement_config or self.statement_config or default_statement_config,
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )

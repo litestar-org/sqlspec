@@ -1,6 +1,7 @@
 """DuckDB connection pool with thread-local connections."""
 
 import logging
+import re
 import threading
 import time
 import uuid
@@ -16,6 +17,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 __all__ = ("DuckDBConnectionPool",)
+
+
+_SQL_IDENTIFIER_RE: "Final[re.Pattern[str]]" = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _validate_sql_identifier(value: str, field_name: str) -> None:
+    """Raise ValueError if value is not safe to interpolate as a SQL identifier."""
+    if not _SQL_IDENTIFIER_RE.fullmatch(value):
+        msg = (
+            f"Invalid SQL identifier for {field_name!r}: {value!r}. "
+            "Must start with a letter and contain only letters, digits, and underscores."
+        )
+        raise ValueError(msg)
 
 
 logger = get_logger(POOL_LOGGER_NAME)
@@ -41,8 +55,6 @@ class DuckDBConnectionPool:
 
     __slots__ = (
         "_connection_config",
-        "_connection_times",
-        "_created_connections",
         "_extension_flags",
         "_extensions",
         "_health_check_interval",
@@ -85,8 +97,6 @@ class DuckDBConnectionPool:
         self._on_connection_create = on_connection_create
         self._thread_local = threading.local()
         self._lock = threading.RLock()
-        self._created_connections = 0
-        self._connection_times: dict[int, float] = {}
         self._pool_id = str(uuid.uuid4())[:8]
         # Track if this pool uses an in-memory database
         # In-memory databases require connections to stay alive to preserve data
@@ -156,6 +166,9 @@ class DuckDBConnectionPool:
             if not (secret_type and secret_name and secret_value):
                 continue
 
+            _validate_sql_identifier(secret_name, "secret_name")
+            _validate_sql_identifier(secret_type, "secret_type")
+
             value_pairs = []
             for key, value in secret_value.items():
                 escaped_value = str(value).replace("'", "''")
@@ -177,11 +190,6 @@ class DuckDBConnectionPool:
         if self._on_connection_create:
             with suppress(Exception):
                 self._on_connection_create(connection)
-
-        conn_id = id(connection)
-        with self._lock:
-            self._created_connections += 1
-            self._connection_times[conn_id] = time.time()
 
         return connection
 

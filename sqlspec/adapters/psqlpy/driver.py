@@ -180,12 +180,17 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        if len(statements) > 1 and prepared_parameters:
+            msg = (
+                "Parameterized multi-statement scripts are not supported; use execute_many or individual execute calls"
+            )
+            raise SQLSpecError(msg)
 
         successful_count = 0
         last_result = None
 
         for stmt in statements:
-            last_result = await cursor.execute(stmt, prepared_parameters or [])
+            last_result = await cursor.execute(stmt, [])
             successful_count += 1
 
         return self.create_execution_result(

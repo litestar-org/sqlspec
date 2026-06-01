@@ -437,7 +437,7 @@ def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = Non
         cursor: Database cursor to execute rollback.
         logger: Optional logger for diagnostics.
     """
-    if dialect != "postgres":
+    if not is_postgres_dialect(dialect):
         return
     try:
         cursor.execute("ROLLBACK")
@@ -457,7 +457,7 @@ def normalize_postgres_empty_parameters(dialect: str, parameters: Any) -> Any:
     Returns:
         Normalized parameter payload.
     """
-    if dialect == "postgres" and isinstance(parameters, dict) and not parameters:
+    if is_postgres_dialect(dialect) and isinstance(parameters, dict) and not parameters:
         return None
     return parameters
 

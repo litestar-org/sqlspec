@@ -1,6 +1,7 @@
 """mssql-python database configuration."""
 
 import asyncio
+import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
@@ -34,6 +35,8 @@ __all__ = (
     "MssqlPythonDriverFeatures",
     "MssqlPythonPoolParams",
 )
+
+_POOLING_PARAMS: "tuple[int, int, bool] | None" = None
 
 
 class MssqlPythonConnectionParams(TypedDict):
@@ -111,7 +114,16 @@ class MssqlPythonConnectionPool:
         self.enabled = enabled
         self.on_connection_create = on_connection_create
         self._closed = False
+        global _POOLING_PARAMS
+        new_params = (max_size, idle_timeout, enabled)
+        if _POOLING_PARAMS is not None and new_params != _POOLING_PARAMS:
+            warnings.warn(
+                f"mssql-python pooling config already set to {_POOLING_PARAMS}; "
+                f"overwriting with {new_params}. Only one pool config per process is supported.",
+                stacklevel=2,
+            )
         MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
+        _POOLING_PARAMS = new_params
 
     def acquire(self) -> "MssqlPythonConnection":
         if self._closed:

@@ -262,8 +262,11 @@ class ObStoreBackend:
             resolved_prefix = ""
         else:
             resolved_prefix = self.base_path or ""
-        items = self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
-        paths = sorted(item["path"] for batch in items for item in batch)
+        if not recursive:
+            result = self.store.list_with_delimiter(resolved_prefix)
+            paths = sorted(item["path"] for item in result["objects"])
+        else:
+            paths = sorted(item["path"] for batch in self.store.list(resolved_prefix) for item in batch)
         _log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
@@ -390,38 +393,24 @@ class ObStoreBackend:
 
     def get_metadata_sync(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore synchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
+        # Keep in sync with get_metadata_async.
         try:
             metadata = self.store.head(resolved_path)
         except Exception:
             return {"path": resolved_path, "exists": False}
         else:
-            if isinstance(metadata, dict):
-                result = {
-                    "path": resolved_path,
-                    "exists": True,
-                    "size": metadata.get("size"),
-                    "last_modified": metadata.get("last_modified"),
-                    "e_tag": metadata.get("e_tag"),
-                    "version": metadata.get("version"),
-                }
-                if metadata.get("metadata"):
-                    result["custom_metadata"] = metadata["metadata"]
-                return result
-
             result = {
                 "path": resolved_path,
                 "exists": True,
-                "size": metadata.size,
-                "last_modified": metadata.last_modified,
-                "e_tag": metadata.e_tag,
-                "version": metadata.version,
+                "size": metadata.get("size"),
+                "last_modified": metadata.get("last_modified"),
+                "e_tag": metadata.get("e_tag"),
+                "version": metadata.get("version"),
             }
-
-            if metadata.metadata:
-                result["custom_metadata"] = metadata.metadata
-
+            if metadata.get("metadata"):
+                result["custom_metadata"] = metadata["metadata"]
             return result
 
     def is_object_sync(self, path: "str | Path") -> bool:
@@ -817,6 +806,7 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result: dict[str, object] = {}
+        # Keep in sync with get_metadata_sync.
         try:
             metadata = await self.store.head_async(resolved_path)
             result.update({

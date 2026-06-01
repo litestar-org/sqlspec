@@ -4,7 +4,7 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -59,7 +59,6 @@ VALID_FOREIGN_KEY_ACTIONS = {
     FOREIGN_KEY_ACTION_SET_DEFAULT,
     FOREIGN_KEY_ACTION_RESTRICT,
     FOREIGN_KEY_ACTION_NO_ACTION,
-    None,
 }
 
 VALID_CONSTRAINT_TYPES = {
@@ -88,6 +87,9 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expr":
 
     if col.unique:
         constraints.append(exp.ColumnConstraint(kind=exp.UniqueColumnConstraint()))
+
+    if col.auto_increment:
+        constraints.append(exp.ColumnConstraint(kind=exp.AutoIncrementColumnConstraint()))
 
     if col.default is not None:
         default_expr: exp.Expr | None = None
@@ -138,6 +140,13 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         return pk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_FOREIGN_KEY:
+        fk_options: list[str] = []
+        if constraint.deferrable:
+            if constraint.initially_deferred:
+                fk_options.append("DEFERRABLE INITIALLY DEFERRED")
+            else:
+                fk_options.append("DEFERRABLE INITIALLY IMMEDIATE")
+
         fk_constraint = exp.ForeignKey(
             expressions=[exp.to_identifier(col) for col in constraint.columns],
             reference=exp.Reference(
@@ -146,6 +155,7 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
                 on_delete=constraint.on_delete,
                 on_update=constraint.on_update,
             ),
+            options=fk_options or None,
         )
 
         if constraint.name:
@@ -471,7 +481,7 @@ class CreateTable(DDLBuilder):
         self._constraints.append(constraint)
         return self
 
-    def check_constraint(self, condition: Union[str, "ColumnExpression"], name: "str | None" = None) -> "Self":
+    def check_constraint(self, condition: "str | ColumnExpression", name: "str | None" = None) -> "Self":
         """Add a check constraint."""
         if not condition:
             self._raise_sql_builder_error("Check constraint must have a condition")
@@ -886,6 +896,11 @@ class CreateIndex(DDLBuilder):
             where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
+
+        if self._using:
+            if index_params is None:
+                index_params = exp.IndexParameters()
+            index_params.set("using", exp.Var(this=self._using))
 
         index_expr = exp.Index(
             this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
@@ -1514,6 +1529,32 @@ class AlterTable(DDLBuilder):
         """Remove NOT NULL constraint from a column."""
         operation = AlterOperation(operation_type="ALTER COLUMN DROP NOT NULL", column_name=column)
 
+        self._operations.append(operation)
+        return self
+
+    def in_schema(self, schema_name: str) -> "Self":
+        """Set the schema for the table."""
+        self._schema = schema_name
+        return self
+
+    def set_column_default(self, column: str, value: "Any") -> "Self":
+        """Set the default value for a column."""
+        if not column:
+            self._raise_sql_builder_error("Column name must be a non-empty string")
+
+        column_def = ColumnDefinition(name=column, dtype="", default=value)
+        operation = AlterOperation(
+            operation_type="ALTER COLUMN SET DEFAULT", column_name=column, column_definition=column_def
+        )
+        self._operations.append(operation)
+        return self
+
+    def drop_column_default(self, column: str) -> "Self":
+        """Remove the default value from a column."""
+        if not column:
+            self._raise_sql_builder_error("Column name must be a non-empty string")
+
+        operation = AlterOperation(operation_type="ALTER COLUMN DROP DEFAULT", column_name=column)
         self._operations.append(operation)
         return self
 

@@ -587,6 +587,7 @@ ignore = [
   "PLW0603", # Using the global statement to update is discouraged
   "PLW0108", # Replace lambda expression with a def
   "RUF067",  # ruff - init should only have import statements
+  "PLW0717", # too many statements in try block
 ]
 select = ["ALL"]
 

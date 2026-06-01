@@ -368,6 +368,7 @@ class ObjectStoreBase(ABC):
         """Write Arrow table to storage asynchronously."""
         raise NotImplementedError
 
+    # NOTE: Returns AsyncIterator directly; keep in sync with ObjectStoreProtocol.
     @abstractmethod
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         """Stream Arrow record batches from storage asynchronously."""

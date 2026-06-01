@@ -164,6 +164,38 @@ def test_register_alias_with_backend_override(tmp_path: Path) -> None:
     assert backend.backend_type == "local"
 
 
+def test_register_alias_evicts_stale_cache(tmp_path: Path) -> None:
+    """Re-registering an alias should evict the previously cached backend."""
+    registry = StorageRegistry()
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    registry.register_alias("test_store", f"file://{first_root}", backend="local")
+    backend_a = registry.get("test_store")
+
+    registry.register_alias("test_store", f"file://{second_root}", backend="local")
+    backend_b = registry.get("test_store")
+
+    assert backend_b is not backend_a
+    assert str(backend_b.base_path) == str(second_root.resolve())
+
+
+def test_register_alias_evicts_stale_cache_with_kwargs(tmp_path: Path) -> None:
+    """Alias cache eviction must also clear keyed instances created with kwargs."""
+    registry = StorageRegistry()
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    registry.register_alias("test_store", f"file://{first_root}", backend="local")
+    backend_a = registry.get("test_store", cache_label="stable")
+
+    registry.register_alias("test_store", f"file://{second_root}", backend="local")
+    backend_b = registry.get("test_store", cache_label="stable")
+
+    assert backend_b is not backend_a
+    assert str(backend_b.base_path) == str(second_root.resolve())
+
+
 def test_cache_functionality(tmp_path: Path) -> None:
     """Test registry caching."""
     registry = StorageRegistry()

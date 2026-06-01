@@ -14,6 +14,8 @@ from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.sanic import SQLSpecPlugin
 from sqlspec.utils.correlation import CorrelationContext
 
+pytestmark = pytest.mark.anyio
+
 
 async def test_correlation_context_is_set_and_restored() -> None:
     """Correlation middleware should use request headers and restore prior context."""

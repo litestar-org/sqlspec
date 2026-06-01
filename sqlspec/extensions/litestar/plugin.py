@@ -20,6 +20,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
+from sqlspec.core._correlation import CorrelationExtractor
 from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
@@ -107,29 +108,30 @@ def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundErr
 
 
 class CorrelationMiddleware:
-    __slots__ = ("_app", "_headers")
+    __slots__ = ("_app", "_extractor", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
         self._app = app
         self._headers = headers
+        self._extractor = (
+            CorrelationExtractor(
+                primary_header=headers[0],
+                additional_headers=headers[1:] if len(headers) > 1 else None,
+                auto_trace_headers=False,
+            )
+            if headers
+            else None
+        )
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         scope_type = scope.get("type")
-        if str(scope_type) != "http" or not self._headers:
+        if str(scope_type) != "http" or self._extractor is None:
             await self._app(scope, receive, send)
             return
 
-        header_value: str | None = None
         raw_headers = scope.get("headers") or []
-        for header in self._headers:
-            for name, value in raw_headers:
-                if name.decode().lower() == header:
-                    header_value = value.decode()
-                    break
-            if header_value:
-                break
-        if not header_value:
-            header_value = CorrelationContext.generate()
+        header_dict = {name.decode().lower(): value.decode() for name, value in raw_headers}
+        header_value = self._extractor.extract(lambda header: header_dict.get(header))
 
         previous_correlation_id = CorrelationContext.get()
         CorrelationContext.set(header_value)
@@ -417,17 +419,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if sqlspec_decoders:
             app_config.type_decoders = [*(app_config.type_decoders or []), *sqlspec_decoders]
 
+        new_middlewares: list[DefineMiddleware] = []
         if self._correlation_headers:
-            middleware = DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers)
-            existing_middleware = list(app_config.middleware or [])
-            existing_middleware.append(middleware)
-            app_config.middleware = existing_middleware
-
+            new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
         if self._enable_sqlcommenter_middleware:
-            sc_middleware = DefineMiddleware(SQLCommenterMiddleware)
-            existing_middleware = list(app_config.middleware or [])
-            existing_middleware.append(sc_middleware)
-            app_config.middleware = existing_middleware
+            new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
+        if new_middlewares:
+            app_config.middleware = [*(app_config.middleware or []), *new_middlewares]
 
         log_with_context(
             logger,
@@ -853,7 +851,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 return state
 
         self._raise_config_not_found(key)
-        return None
+        msg = "unreachable"
+        raise AssertionError(msg)
 
     def _get_available_keys(self) -> "list[str]":
         """Get a list of all available configuration keys for error messages."""
@@ -873,7 +872,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if len(set(pool_keys)) != len(pool_keys):
             self._raise_duplicate_pool_keys()
 
-    def _raise_missing_connection(self, connection_key: str) -> None:
+    def _raise_missing_connection(self, connection_key: str) -> NoReturn:
         """Raise error when connection is not found in scope."""
         msg = f"No database connection found in scope for key '{connection_key}'. "
         msg += "Ensure the connection dependency is properly configured and available."

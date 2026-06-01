@@ -74,4 +74,4 @@ def compute_sql_hash(sql: str) -> str:
     Returns:
         SHA256 hash prefix.
     """
-    return hashlib.sha256(sql.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(sql.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]

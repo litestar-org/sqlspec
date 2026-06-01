@@ -1,3 +1,4 @@
+# Keep in sync with sqlspec/adapters/aiosqlite/type_converter.py
 """SQLite custom type handlers for optional JSON and type conversion support.
 
 Provides registration functions for SQLite's adapter/converter system to enable

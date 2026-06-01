@@ -238,6 +238,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        if len(statements) > 1 and prepared_parameters:
+            msg = (
+                "Parameterized multi-statement scripts are not supported; use execute_many or individual execute calls"
+            )
+            raise SQLSpecError(msg)
 
         successful_count = 0
         last_cursor = cursor
@@ -715,6 +720,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        if len(statements) > 1 and prepared_parameters:
+            msg = (
+                "Parameterized multi-statement scripts are not supported; use execute_many or individual execute calls"
+            )
+            raise SQLSpecError(msg)
 
         successful_count = 0
         last_cursor = cursor
@@ -742,13 +752,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             return None
 
         sql, _ = self._get_compiled_sql(statement, statement.statement_config)
-        sql_upper = sql.upper()
         operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        if is_copy_from_operation(operation_type) and "FROM STDIN" in sql_upper:
+        if is_copy_from_operation(operation_type):
             if isinstance(copy_data, (str, bytes)):
                 data_to_write = copy_data
             elif is_readable(copy_data):
@@ -768,7 +777,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if is_copy_to_operation(operation_type) and "TO STDOUT" in sql_upper:
+        if is_copy_to_operation(operation_type):
             output_data: list[str] = []
             async with cursor.copy(sql) as copy_ctx:
                 output_data.extend([row.decode() if isinstance(row, bytes) else str(row) async for row in copy_ctx])

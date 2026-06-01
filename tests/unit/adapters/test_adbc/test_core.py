@@ -154,3 +154,33 @@ def test_detect_dialect_introspection_match_beats_fallback() -> None:
     conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "duckdb", "driver_name": ""})
     result = adbc_core.detect_dialect(conn, fallback_dialect="sqlite")
     assert result == "duckdb"
+
+
+def test_handle_postgres_rollback_issues_rollback_for_pgvector() -> None:
+    """pgvector is PostgreSQL-compatible and must receive rollback handling."""
+    executed: list[str] = []
+    cursor = SimpleNamespace(execute=lambda sql: executed.append(sql))
+
+    adbc_core.handle_postgres_rollback("pgvector", cursor)
+
+    assert executed == ["ROLLBACK"]
+
+
+def test_handle_postgres_rollback_issues_rollback_for_paradedb() -> None:
+    """paradedb is PostgreSQL-compatible and must receive rollback handling."""
+    executed: list[str] = []
+    cursor = SimpleNamespace(execute=lambda sql: executed.append(sql))
+
+    adbc_core.handle_postgres_rollback("paradedb", cursor)
+
+    assert executed == ["ROLLBACK"]
+
+
+def test_normalize_postgres_empty_parameters_returns_none_for_pgvector() -> None:
+    """pgvector empty dict parameters should use the PostgreSQL empty-params path."""
+    assert adbc_core.normalize_postgres_empty_parameters("pgvector", {}) is None
+
+
+def test_normalize_postgres_empty_parameters_returns_none_for_paradedb() -> None:
+    """paradedb empty dict parameters should use the PostgreSQL empty-params path."""
+    assert adbc_core.normalize_postgres_empty_parameters("paradedb", {}) is None

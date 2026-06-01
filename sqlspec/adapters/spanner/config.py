@@ -239,18 +239,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return self._database
 
     def create_connection(self) -> SpannerConnection:
-        instance_id = self.connection_config.get("instance_id")
-        database_id = self.connection_config.get("database_id")
-        if not instance_id or not database_id:
-            msg = "instance_id and database_id are required."
-            raise ImproperConfigurationError(msg)
-
-        if self.connection_instance is None:
-            self.connection_instance = self.provide_pool()
-
-        client = self._get_client()
-        database = client.instance(instance_id).database(database_id, pool=self.connection_instance)  # type: ignore[no-untyped-call]
-        return cast("SpannerConnection", database.snapshot())
+        return cast("SpannerConnection", self.get_database().snapshot())
 
     def _create_pool(self) -> AbstractSessionPool:
         instance_id = self.connection_config.get("instance_id")

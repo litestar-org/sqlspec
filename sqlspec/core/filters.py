@@ -242,7 +242,6 @@ class BeforeAfterFilter(StatementFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply filter to SQL expression only."""
         conditions: list[Condition] = []
-        col_expr = self._get_column_expression(self.field_name)
 
         proposed_names = self.get_param_names()
         if not proposed_names:
@@ -255,12 +254,21 @@ class BeforeAfterFilter(StatementFilter):
         if self.before:
             before_param_name = resolved_names[param_idx]
             param_idx += 1
-            conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=before_param_name)))
+            conditions.append(
+                exp.LT(
+                    this=self._get_column_expression(self.field_name),
+                    expression=exp.Placeholder(this=before_param_name),
+                )
+            )
             result = result.add_named_parameter(before_param_name, self.before)
 
         if self.after:
             after_param_name = resolved_names[param_idx]
-            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=after_param_name)))
+            conditions.append(
+                exp.GT(
+                    this=self._get_column_expression(self.field_name), expression=exp.Placeholder(this=after_param_name)
+                )
+            )
             result = result.add_named_parameter(after_param_name, self.after)
 
         final_condition = conditions[0]
@@ -330,7 +338,6 @@ class OnBeforeAfterFilter(StatementFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
-        col_expr = self._get_column_expression(self.field_name)
 
         proposed_names = self.get_param_names()
         if not proposed_names:
@@ -343,12 +350,21 @@ class OnBeforeAfterFilter(StatementFilter):
         if self.on_or_before:
             before_param_name = resolved_names[param_idx]
             param_idx += 1
-            conditions.append(exp.LTE(this=col_expr, expression=exp.Placeholder(this=before_param_name)))
+            conditions.append(
+                exp.LTE(
+                    this=self._get_column_expression(self.field_name),
+                    expression=exp.Placeholder(this=before_param_name),
+                )
+            )
             result = result.add_named_parameter(before_param_name, self.on_or_before)
 
         if self.on_or_after:
             after_param_name = resolved_names[param_idx]
-            conditions.append(exp.GTE(this=col_expr, expression=exp.Placeholder(this=after_param_name)))
+            conditions.append(
+                exp.GTE(
+                    this=self._get_column_expression(self.field_name), expression=exp.Placeholder(this=after_param_name)
+                )
+            )
             result = result.add_named_parameter(after_param_name, self.on_or_after)
 
         final_condition = conditions[0]
@@ -720,6 +736,7 @@ class SearchFilter(StatementFilter):
         elif isinstance(self.field_name, exp.Expression):
             result = statement.where(like_op(this=self.field_name, expression=exp.Placeholder(this=param_name)))
         elif isinstance(self.field_name, set) and self.field_name:
+            # do not hoist Placeholder outside this comprehension; sqlglot nodes carry parent pointers.
             field_conditions: list[Condition] = [
                 like_op(this=self._get_column_expression(field), expression=exp.Placeholder(this=param_name))
                 for field in self.field_name
@@ -874,6 +891,7 @@ class NotInSearchFilter(SearchFilter):
                 exp.Not(this=like_op(this=self.field_name, expression=exp.Placeholder(this=param_name)))
             )
         elif isinstance(self.field_name, set) and self.field_name:
+            # do not hoist Placeholder outside this comprehension; sqlglot nodes carry parent pointers.
             field_conditions: list[Condition] = [
                 exp.Not(
                     this=like_op(this=self._get_column_expression(field), expression=exp.Placeholder(this=param_name))

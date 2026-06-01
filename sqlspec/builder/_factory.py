@@ -1432,11 +1432,11 @@ class SQLFactory:
                 sql
                 .select("*")
                 .from_("users")
-                .where(sql.id.neq(sql.not_any(subquery)))
+                .where(sql.id != sql.not_any_(subquery))
             )
             ```
         """
-        return SQLFactory.any(values)
+        return FunctionExpression(exp.Not(this=SQLFactory.any(values).expression))
 
     @staticmethod
     def concat(*expressions: str | exp.Expr) -> StringExpression:

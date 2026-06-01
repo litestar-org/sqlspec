@@ -36,6 +36,7 @@ from sqlspec.core import (
     get_default_cache,
     log_cache_stats,
     reset_cache_stats,
+    reset_stats_only,
     update_cache_config,
 )
 
@@ -560,7 +561,7 @@ def test_namespaced_cache_namespace_isolation() -> None:
 
 def test_get_cache_statistics_aggregation() -> None:
     """Test cache statistics aggregation."""
-    reset_cache_stats()
+    reset_stats_only()
 
     stats = get_cache_statistics()
     assert isinstance(stats, dict)
@@ -568,16 +569,18 @@ def test_get_cache_statistics_aggregation() -> None:
     assert "namespaced" in stats
 
 
-def test_reset_cache_stats_function() -> None:
-    """Test resetting all cache statistics."""
+def test_reset_stats_only_function_preserves_entries() -> None:
+    """Test resetting cache statistics without evicting entries."""
     default_cache = get_default_cache()
     multi_cache = get_cache()
 
     test_key = CacheKey(("test",))
+    default_cache.put(test_key, "cached")
+    multi_cache.put_statement("key", "cached")
     default_cache.get(test_key)
     multi_cache.get_statement("key")
 
-    reset_cache_stats()
+    reset_stats_only()
 
     default_stats = default_cache.get_stats()
     multi_stats = multi_cache.get_stats()
@@ -586,11 +589,29 @@ def test_reset_cache_stats_function() -> None:
     assert default_stats.misses == 0
     assert multi_stats.hits == 0
     assert multi_stats.misses == 0
+    assert test_key in default_cache
+    assert multi_cache.get_statement("key") == "cached"
+
+
+def test_reset_cache_stats_function_warns_and_clears_entries() -> None:
+    """Test deprecated cache reset alias still clears cache entries."""
+    default_cache = get_default_cache()
+    multi_cache = get_cache()
+
+    test_key = CacheKey(("deprecated-reset",))
+    default_cache.put(test_key, "cached")
+    multi_cache.put_statement("deprecated-key", "cached")
+
+    with pytest.warns(DeprecationWarning, match="clear_all_caches\\(\\).*reset_stats_only\\(\\)"):
+        reset_cache_stats()
+
+    assert test_key not in default_cache
+    assert multi_cache.get_statement("deprecated-key") is None
 
 
 def test_log_cache_stats_function(caplog: pytest.LogCaptureFixture) -> None:
     """Test logging cache statistics."""
-    reset_cache_stats()
+    reset_stats_only()
     caplog.set_level(logging.DEBUG, logger="sqlspec.cache")
 
     log_cache_stats()

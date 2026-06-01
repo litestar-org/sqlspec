@@ -161,15 +161,9 @@ def _bq_create_transform(self: Any, expression: exp.Create) -> str:
     if dialect_name == "Spanner" and expression.this and expression.kind == "TABLE":
         properties = expression.args.get("properties")
         if properties:
-            # Re-order properties so Spanner ones stay at the schema boundary
-            new_expressions = []
-            for p in properties.expressions:
-                if _is_post_schema_spanner_property(p):
-                    # Force to POST_SCHEMA if it's a Spanner property
-                    new_expressions.append(p)
-                else:
-                    new_expressions.append(p)
-            properties.set("expressions", new_expressions)
+            spanner_props = [p for p in properties.expressions if _is_post_schema_spanner_property(p)]
+            other_props = [p for p in properties.expressions if not _is_post_schema_spanner_property(p)]
+            properties.set("expressions", other_props + spanner_props)
 
     if _original_bq_create_transform is not None:
         return str(_original_bq_create_transform(self, expression))

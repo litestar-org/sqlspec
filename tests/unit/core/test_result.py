@@ -392,6 +392,54 @@ def test_sql_result_reuses_cached_schema_list_conversion() -> None:
     assert mocked_to_schema.call_count == 1
 
 
+def test_get_schema_row_uses_requested_row_after_get_data_cache_warm() -> None:
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+    result = SQLResult(statement=SQL("SELECT id, name FROM users"), data=rows, rows_affected=2)
+
+    cached_rows = result.get_data(schema_type=User)
+    row = result._get_schema_row(User, rows[1])
+
+    assert row == User(id=2, name="Bob")
+    assert row is not cached_rows[0]
+
+
+def test_get_schema_row_uses_requested_row_after_all_cache_warm() -> None:
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+    result = SQLResult(statement=SQL("SELECT id, name FROM users"), data=rows, rows_affected=2)
+
+    cached_rows = result.all(schema_type=User)
+    row = result._get_schema_row(User, rows[1])
+
+    assert row == User(id=2, name="Bob")
+    assert row is not cached_rows[0]
+
+
+def test_get_schema_row_populates_single_row_cache_when_rows_cache_is_warm() -> None:
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+    result = SQLResult(statement=SQL("SELECT id, name FROM users"), data=rows, rows_affected=2)
+
+    result.all(schema_type=User)
+    row = result._get_schema_row(User, rows[1])
+
+    assert result._schema_row_cache is not None
+    assert result._schema_row_cache[User] is row
+
+
 @pytest.mark.skipif(_RESULT_BASE_COMPILED, reason="patch.object cannot intercept mypyc-compiled modules")
 def test_sql_result_reuses_cached_single_row_schema_conversion() -> None:
     """Repeated single-row schema access should not re-run to_schema()."""

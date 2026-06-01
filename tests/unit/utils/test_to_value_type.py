@@ -21,6 +21,67 @@ from sqlspec.utils.schema import to_value_type
 # =============================================================================
 
 
+def test_foreign_key_metadata_recognized_via_issubclass() -> None:
+    """Real ForeignKeyMetadata resolves to a schema converter."""
+    from sqlspec.typing import ForeignKeyMetadata
+    from sqlspec.utils.schema import _get_schema_converter
+
+    assert _get_schema_converter(ForeignKeyMetadata) is not None
+
+
+def test_foreign_key_metadata_conversion_roundtrip() -> None:
+    """Dict with FK column data converts to ForeignKeyMetadata."""
+    from sqlspec.typing import ForeignKeyMetadata
+
+    result = to_value_type(
+        {
+            "table_name": "orders",
+            "column_name": "user_id",
+            "referenced_table": "users",
+            "referenced_column": "id",
+            "constraint_name": "fk_orders_user",
+        },
+        ForeignKeyMetadata,
+    )
+
+    assert isinstance(result, ForeignKeyMetadata)
+    assert result.table_name == "orders"
+    assert result.column_name == "user_id"
+    assert result.referenced_table == "users"
+    assert result.referenced_column == "id"
+    assert result.constraint_name == "fk_orders_user"
+
+
+def test_unrelated_class_named_foreign_key_metadata_not_matched() -> None:
+    """A same-named third-party class must not use the FK metadata converter."""
+    from sqlspec.utils.schema import _get_schema_converter
+
+    class ForeignKeyMetadata:
+        __slots__ = ("column_name", "referenced_column", "referenced_table", "table_name")
+
+    assert _get_schema_converter(ForeignKeyMetadata) is None
+
+
+def test_foreign_key_metadata_list_conversion() -> None:
+    """A list of FK dictionaries converts to FK metadata instances."""
+    from sqlspec.typing import ForeignKeyMetadata
+    from sqlspec.utils.schema import _convert_foreign_key_metadata
+
+    result = _convert_foreign_key_metadata(
+        [
+            {"table_name": "orders", "column_name": "user_id", "referenced_table": "users", "referenced_column": "id"},
+            {"table_name": "items", "column_name": "order_id", "referenced_table": "orders", "referenced_column": "id"},
+        ],
+        ForeignKeyMetadata,
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert all(isinstance(item, ForeignKeyMetadata) for item in result)
+    assert result[0].table_name == "orders"
+    assert result[1].table_name == "items"
+
+
 class TestIdentityConversions:
     """Tests for identity conversions where value is already the correct type."""
 

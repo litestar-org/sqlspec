@@ -187,6 +187,7 @@ class AiosqliteConnectionPool:
         "_pool_size",
         "_queue_instance",
         "_wal_initialized",
+        "_wal_initialized_event",
         "_warmed",
     )
 
@@ -230,6 +231,7 @@ class AiosqliteConnectionPool:
         self._queue_instance: asyncio.Queue[AiosqlitePoolConnection] | None = None
         self._lock_instance: asyncio.Lock | None = None
         self._closed_event_instance: asyncio.Event | None = None
+        self._wal_initialized_event: asyncio.Event | None = None
 
     @property
     def _queue(self) -> "asyncio.Queue[AiosqlitePoolConnection]":
@@ -251,6 +253,13 @@ class AiosqliteConnectionPool:
         if self._closed_event_instance is None:
             self._closed_event_instance = asyncio.Event()
         return self._closed_event_instance
+
+    @property
+    def _wal_ready_event(self) -> asyncio.Event:
+        """Lazy initialization of WAL-ready event for Python 3.9 compatibility."""
+        if self._wal_initialized_event is None:
+            self._wal_initialized_event = asyncio.Event()
+        return self._wal_initialized_event
 
     @property
     def is_closed(self) -> bool:
@@ -395,6 +404,7 @@ class AiosqliteConnectionPool:
 
             if is_shared_cache:
                 self._wal_initialized = True
+                self._wal_ready_event.set()
 
         except Exception:
             log_with_context(
@@ -652,8 +662,6 @@ class AiosqliteConnectionPool:
                 msg = f"Connection acquisition timed out after {self._connect_timeout}s"
                 raise AiosqliteConnectTimeoutError(msg) from e
 
-        if not self._wal_initialized and "cache=shared" in str(self._connection_parameters.get("database", "")):
-            await asyncio.sleep(0.01)
         return connection
 
     async def release(self, connection: AiosqlitePoolConnection) -> None:
