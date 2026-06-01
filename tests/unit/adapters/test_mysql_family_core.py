@@ -182,14 +182,15 @@ def test_mysql_execute_script_sync_mysql_execute_script_single_statement_with_pa
     cursor.execute.assert_called_once()
 
 
+@pytest.mark.parametrize("prepared_parameters", [None, [], (), {}])
 @pytest.mark.parametrize("driver_factory", [PyMysqlDriver, MysqlConnectorSyncDriver])
-def test_mysql_execute_script_sync_mysql_execute_script_multi_statement_without_params_executes(
-    driver_factory: type[Any],
+def test_mysql_execute_script_sync_mysql_execute_script_multi_statement_without_effective_params_executes(
+    driver_factory: type[Any], prepared_parameters: object
 ) -> None:
     driver = driver_factory(connection=MagicMock())
     statement = _make_statement(driver)
     cursor = _make_sync_cursor()
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, None)):
+    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, prepared_parameters)):
         result = driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2
@@ -219,14 +220,15 @@ async def test_mysql_execute_script_async_mysql_execute_script_single_statement_
     cursor.execute.assert_awaited_once()
 
 
+@pytest.mark.parametrize("prepared_parameters", [None, [], (), {}])
 @pytest.mark.parametrize("driver_factory", [AiomysqlDriver, AsyncmyDriver, MysqlConnectorAsyncDriver])
-async def test_mysql_execute_script_async_mysql_execute_script_multi_statement_without_params_executes(
-    driver_factory: type[Any],
+async def test_mysql_execute_script_async_mysql_execute_script_multi_statement_without_effective_params_executes(
+    driver_factory: type[Any], prepared_parameters: object
 ) -> None:
     driver = driver_factory(connection=AsyncMock())
     statement = _make_statement(driver)
     cursor = _make_async_cursor()
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, None)):
+    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, prepared_parameters)):
         result = await driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2

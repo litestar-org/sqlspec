@@ -187,9 +187,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         successful_count = 0
         last_result = None
+        params = prepared_parameters or []
 
         for stmt in statements:
-            last_result = await cursor.execute(stmt, [])
+            last_result = await cursor.execute(stmt, params)
             successful_count += 1
 
         return self.create_execution_result(

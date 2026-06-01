@@ -256,9 +256,9 @@ async def test_driver_psqlpy_execute_script_uses_empty_params_for_each_sub_state
 
 
 @pytest.mark.anyio
-async def test_driver_psqlpy_execute_script_allows_single_statement_parameters_with_empty_driver_params() -> None:
+async def test_driver_psqlpy_execute_script_passes_single_statement_parameters() -> None:
     driver = _Driver("INSERT INTO t VALUES ($1)", [1])
     statement = SimpleNamespace(statement_config=default_statement_config)
     cursor = _Cursor()
     await driver.dispatch_execute_script(cursor, statement)
-    assert cursor.execute_calls == [("INSERT INTO t VALUES ($1)", [])]
+    assert cursor.execute_calls == [("INSERT INTO t VALUES ($1)", [1])]
