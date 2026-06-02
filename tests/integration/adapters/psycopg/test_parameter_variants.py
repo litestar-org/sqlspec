@@ -83,9 +83,7 @@ def test_psycopg_native_pyformat_parameter_styles(
     assert result.get_data() == [{"name": "test1"}]
 
 
-def test_psycopg_native_pyformat_parameters_with_sql_object(
-    psycopg_parameters_session: PsycopgSyncDriver,
-) -> None:
+def test_psycopg_native_pyformat_parameters_with_sql_object(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Psycopg preserves pyformat placeholders inside SQL objects."""
     result = psycopg_parameters_session.execute(
         SQL("SELECT name FROM psycopg_parameter_items WHERE value > %s ORDER BY value", [150])
@@ -232,8 +230,7 @@ def test_psycopg_parameter_count_mismatch_with_none_raises(psycopg_parameters_se
 
     with pytest.raises(Exception):
         psycopg_parameters_session.execute(
-            "INSERT INTO psycopg_parameter_count (col1, col2) VALUES (%s, %s)",
-            ("value1", None, "extra_param"),
+            "INSERT INTO psycopg_parameter_count (col1, col2) VALUES (%s, %s)", ("value1", None, "extra_param")
         )
     with pytest.raises(Exception):
         psycopg_parameters_session.execute(
@@ -241,9 +238,7 @@ def test_psycopg_parameter_count_mismatch_with_none_raises(psycopg_parameters_se
         )
 
 
-def test_psycopg_pyformat_parameters_with_postgresql_functions(
-    psycopg_parameters_session: PsycopgSyncDriver,
-) -> None:
+def test_psycopg_pyformat_parameters_with_postgresql_functions(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Psycopg native parameters work inside PostgreSQL function expressions."""
     result = psycopg_parameters_session.execute(
         "SELECT name, value, ROUND(CAST(value * %(multiplier)s AS NUMERIC), 2) AS multiplied "

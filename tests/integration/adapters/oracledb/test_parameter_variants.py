@@ -59,10 +59,7 @@ async def _drop_json_null_table(driver: OracleAsyncDriver) -> None:
         pytest.param("SELECT :value AS bound_value FROM dual", {"value": "named"}, "named", id="named_colon"),
         pytest.param("SELECT :1 AS bound_value FROM dual", ("positional",), "positional", id="numeric_colon"),
         pytest.param(
-            SQL("SELECT :1 AS bound_value FROM dual", ["sql-object"]),
-            None,
-            "sql-object",
-            id="sql_object_numeric_colon",
+            SQL("SELECT :1 AS bound_value FROM dual", ["sql-object"]), None, "sql-object", id="sql_object_numeric_colon"
         ),
     ],
 )
@@ -90,10 +87,7 @@ def test_sync_oracle_native_bind_syntax_variants(
     ],
 )
 async def test_async_oracle_native_bind_syntax_variants(
-    oracle_async_session: OracleAsyncDriver,
-    statement: str,
-    parameters: OracleParameterPayload,
-    expected_value: str,
+    oracle_async_session: OracleAsyncDriver, statement: str, parameters: OracleParameterPayload, expected_value: str
 ) -> None:
     """Async Oracle accepts native named and numeric colon binds."""
     result = await oracle_async_session.execute(statement, parameters)
@@ -147,14 +141,7 @@ def test_sync_oracle_typed_null_date_clob_and_raw_binds(oracle_sync_session: Ora
         )
         oracle_sync_session.execute(
             insert_sql,
-            {
-                "id": 2,
-                "text_field": None,
-                "number_field": None,
-                "date_text": None,
-                "clob_field": None,
-                "raw_hex": None,
-            },
+            {"id": 2, "text_field": None, "number_field": None, "date_text": None, "clob_field": None, "raw_hex": None},
         )
 
         result = oracle_sync_session.execute("""
@@ -220,14 +207,7 @@ async def test_async_oracle_typed_null_date_clob_and_raw_binds(oracle_async_sess
         )
         await oracle_async_session.execute(
             insert_sql,
-            {
-                "id": 2,
-                "text_field": None,
-                "number_field": None,
-                "date_text": None,
-                "clob_field": None,
-                "raw_hex": None,
-            },
+            {"id": 2, "text_field": None, "number_field": None, "date_text": None, "clob_field": None, "raw_hex": None},
         )
 
         result = await oracle_async_session.execute("""
@@ -271,8 +251,7 @@ async def test_async_oracle_json_column_null_bind(oracle_async_session: OracleAs
     """)
     try:
         await oracle_async_session.execute(
-            "INSERT INTO ora_param_json_null (id, payload) VALUES (:id, :payload)",
-            {"id": 1, "payload": None},
+            "INSERT INTO ora_param_json_null (id, payload) VALUES (:id, :payload)", {"id": 1, "payload": None}
         )
         await oracle_async_session.execute(
             "INSERT INTO ora_param_json_null (id, payload) VALUES (:id, :payload)",

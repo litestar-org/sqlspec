@@ -60,8 +60,7 @@ async def test_asyncpg_native_numeric_parameters_bind_multiple_values(
 ) -> None:
     """AsyncPG binds multiple native numeric parameters in order."""
     result = await asyncpg_parameters_session.execute(
-        "SELECT name, value FROM asyncpg_parameter_items WHERE value >= $1 AND value <= $2 ORDER BY value",
-        (50, 150),
+        "SELECT name, value FROM asyncpg_parameter_items WHERE value >= $1 AND value <= $2 ORDER BY value", (50, 150)
     )
 
     assert result.get_data() == [
@@ -130,9 +129,7 @@ async def test_asyncpg_jsonb_dict_and_none_parameters(asyncpg_parameters_session
     assert result.get_data() == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
 
 
-async def test_asyncpg_named_none_values_preserve_postgres_types(
-    asyncpg_parameters_session: AsyncpgDriver,
-) -> None:
+async def test_asyncpg_named_none_values_preserve_postgres_types(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Named parameters preserve UUID, date, boolean, and NULL values."""
     await asyncpg_parameters_session.execute("""
         CREATE TABLE asyncpg_parameter_none_values (
@@ -186,17 +183,13 @@ async def test_asyncpg_named_none_values_preserve_postgres_types(
     assert result["nullable_date"] is None
 
 
-async def test_asyncpg_parameter_count_mismatch_with_none_raises(
-    asyncpg_parameters_session: AsyncpgDriver,
-) -> None:
+async def test_asyncpg_parameter_count_mismatch_with_none_raises(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Missing native numeric parameters still fail when provided values include None."""
     with pytest.raises(Exception):
         await asyncpg_parameters_session.execute("SELECT $1::text AS first, $2::int AS second", (None,))
 
 
-async def test_asyncpg_numeric_parameters_with_postgresql_functions(
-    asyncpg_parameters_session: AsyncpgDriver,
-) -> None:
+async def test_asyncpg_numeric_parameters_with_postgresql_functions(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """AsyncPG native parameters work inside PostgreSQL function expressions."""
     result = await asyncpg_parameters_session.execute(
         "SELECT name, value, ROUND((value * $1::FLOAT)::NUMERIC, 2) AS multiplied "

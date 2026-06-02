@@ -191,10 +191,7 @@ def test_cockroach_psycopg_sync_parameter_count_mismatch_with_none_raises(
 ) -> None:
     """Cockroach psycopg sync still rejects native pyformat parameter count mismatches."""
     with pytest.raises(Exception):
-        cockroach_psycopg_sync_parameters_session.execute(
-            "SELECT %s::STRING AS first, %s::INT AS second",
-            (None,),
-        )
+        cockroach_psycopg_sync_parameters_session.execute("SELECT %s::STRING AS first, %s::INT AS second", (None,))
 
 
 @pytest.mark.parametrize(
@@ -316,6 +313,5 @@ async def test_cockroach_psycopg_async_parameter_count_mismatch_with_none_raises
     """Cockroach psycopg async still rejects native pyformat parameter count mismatches."""
     with pytest.raises(Exception):
         await cockroach_psycopg_async_parameters_session.execute(
-            "SELECT %s::STRING AS first, %s::INT AS second",
-            (None,),
+            "SELECT %s::STRING AS first, %s::INT AS second", (None,)
         )

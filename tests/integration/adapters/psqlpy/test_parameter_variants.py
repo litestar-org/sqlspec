@@ -19,9 +19,7 @@ ParamStyle = Literal["positional", "named", "dollar_named"]
     ("query", "parameters", "style"),
     [
         pytest.param("SELECT $1::text AS value", ("test_value",), "positional", id="positional_single"),
-        pytest.param(
-            "SELECT $1::text AS val1, $2::int AS val2", ("test", 42), "positional", id="positional_multiple"
-        ),
+        pytest.param("SELECT $1::text AS val1, $2::int AS val2", ("test", 42), "positional", id="positional_multiple"),
         pytest.param("SELECT :value::text AS value", {"value": "named_test"}, "named", id="colon_named"),
         pytest.param("SELECT $value::text AS value", {"value": "named_test"}, "dollar_named", id="dollar_named"),
     ],

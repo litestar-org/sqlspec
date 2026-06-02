@@ -65,9 +65,7 @@ def _first_row(result: SQLResult) -> dict[str, object]:
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgres_numeric_parameters_prune_null_literals(
-    adbc_postgres_parameter_session: AdbcDriver,
-) -> None:
+def test_adbc_postgres_numeric_parameters_prune_null_literals(adbc_postgres_parameter_session: AdbcDriver) -> None:
     """ADBC PostgreSQL keeps native numeric placeholders while pruning NULL parameters."""
     result = adbc_postgres_parameter_session.execute(
         """
@@ -78,8 +76,7 @@ def test_adbc_postgres_numeric_parameters_prune_null_literals(
     )
     row = _first_row(
         adbc_postgres_parameter_session.execute(
-            "SELECT id, name, value, active, created_date FROM adbc_parameter_items WHERE id = $1",
-            (1,),
+            "SELECT id, name, value, active, created_date FROM adbc_parameter_items WHERE id = $1", (1,)
         )
     )
 
@@ -92,9 +89,7 @@ def test_adbc_postgres_numeric_parameters_prune_null_literals(
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgres_numeric_parameters_with_sql_object(
-    adbc_postgres_parameter_session: AdbcDriver,
-) -> None:
+def test_adbc_postgres_numeric_parameters_with_sql_object(adbc_postgres_parameter_session: AdbcDriver) -> None:
     """ADBC preserves PostgreSQL numeric placeholders inside SQL objects."""
     adbc_postgres_parameter_session.execute_many(
         "INSERT INTO adbc_parameter_items (id, name, value) VALUES ($1, $2, $3)",
@@ -109,13 +104,10 @@ def test_adbc_postgres_numeric_parameters_with_sql_object(
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgres_repeated_null_numeric_parameter(
-    adbc_postgres_parameter_session: AdbcDriver,
-) -> None:
+def test_adbc_postgres_repeated_null_numeric_parameter(adbc_postgres_parameter_session: AdbcDriver) -> None:
     """Repeated PostgreSQL numeric references still bind one pruned NULL parameter."""
     adbc_postgres_parameter_session.execute_many(
-        "INSERT INTO adbc_parameter_items (id, name, value) VALUES ($1, $2, $3)",
-        [(1, "named", 10), (2, None, 20)],
+        "INSERT INTO adbc_parameter_items (id, name, value) VALUES ($1, $2, $3)", [(1, "named", 10), (2, None, 20)]
     )
 
     result = adbc_postgres_parameter_session.execute(
@@ -131,9 +123,7 @@ def test_adbc_postgres_repeated_null_numeric_parameter(
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgres_returning_clause_with_null_parameter(
-    adbc_postgres_parameter_session: AdbcDriver,
-) -> None:
+def test_adbc_postgres_returning_clause_with_null_parameter(adbc_postgres_parameter_session: AdbcDriver) -> None:
     """PostgreSQL-backed ADBC returns rows from RETURNING with pruned NULL parameters."""
     result = adbc_postgres_parameter_session.execute(
         """
@@ -174,8 +164,7 @@ def test_adbc_postgres_parameter_count_mismatch_with_pruned_null_raises(
     """ADBC validates parameter counts before NULL pruning can hide extras."""
     with pytest.raises(SQLSpecError) as exc_info:
         adbc_postgres_parameter_session.execute(
-            "INSERT INTO adbc_parameter_items (id, name) VALUES ($1, $2)",
-            (30, None, "extra"),
+            "INSERT INTO adbc_parameter_items (id, name) VALUES ($1, $2)", (30, None, "extra")
         )
 
     assert "parameter count mismatch" in str(exc_info.value).lower()
@@ -230,8 +219,7 @@ def test_adbc_duckdb_numeric_parameters_with_backend_ddl() -> None:
                 session.execute("INSERT INTO adbc_duckdb_parameter_items (id, name, value) VALUES (?, ?, ?)", row)
 
             result = session.execute(
-                "SELECT name, value FROM adbc_duckdb_parameter_items WHERE value >= $1 ORDER BY value",
-                (20,),
+                "SELECT name, value FROM adbc_duckdb_parameter_items WHERE value >= $1 ORDER BY value", (20,)
             )
 
             assert result.get_data() == [{"name": "mid", "value": 20}, {"name": "high", "value": 30}]
@@ -264,8 +252,7 @@ def test_adbc_duckdb_qmark_parameters_feed_native_arrow_result() -> None:
             )
 
             result = session.select_to_arrow(
-                "SELECT name, value FROM adbc_duckdb_arrow_parameters WHERE value > ? ORDER BY value",
-                (10,),
+                "SELECT name, value FROM adbc_duckdb_arrow_parameters WHERE value > ? ORDER BY value", (10,)
             )
             frame = result.to_pandas()
 

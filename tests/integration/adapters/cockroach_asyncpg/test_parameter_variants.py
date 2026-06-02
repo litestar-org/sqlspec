@@ -171,10 +171,7 @@ async def test_cockroach_asyncpg_parameter_count_mismatch_with_none_raises(
 ) -> None:
     """Cockroach AsyncPG still rejects missing native numeric parameters when values include None."""
     with pytest.raises(Exception):
-        await cockroach_asyncpg_parameters_session.execute(
-            "SELECT $1::STRING AS first, $2::INT AS second",
-            (None,),
-        )
+        await cockroach_asyncpg_parameters_session.execute("SELECT $1::STRING AS first, $2::INT AS second", (None,))
 
 
 async def test_cockroach_asyncpg_numeric_float_parameter_round_trip(

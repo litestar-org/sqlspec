@@ -91,8 +91,7 @@ def test_bigquery_native_parameter_keys_may_include_at_prefix(
 def test_bigquery_array_parameter_with_unnest(bigquery_session: BigQueryDriver) -> None:
     """BigQuery creates native ARRAY query parameters for non-empty Python sequences."""
     result = bigquery_session.execute(
-        "SELECT value FROM UNNEST(@values) AS value ORDER BY value",
-        {"values": [1, 2, 3]},
+        "SELECT value FROM UNNEST(@values) AS value ORDER BY value", {"values": [1, 2, 3]}
     )
 
     assert result.get_data() == [{"value": 1}, {"value": 2}, {"value": 3}]
