@@ -1,0 +1,47 @@
+"""Schema records for shared adapter contract tests."""
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ContractRow:
+    """Seed row used by adapter contract tests."""
+
+    name: str
+    value: int
+    note: object | None = None
+
+
+@dataclass(frozen=True)
+class ContractTable:
+    """SQL snippets for one contract-owned table."""
+
+    name: str
+    create_sql: str
+    delete_sql: str
+    insert_named_sql: str
+    insert_qmark_sql: str
+    select_by_name_named_sql: str
+    select_by_name_qmark_sql: str
+    select_count_sql: str
+    select_ordered_sql: str
+
+
+DEFAULT_CONTRACT_TABLE = ContractTable(
+    name="contract_items",
+    create_sql="""
+        CREATE TABLE contract_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            note TEXT
+        )
+    """,
+    delete_sql="DELETE FROM contract_items",
+    insert_named_sql="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
+    insert_qmark_sql="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
+    select_by_name_named_sql="SELECT name, value, note FROM contract_items WHERE name = :name",
+    select_by_name_qmark_sql="SELECT name, value, note FROM contract_items WHERE name = ?",
+    select_count_sql="SELECT COUNT(*) AS count FROM contract_items",
+    select_ordered_sql="SELECT name, value, note FROM contract_items ORDER BY value",
+)

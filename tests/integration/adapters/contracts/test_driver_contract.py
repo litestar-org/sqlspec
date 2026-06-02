@@ -1,51 +1,20 @@
 """Shared driver behavior contracts."""
 
-from typing import cast
-
-from sqlspec import SQLResult
-from sqlspec.adapters.aiosqlite import AiosqliteDriver
-from sqlspec.adapters.sqlite import SqliteDriver
 from tests.integration.adapters.contracts._cases import DriverCaseContext
+from tests.integration.adapters.contracts.behaviors import (
+    assert_async_execute_many_contract,
+    assert_sync_execute_many_contract,
+)
 
 
 def test_sync_driver_execute_many_contract(sync_driver_case: DriverCaseContext) -> None:
     """Sync drivers insert batches and return ordered rows consistently."""
-    driver = cast("SqliteDriver", sync_driver_case.driver)
-
-    result = driver.execute_many(
-        "INSERT INTO contract_items (name, value) VALUES (?, ?)", [("alpha", 10), ("beta", 20), ("gamma", 30)]
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 3
-
-    rows_result = driver.execute("SELECT name, value FROM contract_items ORDER BY value")
-    assert isinstance(rows_result, SQLResult)
-    assert rows_result.get_data() == [
-        {"name": "alpha", "value": 10},
-        {"name": "beta", "value": 20},
-        {"name": "gamma", "value": 30},
-    ]
+    assert_sync_execute_many_contract(sync_driver_case.driver, sync_driver_case.case)
 
 
 async def test_async_driver_execute_many_contract(async_driver_case: DriverCaseContext) -> None:
     """Async drivers insert batches and return ordered rows consistently."""
-    driver = cast("AiosqliteDriver", async_driver_case.driver)
-
-    result = await driver.execute_many(
-        "INSERT INTO contract_items (name, value) VALUES (?, ?)", [("alpha", 10), ("beta", 20), ("gamma", 30)]
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 3
-
-    rows_result = await driver.execute("SELECT name, value FROM contract_items ORDER BY value")
-    assert isinstance(rows_result, SQLResult)
-    assert rows_result.get_data() == [
-        {"name": "alpha", "value": 10},
-        {"name": "beta", "value": 20},
-        {"name": "gamma", "value": 30},
-    ]
+    await assert_async_execute_many_contract(async_driver_case.driver, async_driver_case.case)
 
 
 def test_driver_case_metadata_resolves_fixture(driver_case: DriverCaseContext) -> None:

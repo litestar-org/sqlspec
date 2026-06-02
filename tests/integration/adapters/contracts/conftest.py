@@ -13,14 +13,7 @@ from tests.integration.adapters.contracts._cases import (
     DriverCase,
     DriverCaseContext,
 )
-
-CONTRACT_TABLE_SQL = """
-    CREATE TABLE contract_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        value INTEGER NOT NULL
-    )
-"""
+from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE
 
 
 @pytest.fixture
@@ -29,7 +22,8 @@ def contract_sqlite_driver() -> Generator[SqliteDriver, None, None]:
     config = SqliteConfig(connection_config={"database": ":memory:"})
     try:
         with config.provide_session() as driver:
-            driver.execute_script(CONTRACT_TABLE_SQL)
+            driver.execute("PRAGMA foreign_keys = ON")
+            driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
             driver.commit()
             yield driver
     finally:
@@ -42,7 +36,8 @@ async def contract_aiosqlite_driver() -> AsyncGenerator[AiosqliteDriver, None]:
     config = AiosqliteConfig()
     try:
         async with config.provide_session() as driver:
-            await driver.execute_script(CONTRACT_TABLE_SQL)
+            await driver.execute("PRAGMA foreign_keys = ON")
+            await driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
             await driver.commit()
             yield driver
     finally:
