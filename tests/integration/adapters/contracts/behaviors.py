@@ -66,6 +66,10 @@ async def _execute_async(driver: AsyncContractDriver, statement: object, paramet
     return await driver.execute(statement, parameters)
 
 
+def _should_assert_execute_rows_affected(case: DriverCase) -> bool:
+    return "execute-rows-affected-unavailable" not in case.deviations
+
+
 def _seed_sync(
     driver: SyncContractDriver, rows: tuple[ContractRow, ...], table: ContractTable = DEFAULT_CONTRACT_TABLE
 ) -> None:
@@ -156,7 +160,7 @@ def assert_sync_parameter_contract(driver: object, case: DriverCase, parameter_c
     _seed_sync(sync_driver, parameter_case.setup_rows, case.table)
 
     result = _execute_sync(sync_driver, parameter_case.statement, parameter_case.parameters)
-    if parameter_case.expected_rows_affected is not None:
+    if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
@@ -175,7 +179,7 @@ async def assert_async_parameter_contract(
     await _seed_async(async_driver, parameter_case.setup_rows, case.table)
 
     result = await _execute_async(async_driver, parameter_case.statement, parameter_case.parameters)
-    if parameter_case.expected_rows_affected is not None:
+    if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
@@ -198,7 +202,9 @@ def assert_sync_parameter_style_contract(
     else:
         result = _execute_sync(sync_driver, parameter_style_case.statement, parameter_style_case.parameters)
 
-    if parameter_style_case.expected_rows_affected is not None:
+    if parameter_style_case.expected_rows_affected is not None and (
+        parameter_style_case.method == "execute_many" or _should_assert_execute_rows_affected(case)
+    ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
         assert_result_data(result, parameter_style_case.expected_result_data)
@@ -224,7 +230,9 @@ async def assert_async_parameter_style_contract(
     else:
         result = await _execute_async(async_driver, parameter_style_case.statement, parameter_style_case.parameters)
 
-    if parameter_style_case.expected_rows_affected is not None:
+    if parameter_style_case.expected_rows_affected is not None and (
+        parameter_style_case.method == "execute_many" or _should_assert_execute_rows_affected(case)
+    ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
         assert_result_data(result, parameter_style_case.expected_result_data)
