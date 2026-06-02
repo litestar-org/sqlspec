@@ -19,6 +19,7 @@ When fastnanoid is NOT installed:
     - nanoid() falls back to uuid4().hex with a warning (different format)
 """
 
+import uuid as _uuid_mod
 import warnings
 from typing import Any, cast
 from uuid import NAMESPACE_DNS, NAMESPACE_OID, NAMESPACE_URL, NAMESPACE_X500, UUID
@@ -137,9 +138,6 @@ def uuid6() -> "UUID":
     if module is not None:
         return cast("UUID", module.uuid6())
 
-    # Try Python 3.14+ native support
-    import uuid as _uuid_mod
-
     native_uuid6 = getattr(_uuid_mod, "uuid6", None)
     if native_uuid6 is not None:
         return cast("UUID", native_uuid6())
@@ -169,9 +167,6 @@ def uuid7() -> "UUID":
     module = _uuid_utils_mod
     if module is not None:
         return cast("UUID", module.uuid7())
-
-    # Try Python 3.14+ native support
-    import uuid as _uuid_mod
 
     native_uuid7 = getattr(_uuid_mod, "uuid7", None)
     if native_uuid7 is not None:

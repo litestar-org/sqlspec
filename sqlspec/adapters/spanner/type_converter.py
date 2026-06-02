@@ -23,8 +23,8 @@ from uuid import UUID
 
 from typing_extensions import final
 
-from sqlspec._typing import UUID_UTILS_INSTALLED
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
+from sqlspec.typing import UUID_UTILS_INSTALLED
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 

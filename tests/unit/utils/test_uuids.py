@@ -227,6 +227,65 @@ def test_nanoid_installed_flag() -> None:
     assert isinstance(bool(NANOID_INSTALLED), bool)
 
 
+def test_uuid_utils_module_cache_is_import_time_reference() -> None:
+    """uuid_utils is cached at import time."""
+    import sqlspec.utils.uuids as _uuids
+
+    module = _uuids._uuid_utils_mod  # pyright: ignore[reportPrivateUsage]
+    assert _uuids.UUID_UTILS_INSTALLED is (module is not None)
+    assert module is None or hasattr(module, "uuid4")
+
+
+def test_fastnanoid_module_cache_is_import_time_reference() -> None:
+    """fastnanoid is cached at import time."""
+    import sqlspec.utils.uuids as _uuids
+
+    module = _uuids._fastnanoid_mod  # pyright: ignore[reportPrivateUsage]
+    assert _uuids.NANOID_INSTALLED is (module is not None)
+    assert module is None or callable(getattr(module, "generate", None))
+
+
+def test_uuid_helpers_do_not_reintroduce_loader_flag_shape() -> None:
+    """The branch uses simple eager module caches, not loader-backed flags."""
+    import sqlspec.utils.uuids as _uuids
+
+    assert not hasattr(_uuids, "_Availability")
+    assert not hasattr(_uuids, "_load_uuid_utils")
+    assert not hasattr(_uuids, "_load_nanoid")
+    assert not hasattr(_uuids, "_UUID_UTILS_MODULE")
+    assert not hasattr(_uuids, "_NANOID_MODULE")
+
+
+def test_uuid4_reads_cached_uuid_utils_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uuid4() reads the import-time uuid_utils module cache."""
+    import sqlspec.utils.uuids as _uuids
+
+    expected = UUID("12345678-1234-4234-9234-123456789abc")
+
+    class FakeUuidUtils:
+        @staticmethod
+        def uuid4() -> UUID:
+            return expected
+
+    monkeypatch.setattr(_uuids, "_uuid_utils_mod", FakeUuidUtils())
+
+    assert _uuids.uuid4() == expected
+
+
+def test_nanoid_reads_cached_fastnanoid_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """nanoid() reads the import-time fastnanoid module cache."""
+    import sqlspec.utils.uuids as _uuids
+
+    class FakeFastNanoid:
+        @staticmethod
+        def generate() -> str:
+            return "cached-nanoid"
+
+    monkeypatch.setattr(_uuids, "_fastnanoid_mod", FakeFastNanoid())
+
+    assert _uuids.nanoid() == "cached-nanoid"
+
+
 def test_uuid3_with_all_namespaces() -> None:
     """Test uuid3 works with all standard namespaces."""
     name = "namespace-test"

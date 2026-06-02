@@ -1,5 +1,6 @@
 """Tests for the SQLResult iteration functionality."""
 
+import importlib.util
 import inspect
 from dataclasses import dataclass
 from typing import Any, cast
@@ -757,6 +758,25 @@ def test_sql_result_methods_with_none_data_raise() -> None:
         result.to_pandas()
     with pytest.raises(ValueError, match="No data available"):
         result.to_polars()
+
+
+def test_io_module_deleted_and_methods_still_work() -> None:
+    """Regression: _io.py is deleted; to_pandas/to_polars use inlined bodies."""
+    spec = importlib.util.find_spec("sqlspec.core.result._io")
+    assert spec is None
+
+    pandas = pytest.importorskip("pandas")
+    polars = pytest.importorskip("polars")
+    data: list[dict[str, Any]] = [{"x": 1}, {"x": 2}]
+    result = SQLResult(statement=SQL("SELECT x FROM t"), data=data)
+
+    df_pd = result.to_pandas()
+    assert isinstance(df_pd, pandas.DataFrame)
+    assert list(df_pd["x"]) == [1, 2]
+
+    df_pl = result.to_polars()
+    assert isinstance(df_pl, polars.DataFrame)
+    assert df_pl["x"].to_list() == [1, 2]
 
 
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
