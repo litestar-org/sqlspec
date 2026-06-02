@@ -206,16 +206,13 @@ exclude = [
   "sqlspec/config.py",                      # Main config
   "sqlspec/**/__init__.py",                 # Init files (usually just imports)
   "sqlspec/protocols.py",                   # Protocol definitions
-  "sqlspec/migrations/commands.py",         # Migration command orchestration: _with_command_span uses inspect.signature/functools.wraps on coroutines (also: branch-local rich.prompt imports)
+  "sqlspec/migrations/commands.py",         # interpreted: inspect.signature/functools.wraps on coroutines
   "sqlspec/dialects/postgres/_pgvector.py", # SQLGlot subclass/registration module stays interpreted
   "sqlspec/dialects/postgres/_paradedb.py", # SQLGlot subclass/registration module stays interpreted
   "sqlspec/dialects/spanner/_spanner.py",   # SQLGlot subclass/registration module stays interpreted
   "sqlspec/dialects/spanner/_spangres.py",  # SQLGlot subclass/registration module stays interpreted
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted
-  # Deferred _channel.py split: importlib.import_module only accounts for native backend loading.
-  # AsyncEventChannel still uses inspect.isawaitable and async-generator iter_events,
-  # so the channel classes remain interpreted until those blockers are removed.
-  "sqlspec/extensions/events/_channel.py",
+  "sqlspec/extensions/events/_channel.py",  # interpreted: importlib + async-generator iter_events
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/adapters/**/data_dictionary.py", # Cross-module inheritance causes mypyc segfaults
