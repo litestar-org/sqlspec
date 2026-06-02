@@ -6,7 +6,7 @@ from typing import Literal
 import pytest
 from _pytest.mark.structures import Mark, MarkDecorator
 
-from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractTable
+from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, DUCKDB_CONTRACT_TABLE, ContractTable
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,7 @@ class DriverCaseContext:
 
 
 SQLITE_XDIST_MARK = pytest.mark.xdist_group("sqlite")
+DUCKDB_XDIST_MARK = pytest.mark.xdist_group("duckdb")
 
 SYNC_DRIVER_CASES = (
     DriverCase(
@@ -58,6 +59,20 @@ SYNC_DRIVER_CASES = (
         dialect="sqlite",
         mode="sync",
         marks=(SQLITE_XDIST_MARK,),
+        supports_arrow=True,
+        supports_explain=True,
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_storage_bridge=True,
+    ),
+    DriverCase(
+        id="duckdb-sync",
+        fixture_name="contract_duckdb_driver",
+        adapter="duckdb",
+        dialect="duckdb",
+        mode="sync",
+        marks=(DUCKDB_XDIST_MARK,),
+        table=DUCKDB_CONTRACT_TABLE,
         supports_arrow=True,
         supports_explain=True,
         supports_execute_many=True,
@@ -181,15 +196,6 @@ DEFERRED_DRIVER_CASES = (
         "async",
         integration_status="deferred",
         reason="CockroachDB service-backed contract fixture is not wired into the C5 harness yet.",
-    ),
-    DriverCase(
-        "duckdb-sync",
-        "",
-        "duckdb",
-        "duckdb",
-        "sync",
-        integration_status="deferred",
-        reason="DuckDB contract fixture is not wired into the C5 harness yet.",
     ),
     DriverCase(
         "mssql-python-sync",

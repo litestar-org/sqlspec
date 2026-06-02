@@ -1,9 +1,8 @@
-"""Test different parameter styles for DuckDB drivers."""
+"""DuckDB-specific parameter variants not covered by shared contracts."""
 
 import math
 from collections.abc import Generator
 from datetime import date
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -46,49 +45,14 @@ def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
         yield session
 
 
-@pytest.mark.parametrize("parameters,expected_count", [(("test1"), 1), (["test1"], 1)])
-def test_duckdb_qmark_parameter_types(
-    duckdb_parameters_session: DuckDBDriver, parameters: Any, expected_count: int
-) -> None:
-    """Test different parameter types with DuckDB qmark style."""
-    result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = ?", parameters)
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == expected_count
-    if expected_count > 0:
-        assert result.get_data()[0]["name"] == "test1"
-
-
-@pytest.mark.parametrize(
-    "parameters,style,query",
-    [
-        (("test1"), "qmark", "SELECT * FROM test_parameters WHERE name = ?"),
-        (("test1"), "numeric", "SELECT * FROM test_parameters WHERE name = $1"),
-    ],
-)
-def test_duckdb_parameter_styles(
-    duckdb_parameters_session: DuckDBDriver, parameters: Any, style: str, query: str
-) -> None:
-    """Test different parameter styles with DuckDB."""
-    result = duckdb_parameters_session.execute(query, parameters)
+def test_duckdb_numeric_parameter_style(duckdb_parameters_session: DuckDBDriver) -> None:
+    """DuckDB accepts numeric parameter style in addition to qmark and named styles."""
+    result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = $1", ("test1"))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
     assert result.get_data()[0]["name"] == "test1"
-
-
-def test_duckdb_multiple_parameters_qmark(duckdb_parameters_session: DuckDBDriver) -> None:
-    """Test queries with multiple parameters using qmark style."""
-    result = duckdb_parameters_session.execute(
-        "SELECT * FROM test_parameters WHERE value >= ? AND value <= ? ORDER BY value", (50, 150)
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    assert result.get_data()[0]["value"] == 100
 
 
 def test_duckdb_multiple_parameters_numeric(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -103,53 +67,11 @@ def test_duckdb_multiple_parameters_numeric(duckdb_parameters_session: DuckDBDri
     assert result.get_data()[0]["value"] == 100
 
 
-def test_duckdb_null_parameters(duckdb_parameters_session: DuckDBDriver) -> None:
-    """Test handling of NULL parameters on DuckDB."""
-
-    result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE description IS NULL")
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
+def test_duckdb_numeric_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> None:
+    """DuckDB supports numeric parameters in LIKE predicates."""
+    result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE $1", ("test1%"))
     assert len(result.data) == 1
-    assert result.get_data()[0]["name"] == "test3"
-    assert result.get_data()[0]["description"] is None
-
-    duckdb_parameters_session.execute(
-        "INSERT INTO test_parameters (id, name, value, description) VALUES (?, ?, ?, ?)",
-        (4, "null_param_test", 400, None),
-    )
-
-    null_result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = ?", ("null_param_test"))
-    assert len(null_result.data) == 1
-    assert null_result.get_data()[0]["description"] is None
-
-
-def test_duckdb_parameter_escaping(duckdb_parameters_session: DuckDBDriver) -> None:
-    """Test parameter escaping prevents SQL injection."""
-
-    malicious_input = "'; DROP TABLE test_parameters; --"
-
-    result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name = ?", (malicious_input))
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 0
-
-    count_result = duckdb_parameters_session.execute("SELECT COUNT(*) as count FROM test_parameters")
-    assert count_result.get_data()[0]["count"] >= 3
-
-
-def test_duckdb_parameter_with_like(duckdb_parameters_session: DuckDBDriver) -> None:
-    """Test parameters with LIKE operations."""
-    result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE ?", ("test%"))
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) >= 3
-
-    numeric_result = duckdb_parameters_session.execute("SELECT * FROM test_parameters WHERE name LIKE $1", ("test1%"))
-    assert len(numeric_result.data) == 1
-    assert numeric_result.get_data()[0]["name"] == "test1"
+    assert result.get_data()[0]["name"] == "test1"
 
 
 def test_duckdb_parameter_with_in_clause(duckdb_parameters_session: DuckDBDriver) -> None:
@@ -173,15 +95,7 @@ def test_duckdb_parameter_with_in_clause(duckdb_parameters_session: DuckDBDriver
 
 
 def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDriver) -> None:
-    """Test parameters with SQL object."""
-
-    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > ?", [150])
-    result = duckdb_parameters_session.execute(sql_obj)
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) >= 1
-    assert all(row["value"] > 150 for row in result.get_data())
+    """DuckDB SQL objects preserve numeric parameter extraction."""
 
     numeric_sql = SQL("SELECT * FROM test_parameters WHERE value < $1", [150])
     numeric_result = duckdb_parameters_session.execute(numeric_sql)

@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Generator
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from tests.integration.adapters.contracts._cases import (
     ASYNC_DRIVER_PARAMS,
@@ -13,7 +14,7 @@ from tests.integration.adapters.contracts._cases import (
     DriverCase,
     DriverCaseContext,
 )
-from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE
+from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, DUCKDB_CONTRACT_TABLE
 
 
 @pytest.fixture
@@ -24,6 +25,20 @@ def contract_sqlite_driver() -> Generator[SqliteDriver, None, None]:
         with config.provide_session() as driver:
             driver.execute("PRAGMA foreign_keys = ON")
             driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
+            driver.commit()
+            yield driver
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def contract_duckdb_driver() -> Generator[DuckDBDriver, None, None]:
+    """Provide a fresh DuckDB driver for contract tests."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script("DROP TABLE IF EXISTS contract_items")
+            driver.execute_script(DUCKDB_CONTRACT_TABLE.create_sql)
             driver.commit()
             yield driver
     finally:

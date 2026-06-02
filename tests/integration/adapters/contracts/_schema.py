@@ -45,3 +45,21 @@ DEFAULT_CONTRACT_TABLE = ContractTable(
     select_count_sql="SELECT COUNT(*) AS count FROM contract_items",
     select_ordered_sql="SELECT name, value, note FROM contract_items ORDER BY value",
 )
+
+DUCKDB_CONTRACT_TABLE = ContractTable(
+    name="contract_items",
+    create_sql="""
+        CREATE TABLE contract_items (
+            name VARCHAR NOT NULL,
+            value INTEGER NOT NULL,
+            note VARCHAR
+        )
+    """,
+    delete_sql="DELETE FROM contract_items",
+    insert_named_sql="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
+    insert_qmark_sql="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
+    select_by_name_named_sql="SELECT name, value, note FROM contract_items WHERE name = :name",
+    select_by_name_qmark_sql="SELECT name, value, note FROM contract_items WHERE name = ?",
+    select_count_sql="SELECT COUNT(*) AS count FROM contract_items",
+    select_ordered_sql="SELECT name, value, note FROM contract_items ORDER BY value",
+)
