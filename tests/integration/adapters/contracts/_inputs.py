@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 import pytest
 
@@ -34,6 +35,22 @@ class ParameterProfileCase:
     parameters: object | None
     setup_rows: tuple[ContractRow, ...]
     statement: str
+    verification_parameters: object | None
+    verification_statement: str | None
+
+
+@dataclass(frozen=True)
+class ParameterStyleCase:
+    """Parameter style case for shared adapter contracts."""
+
+    id: str
+    expected_result_data: tuple[dict[str, object], ...] | None
+    expected_rows_affected: int | None
+    expected_verification_data: tuple[dict[str, object], ...] | None
+    method: Literal["execute", "execute_many"]
+    parameters: object | None
+    setup_rows: tuple[ContractRow, ...]
+    statement: object
     verification_parameters: object | None
     verification_statement: str | None
 
@@ -160,5 +177,165 @@ PARAMETER_PROFILE_CASES = (
     ),
 )
 
+PARAMETER_STYLE_CASES = (
+    ParameterStyleCase(
+        id="qmark_tuple_select",
+        method="execute",
+        setup_rows=(ContractRow("alpha", 10), ContractRow("beta", 20), ContractRow("gamma", 30)),
+        statement="SELECT name, value FROM contract_items WHERE value >= ? ORDER BY value",
+        parameters=(20,),
+        expected_rows_affected=None,
+        expected_result_data=({"name": "beta", "value": 20}, {"name": "gamma", "value": 30}),
+        verification_statement=None,
+        verification_parameters=None,
+        expected_verification_data=None,
+    ),
+    ParameterStyleCase(
+        id="qmark_list_select",
+        method="execute",
+        setup_rows=(ContractRow("alpha", 10), ContractRow("beta", 20), ContractRow("gamma", 30)),
+        statement="SELECT name, value FROM contract_items WHERE value >= ? ORDER BY value",
+        parameters=[20],
+        expected_rows_affected=None,
+        expected_result_data=({"name": "beta", "value": 20}, {"name": "gamma", "value": 30}),
+        verification_statement=None,
+        verification_parameters=None,
+        expected_verification_data=None,
+    ),
+    ParameterStyleCase(
+        id="named_dict_select",
+        method="execute",
+        setup_rows=(ContractRow("alpha", 10), ContractRow("beta", 20), ContractRow("gamma", 30)),
+        statement="SELECT name, value FROM contract_items WHERE value >= :minimum ORDER BY value",
+        parameters={"minimum": 20},
+        expected_rows_affected=None,
+        expected_result_data=({"name": "beta", "value": 20}, {"name": "gamma", "value": 30}),
+        verification_statement=None,
+        verification_parameters=None,
+        expected_verification_data=None,
+    ),
+    ParameterStyleCase(
+        id="sql_object_named_select",
+        method="execute",
+        setup_rows=(ContractRow("alpha", 10), ContractRow("beta", 20), ContractRow("gamma", 30)),
+        statement=SQL("SELECT name, value FROM contract_items WHERE value >= :minimum ORDER BY value", minimum=20),
+        parameters=None,
+        expected_rows_affected=None,
+        expected_result_data=({"name": "beta", "value": 20}, {"name": "gamma", "value": 30}),
+        verification_statement=None,
+        verification_parameters=None,
+        expected_verification_data=None,
+    ),
+    ParameterStyleCase(
+        id="repeated_named_select",
+        method="execute",
+        setup_rows=(ContractRow("repeat", 40), ContractRow("other", 50, "repeat")),
+        statement="SELECT name, value FROM contract_items WHERE name = :target OR note = :target ORDER BY value",
+        parameters={"target": "repeat"},
+        expected_rows_affected=None,
+        expected_result_data=({"name": "repeat", "value": 40}, {"name": "other", "value": 50}),
+        verification_statement=None,
+        verification_parameters=None,
+        expected_verification_data=None,
+    ),
+    ParameterStyleCase(
+        id="like_qmark_select",
+        method="execute",
+        setup_rows=(ContractRow("alpha", 10), ContractRow("beta", 20), ContractRow("alphabet", 30)),
+        statement="SELECT name, value FROM contract_items WHERE name LIKE ? ORDER BY value",
+        parameters=("alpha%",),
+        expected_rows_affected=None,
+        expected_result_data=({"name": "alpha", "value": 10}, {"name": "alphabet", "value": 30}),
+        verification_statement=None,
+        verification_parameters=None,
+        expected_verification_data=None,
+    ),
+    ParameterStyleCase(
+        id="qmark_insert",
+        method="execute",
+        setup_rows=(),
+        statement="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
+        parameters=("qmark", 10, "qmark-note"),
+        expected_rows_affected=1,
+        expected_result_data=None,
+        verification_statement="SELECT name, value, note FROM contract_items ORDER BY value",
+        verification_parameters=None,
+        expected_verification_data=({"name": "qmark", "value": 10, "note": "qmark-note"},),
+    ),
+    ParameterStyleCase(
+        id="named_insert",
+        method="execute",
+        setup_rows=(),
+        statement="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
+        parameters={"name": "named", "value": 20, "note": "named-note"},
+        expected_rows_affected=1,
+        expected_result_data=None,
+        verification_statement="SELECT name, value, note FROM contract_items ORDER BY value",
+        verification_parameters=None,
+        expected_verification_data=({"name": "named", "value": 20, "note": "named-note"},),
+    ),
+    ParameterStyleCase(
+        id="none_named_insert",
+        method="execute",
+        setup_rows=(),
+        statement="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
+        parameters={"name": "none-value", "value": 30, "note": None},
+        expected_rows_affected=1,
+        expected_result_data=None,
+        verification_statement="SELECT name, value, note FROM contract_items ORDER BY value",
+        verification_parameters=None,
+        expected_verification_data=({"name": "none-value", "value": 30, "note": None},),
+    ),
+    ParameterStyleCase(
+        id="execute_many_qmark_tuples",
+        method="execute_many",
+        setup_rows=(),
+        statement="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
+        parameters=[("batch1", 10, None), ("batch2", 20, None), ("batch3", 30, None)],
+        expected_rows_affected=3,
+        expected_result_data=None,
+        verification_statement="SELECT name, value, note FROM contract_items ORDER BY value",
+        verification_parameters=None,
+        expected_verification_data=(
+            {"name": "batch1", "value": 10, "note": None},
+            {"name": "batch2", "value": 20, "note": None},
+            {"name": "batch3", "value": 30, "note": None},
+        ),
+    ),
+    ParameterStyleCase(
+        id="execute_many_named_dicts",
+        method="execute_many",
+        setup_rows=(),
+        statement="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
+        parameters=[
+            {"name": "dict1", "value": 100, "note": None},
+            {"name": "dict2", "value": 200, "note": None},
+            {"name": "dict3", "value": 300, "note": None},
+        ],
+        expected_rows_affected=3,
+        expected_result_data=None,
+        verification_statement="SELECT name, value, note FROM contract_items ORDER BY value",
+        verification_parameters=None,
+        expected_verification_data=(
+            {"name": "dict1", "value": 100, "note": None},
+            {"name": "dict2", "value": 200, "note": None},
+            {"name": "dict3", "value": 300, "note": None},
+        ),
+    ),
+    ParameterStyleCase(
+        id="injection_looking_qmark_value",
+        method="execute",
+        setup_rows=(ContractRow("safe_data", 60),),
+        statement="SELECT name, value FROM contract_items WHERE name = ?",
+        parameters=("'; DROP TABLE contract_items; --",),
+        expected_rows_affected=None,
+        expected_result_data=(),
+        verification_statement="SELECT COUNT(*) AS count FROM contract_items",
+        verification_parameters=None,
+        expected_verification_data=({"count": 1},),
+    ),
+)
+
 STATEMENT_INPUT_PARAMS = tuple(pytest.param(case, id=case.id) for case in STATEMENT_INPUT_CASES)
 PARAMETER_PROFILE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_PROFILE_CASES)
+PARAMETER_STYLE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_STYLE_CASES)

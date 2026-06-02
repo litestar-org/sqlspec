@@ -13,3 +13,13 @@ Keep adapter-specific SQL, optional service setup, and one-off regressions in ad
 5. Add input data to `_inputs.py` or schema metadata to `_schema.py` instead of branching on adapter names inside tests.
 
 Default local coverage currently runs SQLite and aiosqlite contracts. Service-backed adapters should keep their existing opt-in marks and xdist groups when they move from deferred rows to active rows.
+
+## Parameter Styles
+
+Generic parameter-style behavior belongs in `test_parameter_styles_contract.py` with cases from `_inputs.py`.
+Use those cases for qmark tuple/list binding, named dictionaries, `SQL(...)` objects, repeated named binds,
+`execute_many()` tuple and dictionary payloads, LIKE predicates, and injection-looking values.
+
+Keep adapter-local parameter files only for dialect-specific behavior or edge regressions. SQLite and aiosqlite
+None-heavy edge coverage lives in adapter-local `test_none_parameters.py` files because those cases assert
+SQLite storage and parameter-count behavior rather than the shared SQLSpec parameter-style contract.

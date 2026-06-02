@@ -8,7 +8,7 @@ from sqlspec import SQLResult
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
-from tests.integration.adapters.contracts._inputs import ParameterProfileCase, StatementInputCase
+from tests.integration.adapters.contracts._inputs import ParameterProfileCase, ParameterStyleCase, StatementInputCase
 from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractRow, ContractTable
 
 
@@ -184,6 +184,58 @@ async def assert_async_parameter_contract(
             async_driver, parameter_case.verification_statement, parameter_case.verification_parameters
         )
         assert_result_data(verification, parameter_case.expected_verification_data)
+
+
+def assert_sync_parameter_style_contract(
+    driver: object, case: DriverCase, parameter_style_case: ParameterStyleCase
+) -> None:
+    """Assert sync drivers bind one parameter style case correctly."""
+    sync_driver = cast("SyncContractDriver", driver)
+    _seed_sync(sync_driver, parameter_style_case.setup_rows, case.table)
+
+    if parameter_style_case.method == "execute_many":
+        result = sync_driver.execute_many(parameter_style_case.statement, parameter_style_case.parameters)
+    else:
+        result = _execute_sync(sync_driver, parameter_style_case.statement, parameter_style_case.parameters)
+
+    if parameter_style_case.expected_rows_affected is not None:
+        assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
+    if parameter_style_case.expected_result_data is not None:
+        assert_result_data(result, parameter_style_case.expected_result_data)
+    if (
+        parameter_style_case.verification_statement is not None
+        and parameter_style_case.expected_verification_data is not None
+    ):
+        verification = _execute_sync(
+            sync_driver, parameter_style_case.verification_statement, parameter_style_case.verification_parameters
+        )
+        assert_result_data(verification, parameter_style_case.expected_verification_data)
+
+
+async def assert_async_parameter_style_contract(
+    driver: object, case: DriverCase, parameter_style_case: ParameterStyleCase
+) -> None:
+    """Assert async drivers bind one parameter style case correctly."""
+    async_driver = cast("AsyncContractDriver", driver)
+    await _seed_async(async_driver, parameter_style_case.setup_rows, case.table)
+
+    if parameter_style_case.method == "execute_many":
+        result = await async_driver.execute_many(parameter_style_case.statement, parameter_style_case.parameters)
+    else:
+        result = await _execute_async(async_driver, parameter_style_case.statement, parameter_style_case.parameters)
+
+    if parameter_style_case.expected_rows_affected is not None:
+        assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
+    if parameter_style_case.expected_result_data is not None:
+        assert_result_data(result, parameter_style_case.expected_result_data)
+    if (
+        parameter_style_case.verification_statement is not None
+        and parameter_style_case.expected_verification_data is not None
+    ):
+        verification = await _execute_async(
+            async_driver, parameter_style_case.verification_statement, parameter_style_case.verification_parameters
+        )
+        assert_result_data(verification, parameter_style_case.expected_verification_data)
 
 
 def assert_sync_result_contract(driver: object, case: DriverCase) -> None:
