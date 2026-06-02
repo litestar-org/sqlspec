@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core._pagination import OffsetPagination
+from sqlspec.core import OffsetPagination
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase

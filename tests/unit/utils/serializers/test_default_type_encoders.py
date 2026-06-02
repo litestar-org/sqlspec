@@ -208,7 +208,7 @@ def test_stdlib_serializer_accepts_type_encoders_override() -> None:
 
 def test_offset_pagination_round_trip_via_dataclass_branch() -> None:
     """OffsetPagination is a dataclass; encoding goes through the dataclass tail probe."""
-    from sqlspec.core._pagination import OffsetPagination
+    from sqlspec.core import OffsetPagination
 
     page: OffsetPagination[int] = OffsetPagination(items=[1, 2, 3], limit=10, offset=0, total=3)
     assert json.loads(encode_json(page)) == {"items": [1, 2, 3], "limit": 10, "offset": 0, "total": 3}

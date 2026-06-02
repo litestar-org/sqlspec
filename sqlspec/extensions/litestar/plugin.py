@@ -20,8 +20,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.core._correlation import CorrelationExtractor
-from sqlspec.core._pagination import OffsetPagination
+from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.extensions.litestar._utils import (

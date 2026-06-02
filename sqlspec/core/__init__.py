@@ -88,7 +88,6 @@ Example Usage:
 """
 
 from sqlspec.core import filters
-from sqlspec.core._correlation import CorrelationExtractor
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -118,6 +117,7 @@ from sqlspec.core.compiler import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core.correlation import CorrelationExtractor
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.filters import (
     AnyCollectionFilter,
@@ -146,6 +146,7 @@ from sqlspec.core.hashing import (
     hash_sql_statement,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
+from sqlspec.core.pagination import OffsetPagination
 from sqlspec.core.parameters import (
     DRIVER_PARAMETER_PROFILES,
     EXECUTE_MANY_MIN_ROWS,
@@ -273,6 +274,7 @@ __all__ = (
     "NotInCollectionFilter",
     "NotNullFilter",
     "NullFilter",
+    "OffsetPagination",
     "OperationProfile",
     "OperationType",
     "OrderByFilter",

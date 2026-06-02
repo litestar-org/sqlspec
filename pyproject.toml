@@ -220,7 +220,7 @@ exclude = [
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/adapters/**/data_dictionary.py", # Cross-module inheritance causes mypyc segfaults
   "sqlspec/utils/arrow_helpers.py",         # Arrow operations cause segfaults when compiled
-  "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
+  "sqlspec/core/pagination.py",             # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
 include = [
   "sqlspec/core/**/*.py",                          # Core module

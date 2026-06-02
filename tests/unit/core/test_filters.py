@@ -28,6 +28,7 @@ from sqlspec.core import (
     NotInCollectionFilter,
     NotNullFilter,
     NullFilter,
+    OffsetPagination,
     OrderByFilter,
     SearchFilter,
     StatementConfig,
@@ -35,7 +36,6 @@ from sqlspec.core import (
     apply_filter,
     canonicalize_filters,
 )
-from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.filters import NotInSearchFilter
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.driver._async import AsyncDriverAdapterBase

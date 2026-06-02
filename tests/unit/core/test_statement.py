@@ -27,6 +27,7 @@ import sqlspec.typing as public_typing
 from sqlspec.core import (
     SQL,
     CompiledSQL,
+    CorrelationExtractor,
     OperationProfile,
     OperationType,
     ParameterProfile,
@@ -39,7 +40,6 @@ from sqlspec.core import (
     get_pipeline_metrics,
     reset_pipeline_registry,
 )
-from sqlspec.core._correlation import CorrelationExtractor
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.hashing import hash_filters
 from sqlspec.core.metrics import StackExecutionMetrics
