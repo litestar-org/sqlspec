@@ -504,16 +504,6 @@ def get_cache_config() -> CacheConfig:
     return _global_cache_config
 
 
-def _configure_pipeline_cache(config: "CacheConfig") -> None:
-    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
-    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
-    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
-    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
-    configure_statement_pipeline_cache(
-        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
-    )
-
-
 def update_cache_config(config: CacheConfig) -> None:
     """Update the global cache configuration.
 
@@ -962,27 +952,6 @@ class Filter:
         return hash((self.field_name, self.operation, self.value))
 
 
-def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
-    """Create canonical representation of filters for cache keys.
-
-    Args:
-        filters: List of filters to canonicalize
-
-    Returns:
-        Tuple of unique filters sorted by field_name, operation, then value
-    """
-    if not filters:
-        return ()
-
-    # Deduplicate and sort for canonical representation
-    unique_filters = set(filters)
-    return tuple(sorted(unique_filters, key=_filter_sort_key))
-
-
-def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
-    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class FiltersView:
     """Read-only view of filters without copying.
@@ -1058,3 +1027,34 @@ def reset_pipeline_registry() -> None:
     """Clear shared statement pipeline caches and metrics."""
 
     reset_statement_pipeline_cache()
+
+
+def _configure_pipeline_cache(config: "CacheConfig") -> None:
+    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
+    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
+    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
+    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
+    configure_statement_pipeline_cache(
+        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
+    )
+
+
+def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
+    """Create canonical representation of filters for cache keys.
+
+    Args:
+        filters: List of filters to canonicalize
+
+    Returns:
+        Tuple of unique filters sorted by field_name, operation, then value
+    """
+    if not filters:
+        return ()
+
+    # Deduplicate and sort for canonical representation
+    unique_filters = set(filters)
+    return tuple(sorted(unique_filters, key=_filter_sort_key))
+
+
+def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
+    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)

@@ -148,26 +148,6 @@ def is_copy_to_operation(operation_type: "OperationType") -> bool:
     return operation_type in COPY_TO_OPERATION_TYPES
 
 
-def _assign_placeholder_position(
-    placeholder: "exp.Placeholder", placeholder_positions: "dict[str, int]", placeholder_counter: "list[int]"
-) -> "int | None":
-    name_expr = placeholder.name if placeholder.name is not None else None
-    if name_expr is not None:
-        placeholder_key = str(name_expr)
-    else:
-        value = placeholder.args.get("this")
-        placeholder_key = str(value) if value is not None else placeholder.sql()
-
-    if not placeholder_key:
-        return None
-
-    if placeholder_key not in placeholder_positions:
-        placeholder_counter[0] += 1
-        placeholder_positions[placeholder_key] = placeholder_counter[0]
-
-    return placeholder_positions[placeholder_key]
-
-
 @final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class OperationProfile:
@@ -185,21 +165,6 @@ class OperationProfile:
 
     def __repr__(self) -> str:
         return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
-
-
-def _is_effectively_empty_parameters(value: Any) -> bool:
-    if value is None:
-        return True
-    # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)
-    value_type = type(value)
-    if value_type is dict or value_type is list or value_type is tuple:
-        return len(value) == 0
-    if value_type is set or value_type is frozenset:
-        return len(value) == 0
-    # Fallback to ABC check for custom Mapping types
-    if isinstance(value, Mapping):
-        return len(value) == 0
-    return False
 
 
 @final
@@ -1085,3 +1050,38 @@ class SQLProcessor:
             "validator_size": parameter_stats["validator_size"],
             "validator_max_size": parameter_stats["validator_max_size"],
         }
+
+
+def _assign_placeholder_position(
+    placeholder: "exp.Placeholder", placeholder_positions: "dict[str, int]", placeholder_counter: "list[int]"
+) -> "int | None":
+    name_expr = placeholder.name if placeholder.name is not None else None
+    if name_expr is not None:
+        placeholder_key = str(name_expr)
+    else:
+        value = placeholder.args.get("this")
+        placeholder_key = str(value) if value is not None else placeholder.sql()
+
+    if not placeholder_key:
+        return None
+
+    if placeholder_key not in placeholder_positions:
+        placeholder_counter[0] += 1
+        placeholder_positions[placeholder_key] = placeholder_counter[0]
+
+    return placeholder_positions[placeholder_key]
+
+
+def _is_effectively_empty_parameters(value: Any) -> bool:
+    if value is None:
+        return True
+    # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)
+    value_type = type(value)
+    if value_type is dict or value_type is list or value_type is tuple:
+        return len(value) == 0
+    if value_type is set or value_type is frozenset:
+        return len(value) == 0
+    # Fallback to ABC check for custom Mapping types
+    if isinstance(value, Mapping):
+        return len(value) == 0
+    return False

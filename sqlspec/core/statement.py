@@ -382,6 +382,47 @@ class SQL:
             ),
         )
 
+    def __hash__(self) -> int:
+        """Hash value computation."""
+        if self._hash is None:
+            positional_tuple = tuple(self._positional_parameters)
+            named_tuple = tuple(sorted(self._named_parameters.items())) if self._named_parameters else ()
+            raw_sql = self._get_raw_sql()
+            is_many = self._is_many
+            is_script = self._is_script
+            self._hash = hash((raw_sql, positional_tuple, named_tuple, is_many, is_script))
+        return self._hash
+
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison."""
+        if not isinstance(other, SQL):
+            return False
+        return (
+            self._get_raw_sql() == other._get_raw_sql()
+            and self._positional_parameters == other._positional_parameters
+            and self._named_parameters == other._named_parameters
+            and self._is_many == other._is_many
+            and self._is_script == other._is_script
+        )
+
+    def __repr__(self) -> str:
+        """String representation."""
+        params_parts = []
+        if self._positional_parameters:
+            params_parts.append(f"params={self._positional_parameters}")
+        if self._named_parameters:
+            params_parts.append(f"named_params={self._named_parameters}")
+        params_str = f", {', '.join(params_parts)}" if params_parts else ""
+
+        flags = []
+        if self._is_many:
+            flags.append("is_many")
+        if self._is_script:
+            flags.append("is_script")
+        flags_str = f", {', '.join(flags)}" if flags else ""
+
+        return f"SQL({self._get_raw_sql()!r}{params_str}{flags_str})"
+
     def reset(self) -> None:
         """Reset SQL object for reuse in pooling scenarios."""
         if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
@@ -1599,47 +1640,6 @@ class SQL:
             builder.load_parameters(param_map)
 
         return builder
-
-    def __hash__(self) -> int:
-        """Hash value computation."""
-        if self._hash is None:
-            positional_tuple = tuple(self._positional_parameters)
-            named_tuple = tuple(sorted(self._named_parameters.items())) if self._named_parameters else ()
-            raw_sql = self._get_raw_sql()
-            is_many = self._is_many
-            is_script = self._is_script
-            self._hash = hash((raw_sql, positional_tuple, named_tuple, is_many, is_script))
-        return self._hash
-
-    def __eq__(self, other: object) -> bool:
-        """Equality comparison."""
-        if not isinstance(other, SQL):
-            return False
-        return (
-            self._get_raw_sql() == other._get_raw_sql()
-            and self._positional_parameters == other._positional_parameters
-            and self._named_parameters == other._named_parameters
-            and self._is_many == other._is_many
-            and self._is_script == other._is_script
-        )
-
-    def __repr__(self) -> str:
-        """String representation."""
-        params_parts = []
-        if self._positional_parameters:
-            params_parts.append(f"params={self._positional_parameters}")
-        if self._named_parameters:
-            params_parts.append(f"named_params={self._named_parameters}")
-        params_str = f", {', '.join(params_parts)}" if params_parts else ""
-
-        flags = []
-        if self._is_many:
-            flags.append("is_many")
-        if self._is_script:
-            flags.append("is_script")
-        flags_str = f", {', '.join(flags)}" if flags else ""
-
-        return f"SQL({self._get_raw_sql()!r}{params_str}{flags_str})"
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
