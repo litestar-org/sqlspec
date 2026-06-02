@@ -14,7 +14,7 @@ from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checka
 
 from typing_extensions import Self, TypeVar, dataclass_transform
 
-from sqlspec.utils.module_loader import dependency_flag, module_available
+from sqlspec.utils.module_loader import dependency_flag, import_optional, import_optional_attr, module_available
 
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
@@ -93,6 +93,8 @@ __all__ = (
     "cattrs_unstructure",
     "convert",
     "convert_stub",
+    "import_optional",
+    "import_optional_attr",
     "module_available",
     "msgspec_fields",
     "msgspec_fields_stub",

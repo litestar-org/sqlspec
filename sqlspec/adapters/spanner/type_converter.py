@@ -24,18 +24,14 @@ from uuid import UUID
 from typing_extensions import final
 
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
-from sqlspec.typing import UUID_UTILS_INSTALLED
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 
 _UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
-if UUID_UTILS_INSTALLED:
-    try:
-        import uuid_utils as _uuid_utils  # pyright: ignore[reportMissingImports]
-
-        _UUID_TYPES = (UUID, _uuid_utils.UUID)
-    except ImportError:
-        pass
+_uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+if _uuid_utils_uuid is not None:
+    _UUID_TYPES = (UUID, _uuid_utils_uuid)
 
 if TYPE_CHECKING:
     from collections.abc import Callable

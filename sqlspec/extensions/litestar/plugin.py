@@ -37,7 +37,7 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     session_provider_maker,
 )
-from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
+from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
@@ -1038,8 +1038,7 @@ def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callab
     decoders: list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]] = []
     if NUMPY_INSTALLED:
         decoders.append((_litestar_numpy_array_predicate, _litestar_numpy_array_dec_hook))
-    with suppress(ImportError):
-        import uuid_utils  # pyright: ignore[reportMissingImports]
-
-        decoders.append((lambda t: t is uuid_utils.UUID, lambda t, v: t(str(v))))
+    uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+    if uuid_utils_uuid is not None:
+        decoders.append((lambda t: t is uuid_utils_uuid, lambda t, v: t(str(v))))
     return decoders

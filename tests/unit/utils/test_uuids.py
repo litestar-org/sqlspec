@@ -9,6 +9,7 @@ from uuid import UUID
 
 import pytest
 
+from sqlspec import typing as public_typing
 from sqlspec.utils.uuids import (
     NAMESPACE_DNS,
     NAMESPACE_OID,
@@ -23,6 +24,15 @@ from sqlspec.utils.uuids import (
     uuid6,
     uuid7,
 )
+
+
+def test_uuids_flags_are_single_sourced_from_facade() -> None:
+    """uuids must re-export the facade's lazy flags, not shadow them with bools."""
+    assert UUID_UTILS_INSTALLED is public_typing.UUID_UTILS_INSTALLED
+    assert NANOID_INSTALLED is public_typing.NANOID_INSTALLED
+    # Lazy facade flags are OptionalDependencyFlag instances, not plain bools.
+    assert not isinstance(UUID_UTILS_INSTALLED, bool)
+    assert not isinstance(NANOID_INSTALLED, bool)
 
 
 def _is_uuid_like(obj: object) -> bool:
@@ -228,25 +238,25 @@ def test_nanoid_installed_flag() -> None:
 
 
 def test_uuid_utils_module_cache_is_import_time_reference() -> None:
-    """uuid_utils is cached at import time."""
+    """uuid_utils is resolved once at import via import_optional and cached."""
     import sqlspec.utils.uuids as _uuids
 
     module = _uuids._uuid_utils_mod  # pyright: ignore[reportPrivateUsage]
-    assert _uuids.UUID_UTILS_INSTALLED is (module is not None)
+    assert bool(_uuids.UUID_UTILS_INSTALLED) == (module is not None)
     assert module is None or hasattr(module, "uuid4")
 
 
 def test_fastnanoid_module_cache_is_import_time_reference() -> None:
-    """fastnanoid is cached at import time."""
+    """fastnanoid is resolved once at import via import_optional and cached."""
     import sqlspec.utils.uuids as _uuids
 
     module = _uuids._fastnanoid_mod  # pyright: ignore[reportPrivateUsage]
-    assert _uuids.NANOID_INSTALLED is (module is not None)
+    assert bool(_uuids.NANOID_INSTALLED) == (module is not None)
     assert module is None or callable(getattr(module, "generate", None))
 
 
 def test_uuid_helpers_do_not_reintroduce_loader_flag_shape() -> None:
-    """The branch uses simple eager module caches, not loader-backed flags."""
+    """Modules resolve via import_optional; the old _Availability wrapper stays gone."""
     import sqlspec.utils.uuids as _uuids
 
     assert not hasattr(_uuids, "_Availability")

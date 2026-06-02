@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import final
 
 from sqlspec.utils.dispatch import TypeDispatcher
+from sqlspec.utils.module_loader import import_optional_attr
 
 if TYPE_CHECKING:
     import datetime
@@ -205,12 +206,8 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
     if not native:
         coercions[_uuid_mod.UUID] = _uuid_to_string
 
-    try:
-        import uuid_utils as _uuid_utils_mod  # pyright: ignore[reportMissingImports]
-
-        converter = _uuid_utils_to_stdlib if native else _uuid_to_string
-        coercions[_uuid_utils_mod.UUID] = converter
-    except ImportError:
-        pass
+    uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+    if uuid_utils_uuid is not None:
+        coercions[uuid_utils_uuid] = _uuid_utils_to_stdlib if native else _uuid_to_string
 
     return coercions

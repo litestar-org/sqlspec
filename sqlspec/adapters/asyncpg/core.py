@@ -1,7 +1,6 @@
 """AsyncPG adapter compiled helpers."""
 
 import datetime
-import importlib
 import re
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
@@ -32,6 +31,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
@@ -298,8 +298,10 @@ async def register_pgvector_support(connection: Any) -> None:
             _PGVECTOR_MISSING_LOGGED = True
         return
 
+    pgvector_asyncpg = import_optional("pgvector.asyncpg")
+    if pgvector_asyncpg is None:
+        return
     try:
-        pgvector_asyncpg = importlib.import_module("pgvector.asyncpg")
         await pgvector_asyncpg.register_vector(connection)
     except Exception:
         logger.exception("Failed to register pgvector support")

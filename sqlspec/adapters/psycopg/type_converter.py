@@ -9,8 +9,8 @@ does not pay importlib dispatch cost per connection.
 
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import import_optional
 
 if TYPE_CHECKING:
     from psycopg import AsyncConnection, Connection
@@ -20,14 +20,7 @@ __all__ = ("register_pgvector_async", "register_pgvector_sync")
 
 logger = get_logger(__name__)
 
-_pgvector_psycopg: Any | None = None
-if PGVECTOR_INSTALLED:
-    try:
-        import pgvector.psycopg as _pgvector_psycopg_imported  # type: ignore[import-untyped]
-    except ImportError:
-        pass
-    else:
-        _pgvector_psycopg = _pgvector_psycopg_imported
+_pgvector_psycopg: Any | None = import_optional("pgvector.psycopg")
 
 
 def register_pgvector_sync(connection: "Connection[Any]") -> None:

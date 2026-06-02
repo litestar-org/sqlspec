@@ -27,6 +27,9 @@ from uuid import uuid3 as _stdlib_uuid3
 from uuid import uuid4 as _stdlib_uuid4
 from uuid import uuid5 as _stdlib_uuid5
 
+from sqlspec.typing import NANOID_INSTALLED, UUID_UTILS_INSTALLED
+from sqlspec.utils.module_loader import import_optional
+
 __all__ = (
     "NAMESPACE_DNS",
     "NAMESPACE_OID",
@@ -43,25 +46,8 @@ __all__ = (
 )
 
 
-_uuid_utils_mod: Any | None = None
-try:
-    import uuid_utils as _uuid_utils_imported  # pyright: ignore[reportMissingImports]
-except ImportError:  # pragma: no cover
-    pass
-else:
-    _uuid_utils_mod = _uuid_utils_imported
-
-_fastnanoid_mod: Any | None = None
-try:
-    import fastnanoid as _fastnanoid_imported  # pyright: ignore[reportMissingImports]
-except ImportError:  # pragma: no cover
-    pass
-else:
-    _fastnanoid_mod = _fastnanoid_imported
-
-
-UUID_UTILS_INSTALLED = _uuid_utils_mod is not None
-NANOID_INSTALLED = _fastnanoid_mod is not None
+_uuid_utils_mod: Any | None = import_optional("uuid_utils")
+_fastnanoid_mod: Any | None = import_optional("fastnanoid")
 
 
 def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":

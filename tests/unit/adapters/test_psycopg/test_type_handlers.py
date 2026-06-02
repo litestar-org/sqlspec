@@ -12,7 +12,6 @@ def test_register_pgvector_sync_with_pgvector_installed(monkeypatch: pytest.Monk
 
     mock_connection = MagicMock()
     mock_pgvector = MagicMock()
-    monkeypatch.setattr(type_converter, "PGVECTOR_INSTALLED", True)
     monkeypatch.setattr(type_converter, "_pgvector_psycopg", mock_pgvector)
 
     register_pgvector_sync(mock_connection)
@@ -24,7 +23,7 @@ def test_register_pgvector_sync_without_pgvector(monkeypatch: pytest.MonkeyPatch
     """Test register_pgvector_sync gracefully handles pgvector not installed."""
     import sqlspec.adapters.psycopg.type_converter
 
-    monkeypatch.setattr(sqlspec.adapters.psycopg.type_converter, "PGVECTOR_INSTALLED", False)
+    monkeypatch.setattr(sqlspec.adapters.psycopg.type_converter, "_pgvector_psycopg", None)
 
     from sqlspec.adapters.psycopg.type_converter import register_pgvector_sync
 
@@ -42,7 +41,6 @@ async def test_register_pgvector_async_with_pgvector_installed(monkeypatch: pyte
     mock_connection = AsyncMock()
     mock_pgvector = MagicMock()
     mock_pgvector.register_vector_async = AsyncMock()
-    monkeypatch.setattr(type_converter, "PGVECTOR_INSTALLED", True)
     monkeypatch.setattr(type_converter, "_pgvector_psycopg", mock_pgvector)
 
     await register_pgvector_async(mock_connection)
@@ -54,7 +52,7 @@ async def test_register_pgvector_async_without_pgvector(monkeypatch: pytest.Monk
     """Test register_pgvector_async gracefully handles pgvector not installed."""
     import sqlspec.adapters.psycopg.type_converter
 
-    monkeypatch.setattr(sqlspec.adapters.psycopg.type_converter, "PGVECTOR_INSTALLED", False)
+    monkeypatch.setattr(sqlspec.adapters.psycopg.type_converter, "_pgvector_psycopg", None)
 
     from sqlspec.adapters.psycopg.type_converter import register_pgvector_async
 
@@ -72,7 +70,6 @@ def test_register_pgvector_sync_handles_registration_failure(monkeypatch: pytest
     mock_connection = MagicMock()
     mock_pgvector = MagicMock()
     mock_pgvector.register_vector.side_effect = Exception("Registration failed")
-    monkeypatch.setattr(type_converter, "PGVECTOR_INSTALLED", True)
     monkeypatch.setattr(type_converter, "_pgvector_psycopg", mock_pgvector)
 
     register_pgvector_sync(mock_connection)
@@ -86,7 +83,6 @@ async def test_register_pgvector_async_handles_registration_failure(monkeypatch:
     mock_connection = AsyncMock()
     mock_pgvector = MagicMock()
     mock_pgvector.register_vector_async = AsyncMock(side_effect=Exception("Registration failed"))
-    monkeypatch.setattr(type_converter, "PGVECTOR_INSTALLED", True)
     monkeypatch.setattr(type_converter, "_pgvector_psycopg", mock_pgvector)
 
     await register_pgvector_async(mock_connection)
