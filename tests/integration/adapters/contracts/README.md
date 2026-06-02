@@ -12,8 +12,8 @@ Keep adapter-specific SQL, optional service setup, and one-off regressions in ad
 4. Put reusable assertions in `behaviors.py`; central tests should stay thin.
 5. Add input data to `_inputs.py` or schema metadata to `_schema.py` instead of branching on adapter names inside tests.
 
-Default local coverage currently runs SQLite, aiosqlite, and DuckDB contracts. Service-backed adapters should keep
-their existing opt-in marks and xdist groups when they move from deferred rows to active rows.
+Default local coverage currently runs SQLite, aiosqlite, DuckDB, and MySQL-family contracts. Service-backed adapters
+should keep their existing opt-in marks and xdist groups when they move from deferred rows to active rows.
 
 ## Parameter Styles
 
@@ -26,3 +26,6 @@ None-heavy edge coverage lives in adapter-local `test_none_parameters.py` files 
 SQLite storage and parameter-count behavior rather than the shared SQLSpec parameter-style contract.
 DuckDB numeric, mixed-style, array/list, analytics, and None-heavy parameter behavior remains in adapter-local
 variant files because those cases assert DuckDB-specific parameter semantics.
+MySQL native pyformat, named pyformat, boolean, float, empty-string, and special-character parameter behavior
+remains in adapter-local variant files because those cases assert MySQL-family or driver-specific parameter
+semantics rather than generic SQLSpec parameter-style behavior.

@@ -6,7 +6,12 @@ from typing import Literal
 import pytest
 from _pytest.mark.structures import Mark, MarkDecorator
 
-from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, DUCKDB_CONTRACT_TABLE, ContractTable
+from tests.integration.adapters.contracts._schema import (
+    DEFAULT_CONTRACT_TABLE,
+    DUCKDB_CONTRACT_TABLE,
+    MYSQL_CONTRACT_TABLE,
+    ContractTable,
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ class DriverCaseContext:
 
 SQLITE_XDIST_MARK = pytest.mark.xdist_group("sqlite")
 DUCKDB_XDIST_MARK = pytest.mark.xdist_group("duckdb")
+MYSQL_XDIST_MARK = pytest.mark.xdist_group("mysql")
 
 SYNC_DRIVER_CASES = (
     DriverCase(
@@ -79,6 +85,36 @@ SYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
     ),
+    DriverCase(
+        id="mysqlconnector-sync",
+        fixture_name="contract_mysqlconnector_sync_driver",
+        adapter="mysqlconnector",
+        dialect="mysql",
+        mode="sync",
+        marks=(MYSQL_XDIST_MARK,),
+        table=MYSQL_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_explain=True,
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_storage_bridge=True,
+        deviations=("no-returning", "autocommit-ddl"),
+    ),
+    DriverCase(
+        id="pymysql-sync",
+        fixture_name="contract_pymysql_driver",
+        adapter="pymysql",
+        dialect="mysql",
+        mode="sync",
+        marks=(MYSQL_XDIST_MARK,),
+        table=MYSQL_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_explain=True,
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_storage_bridge=True,
+        deviations=("no-returning", "autocommit-ddl"),
+    ),
 )
 
 ASYNC_DRIVER_CASES = (
@@ -94,6 +130,51 @@ ASYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+    ),
+    DriverCase(
+        id="aiomysql-async",
+        fixture_name="contract_aiomysql_driver",
+        adapter="aiomysql",
+        dialect="mysql",
+        mode="async",
+        marks=(MYSQL_XDIST_MARK, pytest.mark.anyio),
+        table=MYSQL_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_explain=True,
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_storage_bridge=True,
+        deviations=("no-returning", "autocommit-ddl"),
+    ),
+    DriverCase(
+        id="asyncmy-async",
+        fixture_name="contract_asyncmy_driver",
+        adapter="asyncmy",
+        dialect="mysql",
+        mode="async",
+        marks=(MYSQL_XDIST_MARK, pytest.mark.anyio),
+        table=MYSQL_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_explain=True,
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_storage_bridge=True,
+        deviations=("no-returning", "autocommit-ddl"),
+    ),
+    DriverCase(
+        id="mysqlconnector-async",
+        fixture_name="contract_mysqlconnector_async_driver",
+        adapter="mysqlconnector",
+        dialect="mysql",
+        mode="async",
+        marks=(MYSQL_XDIST_MARK, pytest.mark.anyio),
+        table=MYSQL_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_explain=True,
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_storage_bridge=True,
+        deviations=("no-returning", "autocommit-ddl"),
     ),
 )
 
@@ -126,15 +207,6 @@ DEFERRED_DRIVER_CASES = (
         reason="ADBC DuckDB contract fixture not wired into the C5 harness yet.",
     ),
     DriverCase(
-        "aiomysql-async",
-        "",
-        "aiomysql",
-        "mysql",
-        "async",
-        integration_status="deferred",
-        reason="MySQL service-backed contract fixture is not wired into the C5 harness yet.",
-    ),
-    DriverCase(
         "arrow-odbc-sync",
         "",
         "arrow_odbc",
@@ -142,15 +214,6 @@ DEFERRED_DRIVER_CASES = (
         "sync",
         integration_status="deferred",
         reason="No active integration fixture exists for arrow_odbc.",
-    ),
-    DriverCase(
-        "asyncmy-async",
-        "",
-        "asyncmy",
-        "mysql",
-        "async",
-        integration_status="deferred",
-        reason="MySQL service-backed contract fixture is not wired into the C5 harness yet.",
     ),
     DriverCase(
         "asyncpg-async",
@@ -207,24 +270,6 @@ DEFERRED_DRIVER_CASES = (
         reason="No active integration fixture exists for mssql_python.",
     ),
     DriverCase(
-        "mysqlconnector-sync",
-        "",
-        "mysqlconnector",
-        "mysql",
-        "sync",
-        integration_status="deferred",
-        reason="MySQL service-backed contract fixture is not wired into the C5 harness yet.",
-    ),
-    DriverCase(
-        "mysqlconnector-async",
-        "",
-        "mysqlconnector",
-        "mysql",
-        "async",
-        integration_status="deferred",
-        reason="MySQL service-backed contract fixture is not wired into the C5 harness yet.",
-    ),
-    DriverCase(
         "oracledb-sync",
         "",
         "oracledb",
@@ -268,15 +313,6 @@ DEFERRED_DRIVER_CASES = (
         "async",
         integration_status="deferred",
         reason="PostgreSQL service-backed contract fixture is not wired into the C5 harness yet.",
-    ),
-    DriverCase(
-        "pymysql-sync",
-        "",
-        "pymysql",
-        "mysql",
-        "sync",
-        integration_status="deferred",
-        reason="MySQL service-backed contract fixture is not wired into the C5 harness yet.",
     ),
     DriverCase(
         "spanner-sync",
