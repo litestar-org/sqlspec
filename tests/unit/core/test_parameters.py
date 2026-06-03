@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 import sqlglot
 
+from sqlspec import SQL
 from sqlspec.core import (
     DRIVER_PARAMETER_PROFILES,
     DriverParameterProfile,
@@ -624,6 +625,31 @@ def test_repeated_named_params_expand_for_qmark_style() -> None:
     assert converted_sql.count("?") == 4
     assert converted_params == ("%duckdb%", "%duckdb%", "%duckdb%", 10)
     assert len(converted_params) == 4
+
+
+def test_expression_backed_repeated_named_params_match_string_qmark_style() -> None:
+    """Expression-backed SQL should expand repeated named params like string SQL."""
+    statement = "SELECT id FROM t WHERE a = :wid OR b = :wid"
+    expression = sqlglot.parse_one(statement, read="sqlite")
+
+    string_sql, string_parameters = SQL(statement, wid="W").compile()
+    expression_sql, expression_parameters = SQL(expression, wid="W").compile()
+
+    assert expression_sql == string_sql
+    assert expression_sql.count("?") == 2
+    assert expression_parameters == string_parameters == ("W", "W")
+
+
+def test_expression_backed_repeated_named_params_rebind_cached_qmark_style() -> None:
+    """Cached expression-backed SQL should re-expand repeated named params."""
+    statement = "SELECT id FROM t WHERE a = :wid OR b = :wid"
+    expression = sqlglot.parse_one(statement, read="sqlite")
+
+    first_sql = SQL(expression.copy(), wid="W")
+    second_sql = SQL(expression.copy(), wid="X")
+
+    assert first_sql.compile()[1] == ("W", "W")
+    assert second_sql.compile()[1] == ("X", "X")
 
 
 def test_edge_case_all_numeric_parameters() -> None:

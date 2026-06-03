@@ -31,6 +31,11 @@ __all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
 _EXECUTE_MANY_SAMPLE_THRESHOLD = 10
 # Number of records to sample for type signatures
 _EXECUTE_MANY_SAMPLE_SIZE = 3
+_OCCURRENCE_BASED_POSITIONAL_STYLES = frozenset({
+    ParameterStyle.QMARK,
+    ParameterStyle.POSITIONAL_COLON,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+})
 
 TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
@@ -962,7 +967,7 @@ class ParameterProcessor:
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
 
-        input_named_parameters = tuple(dict.fromkeys(p.name for p in param_info if p.name is not None))
+        input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
 
         if config.needs_static_script_compilation and param_info and parameters and not is_many:
             return self._compile_static_script(
@@ -992,6 +997,7 @@ class ParameterProcessor:
 
         if requires_mapping:
             target_style = self._select_execution_style(original_styles, config)
+            input_named_parameters = _named_parameters_for_style(param_info, target_style)
             mapping_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
                 param_info, target_style
             )
@@ -1007,6 +1013,10 @@ class ParameterProcessor:
             param_info = self._converter.convert_parameter_info_style(param_info, target_style, mapping_plan)
             original_styles = {target_style}
             needs_execution_conversion = False
+
+        if needs_execution_conversion:
+            target_style = self._select_execution_style(original_styles, config)
+            input_named_parameters = _named_parameters_for_style(param_info, target_style)
 
         applied_wrap_types = False
         if processed_parameters and wrap_types:
@@ -1171,3 +1181,12 @@ def _make_cache_key_tuple(
     if wrap_types is None and normalize_for_parsing is None:
         return (sql, param_fingerprint, input_style, exec_style, dialect, is_many)
     return (sql, param_fingerprint, input_style, exec_style, dialect, is_many, wrap_types, normalize_for_parsing)
+
+
+def _named_parameters_for_style(
+    param_info: "list[ParameterInfo]", target_style: "ParameterStyle | None"
+) -> "tuple[str, ...]":
+    names = tuple(p.name for p in param_info if p.name is not None)
+    if target_style in _OCCURRENCE_BASED_POSITIONAL_STYLES:
+        return names
+    return tuple(dict.fromkeys(names))

@@ -126,6 +126,8 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
 * Preserved Oracle implicit identifier casing for expression-backed query
   builder statements, fixing ``FOR UPDATE``, vector-distance, and migration
   tracker queries against unquoted Oracle objects.
+* Preserved repeated same-named bind parameters in expression-backed pagination
+  count and window-count queries.
 
 **Performance:**
 

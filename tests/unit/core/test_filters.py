@@ -1368,6 +1368,49 @@ async def test_service_paginate_works() -> None:
 
 
 @pytest.mark.anyio
+async def test_service_paginate_handles_repeated_named_parameters() -> None:
+    """Service pagination should execute repeated same-named bind count queries."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(connection_config={"database": tmp.name})
+        sqlspec.add_config(config)
+
+        async with sqlspec.provide_session(config) as session:
+            await session.execute_script("""
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    workspace TEXT,
+                    fallback_workspace TEXT
+                );
+                INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (1, 'alice', 'W', NULL);
+                INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (2, 'bob', 'other', 'W');
+                INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (3, 'charlie', 'other', 'other');
+            """)
+            await session.commit()
+
+            service = UserService(session)
+
+            result = await service.paginate(
+                """
+                SELECT id, name
+                FROM users
+                WHERE workspace = :wid OR fallback_workspace = :wid
+                ORDER BY id
+                """,
+                LimitOffsetFilter(limit=1, offset=0),
+                schema_type=User,
+                wid="W",
+            )
+
+            assert len(result.items) == 1
+            assert result.total == 2
+            assert result.limit == 1
+            assert result.offset == 0
+            assert result.items[0].name == "alice"
+
+
+@pytest.mark.anyio
 async def test_service_paginate_returns_raw_rows_without_schema_type() -> None:
     service = SQLSpecAsyncService(cast(Any, _AsyncRawPaginateSession()))
 

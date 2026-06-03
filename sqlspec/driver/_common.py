@@ -219,6 +219,33 @@ def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
         return set()
 
 
+def _materialize_repeated_named_occurrence_parameters(
+    original_sql: "SQL", excluded_names: "set[str]"
+) -> "tuple[Any, ...] | None":
+    """Return occurrence-ordered parameters when a rewritten expression lost repeated names."""
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    if not isinstance(processed_state, ProcessedState):
+        return None
+
+    input_names = processed_state.input_named_parameters
+    if not input_names:
+        return None
+
+    retained_names = tuple(name for name in input_names if name not in excluded_names)
+    if len(retained_names) == len(set(retained_names)):
+        return None
+
+    execution_parameters = processed_state.execution_parameters
+    if not isinstance(execution_parameters, (list, tuple)):
+        return None
+    if len(execution_parameters) != len(input_names):
+        return None
+
+    return tuple(
+        value for name, value in zip(input_names, execution_parameters, strict=False) if name not in excluded_names
+    )
+
+
 class SyncExceptionHandler(Protocol):
     """Protocol for synchronous exception handlers with deferred exception pattern.
 
@@ -2084,6 +2111,13 @@ class CommonDriverAttributesMixin:
             filtered_named_params = {
                 k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params
             }
+            materialized_parameters = _materialize_repeated_named_occurrence_parameters(original_sql, pagination_params)
+            if materialized_parameters is not None:
+                return SQL(
+                    count_expr,
+                    *materialized_parameters,
+                    statement_config=original_sql.statement_config,
+                )
             return SQL(
                 count_expr,
                 *original_sql.positional_parameters,
@@ -2103,6 +2137,13 @@ class CommonDriverAttributesMixin:
             count_expr.set("with_", cte.copy())
         # Filter out pagination parameters (limit/offset) captured before compile()
         filtered_named_params = {k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params}
+        materialized_parameters = _materialize_repeated_named_occurrence_parameters(original_sql, pagination_params)
+        if materialized_parameters is not None:
+            return SQL(
+                count_expr,
+                *materialized_parameters,
+                statement_config=original_sql.statement_config,
+            )
         return SQL(
             count_expr,
             *original_sql.positional_parameters,
@@ -2158,6 +2199,13 @@ class CommonDriverAttributesMixin:
             msg = "COUNT(*) OVER() can only be added to SELECT or set operation statements"
             raise ImproperConfigurationError(msg)
 
+        materialized_parameters = _materialize_repeated_named_occurrence_parameters(original_sql, set())
+        if materialized_parameters is not None:
+            return SQL(
+                modified_expr,
+                *materialized_parameters,
+                statement_config=original_sql.statement_config,
+            )
         return SQL(
             modified_expr,
             *original_sql.positional_parameters,
