@@ -7,6 +7,8 @@ Tests cover:
 - calculate_backoff_seconds() exponential backoff with jitter
 """
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgRetryConfig
@@ -16,6 +18,35 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
     CockroachPsycopgSyncDataDictionary,
 )
 from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
+from sqlspec.core import SQL
+from sqlspec.driver import ExecutionResult
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncConnection, CockroachSyncConnection
+
+
+def _sync_connection() -> "CockroachSyncConnection":
+    return cast("CockroachSyncConnection", object())
+
+
+def _async_connection() -> "CockroachAsyncConnection":
+    return cast("CockroachAsyncConnection", object())
+
+
+def _execution_result(label: str) -> ExecutionResult:
+    return ExecutionResult(
+        cursor_result=label,
+        rowcount_override=None,
+        special_data=None,
+        selected_data=None,
+        column_names=None,
+        data_row_count=None,
+        statement_count=None,
+        successful_statements=None,
+        is_script_result=False,
+        is_select_result=False,
+        is_many_result=False,
+    )
 
 
 def test_cockroach_psycopg_retry_config_default_values() -> None:
@@ -157,67 +188,71 @@ def test_calculate_backoff_seconds_jitter_variation() -> None:
 
 class _RecordingCockroachPsycopgSyncDriver(CockroachPsycopgSyncDriver):
     def __init__(self) -> None:
-        super().__init__(connection=object(), driver_features={"enable_auto_retry": False})
+        super().__init__(connection=_sync_connection(), driver_features={"enable_auto_retry": False})
         self.calls: list[str] = []
 
-    def _dispatch_execute_many_impl(self, cursor: object, statement: object) -> str:
+    def _dispatch_execute_many_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = statement
         self.calls.append("many")
-        return "many"
+        return _execution_result("many")
 
-    def _dispatch_execute_script_impl(self, cursor: object, statement: object) -> str:
+    def _dispatch_execute_script_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = statement
         self.calls.append("script")
-        return "script"
+        return _execution_result("script")
 
 
 class _RecordingCockroachPsycopgAsyncDriver(CockroachPsycopgAsyncDriver):
     def __init__(self) -> None:
-        super().__init__(connection=object(), driver_features={"enable_auto_retry": False})
+        super().__init__(connection=_async_connection(), driver_features={"enable_auto_retry": False})
         self.calls: list[str] = []
 
-    async def _dispatch_execute_many_impl(self, cursor: object, statement: object) -> str:
+    async def _dispatch_execute_many_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = statement
         self.calls.append("many")
-        return "many"
+        return _execution_result("many")
 
-    async def _dispatch_execute_script_impl(self, cursor: object, statement: object) -> str:
+    async def _dispatch_execute_script_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = statement
         self.calls.append("script")
-        return "script"
+        return _execution_result("script")
 
 
 def test_driver_cockroach_psycopg_sync_non_retry_execute_many_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgSyncDriver()
-    result = driver.dispatch_execute_many(object(), object())
-    assert result == "many"
+    result = driver.dispatch_execute_many(object(), SQL("SELECT 1"))
+    assert result.cursor_result == "many"
     assert driver.calls == ["many"]
 
 
 def test_driver_cockroach_psycopg_sync_non_retry_execute_script_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgSyncDriver()
-    result = driver.dispatch_execute_script(object(), object())
-    assert result == "script"
+    result = driver.dispatch_execute_script(object(), SQL("SELECT 1"))
+    assert result.cursor_result == "script"
     assert driver.calls == ["script"]
 
 
 @pytest.mark.anyio
 async def test_driver_cockroach_psycopg_async_non_retry_execute_many_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgAsyncDriver()
-    result = await driver.dispatch_execute_many(object(), object())
-    assert result == "many"
+    result = await driver.dispatch_execute_many(object(), SQL("SELECT 1"))
+    assert result.cursor_result == "many"
     assert driver.calls == ["many"]
 
 
 @pytest.mark.anyio
 async def test_driver_cockroach_psycopg_async_non_retry_execute_script_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgAsyncDriver()
-    result = await driver.dispatch_execute_script(object(), object())
-    assert result == "script"
+    result = await driver.dispatch_execute_script(object(), SQL("SELECT 1"))
+    assert result.cursor_result == "script"
     assert driver.calls == ["script"]
 
 
 def test_driver_cockroach_psycopg_sync_data_dictionary_uses_parent_slot() -> None:
-    driver = CockroachPsycopgSyncDriver(connection=object())
+    driver = CockroachPsycopgSyncDriver(connection=_sync_connection())
     assert isinstance(driver.data_dictionary, CockroachPsycopgSyncDataDictionary)
 
 
 def test_driver_cockroach_psycopg_async_data_dictionary_uses_parent_slot() -> None:
-    driver = CockroachPsycopgAsyncDriver(connection=object())
+    driver = CockroachPsycopgAsyncDriver(connection=_async_connection())
     assert isinstance(driver.data_dictionary, CockroachPsycopgAsyncDataDictionary)

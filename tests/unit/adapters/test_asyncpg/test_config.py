@@ -1,5 +1,6 @@
 """AsyncPG configuration tests covering statement config builders."""
 
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -48,8 +49,9 @@ def test_asyncpg_config_applies_driver_feature_serializers() -> None:
 
 
 def test_asyncpg_config_connection_type_is_not_metaclass() -> None:
-    assert AsyncpgConfig.connection_type is PoolConnectionProxy
-    assert AsyncpgConfig.connection_type is not PoolConnectionProxyMeta
+    connection_type = cast("object", AsyncpgConfig.connection_type)
+    assert connection_type is PoolConnectionProxy
+    assert connection_type is not cast("object", PoolConnectionProxyMeta)
 
 
 def test_asyncpg_build_postgres_extension_probe_names_filters_disabled_features() -> None:

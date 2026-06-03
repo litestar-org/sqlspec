@@ -7,11 +7,38 @@ Tests cover:
 - calculate_backoff_seconds() exponential backoff with jitter
 """
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgRetryConfig
 from sqlspec.adapters.cockroach_asyncpg.core import calculate_backoff_seconds, is_retryable_error
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
+from sqlspec.core import SQL
+from sqlspec.driver import ExecutionResult
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
+
+
+def _connection() -> "CockroachAsyncpgConnection":
+    return cast("CockroachAsyncpgConnection", object())
+
+
+def _execution_result(label: str) -> ExecutionResult:
+    return ExecutionResult(
+        cursor_result=label,
+        rowcount_override=None,
+        special_data=None,
+        selected_data=None,
+        column_names=None,
+        data_row_count=None,
+        statement_count=None,
+        successful_statements=None,
+        is_script_result=False,
+        is_select_result=False,
+        is_many_result=False,
+    )
 
 
 def test_cockroach_asyncpg_retry_config_default_values() -> None:
@@ -153,29 +180,31 @@ def test_calculate_backoff_seconds_jitter_variation() -> None:
 
 class _RecordingCockroachAsyncpgDriver(CockroachAsyncpgDriver):
     def __init__(self) -> None:
-        super().__init__(connection=object(), driver_features={"enable_auto_retry": False})
+        super().__init__(connection=_connection(), driver_features={"enable_auto_retry": False})
         self.calls: list[str] = []
 
-    async def _dispatch_execute_many_impl(self, cursor: object, statement: object) -> str:
+    async def _dispatch_execute_many_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = statement
         self.calls.append("many")
-        return "many"
+        return _execution_result("many")
 
-    async def _dispatch_execute_script_impl(self, cursor: object, statement: object) -> str:
+    async def _dispatch_execute_script_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = statement
         self.calls.append("script")
-        return "script"
+        return _execution_result("script")
 
 
 @pytest.mark.anyio
 async def test_driver_cockroach_asyncpg_non_retry_execute_many_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachAsyncpgDriver()
-    result = await driver.dispatch_execute_many(object(), object())
-    assert result == "many"
+    result = await driver.dispatch_execute_many(object(), SQL("SELECT 1"))
+    assert result.cursor_result == "many"
     assert driver.calls == ["many"]
 
 
 @pytest.mark.anyio
 async def test_driver_cockroach_asyncpg_non_retry_execute_script_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachAsyncpgDriver()
-    result = await driver.dispatch_execute_script(object(), object())
-    assert result == "script"
+    result = await driver.dispatch_execute_script(object(), SQL("SELECT 1"))
+    assert result.cursor_result == "script"
     assert driver.calls == ["script"]

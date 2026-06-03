@@ -3,13 +3,20 @@
 
 import uuid
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 
 from sqlspec.adapters.duckdb import default_statement_config
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.duckdb._typing import DuckDBConnection
+
+
+def _connection() -> "DuckDBConnection":
+    return cast("DuckDBConnection", object())
 
 
 def test_uuid_conversion_enabled_by_default() -> None:
@@ -95,7 +102,7 @@ class _ArrowCursor:
 class _ArrowDriver(DuckDBDriver):
     def __init__(self, cursor: _ArrowCursor) -> None:
         self.cursor = cursor
-        super().__init__(connection=object(), statement_config=default_statement_config)
+        super().__init__(connection=_connection(), statement_config=default_statement_config)
 
     def _get_compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
         return ("SELECT 1 AS id", [])

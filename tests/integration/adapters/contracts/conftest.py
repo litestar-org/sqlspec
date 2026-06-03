@@ -13,6 +13,7 @@ from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncpg.config import AsyncpgPoolConfig
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, CockroachAsyncpgDriver
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
@@ -322,9 +323,16 @@ async def contract_mysqlconnector_async_driver(
 @pytest.fixture
 async def contract_asyncpg_driver(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
     """Provide a fresh asyncpg driver for contract tests."""
-    config = AsyncpgConfig(
-        connection_config={**_postgres_connection_config(postgres_service), "min_size": 1, "max_size": 5}
-    )
+    connection_config: AsyncpgPoolConfig = {
+        "host": postgres_service.host,
+        "port": postgres_service.port,
+        "user": postgres_service.user,
+        "password": postgres_service.password,
+        "database": postgres_service.database,
+        "min_size": 1,
+        "max_size": 5,
+    }
+    config = AsyncpgConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
             await driver.execute_script("DROP TABLE IF EXISTS contract_items")

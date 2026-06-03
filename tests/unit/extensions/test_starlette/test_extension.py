@@ -2,7 +2,7 @@
 """Tests for Starlette SQLSpec plugin."""
 
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from starlette.applications import Starlette
@@ -17,6 +17,9 @@ from sqlspec.extensions.starlette import SQLSpecPlugin
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
+
+if TYPE_CHECKING:
+    from sqlspec.config import DatabaseConfigProtocol
 
 pytest.importorskip("starlette")
 
@@ -128,7 +131,7 @@ class _Config:
 
 def _make_state(config: _Config) -> SQLSpecConfigState:
     return SQLSpecConfigState(
-        config=config,
+        config=cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         connection_key="db_connection",
         pool_key="db_pool",
         session_key="db_session",

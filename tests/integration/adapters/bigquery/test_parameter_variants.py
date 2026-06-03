@@ -88,8 +88,12 @@ def test_bigquery_native_parameter_keys_may_include_at_prefix(
     assert result.get_data() == [{"name": "alpha"}]
 
 
-def test_bigquery_array_parameter_with_unnest(bigquery_session: BigQueryDriver) -> None:
+def test_bigquery_array_parameter_with_unnest(
+    bigquery_session: BigQueryDriver, native_bigquery_service: "BigQueryService"
+) -> None:
     """BigQuery creates native ARRAY query parameters for non-empty Python sequences."""
+    del native_bigquery_service
+
     result = bigquery_session.execute(
         "SELECT value FROM UNNEST(@values) AS value ORDER BY value", {"values": [1, 2, 3]}
     )
@@ -103,8 +107,12 @@ def test_bigquery_empty_array_parameter_requires_inferable_element_type(bigquery
         bigquery_session.execute("SELECT ARRAY_LENGTH(@values)", {"values": []})
 
 
-def test_bigquery_parameters_inside_struct_expression(bigquery_session: BigQueryDriver) -> None:
+def test_bigquery_parameters_inside_struct_expression(
+    bigquery_session: BigQueryDriver, native_bigquery_service: "BigQueryService"
+) -> None:
     """BigQuery native parameters work inside STRUCT expressions."""
+    del native_bigquery_service
+
     result = bigquery_session.execute(
         """
         SELECT

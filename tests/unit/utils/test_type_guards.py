@@ -472,7 +472,7 @@ def test_is_dto_data_when_litestar_not_installed() -> None:
 
 def test_is_expression_with_mock() -> None:
     """Test is_expression with mock SQLGlot expressions."""
-    mock_expr = MockSQLGlotExpression()
+    mock_expr = cast("exp.Expr", MockSQLGlotExpression())
     result = is_expression(mock_expr)
     assert isinstance(result, bool)
 
@@ -634,7 +634,7 @@ def test_get_initial_expression_with_attribute() -> None:
             self.initial_expression = mock_expr
 
     context = MockContext()
-    assert get_initial_expression(context) is mock_expr
+    assert cast("object", get_initial_expression(context)) is cast("object", mock_expr)
 
 
 def test_get_initial_expression_without_attribute() -> None:

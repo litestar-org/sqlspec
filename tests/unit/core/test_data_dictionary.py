@@ -1,6 +1,6 @@
 """Unit tests for the data dictionary registry and loader."""
 
-from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -8,6 +8,7 @@ import sqlspec.data_dictionary._registry as registry
 from sqlspec.core import SQL
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
+    DialectConfig,
     get_data_dictionary_loader,
     get_dialect_config,
     list_registered_dialects,
@@ -110,7 +111,7 @@ def test_registry_load_default_dialects_is_idempotent(monkeypatch) -> None:
 def test_registry_get_dialect_config_triggers_load(monkeypatch) -> None:
     """get_dialect_config calls the default dialect loader before lookup."""
     calls = 0
-    config = SimpleNamespace(name="example")
+    config = cast("DialectConfig", object())
     monkeypatch.setitem(registry._DIALECT_CONFIGS, "example", config)
 
     def fake_load() -> None:

@@ -1,11 +1,12 @@
 # pyright: reportCallIssue=false
+from collections.abc import Callable
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from sqlspec import StatementStack
-from sqlspec.adapters.oracledb._typing import OracleAsyncConnection
+from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
     build_pipeline_stack_result,
     default_statement_config,
@@ -139,7 +140,7 @@ pytest.importorskip("oracledb")
 
 
 def _make_sync_driver() -> OracleSyncDriver:
-    connection = MagicMock()
+    connection = cast("OracleSyncConnection", MagicMock())
     connection.in_transaction = False
     return OracleSyncDriver(connection=connection)
 
@@ -219,6 +220,8 @@ def test_normalize_execute_many_normalize_execute_many_parameters_async_tuple_to
 @pytest.mark.parametrize(
     "normalizer", [normalize_execute_many_parameters_sync, normalize_execute_many_parameters_async]
 )
-def test_normalize_execute_many_normalize_execute_many_parameters_rejects_empty(normalizer: object) -> None:
+def test_normalize_execute_many_normalize_execute_many_parameters_rejects_empty(
+    normalizer: Callable[[object], object],
+) -> None:
     with pytest.raises(ValueError, match="execute_many requires parameters"):
         normalizer([])

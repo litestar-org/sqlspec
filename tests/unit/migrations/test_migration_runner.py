@@ -12,7 +12,7 @@ Tests for MigrationRunner core functionality including:
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
@@ -430,7 +430,7 @@ def test_get_migration_files_sorting(tmp_path: Path) -> None:
     (tmp_path / "0002_add_users.sql").write_text("-- Migration 2")
 
     runner = create_migration_runner_with_sync_files(tmp_path)
-    files = cast("list[tuple[str, Path]]", runner.get_migration_files())
+    files = runner.get_migration_files()
 
     expected_order = ["0001", "0002", "0003", "0010"]
     actual_order = [version for version, _ in files]
@@ -446,7 +446,7 @@ def test_get_migration_files_mixed_extensions(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("# README")
 
     runner = create_migration_runner_with_sync_files(tmp_path)
-    files = cast("list[tuple[str, Path]]", runner.get_migration_files())
+    files = runner.get_migration_files()
 
     assert len(files) == 3
     assert files[0][0] == "0001"
@@ -487,7 +487,7 @@ DROP TABLE users;
             mock_loader.validate_migration_file = Mock()
             mock_get_loader.return_value = mock_loader
 
-            metadata = cast("dict[str, Any]", runner.load_migration(migration_file))
+            metadata = runner.load_migration(migration_file)
 
         assert metadata["version"] == "0001"
         assert metadata["description"] == "create_users"
@@ -519,7 +519,7 @@ SELECT 1;
         patch.object(type(runner.loader), "load_sql"),
         patch.object(type(runner.loader), "has_query", return_value=True),
     ):
-        metadata = cast("dict[str, Any]", runner.load_migration(migration_file))
+        metadata = runner.load_migration(migration_file)
 
     assert metadata["description"] == "Custom summary"
 
@@ -541,7 +541,7 @@ def test_load_migration_metadata_prefers_python_docstring(tmp_path: Path) -> Non
         mock_get_loader.return_value = mock_loader
         mock_await.return_value = Mock(return_value=True)
 
-        metadata = cast("dict[str, Any]", runner.load_migration(migration_file))
+        metadata = runner.load_migration(migration_file)
 
     assert metadata["description"] == "Add feature"
 
@@ -683,7 +683,7 @@ def down():
 
         mock_await.return_value = Mock(return_value=True)
 
-        metadata = cast("dict[str, Any]", runner.load_migration(migration_file))
+        metadata = runner.load_migration(migration_file)
 
     assert metadata["version"] == "0001"
     assert metadata["description"] == "data_migration"
@@ -849,7 +849,7 @@ def test_invalid_migration_version_handling(tmp_path: Path) -> None:
     invalid_file.write_text("CREATE TABLE test (id INTEGER);")
 
     runner = create_migration_runner_with_sync_files(tmp_path)
-    files = cast("list[tuple[str, Path]]", runner.get_migration_files())
+    files = runner.get_migration_files()
 
     assert len(files) == 0
 
@@ -915,7 +915,7 @@ DROP TABLE large_table;
             mock_loader.validate_migration_file = Mock()
             mock_get_loader.return_value = mock_loader
 
-            metadata = cast("dict[str, Any]", runner.load_migration(large_file))
+            metadata = runner.load_migration(large_file)
 
             assert metadata["version"] == "0001"
             assert metadata["description"] == "large_migration"
@@ -936,7 +936,7 @@ DROP TABLE test_table_{i};
 
     runner = create_migration_runner_with_sync_files(tmp_path)
 
-    files = cast("list[tuple[str, Path]]", runner.get_migration_files())
+    files = runner.get_migration_files()
 
     assert len(files) == 100
 

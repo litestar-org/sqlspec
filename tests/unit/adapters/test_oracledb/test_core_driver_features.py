@@ -2,6 +2,7 @@
 """Unit tests for OracleDB ``apply_driver_features`` defaults."""
 
 import inspect
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -11,6 +12,9 @@ from sqlspec.adapters.oracledb._typing import OracleAsyncCursor
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import apply_driver_features
 from sqlspec.typing import NUMPY_INSTALLED
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection
 
 
 def test_apply_driver_features_returns_dict_when_input_none() -> None:
@@ -139,7 +143,7 @@ def test_typing_cursors_oracle_async_cursor_aexit_signature_uses_varargs() -> No
 @pytest.mark.anyio
 async def test_typing_cursors_oracle_async_cursor_closes_cursor() -> None:
     raw_cursor = FakeAsyncRawCursor()
-    cursor = OracleAsyncCursor(FakeAsyncConnection(raw_cursor))
+    cursor = OracleAsyncCursor(cast("OracleAsyncConnection", FakeAsyncConnection(raw_cursor)))
     await cursor.__aenter__()
     await cursor.__aexit__(None, None, None)
     assert raw_cursor.closed is True
@@ -148,7 +152,7 @@ async def test_typing_cursors_oracle_async_cursor_closes_cursor() -> None:
 @pytest.mark.anyio
 async def test_typing_cursors_oracle_async_cursor_suppresses_close_errors() -> None:
     raw_cursor = FakeAsyncRawCursor(raise_on_close=True)
-    cursor = OracleAsyncCursor(FakeAsyncConnection(raw_cursor))
+    cursor = OracleAsyncCursor(cast("OracleAsyncConnection", FakeAsyncConnection(raw_cursor)))
     await cursor.__aenter__()
     await cursor.__aexit__(RuntimeError, RuntimeError("body failed"), None)
     assert raw_cursor.closed is True

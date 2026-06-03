@@ -2113,11 +2113,7 @@ class CommonDriverAttributesMixin:
             }
             materialized_parameters = _materialize_repeated_named_occurrence_parameters(original_sql, pagination_params)
             if materialized_parameters is not None:
-                return SQL(
-                    count_expr,
-                    *materialized_parameters,
-                    statement_config=original_sql.statement_config,
-                )
+                return SQL(count_expr, *materialized_parameters, statement_config=original_sql.statement_config)
             return SQL(
                 count_expr,
                 *original_sql.positional_parameters,
@@ -2139,11 +2135,7 @@ class CommonDriverAttributesMixin:
         filtered_named_params = {k: v for k, v in original_sql.named_parameters.items() if k not in pagination_params}
         materialized_parameters = _materialize_repeated_named_occurrence_parameters(original_sql, pagination_params)
         if materialized_parameters is not None:
-            return SQL(
-                count_expr,
-                *materialized_parameters,
-                statement_config=original_sql.statement_config,
-            )
+            return SQL(count_expr, *materialized_parameters, statement_config=original_sql.statement_config)
         return SQL(
             count_expr,
             *original_sql.positional_parameters,
@@ -2201,11 +2193,7 @@ class CommonDriverAttributesMixin:
 
         materialized_parameters = _materialize_repeated_named_occurrence_parameters(original_sql, set())
         if materialized_parameters is not None:
-            return SQL(
-                modified_expr,
-                *materialized_parameters,
-                statement_config=original_sql.statement_config,
-            )
+            return SQL(modified_expr, *materialized_parameters, statement_config=original_sql.statement_config)
         return SQL(
             modified_expr,
             *original_sql.positional_parameters,

@@ -149,6 +149,27 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
     return identifiers, 1
 
 
+def _normalize_named_identifier_aliases(
+    parameter_profile: "ParameterProfile", identifiers: "set[tuple[str, int | str]]"
+) -> "set[tuple[str, int | str]]":
+    aliases: dict[str, str] = {}
+    for parameter in parameter_profile.parameters:
+        if parameter.style not in _NAMED_STYLES or not parameter.name:
+            continue
+        aliases[parameter.placeholder_text] = parameter.name
+
+    if not aliases:
+        return identifiers
+
+    normalized: set[tuple[str, int | str]] = set()
+    for kind, value in identifiers:
+        if kind == "named":
+            normalized.add((kind, aliases.get(str(value), value)))
+        else:
+            normalized.add((kind, value))
+    return normalized
+
+
 def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
     if not identifiers:
         return "[]"
@@ -225,8 +246,9 @@ def _validate_single_parameter_set(
         msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
         raise sqlspec.exceptions.SQLSpecError(msg)
 
-    identifiers_match = expected_identifiers == actual_identifiers or _normalize_index_identifiers(
-        expected_identifiers, actual_identifiers
+    normalized_actual_identifiers = _normalize_named_identifier_aliases(parameter_profile, actual_identifiers)
+    identifiers_match = expected_identifiers == normalized_actual_identifiers or _normalize_index_identifiers(
+        expected_identifiers, normalized_actual_identifiers
     )
 
     if not identifiers_match:

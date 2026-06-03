@@ -4,7 +4,7 @@
 from collections.abc import Sequence
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -20,7 +20,15 @@ from sqlspec.adapters.psqlpy.core import (
     prepare_parameters_with_casts,
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
+
+
+def _connection() -> "PsqlpyConnection":
+    return cast("PsqlpyConnection", object())
 
 
 def test_format_execute_many_parameters_no_coercion_reuses_list_rows() -> None:
@@ -230,7 +238,7 @@ class _Cursor:
 
 class _Driver(PsqlpyDriver):
     def __init__(self, compiled_sql: str, parameters: object = None) -> None:
-        super().__init__(connection=object())
+        super().__init__(connection=_connection())
         self.compiled_sql = compiled_sql
         self.compiled_parameters = parameters
 
@@ -243,7 +251,7 @@ async def test_driver_psqlpy_execute_script_rejects_multi_statement_parameters()
     driver = _Driver("INSERT INTO t VALUES ($1); INSERT INTO t VALUES ($1)", [1])
     statement = SimpleNamespace(statement_config=default_statement_config)
     with pytest.raises(SQLSpecError, match="multi-statement"):
-        await driver.dispatch_execute_script(_Cursor(), statement)
+        await driver.dispatch_execute_script(cast("PsqlpyConnection", _Cursor()), cast("SQL", statement))
 
 
 @pytest.mark.anyio
@@ -251,7 +259,7 @@ async def test_driver_psqlpy_execute_script_uses_empty_params_for_each_sub_state
     driver = _Driver("SELECT 1; SELECT 2")
     statement = SimpleNamespace(statement_config=default_statement_config)
     cursor = _Cursor()
-    await driver.dispatch_execute_script(cursor, statement)
+    await driver.dispatch_execute_script(cast("PsqlpyConnection", cursor), cast("SQL", statement))
     assert cursor.execute_calls == [("SELECT 1", []), ("SELECT 2", [])]
 
 
@@ -260,5 +268,5 @@ async def test_driver_psqlpy_execute_script_passes_single_statement_parameters()
     driver = _Driver("INSERT INTO t VALUES ($1)", [1])
     statement = SimpleNamespace(statement_config=default_statement_config)
     cursor = _Cursor()
-    await driver.dispatch_execute_script(cursor, statement)
+    await driver.dispatch_execute_script(cast("PsqlpyConnection", cursor), cast("SQL", statement))
     assert cursor.execute_calls == [("INSERT INTO t VALUES ($1)", [1])]

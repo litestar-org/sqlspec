@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from typing_extensions import Self
@@ -17,7 +17,19 @@ from sqlspec.adapters.psycopg.core import (
     resolve_many_rowcount,
 )
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLParsingError, SQLSpecError, UniqueViolationError
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+
+
+def _sync_connection() -> "PsycopgSyncConnection":
+    return cast("PsycopgSyncConnection", object())
+
+
+def _async_connection() -> "PsycopgAsyncConnection":
+    return cast("PsycopgAsyncConnection", object())
 
 
 def test_resolve_many_rowcount_prefers_positive_driver_rowcount() -> None:
@@ -207,7 +219,7 @@ class _AsyncCursor:
 
 class _SyncDriver(PsycopgSyncDriver):
     def __init__(self, compiled_sql: str, parameters: object = None) -> None:
-        super().__init__(connection=object())
+        super().__init__(connection=_sync_connection())
         self.compiled_sql = compiled_sql
         self.compiled_parameters = parameters
 
@@ -217,7 +229,7 @@ class _SyncDriver(PsycopgSyncDriver):
 
 class _AsyncDriver(PsycopgAsyncDriver):
     def __init__(self, compiled_sql: str, parameters: object = None) -> None:
-        super().__init__(connection=object())
+        super().__init__(connection=_async_connection())
         self.compiled_sql = compiled_sql
         self.compiled_parameters = parameters
 
@@ -229,7 +241,7 @@ def test_driver_psycopg_sync_execute_script_rejects_multi_statement_parameters()
     driver = _SyncDriver("INSERT INTO t VALUES (%s); INSERT INTO t VALUES (%s)", [1])
     statement = SimpleNamespace(statement_config=default_statement_config)
     with pytest.raises(SQLSpecError, match="multi-statement"):
-        driver.dispatch_execute_script(_SyncCursor(), statement)
+        driver.dispatch_execute_script(_SyncCursor(), cast("SQL", statement))
 
 
 @pytest.mark.anyio
@@ -237,7 +249,7 @@ async def test_driver_psycopg_async_execute_script_rejects_multi_statement_param
     driver = _AsyncDriver("INSERT INTO t VALUES (%s); INSERT INTO t VALUES (%s)", [1])
     statement = SimpleNamespace(statement_config=default_statement_config)
     with pytest.raises(SQLSpecError, match="multi-statement"):
-        await driver.dispatch_execute_script(_AsyncCursor(), statement)
+        await driver.dispatch_execute_script(_AsyncCursor(), cast("SQL", statement))
 
 
 @pytest.mark.anyio
@@ -247,7 +259,7 @@ async def test_driver_psycopg_async_copy_from_uses_copy_for_program_variant() ->
         operation_type="COPY_FROM", parameters="payload", statement_config=default_statement_config
     )
     cursor = _AsyncCursor()
-    await driver.dispatch_special_handling(cursor, statement)
+    await driver.dispatch_special_handling(cursor, cast("SQL", statement))
     assert cursor.copy_calls == ["COPY users FROM PROGRAM 'cat data.csv'"]
     assert cursor.execute_calls == []
 
@@ -257,7 +269,7 @@ async def test_driver_psycopg_async_copy_to_uses_copy_for_file_variant() -> None
     driver = _AsyncDriver("COPY users TO '/tmp/users.csv'")
     statement = SimpleNamespace(operation_type="COPY_TO", parameters=None, statement_config=default_statement_config)
     cursor = _AsyncCursor()
-    result = await driver.dispatch_special_handling(cursor, statement)
+    result = await driver.dispatch_special_handling(cursor, cast("SQL", statement))
     assert cursor.copy_calls == ["COPY users TO '/tmp/users.csv'"]
     assert cursor.execute_calls == []
     assert result is not None

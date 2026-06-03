@@ -384,6 +384,14 @@ def test_replace_placeholders_with_literals_named_mapping() -> None:
     assert transformed.sql(dialect="bigquery") == "SELECT 'bob' AS user"
 
 
+@pytest.mark.parametrize(
+    ("sql", "parameters"), [("SELECT :name AS name", {":name": "alpha"}), ("SELECT @name AS name", {"@name": "alpha"})]
+)
+def test_compile_accepts_named_placeholder_text_mapping_keys(sql: str, parameters: dict[str, str]) -> None:
+    """Named mappings may use the exact placeholder token accepted by the converter."""
+    assert SQL(sql, parameters).compile() == ("SELECT ? AS name", ("alpha",))
+
+
 def test_build_statement_config_applies_overrides_and_extras() -> None:
     """Overrides and extras should both be reflected in the resulting config."""
 
@@ -720,8 +728,8 @@ def test_parameter_style_config_advanced() -> None:
         strict_named_parameters=False,
     )
     assert config.default_parameter_style == ParameterStyle.NAMED_COLON
-    assert config.supported_parameter_styles == {ParameterStyle.NAMED_COLON, ParameterStyle.QMARK}
-    assert config.supported_execution_parameter_styles == {ParameterStyle.QMARK}
+    assert config.supported_parameter_styles == frozenset({ParameterStyle.NAMED_COLON, ParameterStyle.QMARK})
+    assert config.supported_execution_parameter_styles == frozenset({ParameterStyle.QMARK})
     assert config.default_execution_parameter_style == ParameterStyle.QMARK
     assert config.type_coercion_map == coercion_map
     assert config.has_native_list_expansion is True
@@ -1586,7 +1594,7 @@ def test_duplicate_named_parameters_various_styles(converter: ParameterConverter
     for case in test_cases:
         parameters = {"param": "test_value"}
         (converted_sql, converted_params) = converter.convert_placeholder_style(
-            case["sql"], parameters, ParameterStyle.NUMERIC
+            str(case["sql"]), parameters, ParameterStyle.NUMERIC
         )
         assert isinstance(converted_params, (list, tuple))
         assert len(converted_params) == 1

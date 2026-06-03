@@ -3,11 +3,12 @@
 
 import datetime
 import inspect
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import pytest
 from litestar.config.app import AppConfig
 from litestar.exceptions import ValidationException
+from litestar.types import HTTPScope
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.base import SQLSpec
@@ -59,6 +60,7 @@ def test_in_fields_provider_returns_filter_when_values_present() -> None:
     result = provider.dependency(**{"status_values": ["active", "archived"]})
     assert isinstance(result, InCollectionFilter)
     assert result.field_name == "status"
+    assert result.values is not None
     assert list(result.values) == ["active", "archived"]
 
 
@@ -93,6 +95,7 @@ def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
     result = provider.dependency(**{"status_values": ["deleted", "archived"]})
     assert isinstance(result, NotInCollectionFilter)
     assert result.field_name == "status"
+    assert result.values is not None
     assert list(result.values) == ["deleted", "archived"]
 
 
@@ -378,7 +381,7 @@ def test_raise_missing_connection_get_plugin_state_raises_for_unknown_key() -> N
 def test_raise_missing_connection_provide_request_connection_raises_when_connection_missing() -> None:
     plugin = _build_plugin()
     state = AppConfig().state
-    scope = {"type": "http"}
+    scope = cast("HTTPScope", {"type": "http"})
     try:
         plugin.provide_request_connection("db_connection", state, scope)
     except ImproperConfigurationError as exc:
@@ -391,7 +394,7 @@ def test_raise_missing_connection_provide_request_connection_raises_when_connect
 def test_raise_missing_connection_provide_request_session_raises_when_connection_missing() -> None:
     plugin = _build_plugin()
     state = AppConfig().state
-    scope = {"type": "http"}
+    scope = cast("HTTPScope", {"type": "http"})
     try:
         plugin.provide_request_session("db_connection", state, scope)
     except ImproperConfigurationError as exc:

@@ -416,11 +416,7 @@ def test_create_count_query_preserves_named_params_with_group_by(mock_driver: "M
 
 def test_create_count_query_expands_repeated_named_parameters_plain_select(sqlite_driver: "SqliteDriver") -> None:
     """Repeated named params should compile for expression-backed direct count queries."""
-    sql = SQL(
-        "SELECT id FROM t WHERE a = :wid OR b = :wid",
-        statement_config=sqlite_driver.statement_config,
-        wid="W",
-    )
+    sql = SQL("SELECT id FROM t WHERE a = :wid OR b = :wid", statement_config=sqlite_driver.statement_config, wid="W")
 
     count_sql = sqlite_driver._create_count_query(sql)
     compiled_sql, parameters = count_sql.compile()
@@ -464,11 +460,7 @@ def test_create_count_query_expands_repeated_named_parameters_cte_branch(sqlite_
 
 def test_create_count_query_single_named_parameter_control(sqlite_driver: "SqliteDriver") -> None:
     """Single-occurrence named params should keep one execution value."""
-    sql = SQL(
-        "SELECT id FROM t WHERE a = :wid",
-        statement_config=sqlite_driver.statement_config,
-        wid="W",
-    )
+    sql = SQL("SELECT id FROM t WHERE a = :wid", statement_config=sqlite_driver.statement_config, wid="W")
 
     count_sql = sqlite_driver._create_count_query(sql)
     compiled_sql, parameters = count_sql.compile()

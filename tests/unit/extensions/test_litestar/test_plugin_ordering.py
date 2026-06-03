@@ -10,7 +10,7 @@ walking the old list and any plugin appended afterwards is silently dropped.
 These tests pin SQLSpecPlugin to the in-place mutation contract.
 """
 
-from __future__ import annotations
+from typing import Any, cast
 
 from litestar import Litestar
 from litestar.config.app import AppConfig
@@ -93,7 +93,11 @@ def test_follow_on_plugin_fires_when_sqlspec_registered_second() -> None:
 
 
 class _ExistingMiddleware:
-    pass
+    def __init__(self, app: Any, **_: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        await self.app(scope, receive, send)
 
 
 def _build_plugin(*, correlation: bool = False, sqlcommenter: bool = False) -> SQLSpecPlugin:
@@ -114,7 +118,10 @@ def _build_plugin(*, correlation: bool = False, sqlcommenter: bool = False) -> S
 
 
 def _middleware_types(app_config: AppConfig) -> list[type[object]]:
-    return [middleware.middleware for middleware in app_config.middleware or []]
+    return [
+        cast("type[object]", cast("DefineMiddleware", middleware).middleware)
+        for middleware in app_config.middleware or []
+    ]
 
 
 def test_on_app_init_middleware_on_app_init_appends_both_middlewares_when_enabled() -> None:

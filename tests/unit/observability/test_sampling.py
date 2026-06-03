@@ -228,7 +228,7 @@ def test_runtime_sampling_emit_statement_event_skips_observers_when_sampling_rej
     runtime = ObservabilityRuntime(
         ObservabilityConfig(
             sampling=SamplingConfig(sample_rate=0.0, force_sample_on_error=False, force_sample_slow_queries_ms=None),
-            statement_observers=(cast(StatementObserver, observed.append),),
+            statement_observers=(observed.append,),
         )
     )
     _emit_statement(runtime)
@@ -238,9 +238,7 @@ def test_runtime_sampling_emit_statement_event_skips_observers_when_sampling_rej
 def test_runtime_sampling_emit_statement_event_marks_sampled_when_sampling_accepts() -> None:
     observed: list[StatementEvent] = []
     runtime = ObservabilityRuntime(
-        ObservabilityConfig(
-            sampling=SamplingConfig(sample_rate=1.0), statement_observers=(cast(StatementObserver, observed.append),)
-        )
+        ObservabilityConfig(sampling=SamplingConfig(sample_rate=1.0), statement_observers=(observed.append,))
     )
     _emit_statement(runtime)
     assert len(observed) == 1
@@ -252,7 +250,7 @@ def test_runtime_sampling_emit_statement_event_force_samples_slow_query() -> Non
     runtime = ObservabilityRuntime(
         ObservabilityConfig(
             sampling=SamplingConfig(sample_rate=0.0, force_sample_slow_queries_ms=10.0),
-            statement_observers=(cast(StatementObserver, observed.append),),
+            statement_observers=(observed.append,),
         )
     )
     _emit_statement(runtime, duration_s=0.1)

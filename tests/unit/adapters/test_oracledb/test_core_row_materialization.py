@@ -1,13 +1,24 @@
 # pyright: reportArgumentType=false
 """Unit tests for Oracle row materialization helpers."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from sqlspec.adapters.oracledb.core import collect_async_rows, collect_sync_rows, resolve_row_metadata
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
+
+
+def _sync_connection() -> "OracleSyncConnection":
+    return cast("OracleSyncConnection", object())
+
+
+def _async_connection() -> "OracleAsyncConnection":
+    return cast("OracleAsyncConnection", object())
 
 
 class _TypeCode:
@@ -149,7 +160,7 @@ def test_select_to_arrow_fallback_sync_select_to_arrow_fallback_passes_prepared_
 
     monkeypatch.setattr(OracleSyncDriver, "_execute_arrow_dataframe", _raise_attribute_error)
     monkeypatch.setattr(SyncDriverAdapterBase, "select_to_arrow", fallback)
-    driver = OracleSyncDriver(connection=object())
+    driver = OracleSyncDriver(connection=_sync_connection())
     result = driver.select_to_arrow("SELECT :id FROM dual", {"id": 1})
     assert result is sentinel
     assert captured["parameters"] == ()
@@ -180,7 +191,7 @@ async def test_select_to_arrow_fallback_async_select_to_arrow_fallback_passes_pr
 
     monkeypatch.setattr(OracleAsyncDriver, "_execute_arrow_dataframe", _raise_attribute_error)
     monkeypatch.setattr(AsyncDriverAdapterBase, "select_to_arrow", fallback)
-    driver = OracleAsyncDriver(connection=object())
+    driver = OracleAsyncDriver(connection=_async_connection())
     result = await driver.select_to_arrow("SELECT :id FROM dual", {"id": 1})
     assert result is sentinel
     assert captured["parameters"] == ()

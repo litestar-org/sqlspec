@@ -2,7 +2,7 @@
 """Tests for Flask SQLSpec plugin lifecycle and configuration."""
 
 import tempfile
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from flask import Flask, g
@@ -13,6 +13,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
+
+if TYPE_CHECKING:
+    from sqlspec.config import DatabaseConfigProtocol
 
 pytest.importorskip("flask")
 
@@ -106,7 +109,7 @@ class _Config:
 
 def _make_state() -> FlaskConfigState:
     return FlaskConfigState(
-        config=_Config(),
+        config=cast("DatabaseConfigProtocol[Any, Any, Any]", _Config()),
         connection_key="sqlspec_connection",
         session_key="db_session",
         commit_mode="manual",
