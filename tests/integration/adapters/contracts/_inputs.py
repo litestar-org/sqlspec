@@ -9,6 +9,12 @@ from typing import Literal
 import pytest
 
 from sqlspec import SQL, sql
+from sqlspec.exceptions import (
+    CheckViolationError,
+    ForeignKeyViolationError,
+    NotNullViolationError,
+    UniqueViolationError,
+)
 from sqlspec.loader import SQLFileLoader
 from tests.integration.adapters.contracts._schema import ContractRow
 
@@ -53,6 +59,20 @@ class ParameterStyleCase:
     statement: object
     verification_parameters: object | None
     verification_statement: str | None
+
+
+@dataclass(frozen=True)
+class ExceptionViolationCase:
+    """Constraint violation that should normalize to a shared sqlspec exception type."""
+
+    id: str
+    setup_script: str
+    seed_statement: str | None
+    seed_parameters: tuple[object, ...] | None
+    trigger_statement: str
+    trigger_parameters: tuple[object, ...]
+    expected_exception: type[Exception]
+    teardown_script: str
 
 
 def _raw_qmark_statement() -> str:
@@ -452,6 +472,71 @@ PARAMETER_STYLE_CASES = (
     ),
 )
 
+EXCEPTION_VIOLATION_CASES = (
+    ExceptionViolationCase(
+        id="unique",
+        setup_script="""
+            DROP TABLE IF EXISTS contract_unique;
+            CREATE TABLE contract_unique (email VARCHAR(255) UNIQUE NOT NULL);
+        """,
+        seed_statement="INSERT INTO contract_unique (email) VALUES (?)",
+        seed_parameters=("duplicate@example.com",),
+        trigger_statement="INSERT INTO contract_unique (email) VALUES (?)",
+        trigger_parameters=("duplicate@example.com",),
+        expected_exception=UniqueViolationError,
+        teardown_script="DROP TABLE IF EXISTS contract_unique",
+    ),
+    ExceptionViolationCase(
+        id="not-null",
+        setup_script="""
+            DROP TABLE IF EXISTS contract_not_null;
+            CREATE TABLE contract_not_null (label VARCHAR(255), required_field VARCHAR(255) NOT NULL);
+        """,
+        seed_statement=None,
+        seed_parameters=None,
+        trigger_statement="INSERT INTO contract_not_null (label) VALUES (?)",
+        trigger_parameters=("missing-required",),
+        expected_exception=NotNullViolationError,
+        teardown_script="DROP TABLE IF EXISTS contract_not_null",
+    ),
+    ExceptionViolationCase(
+        id="check",
+        setup_script="""
+            DROP TABLE IF EXISTS contract_check;
+            CREATE TABLE contract_check (age INTEGER CHECK (age >= 18));
+        """,
+        seed_statement=None,
+        seed_parameters=None,
+        trigger_statement="INSERT INTO contract_check (age) VALUES (?)",
+        trigger_parameters=(5,),
+        expected_exception=CheckViolationError,
+        teardown_script="DROP TABLE IF EXISTS contract_check",
+    ),
+    ExceptionViolationCase(
+        id="foreign-key",
+        setup_script="""
+            DROP TABLE IF EXISTS contract_fk_child;
+            DROP TABLE IF EXISTS contract_fk_parent;
+            CREATE TABLE contract_fk_parent (id INTEGER PRIMARY KEY, name VARCHAR(255));
+            CREATE TABLE contract_fk_child (
+                child_id INTEGER PRIMARY KEY,
+                parent_id INTEGER NOT NULL,
+                FOREIGN KEY (parent_id) REFERENCES contract_fk_parent(id)
+            );
+        """,
+        seed_statement=None,
+        seed_parameters=None,
+        trigger_statement="INSERT INTO contract_fk_child (child_id, parent_id) VALUES (?, ?)",
+        trigger_parameters=(1, 999),
+        expected_exception=ForeignKeyViolationError,
+        teardown_script="""
+            DROP TABLE IF EXISTS contract_fk_child;
+            DROP TABLE IF EXISTS contract_fk_parent;
+        """,
+    ),
+)
+
 STATEMENT_INPUT_PARAMS = tuple(pytest.param(case, id=case.id) for case in STATEMENT_INPUT_CASES)
 PARAMETER_PROFILE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_PROFILE_CASES)
 PARAMETER_STYLE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_STYLE_CASES)
+EXCEPTION_VIOLATION_PARAMS = tuple(pytest.param(case, id=case.id) for case in EXCEPTION_VIOLATION_CASES)

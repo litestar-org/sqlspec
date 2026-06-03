@@ -1,5 +1,6 @@
 """Public behavior helpers for adapter-local and central contract tests."""
 
+import contextlib
 from typing import Any, Protocol, cast
 
 import pytest
@@ -8,7 +9,12 @@ from sqlspec import SQLResult
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
-from tests.integration.adapters.contracts._inputs import ParameterProfileCase, ParameterStyleCase, StatementInputCase
+from tests.integration.adapters.contracts._inputs import (
+    ExceptionViolationCase,
+    ParameterProfileCase,
+    ParameterStyleCase,
+    StatementInputCase,
+)
 from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractRow, ContractTable
 
 
@@ -16,6 +22,8 @@ class SyncContractDriver(Protocol):
     """Sync driver surface used by adapter contract helpers."""
 
     def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
 
     def execute(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
@@ -34,6 +42,8 @@ class AsyncContractDriver(Protocol):
     """Async driver surface used by adapter contract helpers."""
 
     async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
 
     async def execute(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
@@ -404,3 +414,45 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
         await async_driver.execute("SELCT * FROM contract_items")
     with pytest.raises(SQLSpecError):
         await async_driver.execute("SELECT * FROM missing_contract_table")
+
+
+def assert_sync_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:
+    """Assert sync drivers normalize one constraint violation to its sqlspec exception type."""
+    sync_driver = cast("SyncContractDriver", driver)
+
+    sync_driver.execute_script(violation.setup_script)
+    sync_driver.commit()
+    if violation.seed_statement is not None:
+        sync_driver.execute(violation.seed_statement, violation.seed_parameters)
+        sync_driver.commit()
+
+    try:
+        with pytest.raises(violation.expected_exception):
+            sync_driver.execute(violation.trigger_statement, violation.trigger_parameters)
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        with contextlib.suppress(Exception):
+            sync_driver.execute_script(violation.teardown_script)
+            sync_driver.commit()
+
+
+async def assert_async_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:
+    """Assert async drivers normalize one constraint violation to its sqlspec exception type."""
+    async_driver = cast("AsyncContractDriver", driver)
+
+    await async_driver.execute_script(violation.setup_script)
+    await async_driver.commit()
+    if violation.seed_statement is not None:
+        await async_driver.execute(violation.seed_statement, violation.seed_parameters)
+        await async_driver.commit()
+
+    try:
+        with pytest.raises(violation.expected_exception):
+            await async_driver.execute(violation.trigger_statement, violation.trigger_parameters)
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        with contextlib.suppress(Exception):
+            await async_driver.execute_script(violation.teardown_script)
+            await async_driver.commit()
