@@ -99,7 +99,7 @@ class ObStoreBackend:
                     path_str = f"{path_str}#{parsed.fragment}"
                 path_obj = Path(path_str)
 
-                if path_obj.is_file():
+                if path_obj.suffix and not path_obj.is_dir():
                     path_str = str(path_obj.parent)
 
                 # Combine URI path with base_path for correct storage location

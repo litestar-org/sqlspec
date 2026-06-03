@@ -200,6 +200,19 @@ def test_write_and_read_bytes(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_write_to_nonexistent_file_uri(tmp_path: Path) -> None:
+    """A file:// URI naming a not-yet-created file roots the store at its parent directory."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    destination = tmp_path / "exports" / "out.parquet"
+    store = ObStoreBackend(f"file://{destination}")
+    store.write_bytes_sync(str(destination), b"payload")
+
+    assert destination.read_bytes() == b"payload"
+    assert store.read_bytes_sync(str(destination)) == b"payload"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_write_and_read_text(tmp_path: Path) -> None:
     """Test write and read text operations."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
