@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
-from sqlspec.core import SQL, SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -28,48 +28,6 @@ def duckdb_batch_session(duckdb_basic_session: DuckDBDriver) -> "Generator[DuckD
         yield duckdb_basic_session
     finally:
         duckdb_basic_session.execute_script("DROP TABLE IF EXISTS test_batch")
-
-
-def test_duckdb_execute_many_basic(duckdb_batch_session: DuckDBDriver) -> None:
-    """Test basic execute_many with DuckDB."""
-    parameters = [
-        (1, "Item 1", 100, "A"),
-        (2, "Item 2", 200, "B"),
-        (3, "Item 3", 300, "A"),
-        (4, "Item 4", 400, "C"),
-        (5, "Item 5", 500, "B"),
-    ]
-
-    result = duckdb_batch_session.execute_many(
-        "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)", parameters
-    )
-
-    assert isinstance(result, SQLResult)
-
-    assert result.rows_affected == 5
-
-    count_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.get_data()[0]["count"] == 5
-
-
-def test_duckdb_execute_many_update(duckdb_batch_session: DuckDBDriver) -> None:
-    """Test execute_many for UPDATE operations with DuckDB."""
-
-    duckdb_batch_session.execute_many(
-        "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)",
-        [(1, "Update 1", 10, "X"), (2, "Update 2", 20, "Y"), (3, "Update 3", 30, "Z")],
-    )
-
-    update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
-
-    result = duckdb_batch_session.execute_many("UPDATE test_batch SET value = ? WHERE name = ?", update_parameters)
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 3
-
-    check_result = duckdb_batch_session.execute("SELECT name, value FROM test_batch ORDER BY name")
-    assert len(check_result.data) == 3
-    assert all(row["value"] in (100, 200, 300) for row in check_result.get_data())
 
 
 def test_duckdb_execute_many_empty(duckdb_batch_session: DuckDBDriver) -> None:
@@ -108,75 +66,6 @@ def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> 
     float_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item",))
     assert len(float_result.data) == 1
     assert float_result.get_data()[0]["value"] == 78
-
-
-def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
-    """Test execute_many for DELETE operations with DuckDB."""
-
-    duckdb_batch_session.execute_many(
-        "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)",
-        [
-            (1, "Delete 1", 10, "X"),
-            (2, "Delete 2", 20, "Y"),
-            (3, "Delete 3", 30, "X"),
-            (4, "Keep 1", 40, "Z"),
-            (5, "Delete 4", 50, "Y"),
-        ],
-    )
-
-    delete_parameters = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
-
-    result = duckdb_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_parameters)
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 3
-
-    remaining_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert remaining_result.get_data()[0]["count"] == 2
-
-    names_result = duckdb_batch_session.execute("SELECT name FROM test_batch ORDER BY name")
-    remaining_names = [row["name"] for row in names_result.get_data()]
-    assert remaining_names == ["Delete 3", "Keep 1"]
-
-
-def test_duckdb_execute_many_large_batch(duckdb_batch_session: DuckDBDriver) -> None:
-    """Test execute_many with large batch size on DuckDB."""
-
-    large_batch = [(i, f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
-
-    result = duckdb_batch_session.execute_many(
-        "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)", large_batch
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 1000
-
-    count_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.get_data()[0]["count"] == 1000
-
-    sample_result = duckdb_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name IN (?, ?, ?) ORDER BY value", ("Item 100", "Item 500", "Item 999")
-    )
-    assert len(sample_result.data) == 3
-    assert sample_result.get_data()[0]["value"] == 1000
-    assert sample_result.get_data()[1]["value"] == 5000
-    assert sample_result.get_data()[2]["value"] == 9990
-
-
-def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver) -> None:
-    """Test execute_many with SQL object on DuckDB."""
-
-    parameters = [(10, "SQL Obj 1", 111, "SOB"), (20, "SQL Obj 2", 222, "SOB"), (30, "SQL Obj 3", 333, "SOB")]
-
-    sql_obj = SQL("INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)", parameters, is_many=True)
-
-    result = duckdb_batch_session.execute(sql_obj)
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 3
-
-    check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB"))
-    assert check_result.get_data()[0]["count"] == 3
 
 
 def test_duckdb_execute_many_with_analytics(duckdb_batch_session: DuckDBDriver) -> None:

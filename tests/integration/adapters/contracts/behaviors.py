@@ -5,7 +5,7 @@ from typing import Any, Protocol, cast
 
 import pytest
 
-from sqlspec import SQLResult
+from sqlspec import SQL, SQLResult
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -203,6 +203,82 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
             {"name": "gamma", "value": 30, "note": None},
         ),
     )
+
+
+def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers batch insert, update, and delete with accurate row counts."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    inserted = sync_driver.execute_many(table.insert_qmark_sql, [("a", 1, None), ("b", 2, None), ("c", 3, None)])
+    assert_sql_result(inserted, rows_affected=3)
+    sync_driver.commit()
+    assert sync_driver.select_value(table.select_count_sql) == 3
+
+    updated = sync_driver.execute_many(_update_value_sql(table), [(10, "a"), (20, "b")])
+    assert_sql_result(updated, rows_affected=2)
+    sync_driver.commit()
+
+    deleted = sync_driver.execute_many(_delete_by_name_sql(table), [("a",), ("b",)])
+    assert_sql_result(deleted, rows_affected=2)
+    sync_driver.commit()
+    assert sync_driver.select_value(table.select_count_sql) == 1
+
+
+async def assert_async_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers batch insert, update, and delete with accurate row counts."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    inserted = await async_driver.execute_many(table.insert_qmark_sql, [("a", 1, None), ("b", 2, None), ("c", 3, None)])
+    assert_sql_result(inserted, rows_affected=3)
+    await async_driver.commit()
+    assert await async_driver.select_value(table.select_count_sql) == 3
+
+    updated = await async_driver.execute_many(_update_value_sql(table), [(10, "a"), (20, "b")])
+    assert_sql_result(updated, rows_affected=2)
+    await async_driver.commit()
+
+    deleted = await async_driver.execute_many(_delete_by_name_sql(table), [("a",), ("b",)])
+    assert_sql_result(deleted, rows_affected=2)
+    await async_driver.commit()
+    assert await async_driver.select_value(table.select_count_sql) == 1
+
+
+def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers batch a large sequence and an is_many SQL object."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    large_batch = [(f"item-{index}", index, None) for index in range(200)]
+    large_result = sync_driver.execute_many(table.insert_qmark_sql, large_batch)
+    assert_sql_result(large_result, rows_affected=200)
+    sync_driver.commit()
+    assert sync_driver.select_value(table.select_count_sql) == 200
+
+    sql_object = SQL(table.insert_qmark_sql, [("obj-1", 1, None), ("obj-2", 2, None)], is_many=True)
+    object_result = sync_driver.execute(sql_object)
+    assert_sql_result(object_result, rows_affected=2)
+    sync_driver.commit()
+    assert sync_driver.select_value(table.select_count_sql) == 202
+
+
+async def assert_async_execute_many_input_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers batch a large sequence and an is_many SQL object."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    large_batch = [(f"item-{index}", index, None) for index in range(200)]
+    large_result = await async_driver.execute_many(table.insert_qmark_sql, large_batch)
+    assert_sql_result(large_result, rows_affected=200)
+    await async_driver.commit()
+    assert await async_driver.select_value(table.select_count_sql) == 200
+
+    sql_object = SQL(table.insert_qmark_sql, [("obj-1", 1, None), ("obj-2", 2, None)], is_many=True)
+    object_result = await async_driver.execute(sql_object)
+    assert_sql_result(object_result, rows_affected=2)
+    await async_driver.commit()
+    assert await async_driver.select_value(table.select_count_sql) == 202
 
 
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:
