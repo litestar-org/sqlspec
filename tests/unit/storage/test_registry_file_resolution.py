@@ -70,3 +70,14 @@ def test_storage_registry_file_path_resolution_file_and_directory_share_same_bac
         assert isinstance(backend_from_file, ObStoreBackend)
         assert isinstance(backend_from_dir, ObStoreBackend)
         assert backend_from_file._local_store_root == backend_from_dir._local_store_root
+
+
+def test_storage_registry_file_path_resolution_roots_nonexistent_file_at_parent() -> None:
+    """A not-yet-created file destination should root the backend at its parent directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        destination = Path(tmpdir) / "exports" / "out.parquet"
+        s = SQLSpec()
+        loader = s._ensure_loader()
+        backend = loader.storage_registry.get(str(destination))
+        assert isinstance(backend, ObStoreBackend)
+        assert backend._local_store_root == str(destination.parent.resolve())

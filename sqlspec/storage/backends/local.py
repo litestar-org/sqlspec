@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
+from sqlspec.storage._paths import strip_windows_drive_prefix
 from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
@@ -55,9 +56,7 @@ class LocalStore:
         """
         if uri.startswith("file://"):
             parsed = urlparse(uri)
-            path = unquote(parsed.path)
-            if path and len(path) > 2 and path[2] == ":":  # noqa: PLR2004
-                path = path[1:]
+            path = strip_windows_drive_prefix(unquote(parsed.path))
             self.base_path = Path(path).resolve()
         elif uri:
             self.base_path = Path(uri).resolve()

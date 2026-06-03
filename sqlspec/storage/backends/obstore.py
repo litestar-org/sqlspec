@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
-from sqlspec.storage._paths import resolve_storage_path
+from sqlspec.storage._paths import is_file_destination, resolve_storage_path
 from sqlspec.storage._utils import _log_storage_event, import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
@@ -43,16 +43,7 @@ class ObStoreBackend:
     All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
-    __slots__ = (
-        "_is_local_store",
-        "_local_store_root",
-        "_path_cache",
-        "base_path",
-        "protocol",
-        "store",
-        "store_options",
-        "store_uri",
-    )
+    __slots__ = ("_is_local_store", "_local_store_root", "base_path", "protocol", "store", "store_options", "store_uri")
 
     backend_type: ClassVar[str] = "obstore"
 
@@ -81,7 +72,6 @@ class ObStoreBackend:
         self.base_path = base_path.rstrip("/") if base_path else ""
         self.store_options = kwargs
         self.store: Any
-        self._path_cache: dict[str, str] = {}
         self._is_local_store = False
         self._local_store_root = ""
         self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
@@ -99,7 +89,7 @@ class ObStoreBackend:
                     path_str = f"{path_str}#{parsed.fragment}"
                 path_obj = Path(path_str)
 
-                if path_obj.suffix and not path_obj.is_dir():
+                if is_file_destination(path_obj):
                     path_str = str(path_obj.parent)
 
                 # Combine URI path with base_path for correct storage location

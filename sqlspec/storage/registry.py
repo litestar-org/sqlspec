@@ -15,6 +15,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
+from sqlspec.storage._paths import is_file_destination, strip_windows_drive_prefix
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import is_local_path
@@ -122,16 +123,14 @@ class StorageRegistry:
         elif scheme:
             if scheme == "file":
                 parsed = urlparse(path_str)
-                file_path = unquote(parsed.path)
-                if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
-                    file_path = file_path[1:]
+                file_path = strip_windows_drive_prefix(unquote(parsed.path))
 
                 path_obj = Path(file_path).expanduser().resolve()
-                base_uri = f"file://{path_obj.parent}" if path_obj.is_file() else f"file://{path_obj}"
+                base_uri = f"file://{path_obj.parent}" if is_file_destination(path_obj) else f"file://{path_obj}"
         elif is_local_path(path_str):
             scheme = "file"
             path_obj = Path(path_str).expanduser().resolve()
-            base_uri = f"file://{path_obj.parent}" if path_obj.is_file() else f"file://{path_obj}"
+            base_uri = f"file://{path_obj.parent}" if is_file_destination(path_obj) else f"file://{path_obj}"
         else:
             msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
             raise ImproperConfigurationError(msg)
