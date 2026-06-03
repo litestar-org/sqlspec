@@ -86,6 +86,74 @@ async def _seed_async(
         await driver.commit()
 
 
+def _update_value_sql(table: ContractTable) -> str:
+    return f"UPDATE {table.name} SET value = ? WHERE name = ?"
+
+
+def _delete_by_name_sql(table: ContractTable) -> str:
+    return f"DELETE FROM {table.name} WHERE name = ?"
+
+
+def assert_sync_driver_basics_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers run the CRUD lifecycle and expose result column metadata."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    assert_execute_rows = _should_assert_execute_rows_affected(case)
+
+    insert_result = sync_driver.execute(table.insert_qmark_sql, ("basics", 1, None))
+    if assert_execute_rows:
+        assert_sql_result(insert_result, rows_affected=1)
+    sync_driver.commit()
+
+    selected = assert_sql_result(sync_driver.execute(table.select_by_name_qmark_sql, ("basics",)))
+    assert selected.column_names == ["name", "value", "note"]
+    assert selected.get_data()[0] == {"name": "basics", "value": 1, "note": None}
+
+    update_result = sync_driver.execute(_update_value_sql(table), (2, "basics"))
+    if assert_execute_rows:
+        assert_sql_result(update_result, rows_affected=1)
+    sync_driver.commit()
+    updated = assert_sql_result(sync_driver.execute(table.select_by_name_qmark_sql, ("basics",)))
+    assert updated.get_data()[0]["value"] == 2
+    assert sync_driver.select_value(table.select_count_sql) == 1
+
+    delete_result = sync_driver.execute(_delete_by_name_sql(table), ("basics",))
+    if assert_execute_rows:
+        assert_sql_result(delete_result, rows_affected=1)
+    sync_driver.commit()
+    assert sync_driver.select_value(table.select_count_sql) == 0
+
+
+async def assert_async_driver_basics_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers run the CRUD lifecycle and expose result column metadata."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    assert_execute_rows = _should_assert_execute_rows_affected(case)
+
+    insert_result = await async_driver.execute(table.insert_qmark_sql, ("basics", 1, None))
+    if assert_execute_rows:
+        assert_sql_result(insert_result, rows_affected=1)
+    await async_driver.commit()
+
+    selected = assert_sql_result(await async_driver.execute(table.select_by_name_qmark_sql, ("basics",)))
+    assert selected.column_names == ["name", "value", "note"]
+    assert selected.get_data()[0] == {"name": "basics", "value": 1, "note": None}
+
+    update_result = await async_driver.execute(_update_value_sql(table), (2, "basics"))
+    if assert_execute_rows:
+        assert_sql_result(update_result, rows_affected=1)
+    await async_driver.commit()
+    updated = assert_sql_result(await async_driver.execute(table.select_by_name_qmark_sql, ("basics",)))
+    assert updated.get_data()[0]["value"] == 2
+    assert await async_driver.select_value(table.select_count_sql) == 1
+
+    delete_result = await async_driver.execute(_delete_by_name_sql(table), ("basics",))
+    if assert_execute_rows:
+        assert_sql_result(delete_result, rows_affected=1)
+    await async_driver.commit()
+    assert await async_driver.select_value(table.select_count_sql) == 0
+
+
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert sync execute-many behavior for a driver case."""
     sync_driver = cast("SyncContractDriver", driver)

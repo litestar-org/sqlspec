@@ -1,4 +1,10 @@
-"""Integration tests for SQLite driver implementation."""
+"""Integration tests for SQLite driver implementation.
+
+Shared CRUD-lifecycle and transaction-visibility behavior lives in
+``tests/integration/adapters/contracts/test_driver_contract.py``. This file keeps
+SQLite-specific cases: native data-type round trips, PRAGMA schema introspection,
+statement-stack fallback, FOR UPDATE/SHARE SQL generation, and connection hooks.
+"""
 
 import math
 from typing import Any, Literal
@@ -13,39 +19,6 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
-
-
-def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
-    """Test basic CRUD operations."""
-
-    insert_result = sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
-    assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected == 1
-
-    select_result = sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 1
-    assert select_result.get_data()[0]["name"] == "test_name"
-    assert select_result.get_data()[0]["value"] == 42
-
-    update_result = sqlite_session.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name"))
-    assert isinstance(update_result, SQLResult)
-    assert update_result.rows_affected == 1
-
-    verify_result = sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(verify_result, SQLResult)
-    assert verify_result.data is not None
-    assert verify_result.get_data()[0]["value"] == 100
-
-    delete_result = sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(delete_result, SQLResult)
-    assert delete_result.rows_affected == 1
-
-    empty_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(empty_result, SQLResult)
-    assert empty_result.data is not None
-    assert empty_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.parametrize(
@@ -231,17 +204,6 @@ def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) 
     verify = sqlite_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None
     assert verify.get_data()[0]["total"] == 2
-
-
-def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
-    """Test transaction behavior."""
-
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("transaction_test", 100))
-
-    result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test",))
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_data()[0]["count"] == 1
 
 
 def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
