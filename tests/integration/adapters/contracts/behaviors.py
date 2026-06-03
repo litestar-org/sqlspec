@@ -38,6 +38,8 @@ class SyncContractDriver(Protocol):
 
     def select_value(self, statement: object, /, *parameters: object, **kwargs: Any) -> object: ...
 
+    def select_to_arrow(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
+
 
 class AsyncContractDriver(Protocol):
     """Async driver surface used by adapter contract helpers."""
@@ -59,6 +61,8 @@ class AsyncContractDriver(Protocol):
     ) -> dict[str, Any] | None: ...
 
     async def select_value(self, statement: object, /, *parameters: object, **kwargs: Any) -> object: ...
+
+    async def select_to_arrow(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
 
 
 def _row_parameters(rows: tuple[ContractRow, ...]) -> list[tuple[object, ...]]:
@@ -509,6 +513,60 @@ async def assert_async_explain_contract(driver: object, case: DriverCase, explai
     async_driver = cast("AsyncContractDriver", driver)
     result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, case.dialect)))
     assert result.data is not None
+
+
+def assert_sync_arrow_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers return Arrow tables, batches, filtered, and empty results."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    import pyarrow as pa
+
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2), ContractRow("c", 3)), table)
+
+    table_result = sync_driver.select_to_arrow(table.select_ordered_sql)
+    assert isinstance(table_result.data, pa.Table)
+    assert table_result.rows_affected == 3
+    assert table_result.data.column("name").to_pylist() == ["a", "b", "c"]
+
+    batch_result = sync_driver.select_to_arrow(table.select_ordered_sql, return_format="batch")
+    assert isinstance(batch_result.data, pa.RecordBatch)
+    assert batch_result.rows_affected == 3
+
+    filtered = sync_driver.select_to_arrow(table.select_by_name_qmark_sql, ("b",))
+    assert filtered.rows_affected == 1
+    assert filtered.data.column("value").to_pylist() == [2]
+
+    empty = sync_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
+    assert empty.rows_affected == 0
+
+
+async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers return Arrow tables, batches, filtered, and empty results."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    import pyarrow as pa
+
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2), ContractRow("c", 3)), table)
+
+    table_result = await async_driver.select_to_arrow(table.select_ordered_sql)
+    assert isinstance(table_result.data, pa.Table)
+    assert table_result.rows_affected == 3
+    assert table_result.data.column("name").to_pylist() == ["a", "b", "c"]
+
+    batch_result = await async_driver.select_to_arrow(table.select_ordered_sql, return_format="batch")
+    assert isinstance(batch_result.data, pa.RecordBatch)
+    assert batch_result.rows_affected == 3
+
+    filtered = await async_driver.select_to_arrow(table.select_by_name_qmark_sql, ("b",))
+    assert filtered.rows_affected == 1
+    assert filtered.data.column("value").to_pylist() == [2]
+
+    empty = await async_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
+    assert empty.rows_affected == 0
 
 
 def assert_sync_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:
