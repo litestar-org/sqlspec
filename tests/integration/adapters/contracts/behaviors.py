@@ -419,6 +419,8 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
 
 def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
     """Assert sync drivers execute one EXPLAIN artifact and return plan rows."""
+    if not case.supports_explain:
+        pytest.skip(f"{case.adapter} has no verified EXPLAIN support")
     sync_driver = cast("SyncContractDriver", driver)
     result = assert_sql_result(sync_driver.execute(explain_case.build(case.table, case.dialect)))
     assert result.data is not None
@@ -426,6 +428,8 @@ def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case:
 
 async def assert_async_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
     """Assert async drivers execute one EXPLAIN artifact and return plan rows."""
+    if not case.supports_explain:
+        pytest.skip(f"{case.adapter} has no verified EXPLAIN support")
     async_driver = cast("AsyncContractDriver", driver)
     result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, case.dialect)))
     assert result.data is not None

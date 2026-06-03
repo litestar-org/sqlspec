@@ -515,7 +515,7 @@ def _explain_delete(table: ContractTable, dialect: str) -> object:
 
 
 def _explain_query_builder(table: ContractTable, dialect: str) -> object:
-    return sql.select("name").from_(table.name).where("value > 0").explain().build()
+    return sql.select("name", dialect=dialect).from_(table.name).where("value > 0").explain().build()
 
 
 def _explain_sql_factory(table: ContractTable, dialect: str) -> object:
