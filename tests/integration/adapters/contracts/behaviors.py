@@ -11,6 +11,7 @@ from tests.integration.adapters.contracts._assertions import assert_result_data,
 from tests.integration.adapters.contracts._cases import DriverCase
 from tests.integration.adapters.contracts._inputs import (
     ExceptionViolationCase,
+    ExplainCase,
     ParameterProfileCase,
     ParameterStyleCase,
     StatementInputCase,
@@ -414,6 +415,20 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
         await async_driver.execute("SELCT * FROM contract_items")
     with pytest.raises(SQLSpecError):
         await async_driver.execute("SELECT * FROM missing_contract_table")
+
+
+def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
+    """Assert sync drivers execute one EXPLAIN artifact and return plan rows."""
+    sync_driver = cast("SyncContractDriver", driver)
+    result = assert_sql_result(sync_driver.execute(explain_case.build(case.table, case.dialect)))
+    assert result.data is not None
+
+
+async def assert_async_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
+    """Assert async drivers execute one EXPLAIN artifact and return plan rows."""
+    async_driver = cast("AsyncContractDriver", driver)
+    result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, case.dialect)))
+    assert result.data is not None
 
 
 def assert_sync_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:

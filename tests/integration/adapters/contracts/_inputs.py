@@ -9,6 +9,7 @@ from typing import Literal
 import pytest
 
 from sqlspec import SQL, sql
+from sqlspec.builder import Explain
 from sqlspec.exceptions import (
     CheckViolationError,
     ForeignKeyViolationError,
@@ -16,7 +17,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.loader import SQLFileLoader
-from tests.integration.adapters.contracts._schema import ContractRow
+from tests.integration.adapters.contracts._schema import ContractRow, ContractTable
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,14 @@ class ParameterStyleCase:
     statement: object
     verification_parameters: object | None
     verification_statement: str | None
+
+
+@dataclass(frozen=True)
+class ExplainCase:
+    """EXPLAIN artifact factory that should execute and return plan rows."""
+
+    id: str
+    build: "Callable[[ContractTable, str], object]"
 
 
 @dataclass(frozen=True)
@@ -472,6 +481,65 @@ PARAMETER_STYLE_CASES = (
     ),
 )
 
+
+def _explain_select(table: ContractTable, dialect: str) -> object:
+    return Explain(f"SELECT name, value, note FROM {table.name}", dialect=dialect).build()
+
+
+def _explain_where(table: ContractTable, dialect: str) -> object:
+    return Explain(f"SELECT name FROM {table.name} WHERE value > 0", dialect=dialect).build()
+
+
+def _explain_self_join(table: ContractTable, dialect: str) -> object:
+    return Explain(
+        f"SELECT a.name FROM {table.name} a JOIN {table.name} b ON a.value = b.value", dialect=dialect
+    ).build()
+
+
+def _explain_subquery(table: ContractTable, dialect: str) -> object:
+    return Explain(
+        f"SELECT name FROM {table.name} WHERE value IN (SELECT value FROM {table.name})", dialect=dialect
+    ).build()
+
+
+def _explain_insert(table: ContractTable, dialect: str) -> object:
+    return Explain(f"INSERT INTO {table.name} (name, value, note) VALUES ('plan', 1, NULL)", dialect=dialect).build()
+
+
+def _explain_update(table: ContractTable, dialect: str) -> object:
+    return Explain(f"UPDATE {table.name} SET value = 100 WHERE name = 'plan'", dialect=dialect).build()
+
+
+def _explain_delete(table: ContractTable, dialect: str) -> object:
+    return Explain(f"DELETE FROM {table.name} WHERE name = 'plan'", dialect=dialect).build()
+
+
+def _explain_query_builder(table: ContractTable, dialect: str) -> object:
+    return sql.select("name").from_(table.name).where("value > 0").explain().build()
+
+
+def _explain_sql_factory(table: ContractTable, dialect: str) -> object:
+    return sql.explain(f"SELECT name FROM {table.name}", dialect=dialect).build()
+
+
+def _explain_sql_object(table: ContractTable, dialect: str) -> object:
+    return SQL(f"SELECT name FROM {table.name}").explain()
+
+
+EXPLAIN_CASES = (
+    ExplainCase(id="select", build=_explain_select),
+    ExplainCase(id="where", build=_explain_where),
+    ExplainCase(id="self-join", build=_explain_self_join),
+    ExplainCase(id="subquery", build=_explain_subquery),
+    ExplainCase(id="insert", build=_explain_insert),
+    ExplainCase(id="update", build=_explain_update),
+    ExplainCase(id="delete", build=_explain_delete),
+    ExplainCase(id="query-builder", build=_explain_query_builder),
+    ExplainCase(id="sql-factory", build=_explain_sql_factory),
+    ExplainCase(id="sql-object", build=_explain_sql_object),
+)
+
+
 EXCEPTION_VIOLATION_CASES = (
     ExceptionViolationCase(
         id="unique",
@@ -539,4 +607,5 @@ EXCEPTION_VIOLATION_CASES = (
 STATEMENT_INPUT_PARAMS = tuple(pytest.param(case, id=case.id) for case in STATEMENT_INPUT_CASES)
 PARAMETER_PROFILE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_PROFILE_CASES)
 PARAMETER_STYLE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_STYLE_CASES)
+EXPLAIN_PARAMS = tuple(pytest.param(case, id=case.id) for case in EXPLAIN_CASES)
 EXCEPTION_VIOLATION_PARAMS = tuple(pytest.param(case, id=case.id) for case in EXCEPTION_VIOLATION_CASES)
