@@ -25,30 +25,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncConnection, CockroachSyncConnection
 
 
-def _sync_connection() -> "CockroachSyncConnection":
-    return cast("CockroachSyncConnection", object())
-
-
-def _async_connection() -> "CockroachAsyncConnection":
-    return cast("CockroachAsyncConnection", object())
-
-
-def _execution_result(label: str) -> ExecutionResult:
-    return ExecutionResult(
-        cursor_result=label,
-        rowcount_override=None,
-        special_data=None,
-        selected_data=None,
-        column_names=None,
-        data_row_count=None,
-        statement_count=None,
-        successful_statements=None,
-        is_script_result=False,
-        is_select_result=False,
-        is_many_result=False,
-    )
-
-
 def test_cockroach_psycopg_retry_config_default_values() -> None:
     """Default config should have sensible retry defaults."""
     config = CockroachPsycopgRetryConfig()
@@ -184,6 +160,30 @@ def test_calculate_backoff_seconds_jitter_variation() -> None:
     delays = [calculate_backoff_seconds(1, config) for _ in range(20)]
     unique_delays = set(delays)
     assert len(unique_delays) > 1
+
+
+def _sync_connection() -> "CockroachSyncConnection":
+    return cast("CockroachSyncConnection", object())
+
+
+def _async_connection() -> "CockroachAsyncConnection":
+    return cast("CockroachAsyncConnection", object())
+
+
+def _execution_result(label: str) -> ExecutionResult:
+    return ExecutionResult(
+        cursor_result=label,
+        rowcount_override=None,
+        special_data=None,
+        selected_data=None,
+        column_names=None,
+        data_row_count=None,
+        statement_count=None,
+        successful_statements=None,
+        is_script_result=False,
+        is_select_result=False,
+        is_many_result=False,
+    )
 
 
 class _RecordingCockroachPsycopgSyncDriver(CockroachPsycopgSyncDriver):

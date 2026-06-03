@@ -21,26 +21,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
 
 
-def _connection() -> "CockroachAsyncpgConnection":
-    return cast("CockroachAsyncpgConnection", object())
-
-
-def _execution_result(label: str) -> ExecutionResult:
-    return ExecutionResult(
-        cursor_result=label,
-        rowcount_override=None,
-        special_data=None,
-        selected_data=None,
-        column_names=None,
-        data_row_count=None,
-        statement_count=None,
-        successful_statements=None,
-        is_script_result=False,
-        is_select_result=False,
-        is_many_result=False,
-    )
-
-
 def test_cockroach_asyncpg_retry_config_default_values() -> None:
     """Default config should have sensible retry defaults."""
     config = CockroachAsyncpgRetryConfig()
@@ -176,6 +156,26 @@ def test_calculate_backoff_seconds_jitter_variation() -> None:
     delays = [calculate_backoff_seconds(1, config) for _ in range(20)]
     unique_delays = set(delays)
     assert len(unique_delays) > 1
+
+
+def _connection() -> "CockroachAsyncpgConnection":
+    return cast("CockroachAsyncpgConnection", object())
+
+
+def _execution_result(label: str) -> ExecutionResult:
+    return ExecutionResult(
+        cursor_result=label,
+        rowcount_override=None,
+        special_data=None,
+        selected_data=None,
+        column_names=None,
+        data_row_count=None,
+        statement_count=None,
+        successful_statements=None,
+        is_script_result=False,
+        is_select_result=False,
+        is_many_result=False,
+    )
 
 
 class _RecordingCockroachAsyncpgDriver(CockroachAsyncpgDriver):

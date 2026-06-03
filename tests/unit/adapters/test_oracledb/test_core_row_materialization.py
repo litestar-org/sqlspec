@@ -13,14 +13,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 
 
-def _sync_connection() -> "OracleSyncConnection":
-    return cast("OracleSyncConnection", object())
-
-
-def _async_connection() -> "OracleAsyncConnection":
-    return cast("OracleAsyncConnection", object())
-
-
 class _TypeCode:
     __slots__ = ("name",)
 
@@ -136,6 +128,14 @@ def test_resolve_row_metadata_cache_contract_still_holds_after_single_pass_rewri
 
 def _raise_attribute_error(*_args: object, **_kwargs: object) -> object:
     raise AttributeError("native arrow unavailable")
+
+
+def _sync_connection() -> "OracleSyncConnection":
+    return cast("OracleSyncConnection", object())
+
+
+def _async_connection() -> "OracleAsyncConnection":
+    return cast("OracleAsyncConnection", object())
 
 
 def test_select_to_arrow_fallback_sync_select_to_arrow_fallback_passes_prepared_statement(

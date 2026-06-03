@@ -24,14 +24,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
 
 
-def _sync_connection() -> "PsycopgSyncConnection":
-    return cast("PsycopgSyncConnection", object())
-
-
-def _async_connection() -> "PsycopgAsyncConnection":
-    return cast("PsycopgAsyncConnection", object())
-
-
 def test_resolve_many_rowcount_prefers_positive_driver_rowcount() -> None:
     """resolve_many_rowcount should keep positive cursor rowcount values."""
     cursor = SimpleNamespace(rowcount=7)
@@ -215,6 +207,14 @@ class _AsyncCursor:
 
     async def execute(self, *args: Any) -> None:
         self.execute_calls.append(args)
+
+
+def _sync_connection() -> "PsycopgSyncConnection":
+    return cast("PsycopgSyncConnection", object())
+
+
+def _async_connection() -> "PsycopgAsyncConnection":
+    return cast("PsycopgAsyncConnection", object())
 
 
 class _SyncDriver(PsycopgSyncDriver):

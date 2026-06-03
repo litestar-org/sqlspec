@@ -105,145 +105,28 @@ __all__ = (
 )
 
 
-def _parameter_sort_key(item: "tuple[str, object]") -> float:
-    key = item[0]
-    if key.isdigit():
-        return float(int(key))
-    if key.startswith("param_"):
-        suffix = key[6:]
-        if suffix.isdigit():
-            return float(int(suffix))
-    return float("inf")
+logger = get_logger("sqlspec.driver")
 
+VERSION_GROUPS_MIN_FOR_MINOR = 1
+VERSION_GROUPS_MIN_FOR_PATCH = 2
 
-def _lazy_copy_coerce_dict(parameters: "dict[str, Any]", coerce_value: Any, type_coercion_map: Any) -> "dict[str, Any]":
-    result: dict[str, Any] | None = None
-    for key, value in parameters.items():
-        coerced_value = coerce_value(value, type_coercion_map)
-        if result is None:
-            if coerced_value is value:
-                continue
-            result = dict(parameters)
-        result[key] = coerced_value
-    if result is None:
-        return parameters
-    return result
+EXEC_CURSOR_RESULT: Final[int] = 0
+EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
+EXEC_SPECIAL_DATA: Final[int] = 2
+DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
+_DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
+_EMPTY_DML_DATA: Final[tuple[()]] = ()
+_CONVERT_TO_TUPLE = object()
+_CONVERT_TO_FROZENSET = object()
+_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Any], ...], TypeDispatcher[Any]]" = {}
 
-def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
-    return ProcessedState(
-        compiled_sql=processed.compiled_sql,
-        execution_parameters=processed.execution_parameters,
-        parsed_expression=processed.parsed_expression,
-        operation_type=processed.operation_type,
-        input_named_parameters=processed.input_named_parameters,
-        applied_wrap_types=processed.applied_wrap_types,
-        filter_hash=processed.filter_hash,
-        parameter_fingerprint=processed.parameter_fingerprint,
-        parameter_casts=dict(processed.parameter_casts),
-        validation_errors=processed.validation_errors.copy(),
-        parameter_profile=processed.parameter_profile,
-        operation_profile=processed.operation_profile,
-        is_many=False,
-    )
-
-
-def _extract_pagination_placeholders_from_expression(expression: "exp.Expr") -> "set[str]":
-    """Extract named placeholder names from LIMIT and OFFSET clauses of an expression.
-
-    Args:
-        expression: A SQLGlot SELECT expression to scan.
-
-    Returns:
-        Set of placeholder names found in LIMIT/OFFSET clauses.
-    """
-    pagination_placeholders: set[str] = set()
-
-    # Extract from LIMIT clause
-    limit_clause = expression.args.get("limit")
-    if limit_clause:
-        for node in limit_clause.walk():
-            if isinstance(node, exp.Placeholder) and node.this is not None:
-                pagination_placeholders.add(str(node.this))
-
-    # Extract from OFFSET clause
-    offset_clause = expression.args.get("offset")
-    if offset_clause:
-        for node in offset_clause.walk():
-            if isinstance(node, exp.Placeholder) and node.this is not None:
-                pagination_placeholders.add(str(node.this))
-
-    return pagination_placeholders
-
-
-def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
-    """Extract placeholder names from LIMIT and OFFSET clauses.
-
-    These are the placeholders that should be EXCLUDED from count queries,
-    since count queries remove LIMIT/OFFSET clauses.
-
-    First tries to use statement_expression if it has named placeholders.
-    For raw SQL strings where statement_expression is None or has positional
-    placeholders, parses the raw_sql once to extract the names.
-
-    Args:
-        original_sql: The SQL object to extract pagination placeholders from.
-
-    Returns:
-        Set of placeholder names found in LIMIT/OFFSET clauses.
-    """
-    # First try: use statement_expression if available and has named placeholders
-    stmt_expr = original_sql.statement_expression
-    if stmt_expr is not None:
-        placeholders = _extract_pagination_placeholders_from_expression(stmt_expr)
-        if placeholders:
-            return placeholders
-        # Check if it has any named placeholders at all - if not, fall through
-        has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
-        if has_named:
-            # Expression has named placeholders but none in LIMIT/OFFSET
-            return set()
-
-    # Fallback: parse raw_sql to extract LIMIT/OFFSET placeholder names
-    # This is necessary for raw SQL strings before compile() or after
-    # compile() converts placeholders to positional style
-    raw_sql = original_sql.raw_sql
-    if not raw_sql:
-        return set()
-
-    try:
-        parsed = sqlglot.parse_one(raw_sql)
-        return _extract_pagination_placeholders_from_expression(parsed)
-    except Exception:
-        # If parsing fails, return empty set (conservative - don't filter anything)
-        return set()
-
-
-def _materialize_repeated_named_occurrence_parameters(
-    original_sql: "SQL", excluded_names: "set[str]"
-) -> "tuple[Any, ...] | None":
-    """Return occurrence-ordered parameters when a rewritten expression lost repeated names."""
-    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
-    if not isinstance(processed_state, ProcessedState):
-        return None
-
-    input_names = processed_state.input_named_parameters
-    if not input_names:
-        return None
-
-    retained_names = tuple(name for name in input_names if name not in excluded_names)
-    if len(retained_names) == len(set(retained_names)):
-        return None
-
-    execution_parameters = processed_state.execution_parameters
-    if not isinstance(execution_parameters, (list, tuple)):
-        return None
-    if len(execution_parameters) != len(input_names):
-        return None
-
-    return tuple(
-        value for name, value in zip(input_names, execution_parameters, strict=False) if name not in excluded_names
-    )
+_CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
+    ParameterStyle.NAMED_COLON.value,
+    ParameterStyle.NAMED_AT.value,
+    ParameterStyle.NAMED_DOLLAR.value,
+    ParameterStyle.NAMED_PYFORMAT.value,
+))
 
 
 class SyncExceptionHandler(Protocol):
@@ -282,45 +165,32 @@ class AsyncExceptionHandler(Protocol):
     ) -> bool: ...
 
 
-def _raise_database_exception(
-    exc_handler: "AsyncExceptionHandler | SyncExceptionHandler", exc: Exception | None
-) -> None:
-    """Raise any mapped database exception captured by a deferred exception handler."""
-    pending_exception = exc_handler.pending_exception
-    if pending_exception is not None:
-        if exc is None:
-            raise pending_exception from None
-        raise pending_exception from exc
-    if exc is not None:
-        raise exc
+class ScriptExecutionResult(NamedTuple):
+    """Result from script execution with statement count information."""
+
+    cursor_result: Any
+    rowcount_override: int | None
+    special_data: Any
+    statement_count: int
+    successful_statements: int
 
 
-logger = get_logger("sqlspec.driver")
+class ExecutionResult(NamedTuple):
+    """Execution result containing all data needed for SQLResult building."""
 
-VERSION_GROUPS_MIN_FOR_MINOR = 1
-VERSION_GROUPS_MIN_FOR_PATCH = 2
-
-
-_CONVERT_TO_TUPLE = object()
-_CONVERT_TO_FROZENSET = object()
-_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Any], ...], TypeDispatcher[Any]]" = {}
-
-
-def _type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
-    if not type_coercion_map:
-        return ()
-    return tuple(type_coercion_map.items())
-
-
-def _get_type_coercion_dispatcher(fallback_items: "tuple[tuple[type, Any], ...]") -> "TypeDispatcher[Any]":
-    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
-    if dispatcher is not None:
-        return dispatcher
-
-    dispatcher = TypeDispatcher[Any]()
-    dispatcher.register_all(fallback_items)
-    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
-    return dispatcher
+    cursor_result: Any
+    rowcount_override: int | None
+    special_data: Any
+    selected_data: "list[Any] | None"
+    column_names: "list[str] | None"
+    data_row_count: int | None
+    statement_count: int | None
+    successful_statements: int | None
+    is_script_result: bool
+    is_select_result: bool
+    is_many_result: bool
+    row_format: str = "dict"
+    last_inserted_id: int | str | None = None
 
 
 def make_cache_key_hashable(obj: Any) -> Any:
@@ -427,20 +297,22 @@ def make_cache_key_hashable(obj: Any) -> Any:
     return root[0]
 
 
-def _callable_cache_key(func: Any) -> Any:
-    """Return a stable cache key component for callables.
+def describe_stack_statement(statement: "StatementProtocol | str") -> str:
+    """Return a readable representation of a stack statement for diagnostics."""
+    if isinstance(statement, str):
+        return statement
+    if isinstance(statement, StatementProtocol):
+        return statement.raw_sql or repr(statement)
+    return repr(statement)
 
-    Args:
-        func: Callable or None.
 
-    Returns:
-        Tuple identifying the callable, or None for missing callables.
-    """
-    if func is None:
-        return None
-    module = getattr(func, "__module__", None)
-    qualname = getattr(func, "__qualname__", type(func).__name__)
-    return (module, qualname, id(func))
+def handle_single_row_error(error: ValueError) -> "NoReturn":
+    """Normalize single-row selection errors to SQLSpec exceptions."""
+    message = str(error)
+    if message.startswith("No result found"):
+        msg = "No rows found"
+        raise NotFoundError(msg) from error
+    raise error
 
 
 def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
@@ -551,24 +423,6 @@ class StackExecutionObserver:
     def record_operation_error(self, error: Exception) -> None:
         """Record an operation error when continue-on-error is enabled."""
         self.metrics.record_operation_error(error)
-
-
-def describe_stack_statement(statement: "StatementProtocol | str") -> str:
-    """Return a readable representation of a stack statement for diagnostics."""
-    if isinstance(statement, str):
-        return statement
-    if isinstance(statement, StatementProtocol):
-        return statement.raw_sql or repr(statement)
-    return repr(statement)
-
-
-def handle_single_row_error(error: ValueError) -> "NoReturn":
-    """Normalize single-row selection errors to SQLSpec exceptions."""
-    message = str(error)
-    if message.startswith("No result found"):
-        msg = "No rows found"
-        raise NotFoundError(msg) from error
-    raise error
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -743,46 +597,6 @@ class DataDictionaryMixin:
         patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
         return VersionInfo(major, minor, patch)
 
-    def _resolve_log_adapter(self) -> str:
-        """Resolve adapter identifier for logging."""
-        return str(type(self).dialect)
-
-    def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
-        """Log detected database version with db.system context."""
-        logger.debug(
-            "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
-        )
-
-    def _log_version_unavailable(self, adapter: str, reason: str) -> None:
-        """Log that database version could not be determined."""
-        logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
-
-    def _log_schema_introspect(
-        self, driver: Any, *, schema_name: "str | None", table_name: "str | None", operation: str
-    ) -> None:
-        """Log schema-level introspection activity."""
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "schema.introspect",
-            db_system=resolve_db_system(type(driver).__name__),
-            schema_name=schema_name,
-            table_name=table_name,
-            operation=operation,
-        )
-
-    def _log_table_describe(self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str) -> None:
-        """Log table-level introspection activity."""
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "table.describe",
-            db_system=resolve_db_system(type(driver).__name__),
-            schema_name=schema_name,
-            table_name=table_name,
-            operation=operation,
-        )
-
     def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
         """Try multiple version queries to detect database version.
 
@@ -857,50 +671,45 @@ class DataDictionaryMixin:
 
         return list(sorter.static_order())
 
+    def _resolve_log_adapter(self) -> str:
+        """Resolve adapter identifier for logging."""
+        return str(type(self).dialect)
 
-class ScriptExecutionResult(NamedTuple):
-    """Result from script execution with statement count information."""
+    def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
+        """Log detected database version with db.system context."""
+        logger.debug(
+            "Detected database version", extra={"db.system": resolve_db_system(adapter), "db.version": str(version)}
+        )
 
-    cursor_result: Any
-    rowcount_override: int | None
-    special_data: Any
-    statement_count: int
-    successful_statements: int
+    def _log_version_unavailable(self, adapter: str, reason: str) -> None:
+        """Log that database version could not be determined."""
+        logger.debug("Database version unavailable", extra={"db.system": resolve_db_system(adapter), "reason": reason})
 
+    def _log_schema_introspect(
+        self, driver: Any, *, schema_name: "str | None", table_name: "str | None", operation: str
+    ) -> None:
+        """Log schema-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "schema.introspect",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
 
-class ExecutionResult(NamedTuple):
-    """Execution result containing all data needed for SQLResult building."""
-
-    cursor_result: Any
-    rowcount_override: int | None
-    special_data: Any
-    selected_data: "list[Any] | None"
-    column_names: "list[str] | None"
-    data_row_count: int | None
-    statement_count: int | None
-    successful_statements: int | None
-    is_script_result: bool
-    is_select_result: bool
-    is_many_result: bool
-    row_format: str = "dict"
-    last_inserted_id: int | str | None = None
-
-
-EXEC_CURSOR_RESULT: Final[int] = 0
-EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
-EXEC_SPECIAL_DATA: Final[int] = 2
-DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
-
-
-_DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
-_EMPTY_DML_DATA: Final[tuple[()]] = ()
-
-_CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
-    ParameterStyle.NAMED_COLON.value,
-    ParameterStyle.NAMED_AT.value,
-    ParameterStyle.NAMED_DOLLAR.value,
-    ParameterStyle.NAMED_PYFORMAT.value,
-))
+    def _log_table_describe(self, driver: Any, *, schema_name: "str | None", table_name: str, operation: str) -> None:
+        """Log table-level introspection activity."""
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "table.describe",
+            db_system=resolve_db_system(type(driver).__name__),
+            schema_name=schema_name,
+            table_name=table_name,
+            operation=operation,
+        )
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -953,9 +762,6 @@ class CommonDriverAttributesMixin:
         self._observability = runtime
         self._update_stmt_cache_flag()
 
-    def _update_stmt_cache_flag(self) -> None:
-        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)
-
     @property
     def observability(self) -> "ObservabilityRuntime":
         """Return the observability runtime, creating a disabled instance when absent."""
@@ -994,6 +800,326 @@ class CommonDriverAttributesMixin:
             raise StorageCapabilityError(msg, capability="storage_capabilities")
         return cast("StorageCapabilities", dict(capabilities))
 
+    def stmt_cache_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
+        """Rebind parameters for a cached query."""
+        config = self.statement_config.parameter_config
+        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
+        if (
+            not cached.input_named_parameters
+            and not cached.applied_wrap_types
+            and not config.type_coercion_map
+            and not needs_style_remap
+        ):
+            return params
+        processor = ParameterProcessor(
+            converter=self.statement_config.parameter_converter,
+            validator=self.statement_config.parameter_validator,
+            cache_max_size=0,
+            validator_cache_max_size=0,
+        )
+        return processor._transform_cached_parameters(
+            params,
+            cached.parameter_profile,
+            config,
+            input_named_parameters=cached.input_named_parameters,
+            is_many=False,
+            apply_wrap_types=cached.applied_wrap_types,
+        )
+
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+        """Convert data to a specified schema type.
+
+        Supports transformation to various schema types including:
+            - TypedDict
+            - dataclasses
+            - msgspec Structs
+            - Pydantic models
+            - attrs classes
+
+        Args:
+            data: Input data to convert (dict, list of dicts, or other).
+            schema_type: Target schema type for conversion. If None, returns data unchanged.
+
+        Returns:
+            Converted data in the specified schema type, or original data if schema_type is None.
+        """
+        return _to_schema_impl(data, schema_type=schema_type)
+
+    def create_execution_result(
+        self,
+        cursor_result: Any,
+        *,
+        rowcount_override: int | None = None,
+        special_data: Any = None,
+        selected_data: "list[Any] | None" = None,
+        column_names: "list[str] | None" = None,
+        data_row_count: int | None = None,
+        statement_count: int | None = None,
+        successful_statements: int | None = None,
+        is_script_result: bool = False,
+        is_select_result: bool = False,
+        is_many_result: bool = False,
+        row_format: str = "dict",
+        last_inserted_id: int | str | None = None,
+    ) -> ExecutionResult:
+        """Create ExecutionResult with all necessary data for any operation type.
+
+        Args:
+            cursor_result: The raw result returned by the database cursor/driver
+            rowcount_override: Optional override for the number of affected rows
+            special_data: Any special metadata or additional information
+            selected_data: For SELECT operations, the extracted row data (raw driver-native format)
+            column_names: For SELECT operations, the column names
+            data_row_count: For SELECT operations, the number of rows returned
+            statement_count: For script operations, total number of statements
+            successful_statements: For script operations, number of successful statements
+            is_script_result: Whether this result is from script execution
+            is_select_result: Whether this result is from a SELECT operation
+            is_many_result: Whether this result is from an execute_many operation
+            row_format: Format of raw rows - "tuple", "dict", or "record"
+            last_inserted_id: The ID of the last inserted row (if applicable)
+
+        Returns:
+            ExecutionResult configured for the specified operation type
+        """
+        # Positional arguments are slightly faster for NamedTuple
+        return ExecutionResult(
+            cursor_result,
+            rowcount_override,
+            special_data,
+            selected_data,
+            column_names,
+            data_row_count,
+            statement_count,
+            successful_statements,
+            is_script_result,
+            is_select_result,
+            is_many_result,
+            row_format,
+            last_inserted_id,
+        )
+
+    def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
+        """Build and return the SQLResult from ExecutionResult data.
+
+        Args:
+            statement: SQL statement that was executed
+            execution_result: ExecutionResult containing all necessary data
+
+        Returns:
+            SQLResult with complete execution data
+        """
+        if execution_result.is_script_result:
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=execution_result.rowcount_override or 0,
+                operation_type="SCRIPT",
+                total_statements=execution_result.statement_count or 0,
+                successful_statements=execution_result.successful_statements or 0,
+                metadata=execution_result.special_data or _DEFAULT_DML_METADATA,
+            )
+
+        if execution_result.is_select_result:
+            return SQLResult(
+                statement=statement,
+                data=execution_result.selected_data or [],
+                column_names=execution_result.column_names or [],
+                rows_affected=execution_result.data_row_count or 0,
+                operation_type="SELECT",
+                metadata=execution_result.special_data or {},
+                row_format=execution_result.row_format,
+            )
+
+        # DML path (INSERT/UPDATE/DELETE): use _EMPTY_DML_DATA sentinel to avoid
+        # allocating a new empty list on every DML execution.
+        return SQLResult(
+            statement=statement,
+            data=_EMPTY_DML_DATA,
+            rows_affected=execution_result.rowcount_override or 0,
+            operation_type=statement.operation_type,
+            last_inserted_id=execution_result.last_inserted_id,
+            metadata=execution_result.special_data or _DEFAULT_DML_METADATA,
+        )
+
+    def prepare_statement(
+        self,
+        statement: "Statement | QueryBuilder",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
+        *,
+        statement_config: "StatementConfig | None" = None,
+        kwargs: "dict[str, Any] | None" = None,
+    ) -> "SQL":
+        """Build SQL statement from various input types.
+
+        Ensures dialect is set and preserves existing state when rebuilding SQL objects.
+
+        Args:
+            statement: SQL statement or QueryBuilder to prepare
+            parameters: Parameters for the SQL statement
+            statement_config: Optional statement configuration override.
+            kwargs: Additional keyword arguments
+
+        Returns:
+            Prepared SQL statement
+        """
+        if statement_config is None:
+            statement_config = self.statement_config
+
+        # FAST PATH: String statement with simple parameters
+        if isinstance(statement, str):
+            cached_sql = self._statement_cache.get(statement)
+            if cached_sql is not None and not kwargs:
+                # Check if parameters contain filters
+                has_filters = any(is_statement_filter(p) for p in parameters)
+                if not has_filters:
+                    # Reuse cached SQL object and just update its parameters
+                    # This avoids SQL.__init__ overhead
+                    return cached_sql.copy(parameters=parameters)
+
+        kwargs = kwargs or {}
+        filters, data_parameters = self._split_parameters(parameters)
+
+        if isinstance(statement, QueryBuilder):
+            sql_statement = self._prepare_from_builder(statement, data_parameters, statement_config, kwargs)
+        elif isinstance(statement, SQL):
+            sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
+        else:
+            sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
+            # Cache the newly created SQL object for future use
+            if not filters and not kwargs and isinstance(statement, str):
+                self._statement_cache[statement] = sql_statement
+
+        return self._apply_filters(sql_statement, filters)
+
+    def split_script_statements(
+        self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
+    ) -> "list[str]":
+        """Split a SQL script into individual statements.
+
+        Uses a lexer-driven state machine to handle multi-statement scripts,
+        including complex constructs like PL/SQL blocks, T-SQL batches, and nested blocks.
+
+        Args:
+            script: The SQL script to split
+            statement_config: Statement configuration containing dialect information
+            strip_trailing_semicolon: If True, remove trailing semicolons from statements
+
+        Returns:
+            A list of individual SQL statements
+        """
+        return [
+            sql_script.strip()
+            for sql_script in split_sql_script(
+                script, dialect=str(statement_config.dialect), strip_trailing_terminator=strip_trailing_semicolon
+            )
+            if sql_script.strip()
+        ]
+
+    def prepare_driver_parameters(
+        self,
+        parameters: "StatementParameters | list[StatementParameters] | tuple[StatementParameters, ...]",
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: Any | None = None,
+    ) -> "ConvertedParameters":
+        """Prepare parameters for database driver consumption.
+
+        Normalizes parameter structure and unwraps TypedParameter objects
+        to their underlying values, which database drivers expect.
+
+        Args:
+            parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
+            statement_config: Statement configuration for parameter style detection
+            is_many: If True, handle as executemany parameter sequence
+            prepared_statement: Optional prepared statement containing metadata for parameter processing
+
+        Returns:
+            Parameters with TypedParameter objects unwrapped to primitive values
+        """
+        if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
+            return None
+
+        if not parameters:
+            return []
+
+        if is_many:
+            if isinstance(parameters, list):
+                type_coercion_map = statement_config.parameter_config.type_coercion_map
+                fallback_items = _type_coercion_fallbacks(type_coercion_map)
+                needs_transform = False
+                for param_set in parameters:
+                    if isinstance(param_set, dict):
+                        for value in param_set.values():
+                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
+                                needs_transform = True
+                                break
+                    elif isinstance(param_set, (list, tuple)):
+                        for value in param_set:
+                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
+                                needs_transform = True
+                                break
+                    elif self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
+                        needs_transform = True
+                    if needs_transform:
+                        break
+
+                if not needs_transform:
+                    return parameters
+
+                formatted_many: list[Any] | None = None
+                for idx, param_set in enumerate(parameters):
+                    formatted = self._format_parameter_set_for_many(param_set, statement_config)
+                    if formatted_many is None:
+                        if formatted is param_set:
+                            continue
+                        formatted_many = list(parameters[:idx])
+                    formatted_many.append(formatted)
+                if formatted_many is None:
+                    return parameters
+                return formatted_many
+            return [self._format_parameter_set_for_many(parameters, statement_config)]
+        return self._format_parameter_set(parameters, statement_config)
+
+    @staticmethod
+    def find_filter(
+        filter_type: "type[FilterTypeT]",
+        filters: "abc.Sequence[StatementFilter | StatementParameters] | abc.Sequence[StatementFilter]",
+    ) -> "FilterTypeT | None":
+        """Get the filter specified by filter type from the filters.
+
+        Args:
+            filter_type: The type of filter to find.
+            filters: filter types to apply to the query
+
+        Returns:
+            The match filter instance or None
+        """
+        return _find_filter_impl(filter_type, filters)
+
+    def _update_stmt_cache_flag(self) -> None:
+        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)
+
     def _require_capability(self, capability_flag: str) -> None:
         """Check that a storage capability is enabled.
 
@@ -1027,32 +1153,6 @@ class CommonDriverAttributesMixin:
     def _release_pooled_statement(self, statement: "SQL") -> None:
         if statement._pooled:
             self._statement_pool.release(statement)
-
-    def stmt_cache_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
-        """Rebind parameters for a cached query."""
-        config = self.statement_config.parameter_config
-        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
-        if (
-            not cached.input_named_parameters
-            and not cached.applied_wrap_types
-            and not config.type_coercion_map
-            and not needs_style_remap
-        ):
-            return params
-        processor = ParameterProcessor(
-            converter=self.statement_config.parameter_converter,
-            validator=self.statement_config.parameter_validator,
-            cache_max_size=0,
-            validator_cache_max_size=0,
-        )
-        return processor._transform_cached_parameters(
-            params,
-            cached.parameter_profile,
-            config,
-            input_named_parameters=cached.input_named_parameters,
-            is_many=False,
-            apply_wrap_types=cached.applied_wrap_types,
-        )
 
     def _stmt_cache_build_direct(
         self,
@@ -1283,142 +1383,6 @@ class CommonDriverAttributesMixin:
         )
         self._stmt_cache.set(statement.raw_sql, cached)
 
-    @overload
-    @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
-    @overload
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
-    @overload
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
-
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
-        """Convert data to a specified schema type.
-
-        Supports transformation to various schema types including:
-            - TypedDict
-            - dataclasses
-            - msgspec Structs
-            - Pydantic models
-            - attrs classes
-
-        Args:
-            data: Input data to convert (dict, list of dicts, or other).
-            schema_type: Target schema type for conversion. If None, returns data unchanged.
-
-        Returns:
-            Converted data in the specified schema type, or original data if schema_type is None.
-        """
-        return _to_schema_impl(data, schema_type=schema_type)
-
-    def create_execution_result(
-        self,
-        cursor_result: Any,
-        *,
-        rowcount_override: int | None = None,
-        special_data: Any = None,
-        selected_data: "list[Any] | None" = None,
-        column_names: "list[str] | None" = None,
-        data_row_count: int | None = None,
-        statement_count: int | None = None,
-        successful_statements: int | None = None,
-        is_script_result: bool = False,
-        is_select_result: bool = False,
-        is_many_result: bool = False,
-        row_format: str = "dict",
-        last_inserted_id: int | str | None = None,
-    ) -> ExecutionResult:
-        """Create ExecutionResult with all necessary data for any operation type.
-
-        Args:
-            cursor_result: The raw result returned by the database cursor/driver
-            rowcount_override: Optional override for the number of affected rows
-            special_data: Any special metadata or additional information
-            selected_data: For SELECT operations, the extracted row data (raw driver-native format)
-            column_names: For SELECT operations, the column names
-            data_row_count: For SELECT operations, the number of rows returned
-            statement_count: For script operations, total number of statements
-            successful_statements: For script operations, number of successful statements
-            is_script_result: Whether this result is from script execution
-            is_select_result: Whether this result is from a SELECT operation
-            is_many_result: Whether this result is from an execute_many operation
-            row_format: Format of raw rows - "tuple", "dict", or "record"
-            last_inserted_id: The ID of the last inserted row (if applicable)
-
-        Returns:
-            ExecutionResult configured for the specified operation type
-        """
-        # Positional arguments are slightly faster for NamedTuple
-        return ExecutionResult(
-            cursor_result,
-            rowcount_override,
-            special_data,
-            selected_data,
-            column_names,
-            data_row_count,
-            statement_count,
-            successful_statements,
-            is_script_result,
-            is_select_result,
-            is_many_result,
-            row_format,
-            last_inserted_id,
-        )
-
-    def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
-        """Build and return the SQLResult from ExecutionResult data.
-
-        Args:
-            statement: SQL statement that was executed
-            execution_result: ExecutionResult containing all necessary data
-
-        Returns:
-            SQLResult with complete execution data
-        """
-        if execution_result.is_script_result:
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=execution_result.rowcount_override or 0,
-                operation_type="SCRIPT",
-                total_statements=execution_result.statement_count or 0,
-                successful_statements=execution_result.successful_statements or 0,
-                metadata=execution_result.special_data or _DEFAULT_DML_METADATA,
-            )
-
-        if execution_result.is_select_result:
-            return SQLResult(
-                statement=statement,
-                data=execution_result.selected_data or [],
-                column_names=execution_result.column_names or [],
-                rows_affected=execution_result.data_row_count or 0,
-                operation_type="SELECT",
-                metadata=execution_result.special_data or {},
-                row_format=execution_result.row_format,
-            )
-
-        # DML path (INSERT/UPDATE/DELETE): use _EMPTY_DML_DATA sentinel to avoid
-        # allocating a new empty list on every DML execution.
-        return SQLResult(
-            statement=statement,
-            data=_EMPTY_DML_DATA,
-            rows_affected=execution_result.rowcount_override or 0,
-            operation_type=statement.operation_type,
-            last_inserted_id=execution_result.last_inserted_id,
-            metadata=execution_result.special_data or _DEFAULT_DML_METADATA,
-        )
-
     def _should_force_select(self, statement: "SQL", cursor: object) -> bool:
         """Determine if a statement with unknown type should be treated as SELECT.
 
@@ -1447,56 +1411,6 @@ class CommonDriverAttributesMixin:
         if has_cursor_metadata(cursor):
             return bool(cursor.description)
         return False
-
-    def prepare_statement(
-        self,
-        statement: "Statement | QueryBuilder",
-        parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
-        *,
-        statement_config: "StatementConfig | None" = None,
-        kwargs: "dict[str, Any] | None" = None,
-    ) -> "SQL":
-        """Build SQL statement from various input types.
-
-        Ensures dialect is set and preserves existing state when rebuilding SQL objects.
-
-        Args:
-            statement: SQL statement or QueryBuilder to prepare
-            parameters: Parameters for the SQL statement
-            statement_config: Optional statement configuration override.
-            kwargs: Additional keyword arguments
-
-        Returns:
-            Prepared SQL statement
-        """
-        if statement_config is None:
-            statement_config = self.statement_config
-
-        # FAST PATH: String statement with simple parameters
-        if isinstance(statement, str):
-            cached_sql = self._statement_cache.get(statement)
-            if cached_sql is not None and not kwargs:
-                # Check if parameters contain filters
-                has_filters = any(is_statement_filter(p) for p in parameters)
-                if not has_filters:
-                    # Reuse cached SQL object and just update its parameters
-                    # This avoids SQL.__init__ overhead
-                    return cached_sql.copy(parameters=parameters)
-
-        kwargs = kwargs or {}
-        filters, data_parameters = self._split_parameters(parameters)
-
-        if isinstance(statement, QueryBuilder):
-            sql_statement = self._prepare_from_builder(statement, data_parameters, statement_config, kwargs)
-        elif isinstance(statement, SQL):
-            sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
-        else:
-            sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
-            # Cache the newly created SQL object for future use
-            if not filters and not kwargs and isinstance(statement, str):
-                self._statement_cache[statement] = sql_statement
-
-        return self._apply_filters(sql_statement, filters)
 
     def _split_parameters(
         self, parameters: "tuple[StatementParameters | StatementFilter, ...]"
@@ -1579,95 +1493,6 @@ class CommonDriverAttributesMixin:
         for filter_obj in filters:
             sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
-
-    def split_script_statements(
-        self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
-    ) -> "list[str]":
-        """Split a SQL script into individual statements.
-
-        Uses a lexer-driven state machine to handle multi-statement scripts,
-        including complex constructs like PL/SQL blocks, T-SQL batches, and nested blocks.
-
-        Args:
-            script: The SQL script to split
-            statement_config: Statement configuration containing dialect information
-            strip_trailing_semicolon: If True, remove trailing semicolons from statements
-
-        Returns:
-            A list of individual SQL statements
-        """
-        return [
-            sql_script.strip()
-            for sql_script in split_sql_script(
-                script, dialect=str(statement_config.dialect), strip_trailing_terminator=strip_trailing_semicolon
-            )
-            if sql_script.strip()
-        ]
-
-    def prepare_driver_parameters(
-        self,
-        parameters: "StatementParameters | list[StatementParameters] | tuple[StatementParameters, ...]",
-        statement_config: "StatementConfig",
-        is_many: bool = False,
-        prepared_statement: Any | None = None,
-    ) -> "ConvertedParameters":
-        """Prepare parameters for database driver consumption.
-
-        Normalizes parameter structure and unwraps TypedParameter objects
-        to their underlying values, which database drivers expect.
-
-        Args:
-            parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
-            statement_config: Statement configuration for parameter style detection
-            is_many: If True, handle as executemany parameter sequence
-            prepared_statement: Optional prepared statement containing metadata for parameter processing
-
-        Returns:
-            Parameters with TypedParameter objects unwrapped to primitive values
-        """
-        if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
-            return None
-
-        if not parameters:
-            return []
-
-        if is_many:
-            if isinstance(parameters, list):
-                type_coercion_map = statement_config.parameter_config.type_coercion_map
-                fallback_items = _type_coercion_fallbacks(type_coercion_map)
-                needs_transform = False
-                for param_set in parameters:
-                    if isinstance(param_set, dict):
-                        for value in param_set.values():
-                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
-                                needs_transform = True
-                                break
-                    elif isinstance(param_set, (list, tuple)):
-                        for value in param_set:
-                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
-                                needs_transform = True
-                                break
-                    elif self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
-                        needs_transform = True
-                    if needs_transform:
-                        break
-
-                if not needs_transform:
-                    return parameters
-
-                formatted_many: list[Any] | None = None
-                for idx, param_set in enumerate(parameters):
-                    formatted = self._format_parameter_set_for_many(param_set, statement_config)
-                    if formatted_many is None:
-                        if formatted is param_set:
-                            continue
-                        formatted_many = list(parameters[:idx])
-                    formatted_many.append(formatted)
-                if formatted_many is None:
-                    return parameters
-                return formatted_many
-            return [self._format_parameter_set_for_many(parameters, statement_config)]
-        return self._format_parameter_set(parameters, statement_config)
 
     def _apply_coercion(self, value: object, type_coercion_map: "dict[type, Callable[[Any], Any]] | None") -> object:
         """Apply type coercion to a single value.
@@ -2008,22 +1833,6 @@ class CommonDriverAttributesMixin:
         base_hash = hash((statement.raw_sql, params_fingerprint, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
-    @staticmethod
-    def find_filter(
-        filter_type: "type[FilterTypeT]",
-        filters: "abc.Sequence[StatementFilter | StatementParameters] | abc.Sequence[StatementFilter]",
-    ) -> "FilterTypeT | None":
-        """Get the filter specified by filter type from the filters.
-
-        Args:
-            filter_type: The type of filter to find.
-            filters: filter types to apply to the query
-
-        Returns:
-            The match filter instance or None
-        """
-        return _find_filter_impl(filter_type, filters)
-
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
         """Create a COUNT query from the original SQL statement.
 
@@ -2251,3 +2060,190 @@ class CommonDriverAttributesMixin:
     ) -> "StorageBridgeJob":
         """Create a StorageBridgeJob from telemetry data."""
         return create_storage_job(produced, provided, status=status)
+
+
+def _raise_database_exception(
+    exc_handler: "AsyncExceptionHandler | SyncExceptionHandler", exc: Exception | None
+) -> None:
+    """Raise any mapped database exception captured by a deferred exception handler."""
+    pending_exception = exc_handler.pending_exception
+    if pending_exception is not None:
+        if exc is None:
+            raise pending_exception from None
+        raise pending_exception from exc
+    if exc is not None:
+        raise exc
+
+
+def _parameter_sort_key(item: "tuple[str, object]") -> float:
+    key = item[0]
+    if key.isdigit():
+        return float(int(key))
+    if key.startswith("param_"):
+        suffix = key[6:]
+        if suffix.isdigit():
+            return float(int(suffix))
+    return float("inf")
+
+
+def _lazy_copy_coerce_dict(parameters: "dict[str, Any]", coerce_value: Any, type_coercion_map: Any) -> "dict[str, Any]":
+    result: dict[str, Any] | None = None
+    for key, value in parameters.items():
+        coerced_value = coerce_value(value, type_coercion_map)
+        if result is None:
+            if coerced_value is value:
+                continue
+            result = dict(parameters)
+        result[key] = coerced_value
+    if result is None:
+        return parameters
+    return result
+
+
+def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
+    return ProcessedState(
+        compiled_sql=processed.compiled_sql,
+        execution_parameters=processed.execution_parameters,
+        parsed_expression=processed.parsed_expression,
+        operation_type=processed.operation_type,
+        input_named_parameters=processed.input_named_parameters,
+        applied_wrap_types=processed.applied_wrap_types,
+        filter_hash=processed.filter_hash,
+        parameter_fingerprint=processed.parameter_fingerprint,
+        parameter_casts=dict(processed.parameter_casts),
+        validation_errors=processed.validation_errors.copy(),
+        parameter_profile=processed.parameter_profile,
+        operation_profile=processed.operation_profile,
+        is_many=False,
+    )
+
+
+def _extract_pagination_placeholders_from_expression(expression: "exp.Expr") -> "set[str]":
+    """Extract named placeholder names from LIMIT and OFFSET clauses of an expression.
+
+    Args:
+        expression: A SQLGlot SELECT expression to scan.
+
+    Returns:
+        Set of placeholder names found in LIMIT/OFFSET clauses.
+    """
+    pagination_placeholders: set[str] = set()
+
+    # Extract from LIMIT clause
+    limit_clause = expression.args.get("limit")
+    if limit_clause:
+        for node in limit_clause.walk():
+            if isinstance(node, exp.Placeholder) and node.this is not None:
+                pagination_placeholders.add(str(node.this))
+
+    # Extract from OFFSET clause
+    offset_clause = expression.args.get("offset")
+    if offset_clause:
+        for node in offset_clause.walk():
+            if isinstance(node, exp.Placeholder) and node.this is not None:
+                pagination_placeholders.add(str(node.this))
+
+    return pagination_placeholders
+
+
+def _extract_pagination_placeholders(original_sql: "SQL") -> "set[str]":
+    """Extract placeholder names from LIMIT and OFFSET clauses.
+
+    These are the placeholders that should be EXCLUDED from count queries,
+    since count queries remove LIMIT/OFFSET clauses.
+
+    First tries to use statement_expression if it has named placeholders.
+    For raw SQL strings where statement_expression is None or has positional
+    placeholders, parses the raw_sql once to extract the names.
+
+    Args:
+        original_sql: The SQL object to extract pagination placeholders from.
+
+    Returns:
+        Set of placeholder names found in LIMIT/OFFSET clauses.
+    """
+    # First try: use statement_expression if available and has named placeholders
+    stmt_expr = original_sql.statement_expression
+    if stmt_expr is not None:
+        placeholders = _extract_pagination_placeholders_from_expression(stmt_expr)
+        if placeholders:
+            return placeholders
+        # Check if it has any named placeholders at all - if not, fall through
+        has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
+        if has_named:
+            # Expression has named placeholders but none in LIMIT/OFFSET
+            return set()
+
+    # Fallback: parse raw_sql to extract LIMIT/OFFSET placeholder names
+    # This is necessary for raw SQL strings before compile() or after
+    # compile() converts placeholders to positional style
+    raw_sql = original_sql.raw_sql
+    if not raw_sql:
+        return set()
+
+    try:
+        parsed = sqlglot.parse_one(raw_sql)
+        return _extract_pagination_placeholders_from_expression(parsed)
+    except Exception:
+        # If parsing fails, return empty set (conservative - don't filter anything)
+        return set()
+
+
+def _materialize_repeated_named_occurrence_parameters(
+    original_sql: "SQL", excluded_names: "set[str]"
+) -> "tuple[Any, ...] | None":
+    """Return occurrence-ordered parameters when a rewritten expression lost repeated names."""
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    if not isinstance(processed_state, ProcessedState):
+        return None
+
+    input_names = processed_state.input_named_parameters
+    if not input_names:
+        return None
+
+    retained_names = tuple(name for name in input_names if name not in excluded_names)
+    if len(retained_names) == len(set(retained_names)):
+        return None
+
+    execution_parameters = processed_state.execution_parameters
+    if not isinstance(execution_parameters, (list, tuple)):
+        return None
+    if len(execution_parameters) != len(input_names):
+        return None
+
+    return tuple(
+        value for name, value in zip(input_names, execution_parameters, strict=False) if name not in excluded_names
+    )
+
+
+def _type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
+    if not type_coercion_map:
+        return ()
+    return tuple(type_coercion_map.items())
+
+
+def _get_type_coercion_dispatcher(fallback_items: "tuple[tuple[type, Any], ...]") -> "TypeDispatcher[Any]":
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher[Any]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
+def _callable_cache_key(func: Any) -> Any:
+    """Return a stable cache key component for callables.
+
+    Args:
+        func: Callable or None.
+
+    Returns:
+        Tuple identifying the callable, or None for missing callables.
+    """
+    if func is None:
+        return None
+    module = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", type(func).__name__)
+    return (module, qualname, id(func))

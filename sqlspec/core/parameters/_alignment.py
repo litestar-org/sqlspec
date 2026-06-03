@@ -100,6 +100,43 @@ def collect_null_parameter_ordinals(parameters: Any, profile: "ParameterProfile"
     return null_positions
 
 
+def validate_parameter_alignment(
+    parameter_profile: "ParameterProfile | None", parameters: Any, *, is_many: bool = False
+) -> None:
+    """Ensure provided parameters align with detected placeholders.
+
+    Args:
+        parameter_profile: Placeholder metadata extracted from the statement.
+        parameters: Parameter payload the adapter will execute with.
+        is_many: Whether the call explicitly targets ``execute_many``.
+
+    Raises:
+        SQLSpecError: If counts or identifiers differ between placeholders and payload.
+    """
+    profile = parameter_profile or ParameterProfile.empty()
+    if profile.total_count == 0:
+        return
+
+    effective_is_many = is_many or looks_like_execute_many(parameters)
+
+    if effective_is_many:
+        if parameters is None:
+            if profile.total_count == 0:
+                return
+            msg = "Parameter count mismatch: expected parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if not _is_sequence_like(parameters):
+            msg = "Parameter count mismatch: expected sequence of parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if len(parameters) == 0:
+            return
+        for index, param_set in enumerate(parameters):
+            _validate_single_parameter_set(profile, param_set, batch_index=index)
+        return
+
+    _validate_single_parameter_set(profile, parameters)
+
+
 def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
     identifiers: set[tuple[str, int | str]] = set()
     parameters = parameter_profile.parameters
@@ -257,43 +294,6 @@ def _validate_single_parameter_set(
             f"received {_format_identifiers(actual_identifiers)}."
         )
         raise sqlspec.exceptions.SQLSpecError(msg)
-
-
-def validate_parameter_alignment(
-    parameter_profile: "ParameterProfile | None", parameters: Any, *, is_many: bool = False
-) -> None:
-    """Ensure provided parameters align with detected placeholders.
-
-    Args:
-        parameter_profile: Placeholder metadata extracted from the statement.
-        parameters: Parameter payload the adapter will execute with.
-        is_many: Whether the call explicitly targets ``execute_many``.
-
-    Raises:
-        SQLSpecError: If counts or identifiers differ between placeholders and payload.
-    """
-    profile = parameter_profile or ParameterProfile.empty()
-    if profile.total_count == 0:
-        return
-
-    effective_is_many = is_many or looks_like_execute_many(parameters)
-
-    if effective_is_many:
-        if parameters is None:
-            if profile.total_count == 0:
-                return
-            msg = "Parameter count mismatch: expected parameter sets for execute_many."
-            raise sqlspec.exceptions.SQLSpecError(msg)
-        if not _is_sequence_like(parameters):
-            msg = "Parameter count mismatch: expected sequence of parameter sets for execute_many."
-            raise sqlspec.exceptions.SQLSpecError(msg)
-        if len(parameters) == 0:
-            return
-        for index, param_set in enumerate(parameters):
-            _validate_single_parameter_set(profile, param_set, batch_index=index)
-        return
-
-    _validate_single_parameter_set(profile, parameters)
 
 
 def _is_sequence_like(value: Any) -> bool:

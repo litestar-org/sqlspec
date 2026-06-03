@@ -111,49 +111,6 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
     return ("scalar", param_type)
 
 
-def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
-    """Generate fingerprint for execute_many parameters.
-
-    Extracted to reduce code duplication and allow inlining of the common single-execution path.
-    """
-    param_count = len(parameters)
-    sample_size = (
-        min(_EXECUTE_MANY_SAMPLE_SIZE, param_count) if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD else param_count
-    )
-    first = parameters[0]
-    first_type = type(first)
-
-    # Fast type dispatch for first element
-    if first_type is dict:
-        keys = tuple(first.keys())
-        type_sig = tuple(type(v) for v in first.values())
-        return ("many_dict", keys, type_sig, param_count)
-
-    if first_type is list or first_type is tuple:
-        type_sigs: list[tuple[type, ...]] = []
-        for i in range(sample_size):
-            param_item: Any = parameters[i]
-            type_sigs.append(tuple(type(v) for v in param_item))
-        return ("many_seq", tuple(type_sigs), param_count)
-
-    # Fallback to ABC checks
-    if isinstance(first, Mapping):
-        keys = tuple(first.keys())
-        type_sig = tuple(type(v) for v in first.values())
-        return ("many_dict", keys, type_sig, param_count)
-
-    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
-        type_sigs = []
-        for i in range(sample_size):
-            param_item = parameters[i]
-            type_sigs.append(tuple(type(v) for v in param_item))
-        return ("many_seq", tuple(type_sigs), param_count)
-
-    # Scalar values in sequence for execute_many
-    type_sig = tuple(type(parameters[i]) for i in range(sample_size))
-    return ("many_scalar", type_sig, param_count)
-
-
 def value_fingerprint(parameters: "ParameterPayload") -> Any:
     """Return a value-based fingerprint for parameter payloads.
 
@@ -172,212 +129,6 @@ def value_fingerprint(parameters: "ParameterPayload") -> Any:
     # Use repr for value-based hashing - includes both structure and values
     # Return as tuple to match structural_fingerprint return type (hashable)
     return ("values", repr(parameters))
-
-
-def _type_coercion_fallbacks(
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-) -> "tuple[TypeCoercionFallback, ...]":
-    return tuple(type_coercion_map.items())
-
-
-def _get_type_coercion_dispatcher(
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> "TypeDispatcher[Callable[[Any], Any]]":
-    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
-    if dispatcher is not None:
-        return dispatcher
-
-    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
-    dispatcher.register_all(fallback_items)
-    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
-    return dispatcher
-
-
-def _resolve_type_coercion(
-    value: object,
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> object:
-    value_type = type(value)
-    exact_converter = type_coercion_map.get(value_type)
-    if exact_converter is not None:
-        return exact_converter(value)
-    fallback_converter = _get_type_coercion_dispatcher(fallback_items).get(value)
-    if fallback_converter is not None:
-        return fallback_converter(value)
-    return value
-
-
-def _coerce_nested_value(
-    value: object,
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> object:
-    # Fast type dispatch for common types
-    value_type = type(value)
-    if value_type is list or value_type is tuple:
-        seq_value = cast("Sequence[Any]", value)
-        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in seq_value]
-    if value_type is dict:
-        dict_value = cast("dict[Any, Any]", value)
-        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in dict_value.items()}
-    return value
-
-
-def _coerce_parameter_value(
-    value: object,
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> object:
-    if value is None:
-        return value
-
-    value_type = type(value)
-    # Fast path: check TypedParameter by type identity (2-4x faster than isinstance)
-    if value_type is TypedParameter:
-        typed_param = cast("TypedParameter", value)
-        wrapped_value: object = typed_param.value
-        if wrapped_value is None:
-            return wrapped_value
-        coerced = _resolve_type_coercion(wrapped_value, type_coercion_map, fallback_items)
-        if coerced is wrapped_value:
-            return wrapped_value
-        return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
-
-    coerced = _resolve_type_coercion(value, type_coercion_map, fallback_items)
-    if coerced is value:
-        return value
-    return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
-
-
-def _coerce_sequence_preserving_identity(
-    seq_value: "Sequence[Any]",
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> "Sequence[Any] | list[Any]":
-    updated_seq: list[Any] | None = None
-    for idx, item in enumerate(seq_value):
-        coerced_value = _coerce_parameter_value(item, type_coercion_map, fallback_items)
-        if updated_seq is None:
-            if coerced_value is item:
-                continue
-            updated_seq = list(seq_value[:idx])
-        updated_seq.append(coerced_value)
-    if updated_seq is None:
-        return seq_value
-    return updated_seq
-
-
-def _coerce_mapping_preserving_identity(
-    mapping: "Mapping[Any, Any]",
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> "Mapping[Any, Any] | dict[Any, Any]":
-    updated_mapping: dict[Any, Any] | None = None
-    for key, val in mapping.items():
-        coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
-        if updated_mapping is None:
-            if coerced_value is val:
-                continue
-            updated_mapping = dict(mapping)
-        updated_mapping[key] = coerced_value
-    if updated_mapping is None:
-        return mapping
-    return updated_mapping
-
-
-def _coerce_parameter_set(
-    param_set: object,
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-) -> object:
-    # Fast type dispatch for common types
-    param_type = type(param_set)
-    if param_type is list:
-        return _coerce_sequence_preserving_identity(cast("list[Any]", param_set), type_coercion_map, fallback_items)
-    if param_type is tuple:
-        seq_value = cast("tuple[Any, ...]", param_set)
-        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map, fallback_items)
-        if coerced_seq is seq_value:
-            return seq_value
-        return tuple(cast("list[Any]", coerced_seq))
-    if param_type is dict:
-        return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items)
-    # Fallback to ABC checks for custom types
-    if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
-        seq_fallback = param_set
-        coerced_seq = _coerce_sequence_preserving_identity(seq_fallback, type_coercion_map, fallback_items)
-        if coerced_seq is seq_fallback:
-            return param_set
-        return coerced_seq
-    if isinstance(param_set, Mapping):
-        coerced_mapping = _coerce_mapping_preserving_identity(param_set, type_coercion_map, fallback_items)
-        if coerced_mapping is param_set:
-            return param_set
-        return coerced_mapping
-    return _coerce_parameter_value(param_set, type_coercion_map, fallback_items)
-
-
-def _coerce_parameters_payload(
-    parameters: "ParameterPayload",
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-    fallback_items: "tuple[TypeCoercionFallback, ...]",
-    is_many: bool,
-) -> object:
-    # Fast type dispatch for common types
-    param_type = type(parameters)
-    if param_type is list:
-        seq_params = cast("list[Any]", parameters)
-        if is_many:
-            updated_many: list[Any] | None = None
-            for idx, param_set in enumerate(seq_params):
-                coerced_set = _coerce_parameter_set(param_set, type_coercion_map, fallback_items)
-                if updated_many is None:
-                    if coerced_set is param_set:
-                        continue
-                    updated_many = seq_params[:idx]
-                updated_many.append(coerced_set)
-            if updated_many is None:
-                return seq_params
-            return updated_many
-
-        updated_seq: list[Any] | None = None
-        for idx, item in enumerate(seq_params):
-            coerced_item = _coerce_parameter_value(item, type_coercion_map, fallback_items)
-            if updated_seq is None:
-                if coerced_item is item:
-                    continue
-                updated_seq = seq_params[:idx]
-            updated_seq.append(coerced_item)
-        if updated_seq is None:
-            return seq_params
-        return updated_seq
-    if param_type is tuple:
-        tuple_params = cast("tuple[Any, ...]", parameters)
-        if is_many:
-            return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in tuple_params]
-        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in tuple_params]
-    if param_type is dict:
-        dict_params = cast("dict[Any, Any]", parameters)
-        updated_mapping: dict[Any, Any] | None = None
-        for key, val in dict_params.items():
-            coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
-            if updated_mapping is None:
-                if coerced_value is val:
-                    continue
-                updated_mapping = dict(dict_params)
-            updated_mapping[key] = coerced_value
-        if updated_mapping is None:
-            return dict_params
-        return updated_mapping
-    # Fallback to ABC checks for custom types
-    if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in parameters]
-    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in parameters]
-    if isinstance(parameters, Mapping):
-        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in parameters.items()}
-    return _coerce_parameter_value(parameters, type_coercion_map, fallback_items)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -448,6 +199,229 @@ class ParameterProcessor:
             stats["validator_size"] = 0
             stats["validator_max_size"] = 0
         return stats
+
+    def process(
+        self,
+        sql: str,
+        parameters: "ParameterPayload",
+        config: "ParameterStyleConfig",
+        dialect: str | None = None,
+        is_many: bool = False,
+        wrap_types: bool = True,
+        param_fingerprint: Any | None = None,
+    ) -> "ParameterProcessingResult":
+        return self._process_internal(
+            sql,
+            parameters,
+            config,
+            dialect=dialect,
+            is_many=is_many,
+            wrap_types=wrap_types,
+            normalize_for_parsing=True,
+            param_fingerprint=param_fingerprint,
+        )
+
+    def process_for_execution(
+        self,
+        sql: str,
+        parameters: "ParameterPayload",
+        config: "ParameterStyleConfig",
+        dialect: str | None = None,
+        is_many: bool = False,
+        wrap_types: bool = True,
+        parsed_expression: Any = None,
+        param_fingerprint: Any | None = None,
+    ) -> "ParameterProcessingResult":
+        """Process parameters for execution without parse normalization.
+
+        Args:
+            sql: SQL string to process.
+            parameters: Parameter payload.
+            config: Parameter style configuration.
+            dialect: Optional SQL dialect.
+            is_many: Whether this is execute_many.
+            wrap_types: Whether to wrap parameters with type metadata.
+            parsed_expression: Pre-parsed SQLGlot expression to preserve through pipeline.
+            param_fingerprint: Pre-computed parameter fingerprint for cache key.
+
+        Returns:
+            ParameterProcessingResult with execution SQL and parameters.
+        """
+        return self._process_internal(
+            sql,
+            parameters,
+            config,
+            dialect=dialect,
+            is_many=is_many,
+            wrap_types=wrap_types,
+            normalize_for_parsing=False,
+            parsed_expression=parsed_expression,
+            param_fingerprint=param_fingerprint,
+        )
+
+    def _process_internal(
+        self,
+        sql: str,
+        parameters: "ParameterPayload",
+        config: "ParameterStyleConfig",
+        *,
+        dialect: str | None,
+        is_many: bool,
+        wrap_types: bool,
+        normalize_for_parsing: bool,
+        parsed_expression: Any = None,
+        param_fingerprint: Any | None = None,
+    ) -> "ParameterProcessingResult":
+        cache_key = None
+        if self._cache_max_size > 0:
+            cache_key = self._make_processor_cache_key(
+                sql,
+                parameters,
+                config,
+                is_many,
+                dialect,
+                wrap_types,
+                normalize_for_parsing,
+                param_fingerprint=param_fingerprint,
+            )
+            cached_result = self._cache.get(cache_key)
+            if cached_result is not None:
+                self._cache.move_to_end(cache_key)
+                self._cache_hits += 1
+                # For static script compilation, parameters are embedded directly in SQL.
+                # Cache key includes parameter values, so a hit means same SQL with same values.
+                # Return None for parameters since the driver shouldn't receive any.
+                if config.needs_static_script_compilation:
+                    return ParameterProcessingResult(
+                        cached_result.sql,
+                        None,
+                        cached_result.parameter_profile,
+                        sqlglot_sql=cached_result.sqlglot_sql,
+                        parsed_expression=cached_result.parsed_expression,
+                        input_named_parameters=cached_result.input_named_parameters,
+                        applied_wrap_types=cached_result.applied_wrap_types,
+                    )
+                # Return cached SQL transformation with NEW parameters transformed
+                # to match the cached SQL's placeholder format
+                transformed_params = self._transform_cached_parameters(
+                    parameters,
+                    cached_result.parameter_profile,
+                    config,
+                    input_named_parameters=cached_result.input_named_parameters,
+                    is_many=is_many,
+                    apply_wrap_types=cached_result.applied_wrap_types,
+                )
+                # Apply output transformer if present (it may further transform params)
+                final_sql = cached_result.sql
+                if config.output_transformer:
+                    final_sql, transformed_params = config.output_transformer(final_sql, transformed_params)
+                return ParameterProcessingResult(
+                    final_sql,
+                    transformed_params,
+                    cached_result.parameter_profile,
+                    sqlglot_sql=cached_result.sqlglot_sql,
+                    parsed_expression=cached_result.parsed_expression,
+                    input_named_parameters=cached_result.input_named_parameters,
+                    applied_wrap_types=cached_result.applied_wrap_types,
+                )
+            self._cache_misses += 1
+
+        param_info = self._validator.extract_parameters(sql)
+        original_styles = {p.style for p in param_info} if param_info else set()
+        needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
+
+        input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
+
+        if config.needs_static_script_compilation and param_info and parameters and not is_many:
+            return self._compile_static_script(
+                sql, parameters, config, is_many, cache_key, input_named_parameters=input_named_parameters
+            )
+
+        requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
+        if (
+            not needs_execution_conversion
+            and not config.type_coercion_map
+            and not config.output_transformer
+            and not requires_mapping
+        ):
+            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
+            result = ParameterProcessingResult(
+                sql,
+                parameters,
+                ParameterProfile(param_info),
+                sqlglot_sql=normalized_sql,
+                parsed_expression=parsed_expression,
+                input_named_parameters=input_named_parameters,
+                applied_wrap_types=False,
+            )
+            return self._store_cached_result(cache_key, result)
+
+        processed_sql, processed_parameters = sql, parameters
+
+        if requires_mapping:
+            target_style = self._select_execution_style(original_styles, config)
+            input_named_parameters = _named_parameters_for_style(param_info, target_style)
+            mapping_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
+                param_info, target_style
+            )
+            processed_sql, processed_parameters = self._converter.convert_placeholder_style(
+                processed_sql,
+                processed_parameters,
+                target_style,
+                is_many,
+                strict_named_parameters=config.strict_named_parameters,
+                param_info=param_info,
+                precomputed_plan=mapping_plan,
+            )
+            param_info = self._converter.convert_parameter_info_style(param_info, target_style, mapping_plan)
+            original_styles = {target_style}
+            needs_execution_conversion = False
+
+        if needs_execution_conversion:
+            target_style = self._select_execution_style(original_styles, config)
+            input_named_parameters = _named_parameters_for_style(param_info, target_style)
+
+        applied_wrap_types = False
+        if processed_parameters and wrap_types:
+            wrapped_parameters = self._wrap_parameter_types(processed_parameters)
+            if wrapped_parameters is not processed_parameters:
+                processed_parameters = wrapped_parameters
+                applied_wrap_types = True
+
+        if config.type_coercion_map and processed_parameters:
+            processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
+
+        processed_sql, processed_parameters, converted_param_info = self._convert_placeholders_for_execution(
+            processed_sql,
+            processed_parameters,
+            config,
+            param_info,
+            original_styles,
+            needs_execution_conversion,
+            is_many,
+        )
+
+        if config.output_transformer:
+            processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
+
+        final_param_info = converted_param_info if converted_param_info is not None else param_info
+        final_profile = ParameterProfile(final_param_info)
+        sqlglot_sql = (
+            self._normalize_sql_for_parsing(processed_sql, final_param_info, config)
+            if normalize_for_parsing
+            else processed_sql
+        )
+        result = ParameterProcessingResult(
+            processed_sql,
+            processed_parameters,
+            final_profile,
+            sqlglot_sql=sqlglot_sql,
+            parsed_expression=parsed_expression,
+            input_named_parameters=input_named_parameters,
+            applied_wrap_types=applied_wrap_types,
+        )
+
+        return self._store_cached_result(cache_key, result)
 
     def _compile_static_script(
         self,
@@ -837,229 +811,6 @@ class ParameterProcessor:
             sql, param_fingerprint, input_style, exec_style, dialect_marker, is_many, wrap_types, normalize_for_parsing
         )
 
-    def process(
-        self,
-        sql: str,
-        parameters: "ParameterPayload",
-        config: "ParameterStyleConfig",
-        dialect: str | None = None,
-        is_many: bool = False,
-        wrap_types: bool = True,
-        param_fingerprint: Any | None = None,
-    ) -> "ParameterProcessingResult":
-        return self._process_internal(
-            sql,
-            parameters,
-            config,
-            dialect=dialect,
-            is_many=is_many,
-            wrap_types=wrap_types,
-            normalize_for_parsing=True,
-            param_fingerprint=param_fingerprint,
-        )
-
-    def process_for_execution(
-        self,
-        sql: str,
-        parameters: "ParameterPayload",
-        config: "ParameterStyleConfig",
-        dialect: str | None = None,
-        is_many: bool = False,
-        wrap_types: bool = True,
-        parsed_expression: Any = None,
-        param_fingerprint: Any | None = None,
-    ) -> "ParameterProcessingResult":
-        """Process parameters for execution without parse normalization.
-
-        Args:
-            sql: SQL string to process.
-            parameters: Parameter payload.
-            config: Parameter style configuration.
-            dialect: Optional SQL dialect.
-            is_many: Whether this is execute_many.
-            wrap_types: Whether to wrap parameters with type metadata.
-            parsed_expression: Pre-parsed SQLGlot expression to preserve through pipeline.
-            param_fingerprint: Pre-computed parameter fingerprint for cache key.
-
-        Returns:
-            ParameterProcessingResult with execution SQL and parameters.
-        """
-        return self._process_internal(
-            sql,
-            parameters,
-            config,
-            dialect=dialect,
-            is_many=is_many,
-            wrap_types=wrap_types,
-            normalize_for_parsing=False,
-            parsed_expression=parsed_expression,
-            param_fingerprint=param_fingerprint,
-        )
-
-    def _process_internal(
-        self,
-        sql: str,
-        parameters: "ParameterPayload",
-        config: "ParameterStyleConfig",
-        *,
-        dialect: str | None,
-        is_many: bool,
-        wrap_types: bool,
-        normalize_for_parsing: bool,
-        parsed_expression: Any = None,
-        param_fingerprint: Any | None = None,
-    ) -> "ParameterProcessingResult":
-        cache_key = None
-        if self._cache_max_size > 0:
-            cache_key = self._make_processor_cache_key(
-                sql,
-                parameters,
-                config,
-                is_many,
-                dialect,
-                wrap_types,
-                normalize_for_parsing,
-                param_fingerprint=param_fingerprint,
-            )
-            cached_result = self._cache.get(cache_key)
-            if cached_result is not None:
-                self._cache.move_to_end(cache_key)
-                self._cache_hits += 1
-                # For static script compilation, parameters are embedded directly in SQL.
-                # Cache key includes parameter values, so a hit means same SQL with same values.
-                # Return None for parameters since the driver shouldn't receive any.
-                if config.needs_static_script_compilation:
-                    return ParameterProcessingResult(
-                        cached_result.sql,
-                        None,
-                        cached_result.parameter_profile,
-                        sqlglot_sql=cached_result.sqlglot_sql,
-                        parsed_expression=cached_result.parsed_expression,
-                        input_named_parameters=cached_result.input_named_parameters,
-                        applied_wrap_types=cached_result.applied_wrap_types,
-                    )
-                # Return cached SQL transformation with NEW parameters transformed
-                # to match the cached SQL's placeholder format
-                transformed_params = self._transform_cached_parameters(
-                    parameters,
-                    cached_result.parameter_profile,
-                    config,
-                    input_named_parameters=cached_result.input_named_parameters,
-                    is_many=is_many,
-                    apply_wrap_types=cached_result.applied_wrap_types,
-                )
-                # Apply output transformer if present (it may further transform params)
-                final_sql = cached_result.sql
-                if config.output_transformer:
-                    final_sql, transformed_params = config.output_transformer(final_sql, transformed_params)
-                return ParameterProcessingResult(
-                    final_sql,
-                    transformed_params,
-                    cached_result.parameter_profile,
-                    sqlglot_sql=cached_result.sqlglot_sql,
-                    parsed_expression=cached_result.parsed_expression,
-                    input_named_parameters=cached_result.input_named_parameters,
-                    applied_wrap_types=cached_result.applied_wrap_types,
-                )
-            self._cache_misses += 1
-
-        param_info = self._validator.extract_parameters(sql)
-        original_styles = {p.style for p in param_info} if param_info else set()
-        needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
-
-        input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
-
-        if config.needs_static_script_compilation and param_info and parameters and not is_many:
-            return self._compile_static_script(
-                sql, parameters, config, is_many, cache_key, input_named_parameters=input_named_parameters
-            )
-
-        requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
-        if (
-            not needs_execution_conversion
-            and not config.type_coercion_map
-            and not config.output_transformer
-            and not requires_mapping
-        ):
-            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
-            result = ParameterProcessingResult(
-                sql,
-                parameters,
-                ParameterProfile(param_info),
-                sqlglot_sql=normalized_sql,
-                parsed_expression=parsed_expression,
-                input_named_parameters=input_named_parameters,
-                applied_wrap_types=False,
-            )
-            return self._store_cached_result(cache_key, result)
-
-        processed_sql, processed_parameters = sql, parameters
-
-        if requires_mapping:
-            target_style = self._select_execution_style(original_styles, config)
-            input_named_parameters = _named_parameters_for_style(param_info, target_style)
-            mapping_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
-                param_info, target_style
-            )
-            processed_sql, processed_parameters = self._converter.convert_placeholder_style(
-                processed_sql,
-                processed_parameters,
-                target_style,
-                is_many,
-                strict_named_parameters=config.strict_named_parameters,
-                param_info=param_info,
-                precomputed_plan=mapping_plan,
-            )
-            param_info = self._converter.convert_parameter_info_style(param_info, target_style, mapping_plan)
-            original_styles = {target_style}
-            needs_execution_conversion = False
-
-        if needs_execution_conversion:
-            target_style = self._select_execution_style(original_styles, config)
-            input_named_parameters = _named_parameters_for_style(param_info, target_style)
-
-        applied_wrap_types = False
-        if processed_parameters and wrap_types:
-            wrapped_parameters = self._wrap_parameter_types(processed_parameters)
-            if wrapped_parameters is not processed_parameters:
-                processed_parameters = wrapped_parameters
-                applied_wrap_types = True
-
-        if config.type_coercion_map and processed_parameters:
-            processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
-
-        processed_sql, processed_parameters, converted_param_info = self._convert_placeholders_for_execution(
-            processed_sql,
-            processed_parameters,
-            config,
-            param_info,
-            original_styles,
-            needs_execution_conversion,
-            is_many,
-        )
-
-        if config.output_transformer:
-            processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
-
-        final_param_info = converted_param_info if converted_param_info is not None else param_info
-        final_profile = ParameterProfile(final_param_info)
-        sqlglot_sql = (
-            self._normalize_sql_for_parsing(processed_sql, final_param_info, config)
-            if normalize_for_parsing
-            else processed_sql
-        )
-        result = ParameterProcessingResult(
-            processed_sql,
-            processed_parameters,
-            final_profile,
-            sqlglot_sql=sqlglot_sql,
-            parsed_expression=parsed_expression,
-            input_named_parameters=input_named_parameters,
-            applied_wrap_types=applied_wrap_types,
-        )
-
-        return self._store_cached_result(cache_key, result)
-
     def _needs_execution_placeholder_conversion(
         self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig"
     ) -> bool:
@@ -1165,6 +916,255 @@ class ParameterProcessor:
             precomputed_plan=execution_plan,
         )
         return processed_sql, processed_parameters, converted_param_info
+
+
+def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
+    """Generate fingerprint for execute_many parameters.
+
+    Extracted to reduce code duplication and allow inlining of the common single-execution path.
+    """
+    param_count = len(parameters)
+    sample_size = (
+        min(_EXECUTE_MANY_SAMPLE_SIZE, param_count) if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD else param_count
+    )
+    first = parameters[0]
+    first_type = type(first)
+
+    # Fast type dispatch for first element
+    if first_type is dict:
+        keys = tuple(first.keys())
+        type_sig = tuple(type(v) for v in first.values())
+        return ("many_dict", keys, type_sig, param_count)
+
+    if first_type is list or first_type is tuple:
+        type_sigs: list[tuple[type, ...]] = []
+        for i in range(sample_size):
+            param_item: Any = parameters[i]
+            type_sigs.append(tuple(type(v) for v in param_item))
+        return ("many_seq", tuple(type_sigs), param_count)
+
+    # Fallback to ABC checks
+    if isinstance(first, Mapping):
+        keys = tuple(first.keys())
+        type_sig = tuple(type(v) for v in first.values())
+        return ("many_dict", keys, type_sig, param_count)
+
+    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
+        type_sigs = []
+        for i in range(sample_size):
+            param_item = parameters[i]
+            type_sigs.append(tuple(type(v) for v in param_item))
+        return ("many_seq", tuple(type_sigs), param_count)
+
+    # Scalar values in sequence for execute_many
+    type_sig = tuple(type(parameters[i]) for i in range(sample_size))
+    return ("many_scalar", type_sig, param_count)
+
+
+def _type_coercion_fallbacks(
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+) -> "tuple[TypeCoercionFallback, ...]":
+    return tuple(type_coercion_map.items())
+
+
+def _get_type_coercion_dispatcher(
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> "TypeDispatcher[Callable[[Any], Any]]":
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
+def _resolve_type_coercion(
+    value: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
+    value_type = type(value)
+    exact_converter = type_coercion_map.get(value_type)
+    if exact_converter is not None:
+        return exact_converter(value)
+    fallback_converter = _get_type_coercion_dispatcher(fallback_items).get(value)
+    if fallback_converter is not None:
+        return fallback_converter(value)
+    return value
+
+
+def _coerce_nested_value(
+    value: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
+    # Fast type dispatch for common types
+    value_type = type(value)
+    if value_type is list or value_type is tuple:
+        seq_value = cast("Sequence[Any]", value)
+        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in seq_value]
+    if value_type is dict:
+        dict_value = cast("dict[Any, Any]", value)
+        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in dict_value.items()}
+    return value
+
+
+def _coerce_parameter_value(
+    value: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
+    if value is None:
+        return value
+
+    value_type = type(value)
+    # Fast path: check TypedParameter by type identity (2-4x faster than isinstance)
+    if value_type is TypedParameter:
+        typed_param = cast("TypedParameter", value)
+        wrapped_value: object = typed_param.value
+        if wrapped_value is None:
+            return wrapped_value
+        coerced = _resolve_type_coercion(wrapped_value, type_coercion_map, fallback_items)
+        if coerced is wrapped_value:
+            return wrapped_value
+        return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
+
+    coerced = _resolve_type_coercion(value, type_coercion_map, fallback_items)
+    if coerced is value:
+        return value
+    return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
+
+
+def _coerce_sequence_preserving_identity(
+    seq_value: "Sequence[Any]",
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> "Sequence[Any] | list[Any]":
+    updated_seq: list[Any] | None = None
+    for idx, item in enumerate(seq_value):
+        coerced_value = _coerce_parameter_value(item, type_coercion_map, fallback_items)
+        if updated_seq is None:
+            if coerced_value is item:
+                continue
+            updated_seq = list(seq_value[:idx])
+        updated_seq.append(coerced_value)
+    if updated_seq is None:
+        return seq_value
+    return updated_seq
+
+
+def _coerce_mapping_preserving_identity(
+    mapping: "Mapping[Any, Any]",
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> "Mapping[Any, Any] | dict[Any, Any]":
+    updated_mapping: dict[Any, Any] | None = None
+    for key, val in mapping.items():
+        coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
+        if updated_mapping is None:
+            if coerced_value is val:
+                continue
+            updated_mapping = dict(mapping)
+        updated_mapping[key] = coerced_value
+    if updated_mapping is None:
+        return mapping
+    return updated_mapping
+
+
+def _coerce_parameter_set(
+    param_set: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+) -> object:
+    # Fast type dispatch for common types
+    param_type = type(param_set)
+    if param_type is list:
+        return _coerce_sequence_preserving_identity(cast("list[Any]", param_set), type_coercion_map, fallback_items)
+    if param_type is tuple:
+        seq_value = cast("tuple[Any, ...]", param_set)
+        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map, fallback_items)
+        if coerced_seq is seq_value:
+            return seq_value
+        return tuple(cast("list[Any]", coerced_seq))
+    if param_type is dict:
+        return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items)
+    # Fallback to ABC checks for custom types
+    if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
+        seq_fallback = param_set
+        coerced_seq = _coerce_sequence_preserving_identity(seq_fallback, type_coercion_map, fallback_items)
+        if coerced_seq is seq_fallback:
+            return param_set
+        return coerced_seq
+    if isinstance(param_set, Mapping):
+        coerced_mapping = _coerce_mapping_preserving_identity(param_set, type_coercion_map, fallback_items)
+        if coerced_mapping is param_set:
+            return param_set
+        return coerced_mapping
+    return _coerce_parameter_value(param_set, type_coercion_map, fallback_items)
+
+
+def _coerce_parameters_payload(
+    parameters: "ParameterPayload",
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    fallback_items: "tuple[TypeCoercionFallback, ...]",
+    is_many: bool,
+) -> object:
+    # Fast type dispatch for common types
+    param_type = type(parameters)
+    if param_type is list:
+        seq_params = cast("list[Any]", parameters)
+        if is_many:
+            updated_many: list[Any] | None = None
+            for idx, param_set in enumerate(seq_params):
+                coerced_set = _coerce_parameter_set(param_set, type_coercion_map, fallback_items)
+                if updated_many is None:
+                    if coerced_set is param_set:
+                        continue
+                    updated_many = seq_params[:idx]
+                updated_many.append(coerced_set)
+            if updated_many is None:
+                return seq_params
+            return updated_many
+
+        updated_seq: list[Any] | None = None
+        for idx, item in enumerate(seq_params):
+            coerced_item = _coerce_parameter_value(item, type_coercion_map, fallback_items)
+            if updated_seq is None:
+                if coerced_item is item:
+                    continue
+                updated_seq = seq_params[:idx]
+            updated_seq.append(coerced_item)
+        if updated_seq is None:
+            return seq_params
+        return updated_seq
+    if param_type is tuple:
+        tuple_params = cast("tuple[Any, ...]", parameters)
+        if is_many:
+            return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in tuple_params]
+        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in tuple_params]
+    if param_type is dict:
+        dict_params = cast("dict[Any, Any]", parameters)
+        updated_mapping: dict[Any, Any] | None = None
+        for key, val in dict_params.items():
+            coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
+            if updated_mapping is None:
+                if coerced_value is val:
+                    continue
+                updated_mapping = dict(dict_params)
+            updated_mapping[key] = coerced_value
+        if updated_mapping is None:
+            return dict_params
+        return updated_mapping
+    # Fallback to ABC checks for custom types
+    if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+        return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in parameters]
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in parameters]
+    if isinstance(parameters, Mapping):
+        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in parameters.items()}
+    return _coerce_parameter_value(parameters, type_coercion_map, fallback_items)
 
 
 def _make_cache_key_tuple(

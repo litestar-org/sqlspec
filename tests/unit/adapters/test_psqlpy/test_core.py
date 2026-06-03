@@ -27,10 +27,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
 
 
-def _connection() -> "PsqlpyConnection":
-    return cast("PsqlpyConnection", object())
-
-
 def test_format_execute_many_parameters_no_coercion_reuses_list_rows() -> None:
     """Formatting should preserve list rows when no numeric coercion is requested."""
     records = [[1, "a"], [2, "b"]]
@@ -234,6 +230,10 @@ class _Cursor:
     async def execute(self, *args: Any) -> str:
         self.execute_calls.append(args)
         return "OK"
+
+
+def _connection() -> "PsqlpyConnection":
+    return cast("PsqlpyConnection", object())
 
 
 class _Driver(PsqlpyDriver):

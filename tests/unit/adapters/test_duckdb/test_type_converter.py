@@ -15,10 +15,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
 
 
-def _connection() -> "DuckDBConnection":
-    return cast("DuckDBConnection", object())
-
-
 def test_uuid_conversion_enabled_by_default() -> None:
     """Test that UUID conversion is enabled by default."""
     converter = DuckDBOutputConverter()
@@ -97,6 +93,10 @@ class _ArrowCursor:
 
     def to_arrow_table(self) -> pa.Table:
         return pa.table({"id": [1]})
+
+
+def _connection() -> "DuckDBConnection":
+    return cast("DuckDBConnection", object())
 
 
 class _ArrowDriver(DuckDBDriver):
