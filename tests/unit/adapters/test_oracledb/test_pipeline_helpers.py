@@ -140,9 +140,9 @@ pytest.importorskip("oracledb")
 
 
 def _make_sync_driver() -> OracleSyncDriver:
-    connection = cast("OracleSyncConnection", MagicMock())
-    connection.in_transaction = False
-    return OracleSyncDriver(connection=connection)
+    connection_mock = MagicMock()
+    connection_mock.in_transaction = False
+    return OracleSyncDriver(connection=cast("OracleSyncConnection", connection_mock))
 
 
 def test_dispatch_execute_force_select_sync_dispatch_execute_force_select_fallback() -> None:
