@@ -27,6 +27,24 @@ from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
+
+def _timeout_scale() -> float:
+    """Return the multiplier applied to delivery-timing budgets in this module."""
+    try:
+        import coverage
+
+        if coverage.Coverage.current() is not None:
+            return 4.0
+    except Exception:
+        return 1.0
+    return 1.0
+
+
+_SCALE = _timeout_scale()
+_EXERCISE_TIMEOUT = 15.0 * _SCALE
+_SUBSCRIBE_WAIT = 0.5 * _SCALE
+_NEXT_EVENT_TIMEOUT = 3.0 * _SCALE
+_CLOSE_TIMEOUT = 2.0 * _SCALE
 _POLL_INTERVAL = 0.05
 _EXPECTED_DELIVERIES = 3
 
@@ -89,7 +107,7 @@ async def test_sqlspec_channels_backend_multi_channel(postgres_service: Any, bac
     failure: AssertionError | None = None
     try:
         try:
-            await asyncio.wait_for(_exercise(plugin, backend_key), timeout=15.0)
+            await asyncio.wait_for(_exercise(plugin, backend_key), timeout=_EXERCISE_TIMEOUT)
         except asyncio.TimeoutError:
             failure = AssertionError(
                 f"{backend_key}: test hung — concurrent multi-channel deadlock under broken backend"
@@ -102,7 +120,7 @@ async def test_sqlspec_channels_backend_multi_channel(postgres_service: Any, bac
             with contextlib.suppress(Exception):
                 result = close_pool()
                 if isinstance(result, Awaitable):
-                    await asyncio.wait_for(result, timeout=2.0)
+                    await asyncio.wait_for(result, timeout=_CLOSE_TIMEOUT)
 
     if failure is not None:
         raise failure
@@ -113,21 +131,21 @@ async def _exercise(plugin: ChannelsPlugin, backend_key: str) -> None:
         sub_alpha = await plugin.subscribe(f"alpha_{backend_key}")
         sub_beta = await plugin.subscribe(f"beta_{backend_key}")
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(_SUBSCRIBE_WAIT)
 
         for _ in range(_EXPECTED_DELIVERIES):
             await plugin.wait_published({"action": "alpha"}, f"alpha_{backend_key}")
             await plugin.wait_published({"action": "beta"}, f"beta_{backend_key}")
 
         try:
-            alpha_payload = await asyncio.wait_for(_next_event(sub_alpha), timeout=3.0)
+            alpha_payload = await asyncio.wait_for(_next_event(sub_alpha), timeout=_NEXT_EVENT_TIMEOUT)
             decoded_alpha = msgspec.json.decode(alpha_payload)
             assert decoded_alpha["action"] == "alpha"
         except asyncio.TimeoutError as exc:
             raise AssertionError(f"{backend_key}: alpha subscriber timed out") from exc
 
         try:
-            beta_payload = await asyncio.wait_for(_next_event(sub_beta), timeout=3.0)
+            beta_payload = await asyncio.wait_for(_next_event(sub_beta), timeout=_NEXT_EVENT_TIMEOUT)
             decoded_beta = msgspec.json.decode(beta_payload)
             assert decoded_beta["action"] == "beta", (
                 f"{backend_key}: beta subscriber received no message (multi-channel race)"

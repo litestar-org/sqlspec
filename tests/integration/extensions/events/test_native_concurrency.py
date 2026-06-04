@@ -30,7 +30,23 @@ from sqlspec import SQLSpec
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
-_SUBSCRIBE_WAIT = 0.6
+
+def _timeout_scale() -> float:
+    """Return the multiplier applied to delivery-timing budgets in this module."""
+    try:
+        import coverage
+
+        if coverage.Coverage.current() is not None:
+            return 4.0
+    except Exception:
+        return 1.0
+    return 1.0
+
+
+_SCALE = _timeout_scale()
+_SUBSCRIBE_WAIT = 0.6 * _SCALE
+_DRAIN_DEADLINE = 3.0 * _SCALE
+_STOP_TIMEOUT = 2.0 * _SCALE
 _POLL_INTERVAL = 0.05
 _MAX_POLL_ATTEMPTS = 200
 _EXPECTED_DELIVERIES = 5
@@ -79,7 +95,7 @@ def _import_or_skip(backend_key: str) -> ConfigFactory:
 
 
 async def _drain(received: "list[Any]", minimum: int, *, watch_tasks: "tuple[Any, ...]" = ()) -> None:
-    deadline = asyncio.get_running_loop().time() + 3.0
+    deadline = asyncio.get_running_loop().time() + _DRAIN_DEADLINE
     while asyncio.get_running_loop().time() < deadline:
         if len(received) >= minimum:
             return
@@ -196,7 +212,7 @@ async def _safe_stop(channel: Any, *listeners: Any) -> None:
         if listener is None:
             continue
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(channel.stop_listener(listener.id), timeout=2.0)
+            await asyncio.wait_for(channel.stop_listener(listener.id), timeout=_STOP_TIMEOUT)
 
 
 async def _publish(channel: Any, name: str, payload: "dict[str, Any]") -> None:
@@ -207,10 +223,10 @@ async def _publish(channel: Any, name: str, payload: "dict[str, Any]") -> None:
 
 async def _cleanup(channel: Any, config: Any) -> None:
     with contextlib.suppress(Exception):
-        await asyncio.wait_for(channel.shutdown(), timeout=2.0)
+        await asyncio.wait_for(channel.shutdown(), timeout=_STOP_TIMEOUT)
     close_pool = getattr(config, "close_pool", None)
     if close_pool is not None and getattr(config, "connection_instance", None) is not None:
         with contextlib.suppress(Exception):
             result = close_pool()
             if isinstance(result, Awaitable):
-                await asyncio.wait_for(result, timeout=2.0)
+                await asyncio.wait_for(result, timeout=_STOP_TIMEOUT)
