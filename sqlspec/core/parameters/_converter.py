@@ -272,7 +272,7 @@ class ParameterConverter:
         param_dict: dict[str, Any] = {}
         for i, param in enumerate(param_info):
             if i < len(parameters):
-                name = param.name or f"param_{param.ordinal}"
+                name = _normalized_named_parameter_name(param)
                 param_dict[name] = parameters[i]
         return param_dict
 
@@ -280,7 +280,7 @@ class ParameterConverter:
         self, parameters: "Mapping[str, Any]", param_info: "list[ParameterInfo]"
     ) -> "NamedParameterOutput":
         """Align a mapping with the placeholder names of a named-style target."""
-        expected_names = {param.name or f"param_{param.ordinal}" for param in param_info}
+        expected_names = {_normalized_named_parameter_name(param) for param in param_info}
         if expected_names.issubset(parameters.keys()):
             return dict(parameters)
         return self._convert_sequence_to_dict(list(parameters.values()), param_info)

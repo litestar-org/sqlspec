@@ -10,6 +10,7 @@ from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
+    ORACLE_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
     ContractTable,
 )
@@ -61,6 +62,7 @@ MYSQL_XDIST_MARK = pytest.mark.xdist_group("mysql")
 POSTGRES_XDIST_MARK = pytest.mark.xdist_group("postgres")
 COCKROACH_XDIST_MARK = pytest.mark.xdist_group("cockroachdb")
 ADBC_MARK = pytest.mark.adbc
+ORACLE_XDIST_MARK = pytest.mark.xdist_group("oracle")
 
 SYNC_DRIVER_CASES = (
     DriverCase(
@@ -197,6 +199,20 @@ SYNC_DRIVER_CASES = (
         supports_storage_bridge=True,
         supports_for_update=True,
         deviations=("execute-rows-affected-unavailable", "explain-copy-incompatible"),
+    ),
+    DriverCase(
+        id="oracledb-sync",
+        fixture_name="contract_oracle_sync_driver",
+        adapter="oracledb",
+        dialect="oracle",
+        mode="sync",
+        marks=(ORACLE_XDIST_MARK,),
+        table=ORACLE_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_execute_many=True,
+        supports_for_update=True,
+        supports_returning=True,
+        deviations=("no-for-share",),
     ),
 )
 
@@ -357,6 +373,20 @@ ASYNC_DRIVER_CASES = (
         supports_arrays=True,
         deviations=("cockroach-serializable-transactions",),
     ),
+    DriverCase(
+        id="oracledb-async",
+        fixture_name="contract_oracle_async_driver",
+        adapter="oracledb",
+        dialect="oracle",
+        mode="async",
+        marks=(ORACLE_XDIST_MARK, pytest.mark.anyio),
+        table=ORACLE_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_execute_many=True,
+        supports_for_update=True,
+        supports_returning=True,
+        deviations=("no-for-share",),
+    ),
 )
 
 DEFERRED_DRIVER_CASES = (
@@ -386,24 +416,6 @@ DEFERRED_DRIVER_CASES = (
         "sync",
         integration_status="deferred",
         reason="No active integration fixture exists for mssql_python.",
-    ),
-    DriverCase(
-        "oracledb-sync",
-        "",
-        "oracledb",
-        "oracle",
-        "sync",
-        integration_status="deferred",
-        reason="Oracle service-backed contract fixture is not wired into the C5 harness yet.",
-    ),
-    DriverCase(
-        "oracledb-async",
-        "",
-        "oracledb",
-        "oracle",
-        "async",
-        integration_status="deferred",
-        reason="Oracle service-backed contract fixture is not wired into the C5 harness yet.",
     ),
     DriverCase(
         "spanner-sync",

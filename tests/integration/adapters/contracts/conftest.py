@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from pytest_databases.docker.cockroachdb import CockroachDBService
 from pytest_databases.docker.mysql import MySQLService
+from pytest_databases.docker.oracle import OracleService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
@@ -43,6 +44,13 @@ from sqlspec.adapters.mysqlconnector import (
 )
 from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore, MysqlConnectorSyncADKStore
 from sqlspec.adapters.mysqlconnector.litestar.store import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
+from sqlspec.adapters.oracledb import (
+    OracleAsyncConfig,
+    OracleAsyncDriver,
+    OraclePoolParams,
+    OracleSyncConfig,
+    OracleSyncDriver,
+)
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
@@ -77,6 +85,7 @@ from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
+    ORACLE_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
     ContractTable,
 )
@@ -203,6 +212,46 @@ def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generato
             yield driver
     finally:
         config.close_pool()
+
+
+def _oracle_pool_params(oracle_service: OracleService) -> OraclePoolParams:
+    return OraclePoolParams(
+        host=oracle_service.host,
+        port=oracle_service.port,
+        service_name=oracle_service.service_name,
+        user=oracle_service.user,
+        password=oracle_service.password,
+        min=1,
+        max=5,
+    )
+
+
+@pytest.fixture
+def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator[OracleSyncDriver, None, None]:
+    """Provide a fresh Oracle sync driver for contract tests."""
+    config = OracleSyncConfig(connection_config=_oracle_pool_params(oracle_23ai_service))
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script("DROP TABLE IF EXISTS contract_items")
+            driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
+            driver.commit()
+            yield driver
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+async def contract_oracle_async_driver(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncDriver, None]":
+    """Provide a fresh Oracle async driver for contract tests."""
+    config = OracleAsyncConfig(connection_config=_oracle_pool_params(oracle_23ai_service))
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+            await driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
+            await driver.commit()
+            yield driver
+    finally:
+        await config.close_pool()
 
 
 @pytest.fixture

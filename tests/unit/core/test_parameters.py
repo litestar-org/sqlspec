@@ -2418,7 +2418,7 @@ def test_build_conversion_plan_called_once_in_requires_mapping_branch() -> None:
         "SELECT * FROM t WHERE id = $1 AND name = $2", {"id": 42, "name": "bob"}, config
     )
     assert converter.build_conversion_plan_calls == 1
-    assert result.parameters == {"1": 42, "2": "bob"}
+    assert result.parameters == {"param_0": 42, "param_1": "bob"}
 
 
 @pytest.mark.skipif(

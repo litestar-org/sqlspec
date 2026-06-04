@@ -205,12 +205,14 @@ def assert_sync_for_update_contract(driver: object, case: DriverCase) -> None:
 
     sync_driver.execute(table.insert_qmark_sql, _FOR_UPDATE_LOCK_ROW)
     sync_driver.commit()
+    builders = [
+        sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
+        sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
+    ]
+    if "no-for-share" not in case.deviations:
+        builders.append(sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share())
     try:
-        for builder in (
-            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
-            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
-            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share(),
-        ):
+        for builder in builders:
             sync_driver.begin()
             locked = sync_driver.select_one(builder)
             assert locked["name"] == "lock-row"
@@ -232,12 +234,14 @@ async def assert_async_for_update_contract(driver: object, case: DriverCase) -> 
 
     await async_driver.execute(table.insert_qmark_sql, _FOR_UPDATE_LOCK_ROW)
     await async_driver.commit()
+    builders = [
+        sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
+        sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
+    ]
+    if "no-for-share" not in case.deviations:
+        builders.append(sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share())
     try:
-        for builder in (
-            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
-            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
-            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share(),
-        ):
+        for builder in builders:
             await async_driver.begin()
             locked = await async_driver.select_one(builder)
             assert locked["name"] == "lock-row"
