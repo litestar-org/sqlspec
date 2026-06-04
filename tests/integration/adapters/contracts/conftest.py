@@ -1,7 +1,8 @@
 """Fixtures for shared adapter contract tests."""
 
 import contextlib
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -38,6 +39,12 @@ from tests.integration.adapters.contracts._cases import (
     SYNC_DRIVER_PARAMS,
     DriverCase,
     DriverCaseContext,
+)
+from tests.integration.adapters.contracts._events_cases import (
+    ASYNC_EVENTS_PARAMS,
+    SYNC_EVENTS_PARAMS,
+    EventsCase,
+    EventsCaseContext,
 )
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
@@ -437,6 +444,185 @@ async def contract_cockroach_psycopg_async_driver(
             await driver.commit()
     finally:
         await config.close_pool()
+
+
+def _events_migration_config(tmp_path: Path, suffix: str) -> dict[str, Any]:
+    migrations = tmp_path / f"migrations_{suffix}"
+    migrations.mkdir()
+    return {
+        "script_location": str(migrations),
+        "include_extensions": ["events"],
+        "version_table_name": f"ddl_migrations_{suffix}",
+    }
+
+
+@pytest.fixture
+def events_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build SQLite event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> SqliteConfig:
+        return SqliteConfig(
+            connection_config={"database": str(tmp_path / f"events_{suffix}.db")},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
+    """Build DuckDB event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> DuckDBConfig:
+        return DuckDBConfig(
+            connection_config={"database": str(tmp_path / f"events_{suffix}.duckdb")},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build aiosqlite event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> AiosqliteConfig:
+        return AiosqliteConfig(
+            connection_config={"database": str(tmp_path / f"events_{suffix}.db")},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+def _mysql_connection_config(mysql_service: MySQLService, *, database_key: str = "database") -> dict[str, Any]:
+    return {
+        "host": mysql_service.host,
+        "port": mysql_service.port,
+        "user": mysql_service.user,
+        "password": mysql_service.password,
+        database_key: mysql_service.db,
+        "autocommit": True,
+    }
+
+
+@pytest.fixture
+def events_config_pymysql(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+    """Build PyMySQL event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> PyMysqlConfig:
+        return PyMysqlConfig(
+            connection_config=_mysql_connection_config(mysql_service),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_asyncmy(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+    """Build AsyncMy event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> AsyncmyConfig:
+        return AsyncmyConfig(
+            connection_config=_mysql_connection_config(mysql_service),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_aiomysql(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+    """Build aiomysql event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> AiomysqlConfig:
+        return AiomysqlConfig(
+            connection_config=_mysql_connection_config(mysql_service, database_key="db"),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_mysqlconnector_async(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+    """Build mysql-connector async event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> MysqlConnectorAsyncConfig:
+        connection_config = _mysql_connection_config(mysql_service)
+        connection_config["use_pure"] = True
+        return MysqlConnectorAsyncConfig(
+            connection_config=connection_config,
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_psycopg_sync(postgres_service: PostgresService, tmp_path: Path) -> Callable[..., Any]:
+    """Build psycopg sync event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> PsycopgSyncConfig:
+        return PsycopgSyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_psycopg_async(postgres_service: PostgresService, tmp_path: Path) -> Callable[..., Any]:
+    """Build psycopg async event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> PsycopgAsyncConfig:
+        return PsycopgAsyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_psqlpy(postgres_service: PostgresService, tmp_path: Path) -> Callable[..., Any]:
+    """Build psqlpy event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> PsqlpyConfig:
+        return PsqlpyConfig(
+            connection_config={"dsn": _psqlpy_dsn(postgres_service)},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+def _resolve_events_case(request: pytest.FixtureRequest, case: EventsCase) -> EventsCaseContext:
+    return EventsCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
+
+
+@pytest.fixture(params=SYNC_EVENTS_PARAMS)
+def sync_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
+    """Resolve a sync event-channel contract case by factory fixture name."""
+    return _resolve_events_case(request, request.param)
+
+
+@pytest.fixture(params=ASYNC_EVENTS_PARAMS)
+def async_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
+    """Resolve an async event-channel contract case by factory fixture name."""
+    return _resolve_events_case(request, request.param)
 
 
 def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> DriverCaseContext:
