@@ -637,6 +637,84 @@ async def assert_async_storage_bridge_local_contract(driver: object, case: Drive
     assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
 
 
+def _storage_bridge_export_sql(table: ContractTable) -> str:
+    return f"SELECT name, value, note FROM {table.name} WHERE value >= ? ORDER BY value"
+
+
+def _storage_bridge_rustfs_names(case: DriverCase) -> "tuple[str, str, str, str]":
+    alias = f"storage_bridge_contract_{case.id.replace('-', '_')}"
+    prefix = f"contract-{case.id}"
+    destination = f"alias://{alias}/export.parquet"
+    object_name = f"{prefix}/export.parquet"
+    return alias, prefix, destination, object_name
+
+
+def assert_sync_storage_bridge_rustfs_contract(
+    driver: object, case: DriverCase, rustfs_service: Any, rustfs_bucket_name: str
+) -> None:
+    """Assert sync drivers round-trip a SELECT through RustFS object storage."""
+    if not case.supports_storage_bridge:
+        pytest.skip(f"{case.adapter} has no verified storage-bridge support")
+    from sqlspec.storage.registry import storage_registry
+    from tests.fixtures.rustfs import rustfs_object_size
+    from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
+
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    alias, prefix, destination, object_name = _storage_bridge_rustfs_names(case)
+
+    storage_registry.clear()
+    try:
+        register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
+        _seed_sync(sync_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table)
+
+        export_job = sync_driver.select_to_storage(
+            _storage_bridge_export_sql(table), destination, 1, format_hint="parquet"
+        )
+        assert export_job.telemetry["rows_processed"] == 2
+
+        load_job = sync_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
+        assert load_job.telemetry["rows_processed"] == 2
+        assert_result_data(sync_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+
+        assert rustfs_object_size(rustfs_service, rustfs_bucket_name, object_name) > 0
+    finally:
+        storage_registry.clear()
+
+
+async def assert_async_storage_bridge_rustfs_contract(
+    driver: object, case: DriverCase, rustfs_service: Any, rustfs_bucket_name: str
+) -> None:
+    """Assert async drivers round-trip a SELECT through RustFS object storage."""
+    if not case.supports_storage_bridge:
+        pytest.skip(f"{case.adapter} has no verified storage-bridge support")
+    from sqlspec.storage.registry import storage_registry
+    from tests.fixtures.rustfs import rustfs_object_size
+    from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
+
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    alias, prefix, destination, object_name = _storage_bridge_rustfs_names(case)
+
+    storage_registry.clear()
+    try:
+        register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
+        await _seed_async(async_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table)
+
+        export_job = await async_driver.select_to_storage(
+            _storage_bridge_export_sql(table), destination, 1, format_hint="parquet"
+        )
+        assert export_job.telemetry["rows_processed"] == 2
+
+        load_job = await async_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
+        assert load_job.telemetry["rows_processed"] == 2
+        assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+
+        assert rustfs_object_size(rustfs_service, rustfs_bucket_name, object_name) > 0
+    finally:
+        storage_registry.clear()
+
+
 def assert_sync_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:
     """Assert sync drivers normalize one constraint violation to its sqlspec exception type."""
     sync_driver = cast("SyncContractDriver", driver)
