@@ -83,6 +83,24 @@ MYSQL_CONTRACT_TABLE = ContractTable(
     select_ordered_sql="SELECT name, value, note FROM contract_items ORDER BY value",
 )
 
+BIGQUERY_CONTRACT_TABLE = ContractTable(
+    name="contract_items",
+    create_sql="""
+        CREATE OR REPLACE TABLE contract_items (
+            name STRING NOT NULL,
+            value INT64 NOT NULL,
+            note STRING
+        )
+    """,
+    delete_sql="DELETE FROM contract_items WHERE TRUE",
+    insert_named_sql="INSERT INTO contract_items (name, value, note) VALUES (@name, @value, @note)",
+    insert_qmark_sql="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
+    select_by_name_named_sql="SELECT name, value, note FROM contract_items WHERE name = @name",
+    select_by_name_qmark_sql="SELECT name, value, note FROM contract_items WHERE name = ?",
+    select_count_sql="SELECT COUNT(*) AS count FROM contract_items",
+    select_ordered_sql="SELECT name, value, note FROM contract_items ORDER BY value",
+)
+
 ORACLE_CONTRACT_TABLE = ContractTable(
     name="contract_items",
     create_sql="""

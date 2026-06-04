@@ -86,9 +86,11 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     )
     for item in items:
         item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
-        if "tests/integration/adapters/bigquery" in item_path and not bigquery_enabled:
+        is_bigquery = "tests/integration/adapters/bigquery" in item_path or item.get_closest_marker("bigquery") is not None
+        is_spanner = "tests/integration/adapters/spanner" in item_path or item.get_closest_marker("spanner") is not None
+        if is_bigquery and not bigquery_enabled:
             item.add_marker(skip_bigquery)
-        if "tests/integration/adapters/spanner" in item_path and not spanner_enabled:
+        if is_spanner and not spanner_enabled:
             item.add_marker(skip_spanner)
 
     if not is_compiled():

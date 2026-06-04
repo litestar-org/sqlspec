@@ -29,6 +29,7 @@ class DriverCase:
     integration_status: Literal["active", "local-only", "unit-only", "deferred"] = "active"
     reason: str | None = None
     table: ContractTable = DEFAULT_CONTRACT_TABLE
+    table_fixture: str | None = None
     supports_arrow: bool = False
     supports_explain: bool = False
     supports_execute_many: bool = True
@@ -402,15 +403,6 @@ DEFERRED_DRIVER_CASES = (
         reason="No active integration fixture exists for arrow_odbc.",
     ),
     DriverCase(
-        "bigquery-sync",
-        "",
-        "bigquery",
-        "bigquery",
-        "sync",
-        integration_status="deferred",
-        reason="BigQuery remains optional and needs existing opt-in gate wiring.",
-    ),
-    DriverCase(
         "mssql-python-sync",
         "",
         "mssql_python",
@@ -418,6 +410,15 @@ DEFERRED_DRIVER_CASES = (
         "sync",
         integration_status="deferred",
         reason="No active integration fixture exists for mssql_python.",
+    ),
+    DriverCase(
+        "bigquery-sync",
+        "",
+        "bigquery",
+        "bigquery",
+        "sync",
+        integration_status="deferred",
+        reason="BigQuery emulator hangs on DDL (300s retry timeout) with function-scoped contract fixtures; needs session-scoped client reuse like the local bigquery conftest. Fixture + ContractTable ready in conftest/_schema.",
     ),
     DriverCase(
         "spanner-sync",

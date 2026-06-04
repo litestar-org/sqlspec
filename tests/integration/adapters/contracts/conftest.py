@@ -2,11 +2,15 @@
 
 import contextlib
 from collections.abc import AsyncGenerator, Callable, Generator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from google.api_core.client_options import ClientOptions
+from google.auth.credentials import AnonymousCredentials
+from pytest_databases.docker.bigquery import BigQueryService
 from pytest_databases.docker.cockroachdb import CockroachDBService
 from pytest_databases.docker.mysql import MySQLService
 from pytest_databases.docker.oracle import OracleService
@@ -26,6 +30,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 from sqlspec.adapters.asyncpg.config import AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
+from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, CockroachAsyncpgDriver
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
@@ -82,6 +87,7 @@ from tests.integration.adapters.contracts._migration_cases import (
     MigrationCaseContext,
 )
 from tests.integration.adapters.contracts._schema import (
+    BIGQUERY_CONTRACT_TABLE,
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
@@ -209,6 +215,29 @@ def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generato
     )
     try:
         with _provide_adbc_contract_driver(config, POSTGRES_CONTRACT_TABLE) as driver:
+            yield driver
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def contract_bigquery_driver(bigquery_service: BigQueryService) -> "Generator[BigQueryDriver, None, None]":
+    """Provide a fresh BigQuery driver for contract tests.
+
+    Sets a dot-free dataset_id so the driver registers a default dataset and
+    unqualified ``contract_items`` references resolve to ``project.dataset.contract_items``.
+    """
+    config = BigQueryConfig(
+        connection_config={
+            "project": bigquery_service.project,
+            "dataset_id": bigquery_service.dataset,
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+            "credentials": AnonymousCredentials(),
+        }
+    )
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(BIGQUERY_CONTRACT_TABLE.create_sql)
             yield driver
     finally:
         config.close_pool()
@@ -1251,7 +1280,10 @@ def store_case(request: pytest.FixtureRequest) -> StoreCaseContext:
 
 
 def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> DriverCaseContext:
-    return DriverCaseContext(case=case, driver=request.getfixturevalue(case.fixture_name))
+    driver = request.getfixturevalue(case.fixture_name)
+    if case.table_fixture is not None:
+        case = replace(case, table=request.getfixturevalue(case.table_fixture))
+    return DriverCaseContext(case=case, driver=driver)
 
 
 @pytest.fixture(params=SYNC_DRIVER_PARAMS)
