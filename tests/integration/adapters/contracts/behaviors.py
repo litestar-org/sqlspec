@@ -5,7 +5,7 @@ from typing import Any, Protocol, cast
 
 import pytest
 
-from sqlspec import SQL, SQLResult
+from sqlspec import SQL, SQLResult, sql
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -21,6 +21,8 @@ from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE,
 
 class SyncContractDriver(Protocol):
     """Sync driver surface used by adapter contract helpers."""
+
+    def begin(self) -> None: ...
 
     def commit(self) -> None: ...
 
@@ -51,6 +53,8 @@ class SyncContractDriver(Protocol):
 
 class AsyncContractDriver(Protocol):
     """Async driver surface used by adapter contract helpers."""
+
+    async def begin(self) -> None: ...
 
     async def commit(self) -> None: ...
 
@@ -183,6 +187,63 @@ async def assert_async_driver_basics_contract(driver: object, case: DriverCase) 
         assert_sql_result(delete_result, rows_affected=1)
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 0
+
+
+_FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)
+
+
+def assert_sync_for_update_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers honor FOR UPDATE, FOR UPDATE SKIP LOCKED, and FOR SHARE row locking."""
+    if not case.supports_for_update:
+        pytest.skip(f"{case.adapter} has no verified row-locking support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    sync_driver.execute(table.insert_qmark_sql, _FOR_UPDATE_LOCK_ROW)
+    sync_driver.commit()
+    try:
+        for builder in (
+            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
+            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
+            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share(),
+        ):
+            sync_driver.begin()
+            locked = sync_driver.select_one(builder)
+            assert locked["name"] == "lock-row"
+            assert locked["value"] == 100
+            sync_driver.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        sync_driver.execute(_delete_by_name_sql(table), ("lock-row",))
+        sync_driver.commit()
+
+
+async def assert_async_for_update_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers honor FOR UPDATE, FOR UPDATE SKIP LOCKED, and FOR SHARE row locking."""
+    if not case.supports_for_update:
+        pytest.skip(f"{case.adapter} has no verified row-locking support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    await async_driver.execute(table.insert_qmark_sql, _FOR_UPDATE_LOCK_ROW)
+    await async_driver.commit()
+    try:
+        for builder in (
+            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
+            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
+            sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share(),
+        ):
+            await async_driver.begin()
+            locked = await async_driver.select_one(builder)
+            assert locked["name"] == "lock-row"
+            assert locked["value"] == 100
+            await async_driver.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        await async_driver.execute(_delete_by_name_sql(table), ("lock-row",))
+        await async_driver.commit()
 
 
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
