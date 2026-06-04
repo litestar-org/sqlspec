@@ -8,7 +8,7 @@ from typing import Literal
 
 import pytest
 
-from sqlspec import SQL, sql
+from sqlspec import SQL, Select, sql
 from sqlspec.builder import Explain
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -92,15 +92,8 @@ def _sql_object_statement() -> SQL:
     return SQL("SELECT name, value FROM contract_items WHERE value >= :minimum ORDER BY value", minimum=20)
 
 
-def _builder_statement() -> SQL:
-    return (
-        sql
-        .select("name", "value")
-        .from_("contract_items")
-        .where("value >= :minimum", minimum=20)
-        .order_by("value")
-        .to_statement()
-    )
+def _builder_statement() -> Select:
+    return sql.select("name", "value").from_("contract_items").where("value >= :minimum", minimum=20).order_by("value")
 
 
 def _loader_statement() -> SQL:
