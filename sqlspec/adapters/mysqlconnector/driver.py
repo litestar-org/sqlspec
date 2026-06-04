@@ -114,7 +114,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-        if statement.returns_rows():
+        if statement.returns_rows() or getattr(cursor, "with_rows", False):
             fetched_data = cursor.fetchall()
             description = cursor.description or None
             column_names = resolve_column_names(description)
@@ -343,7 +343,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-        if statement.returns_rows():
+        if statement.returns_rows() or getattr(cursor, "with_rows", False):
             fetched_data = await cursor.fetchall()
             description = cursor.description or None
             column_names = resolve_column_names(description)
