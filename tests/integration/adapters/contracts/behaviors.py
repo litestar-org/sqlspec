@@ -708,6 +708,83 @@ async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
     assert empty.rows_affected == 0
 
 
+_ARROW_LARGE_ROW_COUNT = 1000
+
+
+def assert_sync_arrow_extras_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync Arrow output preserves NULLs and scales to a large result set."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    import pyarrow as pa
+
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    _seed_sync(sync_driver, (ContractRow("a", 1, None), ContractRow("b", 2, "noted")), table)
+    null_result = sync_driver.select_to_arrow(table.select_ordered_sql)
+    assert isinstance(null_result.data, pa.Table)
+    assert null_result.data.column("note").to_pylist() == [None, "noted"]
+
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    _seed_sync(sync_driver, tuple(ContractRow(f"n{i}", i) for i in range(1, _ARROW_LARGE_ROW_COUNT + 1)), table)
+    large_result = sync_driver.select_to_arrow(table.select_ordered_sql)
+    assert large_result.rows_affected == _ARROW_LARGE_ROW_COUNT
+    assert sum(large_result.data.column("value").to_pylist()) == sum(range(1, _ARROW_LARGE_ROW_COUNT + 1))
+
+
+async def assert_async_arrow_extras_contract(driver: object, case: DriverCase) -> None:
+    """Assert async Arrow output preserves NULLs and scales to a large result set."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    import pyarrow as pa
+
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    await _seed_async(async_driver, (ContractRow("a", 1, None), ContractRow("b", 2, "noted")), table)
+    null_result = await async_driver.select_to_arrow(table.select_ordered_sql)
+    assert isinstance(null_result.data, pa.Table)
+    assert null_result.data.column("note").to_pylist() == [None, "noted"]
+
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    await _seed_async(async_driver, tuple(ContractRow(f"n{i}", i) for i in range(1, _ARROW_LARGE_ROW_COUNT + 1)), table)
+    large_result = await async_driver.select_to_arrow(table.select_ordered_sql)
+    assert large_result.rows_affected == _ARROW_LARGE_ROW_COUNT
+    assert sum(large_result.data.column("value").to_pylist()) == sum(range(1, _ARROW_LARGE_ROW_COUNT + 1))
+
+
+def assert_sync_arrow_polars_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync Arrow results convert to a Polars DataFrame."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    pytest.importorskip("polars")
+
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+
+    frame = sync_driver.select_to_arrow(table.select_ordered_sql).to_polars()
+    assert len(frame) == 2
+    assert frame["name"].to_list() == ["a", "b"]
+
+
+async def assert_async_arrow_polars_contract(driver: object, case: DriverCase) -> None:
+    """Assert async Arrow results convert to a Polars DataFrame."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    pytest.importorskip("polars")
+
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+
+    frame = (await async_driver.select_to_arrow(table.select_ordered_sql)).to_polars()
+    assert len(frame) == 2
+    assert frame["name"].to_list() == ["a", "b"]
+
+
 _STORAGE_BRIDGE_EXPECTED = (
     {"name": "alpha", "value": 1, "note": "first"},
     {"name": "beta", "value": 2, "note": "second"},
