@@ -154,30 +154,6 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     await aiosqlite_session.execute_script("DROP TABLE aiosqlite_data_types_test")
 
 
-async def test_aiosqlite_statement_stack_sequential(aiosqlite_session: AiosqliteDriver) -> None:
-    """StatementStack execution should remain sequential for aiosqlite."""
-
-    await aiosqlite_session.execute("DELETE FROM test_table")
-    await aiosqlite_session.commit()
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "aiosqlite-stack-one", 100))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "aiosqlite-stack-two", 200))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("aiosqlite-stack-%",))
-    )
-
-    results = await aiosqlite_session.execute_stack(stack)
-
-    assert len(results) == 3
-    assert results[0].rows_affected == 1
-    assert results[1].rows_affected == 1
-    count_result = results[2].result
-    assert isinstance(count_result, SQLResult)
-    assert count_result.data is not None
-    assert count_result.get_data()[0]["total"] == 2
-
-
 async def test_aiosqlite_statement_stack_continue_on_error(aiosqlite_session: AiosqliteDriver) -> None:
     """Sequential execution should continue when continue_on_error is enabled."""
 

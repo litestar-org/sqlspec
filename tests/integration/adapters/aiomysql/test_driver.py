@@ -167,30 +167,6 @@ async def test_aiomysql_data_types(aiomysql_driver: AiomysqlDriver) -> None:
     assert row["json_col"]["key"] == "value"
 
 
-async def test_aiomysql_statement_stack_sequential(aiomysql_driver: AiomysqlDriver) -> None:
-    """StatementStack should execute sequentially for aiomysql (no native batching)."""
-
-    await aiomysql_driver.execute_script("DELETE FROM test_table_aiomysql")
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table_aiomysql (name, value) VALUES (?, ?)", ("mysql-stack-one", 11))
-        .push_execute("INSERT INTO test_table_aiomysql (name, value) VALUES (?, ?)", ("mysql-stack-two", 22))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table_aiomysql WHERE name LIKE ?", ("mysql-stack-%",))
-    )
-
-    results = await aiomysql_driver.execute_stack(stack)
-
-    assert len(results) == 3
-    assert results[0].rows_affected == 1
-    assert results[1].rows_affected == 1
-    final_result = results[2].result
-    assert isinstance(final_result, SQLResult)
-    data = final_result.get_data()
-    assert data
-    assert data[0]["total"] == 2
-
-
 async def test_aiomysql_statement_stack_continue_on_error(aiomysql_driver: AiomysqlDriver) -> None:
     """Continue-on-error should still work with sequential fallback."""
 

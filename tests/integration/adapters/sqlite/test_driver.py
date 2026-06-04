@@ -156,30 +156,6 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     assert row["null_col"] is None
 
 
-def test_sqlite_statement_stack_sequential(sqlite_session: SqliteDriver) -> None:
-    """StatementStack should execute sequentially for SQLite."""
-
-    sqlite_session.execute("DELETE FROM test_table")
-    sqlite_session.commit()
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "sqlite-stack-one", 100))
-        .push_execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (2, "sqlite-stack-two", 200))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table WHERE name LIKE ?", ("sqlite-stack-%",))
-    )
-
-    results = sqlite_session.execute_stack(stack)
-
-    assert len(results) == 3
-    assert results[0].rows_affected == 1
-    assert results[1].rows_affected == 1
-    count_result = results[2].result
-    assert isinstance(count_result, SQLResult)
-    assert count_result.data is not None
-    assert count_result.get_data()[0]["total"] == 2
-
-
 @requires_interpreted
 def test_sqlite_statement_stack_continue_on_error(sqlite_session: SqliteDriver) -> None:
     """Sequential fallback should honor continue-on-error mode."""

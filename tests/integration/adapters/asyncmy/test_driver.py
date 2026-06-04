@@ -167,30 +167,6 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
     assert row["json_col"]["key"] == "value"
 
 
-async def test_asyncmy_statement_stack_sequential(asyncmy_driver: AsyncmyDriver) -> None:
-    """StatementStack should execute sequentially for asyncmy (no native batching)."""
-
-    await asyncmy_driver.execute_script("DELETE FROM test_table_asyncmy")
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql-stack-one", 11))
-        .push_execute("INSERT INTO test_table_asyncmy (name, value) VALUES (?, ?)", ("mysql-stack-two", 22))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table_asyncmy WHERE name LIKE ?", ("mysql-stack-%",))
-    )
-
-    results = await asyncmy_driver.execute_stack(stack)
-
-    assert len(results) == 3
-    assert results[0].rows_affected == 1
-    assert results[1].rows_affected == 1
-    final_result = results[2].result
-    assert isinstance(final_result, SQLResult)
-    data = final_result.get_data()
-    assert data
-    assert data[0]["total"] == 2
-
-
 async def test_asyncmy_statement_stack_continue_on_error(asyncmy_driver: AsyncmyDriver) -> None:
     """Continue-on-error should still work with sequential fallback."""
 

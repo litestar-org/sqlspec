@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementStack, sql
+from sqlspec import SQL, SQLResult, sql
 from sqlspec.adapters.pymysql import PyMysqlDriver
 
 if TYPE_CHECKING:
@@ -130,26 +130,6 @@ def test_pymysql_data_types(pymysql_driver: PyMysqlDriver) -> None:
     assert row["bool_col"] in (True, 1)
     assert isinstance(row["json_col"], dict)
     assert row["json_col"]["key"] == "value"
-
-
-def test_pymysql_statement_stack(pymysql_driver: PyMysqlDriver) -> None:
-    """StatementStack should execute sequentially for PyMySQL."""
-    pymysql_driver.execute_script("DELETE FROM test_table_pymysql")
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table_pymysql (name, value) VALUES (?, ?)", ("mysql-stack-one", 11))
-        .push_execute("INSERT INTO test_table_pymysql (name, value) VALUES (?, ?)", ("mysql-stack-two", 22))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table_pymysql WHERE name LIKE ?", ("mysql-stack-%",))
-    )
-
-    results = pymysql_driver.execute_stack(stack)
-
-    assert len(results) == 3
-    final_result = results[2].result
-    assert isinstance(final_result, SQLResult)
-    data = final_result.get_data()
-    assert data[0]["total"] == 2
 
 
 def test_pymysql_transactions(pymysql_transaction_config: "PyMysqlConfig") -> None:

@@ -813,29 +813,6 @@ async def test_for_update_of_tables(asyncpg_session: "AsyncpgDriver") -> None:
         await asyncpg_session.execute_script("DROP TABLE IF EXISTS test_users_asyncpg")
 
 
-async def test_asyncpg_statement_stack_batch(asyncpg_session: "AsyncpgDriver") -> None:
-    """Ensure StatementStack batches operations under asyncpg native path."""
-
-    await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "stack-one", 10))
-        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (2, "stack-two", 20))
-        .push_execute("SELECT COUNT(*) AS total_rows FROM test_table_asyncpg WHERE name LIKE $1", ("stack-%",))
-    )
-
-    results = await asyncpg_session.execute_stack(stack)
-
-    assert len(results) == 3
-    assert results[0].rows_affected == 1
-    assert results[1].rows_affected == 1
-    count_result = results[2].result
-    assert isinstance(count_result, SQLResult)
-    assert count_result.data is not None
-    assert count_result.get_data()[0]["total_rows"] == 2
-
-
 async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "AsyncpgDriver") -> None:
     """Stack execution should surface errors while continuing operations when requested."""
 

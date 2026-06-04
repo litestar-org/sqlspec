@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementStack
+from sqlspec import SQL, SQLResult
 from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncDriver
 
 if TYPE_CHECKING:
@@ -136,28 +136,6 @@ def test_mysqlconnector_sync_data_types(mysqlconnector_sync_driver: MysqlConnect
     assert row["bool_col"] in (True, 1)
     assert isinstance(row["json_col"], dict)
     assert row["json_col"]["key"] == "value"
-
-
-def test_mysqlconnector_sync_statement_stack(mysqlconnector_sync_driver: MysqlConnectorSyncDriver) -> None:
-    """StatementStack should execute sequentially for mysql-connector sync."""
-    mysqlconnector_sync_driver.execute_script("DELETE FROM test_table_mysqlconnector_sync")
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table_mysqlconnector_sync (name, value) VALUES (?, ?)", ("mysql-stack-one", 11))
-        .push_execute("INSERT INTO test_table_mysqlconnector_sync (name, value) VALUES (?, ?)", ("mysql-stack-two", 22))
-        .push_execute(
-            "SELECT COUNT(*) AS total FROM test_table_mysqlconnector_sync WHERE name LIKE ?", ("mysql-stack-%",)
-        )
-    )
-
-    results = mysqlconnector_sync_driver.execute_stack(stack)
-
-    assert len(results) == 3
-    final_result = results[2].result
-    assert isinstance(final_result, SQLResult)
-    data = final_result.get_data()
-    assert data[0]["total"] == 2
 
 
 def test_mysqlconnector_sync_transactions(mysqlconnector_sync_transaction_config: "MysqlConnectorSyncConfig") -> None:

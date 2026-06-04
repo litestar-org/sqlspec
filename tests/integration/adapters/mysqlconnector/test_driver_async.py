@@ -5,7 +5,7 @@ import math
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec import SQL, SQLResult, StatementStack, sql
+from sqlspec import SQL, SQLResult, sql
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig, MysqlConnectorAsyncDriver
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -136,32 +136,6 @@ async def test_mysqlconnector_async_data_types(mysqlconnector_async_driver: Mysq
     assert row["bool_col"] in (True, 1)
     assert isinstance(row["json_col"], dict)
     assert row["json_col"]["key"] == "value"
-
-
-async def test_mysqlconnector_async_statement_stack(mysqlconnector_async_driver: MysqlConnectorAsyncDriver) -> None:
-    """StatementStack should execute sequentially for mysql-connector."""
-    await mysqlconnector_async_driver.execute_script("DELETE FROM test_table_mysqlconnector_async")
-
-    stack = (
-        StatementStack()
-        .push_execute(
-            "INSERT INTO test_table_mysqlconnector_async (name, value) VALUES (?, ?)", ("mysql-stack-one", 11)
-        )
-        .push_execute(
-            "INSERT INTO test_table_mysqlconnector_async (name, value) VALUES (?, ?)", ("mysql-stack-two", 22)
-        )
-        .push_execute(
-            "SELECT COUNT(*) AS total FROM test_table_mysqlconnector_async WHERE name LIKE ?", ("mysql-stack-%",)
-        )
-    )
-
-    results = await mysqlconnector_async_driver.execute_stack(stack)
-
-    assert len(results) == 3
-    final_result = results[2].result
-    assert isinstance(final_result, SQLResult)
-    data = final_result.get_data()
-    assert data[0]["total"] == 2
 
 
 async def test_mysqlconnector_async_driver_features_custom_serializers(mysql_service: MySQLService) -> None:

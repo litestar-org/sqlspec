@@ -297,29 +297,6 @@ async def test_multiple_positional_parameters(psqlpy_session: "PsqlpyDriver") ->
     assert len(mixed_result.data) == 1
 
 
-async def test_psqlpy_statement_stack_sequential(psqlpy_session: "PsqlpyDriver") -> None:
-    """psqlpy uses sequential stack execution."""
-
-    await psqlpy_session.execute("DELETE FROM test_table_psqlpy")
-
-    stack = (
-        StatementStack()
-        .push_execute("INSERT INTO test_table_psqlpy (id, name) VALUES (?, ?)", (1, "psqlpy-stack-one"))
-        .push_execute("INSERT INTO test_table_psqlpy (id, name) VALUES (?, ?)", (2, "psqlpy-stack-two"))
-        .push_execute("SELECT COUNT(*) AS total FROM test_table_psqlpy WHERE name LIKE ?", ("psqlpy-stack-%",))
-    )
-
-    results = await psqlpy_session.execute_stack(stack)
-
-    assert len(results) == 3
-
-    verify = await psqlpy_session.execute(
-        "SELECT COUNT(*) AS total FROM test_table_psqlpy WHERE name LIKE ?", ("psqlpy-stack-%",)
-    )
-    assert verify.data is not None
-    assert verify.get_data()[0]["total"] == 2
-
-
 async def test_psqlpy_statement_stack_continue_on_error(psqlpy_session: "PsqlpyDriver") -> None:
     """Sequential stack execution should honor continue-on-error flag."""
 

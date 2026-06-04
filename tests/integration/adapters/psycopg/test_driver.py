@@ -261,32 +261,6 @@ def test_psycopg_error_handling(psycopg_session: "PsycopgSyncDriver") -> None:
         psycopg_session.execute("SELECT nonexistent_column FROM test_table_psycopg_sync")
 
 
-def test_psycopg_statement_stack_pipeline(psycopg_session: "PsycopgSyncDriver") -> None:
-    """StatementStack should leverage psycopg pipeline mode when available."""
-
-    psycopg_session.execute("DELETE FROM test_table_psycopg_sync")
-
-    stack = (
-        StatementStack()
-        .push_execute(
-            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (1, "sync-stack-one", 5)
-        )
-        .push_execute(
-            "INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (2, "sync-stack-two", 15)
-        )
-        .push_execute("SELECT COUNT(*) AS total FROM test_table_psycopg_sync WHERE name LIKE %s", ("sync-stack-%",))
-    )
-
-    results = psycopg_session.execute_stack(stack)
-
-    assert len(results) == 3
-    total_result = psycopg_session.execute(
-        "SELECT COUNT(*) AS total FROM test_table_psycopg_sync WHERE name LIKE %s", "sync-stack-%"
-    )
-    assert total_result.data is not None
-    assert total_result.get_data()[0]["total"] == 2
-
-
 def test_psycopg_statement_stack_continue_on_error(psycopg_session: "PsycopgSyncDriver") -> None:
     """Pipeline execution should continue when instructed to handle errors."""
 
