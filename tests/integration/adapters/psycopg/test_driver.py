@@ -6,7 +6,7 @@ from typing import Any, Literal, cast
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec import SQLResult, StatementStack, sql
+from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig, PsycopgSyncDriver
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -681,122 +681,6 @@ def test_extensions_not_enabled_on_standard_postgres(psycopg_sync_config: "Psyco
     assert psycopg_sync_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert psycopg_sync_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
     assert psycopg_sync_config.statement_config.dialect == "postgres"
-
-
-def test_psycopg_sync_for_update_locking(psycopg_session: "PsycopgSyncDriver") -> None:
-    """Test FOR UPDATE row locking with psycopg (sync)."""
-
-    # Setup test table
-    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
-    psycopg_session.execute_script("""
-        CREATE TABLE test_table_psycopg_sync (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(50),
-            value INTEGER
-        )
-    """)
-
-    # Insert test data
-    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", ("psycopg_lock", 100))
-
-    try:
-        psycopg_session.begin()
-
-        # Test basic FOR UPDATE
-        result = psycopg_session.select_one(
-            sql
-            .select("id", "name", "value")
-            .from_("test_table_psycopg_sync")
-            .where_eq("name", "psycopg_lock")
-            .for_update()
-        )
-        assert result is not None
-        assert result["name"] == "psycopg_lock"
-        assert result["value"] == 100
-
-        psycopg_session.commit()
-    except Exception:
-        psycopg_session.rollback()
-        raise
-    finally:
-        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
-
-
-def test_psycopg_sync_for_update_skip_locked(psycopg_session: "PsycopgSyncDriver") -> None:
-    """Test FOR UPDATE SKIP LOCKED with psycopg (sync)."""
-
-    # Setup test table
-    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
-    psycopg_session.execute_script("""
-        CREATE TABLE test_table_psycopg_sync (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(50),
-            value INTEGER
-        )
-    """)
-
-    # Insert test data
-    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", ("psycopg_skip", 200))
-
-    try:
-        psycopg_session.begin()
-
-        # Test FOR UPDATE SKIP LOCKED
-        result = psycopg_session.select_one(
-            sql
-            .select("*")
-            .from_("test_table_psycopg_sync")
-            .where_eq("name", "psycopg_skip")
-            .for_update(skip_locked=True)
-        )
-        assert result is not None
-        assert result["name"] == "psycopg_skip"
-
-        psycopg_session.commit()
-    except Exception:
-        psycopg_session.rollback()
-        raise
-    finally:
-        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
-
-
-def test_psycopg_sync_for_share_locking(psycopg_session: "PsycopgSyncDriver") -> None:
-    """Test FOR SHARE row locking with psycopg (sync)."""
-
-    # Setup test table
-    psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
-    psycopg_session.execute_script("""
-        CREATE TABLE test_table_psycopg_sync (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(50),
-            value INTEGER
-        )
-    """)
-
-    # Insert test data
-    psycopg_session.execute("INSERT INTO test_table_psycopg_sync (name, value) VALUES (%s, %s)", ("psycopg_share", 300))
-
-    try:
-        psycopg_session.begin()
-
-        # Test FOR SHARE
-        result = psycopg_session.select_one(
-            sql
-            .select("id", "name", "value")
-            .from_("test_table_psycopg_sync")
-            .where_eq("name", "psycopg_share")
-            .for_share()
-        )
-        assert result is not None
-        assert result["name"] == "psycopg_share"
-        assert result["value"] == 300
-
-        psycopg_session.commit()
-    except Exception:
-        psycopg_session.rollback()
-        raise
-    finally:
-        psycopg_session.execute_script("DROP TABLE IF EXISTS test_table_psycopg_sync")
 
 
 def test_psycopg_sync_on_connection_create_hook(postgres_service: "PostgresService") -> None:

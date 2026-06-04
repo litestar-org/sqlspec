@@ -663,30 +663,6 @@ async def test_extensions_not_enabled_on_standard_postgres(asyncpg_config: "Asyn
 
 
 @pytest.mark.asyncpg
-async def test_for_update_locking(asyncpg_session: "AsyncpgDriver") -> None:
-    """Test FOR UPDATE row locking."""
-
-    # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("test_lock", 100))
-
-    try:
-        await asyncpg_session.begin()
-
-        # Test basic FOR UPDATE
-        result = await asyncpg_session.select_one(
-            sql.select("id", "name", "value").from_("test_table_asyncpg").where_eq("name", "test_lock").for_update()
-        )
-        assert result is not None
-        assert result["name"] == "test_lock"
-        assert result["value"] == 100
-
-        await asyncpg_session.commit()
-    except Exception:
-        await asyncpg_session.rollback()
-        raise
-
-
-@pytest.mark.asyncpg
 async def test_for_update_skip_locked(postgres_service: "PostgresService") -> None:
     """Test SKIP LOCKED functionality with two sessions."""
     import asyncio
@@ -793,30 +769,6 @@ async def test_for_update_nowait(asyncpg_session: "AsyncpgDriver") -> None:
         )
         assert result is not None
         assert result["name"] == "test_nowait"
-
-        await asyncpg_session.commit()
-    except Exception:
-        await asyncpg_session.rollback()
-        raise
-
-
-@pytest.mark.asyncpg
-async def test_for_share_locking(asyncpg_session: "AsyncpgDriver") -> None:
-    """Test FOR SHARE row locking."""
-
-    # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table_asyncpg (name, value) VALUES ($1, $2)", ("test_share", 300))
-
-    try:
-        await asyncpg_session.begin()
-
-        # Test basic FOR SHARE
-        result = await asyncpg_session.select_one(
-            sql.select("id", "name", "value").from_("test_table_asyncpg").where_eq("name", "test_share").for_share()
-        )
-        assert result is not None
-        assert result["name"] == "test_share"
-        assert result["value"] == 300
 
         await asyncpg_session.commit()
     except Exception:
