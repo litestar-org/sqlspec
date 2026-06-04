@@ -167,7 +167,8 @@ SYNC_DRIVER_CASES = (
         mode="sync",
         marks=(ADBC_MARK,),
         supports_arrow=True,
-        supports_execute_many=False,
+        supports_explain=True,
+        supports_storage_bridge=True,
         supports_exception_translation=False,
         deviations=("execute-rows-affected-unavailable",),
     ),
@@ -180,7 +181,8 @@ SYNC_DRIVER_CASES = (
         marks=(ADBC_MARK,),
         table=DUCKDB_CONTRACT_TABLE,
         supports_arrow=True,
-        supports_execute_many=False,
+        supports_explain=True,
+        supports_storage_bridge=True,
         deviations=("execute-rows-affected-unavailable",),
     ),
     DriverCase(
@@ -192,8 +194,9 @@ SYNC_DRIVER_CASES = (
         marks=(ADBC_MARK, POSTGRES_XDIST_MARK),
         table=POSTGRES_CONTRACT_TABLE,
         supports_arrow=True,
-        supports_execute_many=True,
-        deviations=("execute-rows-affected-unavailable",),
+        supports_storage_bridge=True,
+        supports_for_update=True,
+        deviations=("execute-rows-affected-unavailable", "explain-copy-incompatible"),
     ),
 )
 
