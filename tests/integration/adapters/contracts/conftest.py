@@ -12,12 +12,16 @@ from pytest_databases.docker.mysql import MySQLService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
+from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
+from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 from sqlspec.adapters.asyncpg.config import AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, CockroachAsyncpgDriver
@@ -28,6 +32,7 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncDriver,
 )
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
 from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConfig,
@@ -35,15 +40,19 @@ from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncDriver,
 )
+from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore, MysqlConnectorSyncADKStore
 from sqlspec.adapters.mysqlconnector.litestar.store import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver, PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore, PsycopgSyncStore
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver
 from sqlspec.adapters.pymysql.litestar.store import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+from tests.integration.adapters.contracts._adk_cases import ADK_STORE_PARAMS, AdkStoreCase, AdkStoreCaseContext
 from tests.integration.adapters.contracts._cases import (
     ASYNC_DRIVER_PARAMS,
     DRIVER_PARAMS,
@@ -966,6 +975,155 @@ async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator
     with contextlib.suppress(Exception):
         await store.delete_all()
     config.close_pool()
+
+
+def _adk_extension_config(suffix: str) -> dict[str, Any]:
+    return {"adk": {"session_table": f"adk_s_{suffix}", "events_table": f"adk_e_{suffix}"}}
+
+
+@pytest.fixture
+def adk_store_sqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build a fresh SQLite ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = SqliteConfig(
+            connection_config={"database": str(tmp_path / f"adk_{suffix}.db")},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, SqliteADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build a fresh aiosqlite ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AiosqliteConfig(
+            connection_config={"database": str(tmp_path / f"adk_{suffix}.db")},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, AiosqliteADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_duckdb(tmp_path: Path) -> Callable[..., Any]:
+    """Build a fresh DuckDB ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = DuckDBConfig(
+            connection_config={"database": str(tmp_path / f"adk_{suffix}.duckdb")},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, DuckdbADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_aiomysql(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build a fresh aiomysql ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AiomysqlConfig(
+            connection_config=_mysql_connection_config(mysql_service, database_key="db"),
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, AiomysqlADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_asyncmy(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build a fresh asyncmy ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AsyncmyConfig(
+            connection_config=_mysql_connection_config(mysql_service), extension_config=_adk_extension_config(suffix)
+        )
+        return config, AsyncmyADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_mysqlconnector_async(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build a fresh mysql-connector async ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        connection_config = _mysql_connection_config(mysql_service)
+        connection_config["use_pure"] = True
+        config = MysqlConnectorAsyncConfig(
+            connection_config=connection_config, extension_config=_adk_extension_config(suffix)
+        )
+        return config, MysqlConnectorAsyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_mysqlconnector_sync(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build a fresh mysql-connector sync ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        connection_config = _mysql_connection_config(mysql_service)
+        connection_config["use_pure"] = True
+        config = MysqlConnectorSyncConfig(
+            connection_config=connection_config, extension_config=_adk_extension_config(suffix)
+        )
+        return config, MysqlConnectorSyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build a fresh asyncpg ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AsyncpgConfig(
+            connection_config=_postgres_connection_config(postgres_service),
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, AsyncpgADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build a fresh psqlpy ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = PsqlpyConfig(
+            connection_config={"dsn": _psqlpy_dsn(postgres_service)}, extension_config=_adk_extension_config(suffix)
+        )
+        return config, PsqlpyADKStore(config)
+
+    return make
+
+
+def _resolve_adk_store_case(request: pytest.FixtureRequest, case: AdkStoreCase) -> AdkStoreCaseContext:
+    return AdkStoreCaseContext(case=case, make_store=request.getfixturevalue(case.factory_fixture))
+
+
+@pytest.fixture(params=ADK_STORE_PARAMS)
+def adk_store_case(request: pytest.FixtureRequest) -> AdkStoreCaseContext:
+    """Resolve an ADK store contract case by factory fixture name."""
+    return _resolve_adk_store_case(request, request.param)
 
 
 def _resolve_store_case(request: pytest.FixtureRequest, case: StoreCase) -> StoreCaseContext:
