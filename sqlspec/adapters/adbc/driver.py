@@ -241,25 +241,14 @@ class AdbcDriver(SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin database transaction.
 
-        ADBC SQLite holds an implicit transaction after the first DML and
-        rejects an explicit ``BEGIN`` with "cannot start a transaction
-        within a transaction." On that dialect this is a no-op; the
-        implicit transaction is closed by ``commit()`` / ``rollback()``.
+        ADBC connections operate with autocommit disabled and manage the
+        active transaction internally, so no explicit statement is issued.
         """
-        if self._dialect_name == "sqlite":
-            return
-        try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("BEGIN")
-        except Exception as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
         """Commit database transaction."""
         try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("COMMIT")
+            self.connection.commit()
         except Exception as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -267,8 +256,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     def rollback(self) -> None:
         """Rollback database transaction."""
         try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("ROLLBACK")
+            self.connection.rollback()
         except Exception as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
