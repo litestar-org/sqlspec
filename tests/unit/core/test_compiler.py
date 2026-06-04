@@ -567,7 +567,7 @@ def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig")
     """AST transformers should not trigger a second parse."""
 
     def pass_through(
-        expression: exp.Expr, parameters: Any, _parameter_profile: "ParameterProfile"
+        expression: exp.Expr, parameters: Any, _parameter_profile: "ParameterProfile", _is_many: bool = False
     ) -> "tuple[exp.Expr, Any]":
         return expression, parameters
 
@@ -586,7 +586,7 @@ def test_ast_transformer_receives_parameter_profile(basic_statement_config: "Sta
     captured: dict[str, int] = {}
 
     def capture_profile(
-        expression: exp.Expr, parameters: Any, parameter_profile: "ParameterProfile"
+        expression: exp.Expr, parameters: Any, parameter_profile: "ParameterProfile", _is_many: bool = False
     ) -> "tuple[exp.Expr, Any]":
         captured["count"] = parameter_profile.total_count
         return expression, parameters

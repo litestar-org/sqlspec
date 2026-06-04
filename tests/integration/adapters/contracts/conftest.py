@@ -11,6 +11,7 @@ from pytest_databases.docker.cockroachdb import CockroachDBService
 from pytest_databases.docker.mysql import MySQLService
 from pytest_databases.docker.postgres import PostgresService
 
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
@@ -77,6 +78,7 @@ from tests.integration.adapters.contracts._schema import (
     DUCKDB_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
+    ContractTable,
 )
 from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
 
@@ -135,6 +137,69 @@ def contract_duckdb_driver() -> Generator[DuckDBDriver, None, None]:
             driver.execute_script("DROP TABLE IF EXISTS contract_items")
             driver.execute_script(DUCKDB_CONTRACT_TABLE.create_sql)
             driver.commit()
+            yield driver
+    finally:
+        config.close_pool()
+
+
+_ADBC_DRIVER_MISSING_MARKERS = (
+    "cannot open shared object file",
+    "No module named",
+    "Failed to import connect function",
+    "Could not configure connection",
+)
+
+
+@contextlib.contextmanager
+def _provide_adbc_contract_driver(config: AdbcConfig, table: ContractTable) -> Generator[AdbcDriver, None, None]:
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script("DROP TABLE IF EXISTS contract_items")
+            driver.execute_script(table.create_sql)
+            driver.commit()
+            yield driver
+    except Exception as exc:
+        if any(marker in str(exc) for marker in _ADBC_DRIVER_MISSING_MARKERS):
+            pytest.skip(f"ADBC driver not available: {exc}")
+        raise
+
+
+@pytest.fixture
+def contract_adbc_sqlite_driver() -> Generator[AdbcDriver, None, None]:
+    """Provide a fresh ADBC SQLite driver for contract tests."""
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
+    try:
+        with _provide_adbc_contract_driver(config, DEFAULT_CONTRACT_TABLE) as driver:
+            yield driver
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def contract_adbc_duckdb_driver() -> Generator[AdbcDriver, None, None]:
+    """Provide a fresh ADBC DuckDB driver for contract tests."""
+    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
+    try:
+        with _provide_adbc_contract_driver(config, DUCKDB_CONTRACT_TABLE) as driver:
+            yield driver
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+    """Provide a fresh ADBC PostgreSQL driver for contract tests."""
+    config = AdbcConfig(
+        connection_config={
+            "uri": (
+                f"postgresql://{postgres_service.user}:{postgres_service.password}"
+                f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+            ),
+            "driver_name": "adbc_driver_postgresql",
+        }
+    )
+    try:
+        with _provide_adbc_contract_driver(config, POSTGRES_CONTRACT_TABLE) as driver:
             yield driver
     finally:
         config.close_pool()

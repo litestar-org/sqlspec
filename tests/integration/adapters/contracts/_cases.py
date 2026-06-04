@@ -43,6 +43,7 @@ class DriverCase:
     supports_json: bool = False
     supports_arrays: bool = False
     supports_vector: bool = False
+    supports_exception_translation: bool = True
     deviations: tuple[str, ...] = ()
 
 
@@ -59,6 +60,7 @@ DUCKDB_XDIST_MARK = pytest.mark.xdist_group("duckdb")
 MYSQL_XDIST_MARK = pytest.mark.xdist_group("mysql")
 POSTGRES_XDIST_MARK = pytest.mark.xdist_group("postgres")
 COCKROACH_XDIST_MARK = pytest.mark.xdist_group("cockroachdb")
+ADBC_MARK = pytest.mark.adbc
 
 SYNC_DRIVER_CASES = (
     DriverCase(
@@ -156,6 +158,42 @@ SYNC_DRIVER_CASES = (
         supports_json=True,
         supports_arrays=True,
         deviations=("cockroach-serializable-transactions",),
+    ),
+    DriverCase(
+        id="adbc-sqlite-sync",
+        fixture_name="contract_adbc_sqlite_driver",
+        adapter="adbc",
+        dialect="sqlite",
+        mode="sync",
+        marks=(ADBC_MARK,),
+        supports_arrow=True,
+        supports_execute_many=False,
+        supports_exception_translation=False,
+        deviations=("execute-rows-affected-unavailable",),
+    ),
+    DriverCase(
+        id="adbc-duckdb-sync",
+        fixture_name="contract_adbc_duckdb_driver",
+        adapter="adbc",
+        dialect="duckdb",
+        mode="sync",
+        marks=(ADBC_MARK,),
+        table=DUCKDB_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_execute_many=False,
+        deviations=("execute-rows-affected-unavailable",),
+    ),
+    DriverCase(
+        id="adbc-postgres-sync",
+        fixture_name="contract_adbc_postgres_driver",
+        adapter="adbc",
+        dialect="postgres",
+        mode="sync",
+        marks=(ADBC_MARK, POSTGRES_XDIST_MARK),
+        table=POSTGRES_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_execute_many=True,
+        deviations=("execute-rows-affected-unavailable",),
     ),
 )
 
@@ -319,33 +357,6 @@ ASYNC_DRIVER_CASES = (
 )
 
 DEFERRED_DRIVER_CASES = (
-    DriverCase(
-        "adbc-postgres-sync",
-        "",
-        "adbc",
-        "postgres",
-        "sync",
-        integration_status="deferred",
-        reason="ADBC contract fixtures require backend-specific setup.",
-    ),
-    DriverCase(
-        "adbc-sqlite-sync",
-        "",
-        "adbc",
-        "sqlite",
-        "sync",
-        integration_status="deferred",
-        reason="ADBC SQLite contract fixture not wired into the C5 harness yet.",
-    ),
-    DriverCase(
-        "adbc-duckdb-sync",
-        "",
-        "adbc",
-        "duckdb",
-        "sync",
-        integration_status="deferred",
-        reason="ADBC DuckDB contract fixture not wired into the C5 harness yet.",
-    ),
     DriverCase(
         "arrow-odbc-sync",
         "",

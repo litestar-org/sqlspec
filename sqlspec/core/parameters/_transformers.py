@@ -40,10 +40,14 @@ class _NullPruningTransform:
         self._dialect = dialect
 
     def __call__(
-        self, expression: Any, parameters: "ParameterPayload", parameter_profile: "ParameterProfile"
+        self,
+        expression: Any,
+        parameters: "ParameterPayload",
+        parameter_profile: "ParameterProfile",
+        is_many: bool = False,
     ) -> "tuple[Any, ConvertedParameters]":
         return replace_null_parameters_with_literals(
-            expression, parameters, dialect=self._dialect, parameter_profile=parameter_profile
+            expression, parameters, dialect=self._dialect, parameter_profile=parameter_profile, is_many=is_many
         )
 
 
@@ -55,7 +59,11 @@ class _LiteralInliningTransform:
         self._json_serializer = json_serializer
 
     def __call__(
-        self, expression: Any, parameters: "ParameterPayload", _parameter_profile: "ParameterProfile"
+        self,
+        expression: Any,
+        parameters: "ParameterPayload",
+        _parameter_profile: "ParameterProfile",
+        _is_many: bool = False,
     ) -> "tuple[Any, object]":
         literal_expression = replace_placeholders_with_literals(
             expression, parameters, json_serializer=self._json_serializer
@@ -191,6 +199,7 @@ def replace_null_parameters_with_literals(
     *,
     dialect: str = "postgres",
     parameter_profile: "ParameterProfile | None" = None,
+    is_many: bool = False,
 ) -> "tuple[Any, ConvertedParameters]":
     """Rewrite placeholders representing ``NULL`` values and prune parameters.
 
@@ -199,6 +208,7 @@ def replace_null_parameters_with_literals(
         parameters: Parameter payload provided by the caller.
         dialect: SQLGlot dialect for serializing the expression.
         parameter_profile: Parameter profile to reuse for validation.
+        is_many: Whether the payload is a batch of parameter sets.
 
     Returns:
         Tuple containing the transformed expression and updated parameters.
@@ -212,7 +222,7 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
         return expression, None
 
-    if looks_like_execute_many(parameters):
+    if is_many or looks_like_execute_many(parameters):
         # For execute_many, convert to concrete type
         if isinstance(parameters, dict):
             return expression, parameters

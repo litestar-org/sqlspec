@@ -600,6 +600,7 @@ class SQLProcessor:
         parse_cache_key: "Any | None",
         parse_cache_entry: "ParseCacheEntry | None",
         expression_override: "exp.Expr | None",
+        is_many: bool = False,
     ) -> "tuple[exp.Expr | None, Any, bool, OperationType, OperationProfile]":
         """Apply AST transformers and update metadata.
 
@@ -612,6 +613,8 @@ class SQLProcessor:
             parse_cache_key: Parse cache key when used.
             parse_cache_entry: Cached parse entry when available.
             expression_override: Expression override reference.
+            is_many: Whether the statement runs as execute_many; forwarded to the
+                parameter AST transformer so it treats batched payloads correctly.
 
         Returns:
             Updated expression metadata and transformation state.
@@ -639,7 +642,7 @@ class SQLProcessor:
                 expression, parameters = transformer(expression, parameters)
             ast_was_transformed = True
         if ast_transformer:
-            expression, parameters = ast_transformer(expression, parameters, parameter_profile)
+            expression, parameters = ast_transformer(expression, parameters, parameter_profile, is_many)
             ast_was_transformed = True
         if ast_was_transformed:
             if expression is None:
@@ -659,6 +662,7 @@ class SQLProcessor:
         is_many: bool,
         dialect_str: "str | None",
         ast_was_transformed: bool,
+        original_input_named_parameters: "tuple[str, ...]" = (),
     ) -> "tuple[str, Any, ParameterProfile, tuple[str, ...], bool]":
         """Finalize SQL and parameter conversion for execution.
 
@@ -671,6 +675,8 @@ class SQLProcessor:
             is_many: Whether this is for execute_many.
             dialect_str: Dialect name.
             ast_was_transformed: Whether AST transformations ran.
+            original_input_named_parameters: Input named parameter order captured before
+                AST transformation, used to map named parameters on cache hits.
 
         Returns:
             Final SQL, execution parameters, parameter profile, input named parameters,
@@ -695,11 +701,14 @@ class SQLProcessor:
             output_transformer = self._config.output_transformer
             if output_transformer:
                 final_sql, final_params = output_transformer(final_sql, final_params)
+            final_input_named = transformed_result.input_named_parameters
+            if original_input_named_parameters and len(original_input_named_parameters) == len(final_input_named):
+                final_input_named = original_input_named_parameters
             return (
                 final_sql,
                 final_params,
                 parameter_profile,
-                transformed_result.input_named_parameters,
+                final_input_named,
                 transformed_result.applied_wrap_types,
             )
 
@@ -796,6 +805,7 @@ class SQLProcessor:
                         parse_cache_key,
                         parse_cache_entry,
                         expression_override,
+                        is_many=is_many,
                     )
                 )
                 if expression is not None:
@@ -810,6 +820,7 @@ class SQLProcessor:
                 is_many,
                 self._dialect_str,
                 ast_was_transformed,
+                original_input_named_parameters=input_named_parameters,
             )
 
             # If not transformed, we still need input_named_parameters from _prepare_parameters

@@ -591,7 +591,26 @@ class ParameterProcessor:
             elif any(style in _NAMED_STYLE_VALUES for style in cached_styles):
                 processed = self._map_positional_to_named(processed, cached_profile, is_many)
 
+        if processed and config.ast_transformer is not None and not is_many:
+            processed = self._drop_pruned_null_parameters(processed)
+
         return processed
+
+    @staticmethod
+    def _drop_pruned_null_parameters(parameters: "ConvertedParameters") -> "ConvertedParameters":
+        """Replicate AST null-pruning on a cache hit.
+
+        Adapters with a null-pruning ast_transformer replace ``None`` placeholders with
+        literal ``NULL`` and drop the matching values on the first (uncached) compile. The
+        transform does not re-run on cache hits, so the cached SQL keeps fewer placeholders
+        than the freshly supplied values; this removes the ``None`` values to realign them.
+        """
+        if isinstance(parameters, Mapping):
+            return {key: value for key, value in parameters.items() if value is not None}
+        if isinstance(parameters, (list, tuple)) and not isinstance(parameters, (str, bytes, bytearray)):
+            cleaned = [value for value in parameters if value is not None]
+            return tuple(cleaned) if isinstance(parameters, tuple) else cleaned
+        return parameters
 
     def _map_positional_to_named(
         self, parameters: "ConvertedParameters", cached_profile: "ParameterProfile", is_many: bool

@@ -109,20 +109,39 @@ def _should_assert_execute_rows_affected(case: DriverCase) -> bool:
     return "execute-rows-affected-unavailable" not in case.deviations
 
 
+_MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
+
+
 def _seed_sync(
     driver: SyncContractDriver, rows: tuple[ContractRow, ...], table: ContractTable = DEFAULT_CONTRACT_TABLE
 ) -> None:
-    if rows:
-        driver.execute_many(table.insert_qmark_sql, _row_parameters(rows))
-        driver.commit()
+    if not rows:
+        return
+    params = _row_parameters(rows)
+    try:
+        driver.execute_many(table.insert_qmark_sql, params)
+    except SQLSpecError as exc:
+        if _MULTI_ROW_BIND_UNSUPPORTED not in str(exc):
+            raise
+        for row_params in params:
+            driver.execute(table.insert_qmark_sql, row_params)
+    driver.commit()
 
 
 async def _seed_async(
     driver: AsyncContractDriver, rows: tuple[ContractRow, ...], table: ContractTable = DEFAULT_CONTRACT_TABLE
 ) -> None:
-    if rows:
-        await driver.execute_many(table.insert_qmark_sql, _row_parameters(rows))
-        await driver.commit()
+    if not rows:
+        return
+    params = _row_parameters(rows)
+    try:
+        await driver.execute_many(table.insert_qmark_sql, params)
+    except SQLSpecError as exc:
+        if _MULTI_ROW_BIND_UNSUPPORTED not in str(exc):
+            raise
+        for row_params in params:
+            await driver.execute(table.insert_qmark_sql, row_params)
+    await driver.commit()
 
 
 def _update_value_sql(table: ContractTable) -> str:
@@ -310,6 +329,8 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
 
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert sync execute-many behavior for a driver case."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
@@ -330,6 +351,8 @@ def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
 
 async def assert_async_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert async execute-many behavior for a driver case."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
@@ -350,6 +373,8 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
 
 def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers batch insert, update, and delete with accurate row counts."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
@@ -370,6 +395,8 @@ def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase)
 
 async def assert_async_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers batch insert, update, and delete with accurate row counts."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
@@ -390,6 +417,8 @@ async def assert_async_execute_many_mutation_contract(driver: object, case: Driv
 
 def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers batch a large sequence and an is_many SQL object."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
@@ -408,6 +437,8 @@ def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) ->
 
 async def assert_async_execute_many_input_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers batch a large sequence and an is_many SQL object."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
@@ -492,6 +523,8 @@ def assert_sync_parameter_style_contract(
     driver: object, case: DriverCase, parameter_style_case: ParameterStyleCase
 ) -> None:
     """Assert sync drivers bind one parameter style case correctly."""
+    if parameter_style_case.method == "execute_many" and not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     _seed_sync(sync_driver, parameter_style_case.setup_rows, case.table)
 
@@ -520,6 +553,8 @@ async def assert_async_parameter_style_contract(
     driver: object, case: DriverCase, parameter_style_case: ParameterStyleCase
 ) -> None:
     """Assert async drivers bind one parameter style case correctly."""
+    if parameter_style_case.method == "execute_many" and not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     await _seed_async(async_driver, parameter_style_case.setup_rows, case.table)
 
