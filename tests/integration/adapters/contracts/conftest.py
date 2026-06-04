@@ -46,6 +46,12 @@ from tests.integration.adapters.contracts._events_cases import (
     EventsCase,
     EventsCaseContext,
 )
+from tests.integration.adapters.contracts._migration_cases import (
+    ASYNC_MIGRATION_PARAMS,
+    SYNC_MIGRATION_PARAMS,
+    MigrationCase,
+    MigrationCaseContext,
+)
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
@@ -623,6 +629,154 @@ def sync_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
 def async_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
     """Resolve an async event-channel contract case by factory fixture name."""
     return _resolve_events_case(request, request.param)
+
+
+@pytest.fixture
+def migration_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build SQLite configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> SqliteConfig:
+        return SqliteConfig(
+            connection_config={"database": str(tmp_path / f"mig_{suffix}.db")},
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
+    """Build DuckDB configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> DuckDBConfig:
+        return DuckDBConfig(
+            connection_config={"database": str(tmp_path / f"mig_{suffix}.duckdb")},
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build aiosqlite configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> AiosqliteConfig:
+        return AiosqliteConfig(
+            connection_config={"database": str(tmp_path / f"mig_{suffix}.db")},
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_pymysql(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build PyMySQL configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> PyMysqlConfig:
+        return PyMysqlConfig(
+            connection_config=_mysql_connection_config(mysql_service),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_asyncmy(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build AsyncMy configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> AsyncmyConfig:
+        return AsyncmyConfig(
+            connection_config=_mysql_connection_config(mysql_service),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_aiomysql(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build aiomysql configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> AiomysqlConfig:
+        return AiomysqlConfig(
+            connection_config=_mysql_connection_config(mysql_service, database_key="db"),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_mysqlconnector_async(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build mysql-connector async configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> MysqlConnectorAsyncConfig:
+        connection_config = _mysql_connection_config(mysql_service)
+        connection_config["use_pure"] = True
+        return MysqlConnectorAsyncConfig(
+            connection_config=connection_config,
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psycopg sync configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsycopgSyncConfig:
+        return PsycopgSyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psycopg async configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsycopgAsyncConfig:
+        return PsycopgAsyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psqlpy configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsqlpyConfig:
+        return PsqlpyConfig(
+            connection_config={"dsn": _psqlpy_dsn(postgres_service)},
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+def _resolve_migration_case(request: pytest.FixtureRequest, case: MigrationCase) -> MigrationCaseContext:
+    return MigrationCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
+
+
+@pytest.fixture(params=SYNC_MIGRATION_PARAMS)
+def sync_migration_case(request: pytest.FixtureRequest) -> MigrationCaseContext:
+    """Resolve a sync migration contract case by factory fixture name."""
+    return _resolve_migration_case(request, request.param)
+
+
+@pytest.fixture(params=ASYNC_MIGRATION_PARAMS)
+def async_migration_case(request: pytest.FixtureRequest) -> MigrationCaseContext:
+    """Resolve an async migration contract case by factory fixture name."""
+    return _resolve_migration_case(request, request.param)
 
 
 def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> DriverCaseContext:

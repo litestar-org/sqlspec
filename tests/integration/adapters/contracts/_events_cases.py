@@ -52,7 +52,9 @@ ASYNC_EVENTS_CASES = (
     EventsCase(
         "aiosqlite-async", "events_config_aiosqlite", "aiosqlite", "async", marks=(SQLITE_XDIST_MARK, pytest.mark.anyio)
     ),
-    EventsCase("asyncmy-async", "events_config_asyncmy", "asyncmy", "async", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)),
+    EventsCase(
+        "asyncmy-async", "events_config_asyncmy", "asyncmy", "async", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)
+    ),
     EventsCase(
         "aiomysql-async", "events_config_aiomysql", "aiomysql", "async", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)
     ),
