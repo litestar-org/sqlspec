@@ -40,6 +40,14 @@ class SyncContractDriver(Protocol):
 
     def select_to_arrow(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
 
+    def select_to_storage(
+        self, statement: object, destination: object, /, *parameters: object, **kwargs: Any
+    ) -> Any: ...
+
+    def load_from_arrow(self, table: str, source: Any, /, **kwargs: Any) -> Any: ...
+
+    def load_from_storage(self, table: str, source: object, /, **kwargs: Any) -> Any: ...
+
 
 class AsyncContractDriver(Protocol):
     """Async driver surface used by adapter contract helpers."""
@@ -63,6 +71,14 @@ class AsyncContractDriver(Protocol):
     async def select_value(self, statement: object, /, *parameters: object, **kwargs: Any) -> object: ...
 
     async def select_to_arrow(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
+
+    async def select_to_storage(
+        self, statement: object, destination: object, /, *parameters: object, **kwargs: Any
+    ) -> Any: ...
+
+    async def load_from_arrow(self, table: str, source: Any, /, **kwargs: Any) -> Any: ...
+
+    async def load_from_storage(self, table: str, source: object, /, **kwargs: Any) -> Any: ...
 
 
 def _row_parameters(rows: tuple[ContractRow, ...]) -> list[tuple[object, ...]]:
@@ -567,6 +583,58 @@ async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
 
     empty = await async_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
     assert empty.rows_affected == 0
+
+
+_STORAGE_BRIDGE_EXPECTED = (
+    {"name": "alpha", "value": 1, "note": "first"},
+    {"name": "beta", "value": 2, "note": "second"},
+)
+
+
+def _storage_bridge_arrow_table() -> Any:
+    import pyarrow as pa
+
+    return pa.table({"name": ["alpha", "beta"], "value": [1, 2], "note": ["first", "second"]})
+
+
+def assert_sync_storage_bridge_local_contract(driver: object, case: DriverCase, tmp_path: Any) -> None:
+    """Assert sync drivers round-trip Arrow and local parquet through the storage bridge."""
+    if not case.supports_storage_bridge:
+        pytest.skip(f"{case.adapter} has no verified storage-bridge support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    arrow_job = sync_driver.load_from_arrow(table.name, _storage_bridge_arrow_table(), overwrite=True)
+    assert arrow_job.telemetry["rows_processed"] == 2
+    assert_result_data(sync_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+
+    destination = str(tmp_path / f"{case.id}.parquet")
+    export_job = sync_driver.select_to_storage(table.select_ordered_sql, destination, format_hint="parquet")
+    assert export_job.telemetry["rows_processed"] == 2
+
+    load_job = sync_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
+    assert load_job.telemetry["rows_processed"] == 2
+    assert_result_data(sync_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+
+
+async def assert_async_storage_bridge_local_contract(driver: object, case: DriverCase, tmp_path: Any) -> None:
+    """Assert async drivers round-trip Arrow and local parquet through the storage bridge."""
+    if not case.supports_storage_bridge:
+        pytest.skip(f"{case.adapter} has no verified storage-bridge support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    arrow_job = await async_driver.load_from_arrow(table.name, _storage_bridge_arrow_table(), overwrite=True)
+    assert arrow_job.telemetry["rows_processed"] == 2
+    assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+
+    destination = str(tmp_path / f"{case.id}.parquet")
+    export_job = await async_driver.select_to_storage(table.select_ordered_sql, destination, format_hint="parquet")
+    assert export_job.telemetry["rows_processed"] == 2
+
+    load_job = await async_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
+    assert load_job.telemetry["rows_processed"] == 2
+    assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
 
 
 def assert_sync_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:

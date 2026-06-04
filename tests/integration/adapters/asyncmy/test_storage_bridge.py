@@ -1,4 +1,9 @@
-"""Storage bridge integration tests for AsyncMy adapter."""
+"""Adapter-specific storage bridge coverage for AsyncMy.
+
+Shared load_from_arrow + local parquet load_from_storage round-trips live in
+tests/integration/adapters/contracts/test_storage_bridge_contract.py. This file keeps the
+MySQL-specific DECIMAL type-fidelity load_from_storage case.
+"""
 
 from pathlib import Path
 
@@ -11,31 +16,7 @@ from sqlspec.adapters.asyncmy import AsyncmyDriver
 pytestmark = [pytest.mark.xdist_group("mysql")]
 
 
-async def _fetch_rows(asyncmy_driver: AsyncmyDriver, table: str) -> list[dict[str, object]]:
-    rows = await asyncmy_driver.select(f"SELECT id, name FROM {table} ORDER BY id")
-    assert isinstance(rows, list)
-    return rows
-
-
-async def test_asyncmy_load_from_arrow(asyncmy_driver: AsyncmyDriver) -> None:
-    table_name = "storage_bridge_users"
-    await asyncmy_driver.execute(f"DROP TABLE IF EXISTS {table_name}")
-    await asyncmy_driver.execute(f"CREATE TABLE {table_name} (id INT PRIMARY KEY, name VARCHAR(64))")
-
-    arrow_table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
-
-    job = await asyncmy_driver.load_from_arrow(table_name, arrow_table, overwrite=True)
-
-    assert job.telemetry["rows_processed"] == arrow_table.num_rows
-    assert job.telemetry["destination"] == table_name
-
-    rows = await _fetch_rows(asyncmy_driver, table_name)
-    assert rows == [{"id": 1, "name": "alpha"}, {"id": 2, "name": "beta"}]
-
-    await asyncmy_driver.execute(f"DROP TABLE IF EXISTS {table_name}")
-
-
-async def test_asyncmy_load_from_storage(tmp_path: Path, asyncmy_driver: AsyncmyDriver) -> None:
+async def test_asyncmy_load_from_storage_decimal(tmp_path: Path, asyncmy_driver: AsyncmyDriver) -> None:
     await asyncmy_driver.execute("DROP TABLE IF EXISTS storage_bridge_scores")
     await asyncmy_driver.execute("CREATE TABLE storage_bridge_scores (id INT PRIMARY KEY, score DECIMAL(5,2))")
 
