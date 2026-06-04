@@ -6,6 +6,7 @@ from typing import Any, Protocol, cast
 import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
+from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -252,6 +253,92 @@ async def assert_async_for_update_contract(driver: object, case: DriverCase) -> 
             await async_driver.rollback()
         await async_driver.execute(_delete_by_name_sql(table), ("lock-row",))
         await async_driver.commit()
+
+
+_FILTER_SEED_ROWS = (
+    ContractRow("alpha", 10),
+    ContractRow("beta", 20),
+    ContractRow("gamma", 30),
+    ContractRow("delta", 40),
+    ContractRow("epsilon", 50),
+)
+_GROUPED_SEED_ROWS = (
+    ContractRow("alpha", 10),
+    ContractRow("beta", 20),
+    ContractRow("gamma", 20),
+    ContractRow("delta", 30),
+    ContractRow("epsilon", 30),
+)
+
+
+def assert_sync_filter_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers apply OrderBy/LimitOffset, InCollection, and Search filters."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    _seed_sync(sync_driver, _FILTER_SEED_ROWS, table)
+    base = f"SELECT name, value FROM {table.name}"
+
+    paged = sync_driver.execute(base, OrderByFilter("value", "desc"), LimitOffsetFilter(limit=2, offset=1))
+    assert [row["name"] for row in paged.get_data()] == ["delta", "gamma"]
+
+    in_collection = sync_driver.execute(base, InCollectionFilter("value", [20, 40]), OrderByFilter("value", "asc"))
+    assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
+
+    searched = sync_driver.execute(base, SearchFilter("name", "lta"))
+    assert [row["name"] for row in searched.get_data()] == ["delta"]
+
+
+async def assert_async_filter_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers apply OrderBy/LimitOffset, InCollection, and Search filters."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await _seed_async(async_driver, _FILTER_SEED_ROWS, table)
+    base = f"SELECT name, value FROM {table.name}"
+
+    paged = await async_driver.execute(base, OrderByFilter("value", "desc"), LimitOffsetFilter(limit=2, offset=1))
+    assert [row["name"] for row in paged.get_data()] == ["delta", "gamma"]
+
+    in_collection = await async_driver.execute(
+        base, InCollectionFilter("value", [20, 40]), OrderByFilter("value", "asc")
+    )
+    assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
+
+    searched = await async_driver.execute(base, SearchFilter("name", "lta"))
+    assert [row["name"] for row in searched.get_data()] == ["delta"]
+
+
+def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers run grouped aggregation and correlated subquery selects."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    _seed_sync(sync_driver, _GROUPED_SEED_ROWS, table)
+
+    grouped = sync_driver.execute(
+        f"SELECT value, COUNT(*) AS count FROM {table.name} GROUP BY value HAVING COUNT(*) >= 2 ORDER BY value"
+    )
+    assert [(row["value"], row["count"]) for row in grouped.get_data()] == [(20, 2), (30, 2)]
+
+    top = sync_driver.execute(
+        f"SELECT name FROM {table.name} WHERE value = (SELECT MAX(value) FROM {table.name}) ORDER BY name"
+    )
+    assert [row["name"] for row in top.get_data()] == ["delta", "epsilon"]
+
+
+async def assert_async_complex_query_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers run grouped aggregation and correlated subquery selects."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await _seed_async(async_driver, _GROUPED_SEED_ROWS, table)
+
+    grouped = await async_driver.execute(
+        f"SELECT value, COUNT(*) AS count FROM {table.name} GROUP BY value HAVING COUNT(*) >= 2 ORDER BY value"
+    )
+    assert [(row["value"], row["count"]) for row in grouped.get_data()] == [(20, 2), (30, 2)]
+
+    top = await async_driver.execute(
+        f"SELECT name FROM {table.name} WHERE value = (SELECT MAX(value) FROM {table.name}) ORDER BY name"
+    )
+    assert [row["name"] for row in top.get_data()] == ["delta", "epsilon"]
 
 
 def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> None:
