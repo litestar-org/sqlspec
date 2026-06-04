@@ -640,10 +640,16 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
         await async_driver.execute("SELECT * FROM missing_contract_table")
 
 
+def _explain_skip_reason(case: DriverCase) -> str:
+    if "explain-copy-incompatible" in case.deviations:
+        return f"{case.adapter}-{case.dialect} EXPLAIN is incompatible with the driver's COPY result transfer"
+    return f"{case.adapter} ({case.dialect}) has no verified EXPLAIN support"
+
+
 def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
     """Assert sync drivers execute one EXPLAIN artifact and return plan rows."""
     if not case.supports_explain:
-        pytest.skip(f"{case.adapter} has no verified EXPLAIN support")
+        pytest.skip(_explain_skip_reason(case))
     sync_driver = cast("SyncContractDriver", driver)
     result = assert_sql_result(sync_driver.execute(explain_case.build(case.table, case.dialect)))
     assert result.data is not None
@@ -652,7 +658,7 @@ def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case:
 async def assert_async_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
     """Assert async drivers execute one EXPLAIN artifact and return plan rows."""
     if not case.supports_explain:
-        pytest.skip(f"{case.adapter} has no verified EXPLAIN support")
+        pytest.skip(_explain_skip_reason(case))
     async_driver = cast("AsyncContractDriver", driver)
     result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, case.dialect)))
     assert result.data is not None

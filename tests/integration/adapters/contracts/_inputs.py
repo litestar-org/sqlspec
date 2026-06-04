@@ -10,6 +10,7 @@ import pytest
 
 from sqlspec import SQL, Select, sql
 from sqlspec.builder import Explain
+from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import (
     CheckViolationError,
     ForeignKeyViolationError,
@@ -516,7 +517,7 @@ def _explain_sql_factory(table: ContractTable, dialect: str) -> object:
 
 
 def _explain_sql_object(table: ContractTable, dialect: str) -> object:
-    return SQL(f"SELECT name FROM {table.name}").explain()
+    return SQL(f"SELECT name FROM {table.name}", statement_config=StatementConfig(dialect=dialect)).explain()
 
 
 EXPLAIN_CASES = (
