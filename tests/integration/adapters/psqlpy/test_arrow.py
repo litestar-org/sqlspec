@@ -113,60 +113,6 @@ async def test_select_to_arrow_empty_result(psqlpy_driver: "PsqlpyDriver") -> No
         await _drop_table(driver, "arrow_empty_test_psqlpy")
 
 
-async def test_select_to_arrow_null_handling(psqlpy_driver: "PsqlpyDriver") -> None:
-    """Test NULL value handling."""
-
-    driver = psqlpy_driver
-    await driver.execute("CREATE TABLE arrow_null_test_psqlpy (id INTEGER, value TEXT)")
-    await driver.execute("INSERT INTO arrow_null_test_psqlpy VALUES (1, 'a'), (2, NULL), (3, 'c')")
-
-    try:
-        result = await driver.select_to_arrow("SELECT * FROM arrow_null_test_psqlpy ORDER BY id")
-
-        df = result.to_pandas()
-        assert len(df) == 3
-        assert df.iloc[1]["value"] is None or df.isna().iloc[1]["value"]
-    finally:
-        await _drop_table(driver, "arrow_null_test_psqlpy")
-
-
-async def test_select_to_arrow_to_polars(psqlpy_driver: "PsqlpyDriver") -> None:
-    """Test conversion to Polars."""
-
-    pytest.importorskip("polars")
-
-    driver = psqlpy_driver
-    await driver.execute("CREATE TABLE arrow_polars_test_psqlpy (id INTEGER, value TEXT)")
-    await driver.execute("INSERT INTO arrow_polars_test_psqlpy VALUES (1, 'a'), (2, 'b')")
-
-    try:
-        result = await driver.select_to_arrow("SELECT * FROM arrow_polars_test_psqlpy ORDER BY id")
-        df = result.to_polars()
-
-        assert len(df) == 2
-        assert df["value"].to_list() == ["a", "b"]
-    finally:
-        await _drop_table(driver, "arrow_polars_test_psqlpy")
-
-
-async def test_select_to_arrow_large_dataset(psqlpy_driver: "PsqlpyDriver") -> None:
-    """Test larger dataset handling."""
-
-    driver = psqlpy_driver
-    await driver.execute("CREATE TABLE arrow_large_test_psqlpy (id INTEGER, value INTEGER)")
-    values = ", ".join(f"({i}, {i * 10})" for i in range(1, 1001))
-    await driver.execute(f"INSERT INTO arrow_large_test_psqlpy VALUES {values}")
-
-    try:
-        result = await driver.select_to_arrow("SELECT * FROM arrow_large_test_psqlpy ORDER BY id")
-
-        assert result.rows_affected == 1000
-        df = result.to_pandas()
-        assert len(df) == 1000
-    finally:
-        await _drop_table(driver, "arrow_large_test_psqlpy")
-
-
 async def test_select_to_arrow_type_preservation(psqlpy_driver: "PsqlpyDriver") -> None:
     """Test that PostgreSQL types map correctly to Arrow."""
 

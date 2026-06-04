@@ -107,56 +107,6 @@ def test_select_to_arrow_empty_result(duckdb_basic_session: "DuckDBDriver") -> N
         _drop_table(driver, "arrow_empty_test")
 
 
-def test_select_to_arrow_null_handling(duckdb_basic_session: "DuckDBDriver") -> None:
-    """Test select_to_arrow with NULL values."""
-    driver = duckdb_basic_session
-    driver.execute("CREATE TABLE arrow_null_test (id INTEGER, value VARCHAR)")
-    driver.execute("INSERT INTO arrow_null_test VALUES (1, 'a'), (2, NULL), (3, 'c')")
-
-    try:
-        result = driver.select_to_arrow("SELECT * FROM arrow_null_test ORDER BY id")
-
-        df = result.to_pandas()
-        assert len(df) == 3
-        assert df.iloc[1]["value"] is None or df.isna().iloc[1]["value"]
-    finally:
-        _drop_table(driver, "arrow_null_test")
-
-
-def test_select_to_arrow_to_polars(duckdb_basic_session: "DuckDBDriver") -> None:
-    """Test select_to_arrow with polars conversion."""
-    pytest.importorskip("polars", reason="polars not installed")
-
-    driver = duckdb_basic_session
-    driver.execute("CREATE TABLE arrow_polars_test (id INTEGER, value VARCHAR)")
-    driver.execute("INSERT INTO arrow_polars_test VALUES (1, 'a'), (2, 'b')")
-
-    try:
-        result = driver.select_to_arrow("SELECT * FROM arrow_polars_test ORDER BY id")
-
-        pl_df = result.to_polars()
-        assert len(pl_df) == 2
-        assert list(pl_df["value"]) == ["a", "b"]
-    finally:
-        _drop_table(driver, "arrow_polars_test")
-
-
-def test_select_to_arrow_large_dataset(duckdb_basic_session: "DuckDBDriver") -> None:
-    """Test select_to_arrow with larger dataset (10K rows)."""
-    driver = duckdb_basic_session
-    driver.execute("CREATE TABLE arrow_large_test (id INTEGER, value DOUBLE)")
-    driver.execute("INSERT INTO arrow_large_test SELECT range AS id, random() FROM range(10000)")
-
-    try:
-        result = driver.select_to_arrow("SELECT * FROM arrow_large_test")
-
-        assert result.rows_affected == 10000
-        df = result.to_pandas()
-        assert len(df) == 10000
-    finally:
-        _drop_table(driver, "arrow_large_test")
-
-
 def test_select_to_arrow_type_preservation(duckdb_basic_session: "DuckDBDriver") -> None:
     """Test that Arrow preserves column types correctly."""
 

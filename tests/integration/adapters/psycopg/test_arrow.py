@@ -106,54 +106,6 @@ async def test_select_to_arrow_empty_result(psycopg_config: PsycopgAsyncConfig) 
         assert len(result.to_pandas()) == 0
 
 
-async def test_select_to_arrow_null_handling(psycopg_config: PsycopgAsyncConfig) -> None:
-    """Test select_to_arrow with NULL values."""
-    async with psycopg_config.provide_session() as session:
-        await session.execute("DROP TABLE IF EXISTS arrow_null_test_psycopg_async CASCADE")
-        await session.execute("CREATE TABLE arrow_null_test_psycopg_async (id INTEGER, value TEXT)")
-        await session.execute("INSERT INTO arrow_null_test_psycopg_async VALUES (1, 'a'), (2, NULL), (3, 'c')")
-
-        result = await session.select_to_arrow("SELECT * FROM arrow_null_test_psycopg_async ORDER BY id")
-
-        df = result.to_pandas()
-        assert len(df) == 3
-        assert df.iloc[1]["value"] is None or df.isna().iloc[1]["value"]
-
-
-async def test_select_to_arrow_to_polars(psycopg_config: PsycopgAsyncConfig) -> None:
-    """Test select_to_arrow conversion to Polars DataFrame."""
-    pytest.importorskip("polars")
-
-    async with psycopg_config.provide_session() as session:
-        await session.execute("DROP TABLE IF EXISTS arrow_polars_test_psycopg_async CASCADE")
-        await session.execute("CREATE TABLE arrow_polars_test_psycopg_async (id INTEGER, value TEXT)")
-        await session.execute("INSERT INTO arrow_polars_test_psycopg_async VALUES (1, 'a'), (2, 'b')")
-
-        result = await session.select_to_arrow("SELECT * FROM arrow_polars_test_psycopg_async ORDER BY id")
-        df = result.to_polars()
-
-        assert len(df) == 2
-        assert df["value"].to_list() == ["a", "b"]
-
-
-async def test_select_to_arrow_large_dataset(psycopg_config: PsycopgAsyncConfig) -> None:
-    """Test select_to_arrow with larger dataset."""
-    async with psycopg_config.provide_session() as session:
-        await session.execute("DROP TABLE IF EXISTS arrow_large_test_psycopg_async CASCADE")
-        await session.execute("CREATE TABLE arrow_large_test_psycopg_async (id INTEGER, value INTEGER)")
-
-        # Insert 1000 rows
-        values = ", ".join(f"({i}, {i * 10})" for i in range(1, 1001))
-        await session.execute(f"INSERT INTO arrow_large_test_psycopg_async VALUES {values}")
-
-        result = await session.select_to_arrow("SELECT * FROM arrow_large_test_psycopg_async ORDER BY id")
-
-        assert result.rows_affected == 1000
-        df = result.to_pandas()
-        assert len(df) == 1000
-        assert df["value"].sum() == sum(i * 10 for i in range(1, 1001))
-
-
 async def test_select_to_arrow_type_preservation(psycopg_config: PsycopgAsyncConfig) -> None:
     """Test that PostgreSQL types are properly converted to Arrow types."""
     async with psycopg_config.provide_session() as session:

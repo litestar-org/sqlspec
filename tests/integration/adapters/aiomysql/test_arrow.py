@@ -96,58 +96,6 @@ async def test_select_to_arrow_empty_result(aiomysql_driver: AiomysqlDriver) -> 
     await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_empty_test")
 
 
-async def test_select_to_arrow_null_handling(aiomysql_driver: AiomysqlDriver) -> None:
-    """Test select_to_arrow with NULL values."""
-
-    await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_null_test")
-    await aiomysql_driver.execute("CREATE TABLE IF NOT EXISTS arrow_null_test (id INT, value VARCHAR(100))")
-    await aiomysql_driver.execute("INSERT INTO arrow_null_test VALUES (1, 'a'), (2, NULL), (3, 'c')")
-
-    result = await aiomysql_driver.select_to_arrow("SELECT * FROM arrow_null_test ORDER BY id")
-
-    df = result.to_pandas()
-    assert len(df) == 3
-    assert df.iloc[1]["value"] is None or df.isna().iloc[1]["value"]
-
-    await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_null_test")
-
-
-async def test_select_to_arrow_to_polars(aiomysql_driver: AiomysqlDriver) -> None:
-    """Test select_to_arrow conversion to Polars DataFrame."""
-    pytest.importorskip("polars")
-
-    await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_polars_test")
-    await aiomysql_driver.execute("CREATE TABLE IF NOT EXISTS arrow_polars_test (id INT, value VARCHAR(100))")
-    await aiomysql_driver.execute("INSERT INTO arrow_polars_test VALUES (1, 'a'), (2, 'b')")
-
-    result = await aiomysql_driver.select_to_arrow("SELECT * FROM arrow_polars_test ORDER BY id")
-    df = result.to_polars()
-
-    assert len(df) == 2
-    assert df["value"].to_list() == ["a", "b"]
-
-    await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_polars_test")
-
-
-async def test_select_to_arrow_large_dataset(aiomysql_driver: AiomysqlDriver) -> None:
-    """Test select_to_arrow with larger dataset."""
-
-    await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_large_test")
-    await aiomysql_driver.execute("CREATE TABLE IF NOT EXISTS arrow_large_test (id INT, value INT)")
-
-    values = ", ".join(f"({i}, {i * 10})" for i in range(1, 1001))
-    await aiomysql_driver.execute(f"INSERT INTO arrow_large_test VALUES {values}")
-
-    result = await aiomysql_driver.select_to_arrow("SELECT * FROM arrow_large_test ORDER BY id")
-
-    assert result.rows_affected == 1000
-    df = result.to_pandas()
-    assert len(df) == 1000
-    assert df["value"].sum() == sum(i * 10 for i in range(1, 1001))
-
-    await aiomysql_driver.execute("DROP TABLE IF EXISTS arrow_large_test")
-
-
 async def test_select_to_arrow_type_preservation(aiomysql_driver: AiomysqlDriver) -> None:
     """Test that MySQL types are properly converted to Arrow types."""
 

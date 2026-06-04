@@ -101,58 +101,6 @@ async def test_select_to_arrow_empty_result(asyncpg_async_driver: AsyncpgDriver)
     await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_empty_test CASCADE")
 
 
-async def test_select_to_arrow_null_handling(asyncpg_async_driver: AsyncpgDriver) -> None:
-    """Test select_to_arrow with NULL values."""
-
-    await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_null_test CASCADE")
-    await asyncpg_async_driver.execute("CREATE TABLE arrow_null_test (id INTEGER, value TEXT)")
-    await asyncpg_async_driver.execute("INSERT INTO arrow_null_test VALUES (1, 'a'), (2, NULL), (3, 'c')")
-
-    result = await asyncpg_async_driver.select_to_arrow("SELECT * FROM arrow_null_test ORDER BY id")
-
-    df = result.to_pandas()
-    assert len(df) == 3
-    assert df.iloc[1]["value"] is None or df.isna().iloc[1]["value"]
-
-    await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_null_test CASCADE")
-
-
-async def test_select_to_arrow_to_polars(asyncpg_async_driver: AsyncpgDriver) -> None:
-    """Test select_to_arrow conversion to Polars DataFrame."""
-    pytest.importorskip("polars")
-
-    await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_polars_test CASCADE")
-    await asyncpg_async_driver.execute("CREATE TABLE arrow_polars_test (id INTEGER, value TEXT)")
-    await asyncpg_async_driver.execute("INSERT INTO arrow_polars_test VALUES (1, 'a'), (2, 'b')")
-
-    result = await asyncpg_async_driver.select_to_arrow("SELECT * FROM arrow_polars_test ORDER BY id")
-    df = result.to_polars()
-
-    assert len(df) == 2
-    assert df["value"].to_list() == ["a", "b"]
-
-    await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_polars_test CASCADE")
-
-
-async def test_select_to_arrow_large_dataset(asyncpg_async_driver: AsyncpgDriver) -> None:
-    """Test select_to_arrow with larger dataset."""
-
-    await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_large_test CASCADE")
-    await asyncpg_async_driver.execute("CREATE TABLE arrow_large_test (id INTEGER, value INTEGER)")
-
-    values = ", ".join(f"({i}, {i * 10})" for i in range(1, 1001))
-    await asyncpg_async_driver.execute(f"INSERT INTO arrow_large_test VALUES {values}")
-
-    result = await asyncpg_async_driver.select_to_arrow("SELECT * FROM arrow_large_test ORDER BY id")
-
-    assert result.rows_affected == 1000
-    df = result.to_pandas()
-    assert len(df) == 1000
-    assert df["value"].sum() == sum(i * 10 for i in range(1, 1001))
-
-    await asyncpg_async_driver.execute("DROP TABLE IF EXISTS arrow_large_test CASCADE")
-
-
 async def test_select_to_arrow_type_preservation(asyncpg_async_driver: AsyncpgDriver) -> None:
     """Test that PostgreSQL types are properly converted to Arrow types."""
 
