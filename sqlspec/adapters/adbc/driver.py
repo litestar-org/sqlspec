@@ -50,6 +50,8 @@ __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionConte
 
 logger = get_logger("sqlspec.adapters.adbc")
 
+_MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
+
 
 @final
 class AdbcExceptionHandler(BaseSyncExceptionHandler):
@@ -175,11 +177,15 @@ class AdbcDriver(SyncDriverAdapterBase):
                 row_count = 0
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 parameter_count = len(prepared_parameters)
-                if self._is_postgres:
+                try:
                     cursor.executemany(sql, prepared_parameters)
-                    row_count = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
+                except Exception as exc:
+                    if _MULTI_ROW_BIND_UNSUPPORTED not in str(exc):
+                        raise
+                    for row in prepared_parameters:
+                        cursor.execute(sql, parameters=row)
+                    row_count = parameter_count
                 else:
-                    cursor.executemany(sql, prepared_parameters)
                     row_count = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
             else:
                 cursor.executemany(sql, prepared_parameters)
