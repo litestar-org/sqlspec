@@ -5,7 +5,7 @@ from typing import Any, Protocol, cast
 
 import pytest
 
-from sqlspec import SQL, SQLResult, sql
+from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -33,6 +33,8 @@ class SyncContractDriver(Protocol):
     def execute_many(self, statement: object, parameters: object, /, **kwargs: Any) -> SQLResult: ...
 
     def execute_script(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
+
+    def execute_stack(self, stack: object, /, *, continue_on_error: bool = False) -> "tuple[Any, ...]": ...
 
     def select_one(self, statement: object, /, *parameters: object, **kwargs: Any) -> dict[str, Any]: ...
 
@@ -65,6 +67,8 @@ class AsyncContractDriver(Protocol):
     async def execute_many(self, statement: object, parameters: object, /, **kwargs: Any) -> SQLResult: ...
 
     async def execute_script(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
+
+    async def execute_stack(self, stack: object, /, *, continue_on_error: bool = False) -> "tuple[Any, ...]": ...
 
     async def select_one(self, statement: object, /, *parameters: object, **kwargs: Any) -> dict[str, Any]: ...
 
@@ -243,6 +247,64 @@ async def assert_async_for_update_contract(driver: object, case: DriverCase) -> 
         with contextlib.suppress(Exception):
             await async_driver.rollback()
         await async_driver.execute(_delete_by_name_sql(table), ("lock-row",))
+        await async_driver.commit()
+
+
+def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers execute a StatementStack sequentially with per-operation results."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    assert_execute_rows = _should_assert_execute_rows_affected(case)
+
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    stack = (
+        StatementStack()
+        .push_execute(table.insert_qmark_sql, ("stack-one", 10, None))
+        .push_execute(table.insert_qmark_sql, ("stack-two", 20, None))
+        .push_execute(table.select_count_sql)
+    )
+    results = sync_driver.execute_stack(stack)
+    sync_driver.commit()
+    try:
+        assert len(results) == 3
+        if assert_execute_rows:
+            assert results[0].rows_affected == 1
+            assert results[1].rows_affected == 1
+        count_result = results[2].result
+        assert isinstance(count_result, SQLResult)
+        assert count_result.get_data()[0]["count"] == 2
+    finally:
+        sync_driver.execute(table.delete_sql)
+        sync_driver.commit()
+
+
+async def assert_async_statement_stack_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers execute a StatementStack sequentially with per-operation results."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    assert_execute_rows = _should_assert_execute_rows_affected(case)
+
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    stack = (
+        StatementStack()
+        .push_execute(table.insert_qmark_sql, ("stack-one", 10, None))
+        .push_execute(table.insert_qmark_sql, ("stack-two", 20, None))
+        .push_execute(table.select_count_sql)
+    )
+    results = await async_driver.execute_stack(stack)
+    await async_driver.commit()
+    try:
+        assert len(results) == 3
+        if assert_execute_rows:
+            assert results[0].rows_affected == 1
+            assert results[1].rows_affected == 1
+        count_result = results[2].result
+        assert isinstance(count_result, SQLResult)
+        assert count_result.get_data()[0]["count"] == 2
+    finally:
+        await async_driver.execute(table.delete_sql)
         await async_driver.commit()
 
 

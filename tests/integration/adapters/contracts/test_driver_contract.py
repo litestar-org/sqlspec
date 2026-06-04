@@ -5,9 +5,11 @@ from tests.integration.adapters.contracts.behaviors import (
     assert_async_driver_basics_contract,
     assert_async_execute_many_contract,
     assert_async_for_update_contract,
+    assert_async_statement_stack_contract,
     assert_sync_driver_basics_contract,
     assert_sync_execute_many_contract,
     assert_sync_for_update_contract,
+    assert_sync_statement_stack_contract,
 )
 
 
@@ -29,6 +31,16 @@ def test_sync_driver_execute_many_contract(sync_driver_case: DriverCaseContext) 
 async def test_async_driver_execute_many_contract(async_driver_case: DriverCaseContext) -> None:
     """Async drivers insert batches and return ordered rows consistently."""
     await assert_async_execute_many_contract(async_driver_case.driver, async_driver_case.case)
+
+
+def test_sync_statement_stack_contract(sync_driver_case: DriverCaseContext) -> None:
+    """Sync drivers execute a StatementStack sequentially and return per-operation results."""
+    assert_sync_statement_stack_contract(sync_driver_case.driver, sync_driver_case.case)
+
+
+async def test_async_statement_stack_contract(async_driver_case: DriverCaseContext) -> None:
+    """Async drivers execute a StatementStack sequentially and return per-operation results."""
+    await assert_async_statement_stack_contract(async_driver_case.driver, async_driver_case.case)
 
 
 def test_sync_for_update_contract(sync_driver_case: DriverCaseContext) -> None:
