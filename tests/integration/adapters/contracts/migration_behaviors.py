@@ -293,7 +293,9 @@ def assert_sync_migration_multi_statement_contract(make_config: Any, case: Migra
         config.close_pool()
 
 
-async def assert_async_migration_multi_statement_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+async def assert_async_migration_multi_statement_contract(
+    make_config: Any, case: MigrationCase, tmp_path: Path
+) -> None:
     """Async migrations apply every statement in a multi-statement revision atomically."""
     token, script_location, version_table, table = _migration_paths(case, "multistmt", tmp_path)
     config = _build(make_config, script_location, version_table, token)

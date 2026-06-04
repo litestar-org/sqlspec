@@ -4,6 +4,7 @@ import contextlib
 from collections.abc import AsyncGenerator, Callable, Generator
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from pytest_databases.docker.cockroachdb import CockroachDBService
@@ -11,10 +12,14 @@ from pytest_databases.docker.mysql import MySQLService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
+from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
+from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.adapters.asyncpg.config import AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, CockroachAsyncpgDriver
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
@@ -23,16 +28,22 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncDriver,
 )
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
 from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConfig,
     MysqlConnectorAsyncDriver,
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncDriver,
 )
+from sqlspec.adapters.mysqlconnector.litestar.store import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver, PsycopgSyncConfig, PsycopgSyncDriver
+from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore, PsycopgSyncStore
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver
+from sqlspec.adapters.pymysql.litestar.store import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
 from tests.integration.adapters.contracts._cases import (
     ASYNC_DRIVER_PARAMS,
     DRIVER_PARAMS,
@@ -58,6 +69,7 @@ from tests.integration.adapters.contracts._schema import (
     MYSQL_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
 )
+from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
 
 
 def _postgres_connection_config(postgres_service: PostgresService) -> dict[str, Any]:
@@ -777,6 +789,193 @@ def sync_migration_case(request: pytest.FixtureRequest) -> MigrationCaseContext:
 def async_migration_case(request: pytest.FixtureRequest) -> MigrationCaseContext:
     """Resolve an async migration contract case by factory fixture name."""
     return _resolve_migration_case(request, request.param)
+
+
+_STORE_TABLE = "litestar_contract_sessions"
+_STORE_EXTENSION_CONFIG: dict[str, Any] = {"litestar": {"session_table": _STORE_TABLE}}
+
+
+@pytest.fixture
+async def contract_sqlite_store() -> "AsyncGenerator[SQLiteStore, None]":
+    """Provide a ready SQLite Litestar store for contract tests."""
+    config = SqliteConfig(
+        connection_config={"database": "file:contract_store_sqlite?mode=memory&cache=shared", "uri": True},
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = SQLiteStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_aiosqlite_store() -> "AsyncGenerator[AiosqliteStore, None]":
+    """Provide a ready aiosqlite Litestar store for contract tests."""
+    config = AiosqliteConfig(connection_config={"database": ":memory:"}, extension_config=_STORE_EXTENSION_CONFIG)
+    store = AiosqliteStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_duckdb_store(tmp_path: Path) -> "AsyncGenerator[DuckdbStore, None]":
+    """Provide a ready DuckDB Litestar store for contract tests."""
+    config = DuckDBConfig(
+        connection_config={"database": str(tmp_path / f"store_{uuid4().hex}.duckdb")},
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = DuckdbStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_asyncpg_store(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgStore, None]":
+    """Provide a ready asyncpg Litestar store for contract tests."""
+    config = AsyncpgConfig(
+        connection_config=_postgres_connection_config(postgres_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = AsyncpgStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_psqlpy_store(postgres_service: PostgresService) -> "AsyncGenerator[PsqlpyStore, None]":
+    """Provide a ready psqlpy Litestar store for contract tests."""
+    config = PsqlpyConfig(
+        connection_config={"dsn": _psqlpy_dsn(postgres_service)}, extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = PsqlpyStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_psycopg_async_store(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgAsyncStore, None]":
+    """Provide a ready psycopg async Litestar store for contract tests."""
+    config = PsycopgAsyncConfig(
+        connection_config={"conninfo": _postgres_conninfo(postgres_service)}, extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = PsycopgAsyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_psycopg_sync_store(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgSyncStore, None]":
+    """Provide a ready psycopg sync Litestar store for contract tests."""
+    config = PsycopgSyncConfig(
+        connection_config={"conninfo": _postgres_conninfo(postgres_service)}, extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = PsycopgSyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_aiomysql_store(mysql_service: MySQLService) -> "AsyncGenerator[AiomysqlStore, None]":
+    """Provide a ready aiomysql Litestar store for contract tests."""
+    config = AiomysqlConfig(
+        connection_config=_mysql_connection_config(mysql_service, database_key="db"),
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = AiomysqlStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyStore, None]":
+    """Provide a ready asyncmy Litestar store for contract tests."""
+    config = AsyncmyConfig(
+        connection_config=_mysql_connection_config(mysql_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = AsyncmyStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_mysqlconnector_async_store(
+    mysql_service: MySQLService,
+) -> "AsyncGenerator[MysqlConnectorAsyncStore, None]":
+    """Provide a ready mysql-connector async Litestar store for contract tests."""
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config["use_pure"] = True
+    config = MysqlConnectorAsyncConfig(connection_config=connection_config, extension_config=_STORE_EXTENSION_CONFIG)
+    store = MysqlConnectorAsyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    await config.close_pool()
+
+
+@pytest.fixture
+async def contract_mysqlconnector_sync_store(
+    mysql_service: MySQLService,
+) -> "AsyncGenerator[MysqlConnectorSyncStore, None]":
+    """Provide a ready mysql-connector sync Litestar store for contract tests."""
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config["use_pure"] = True
+    config = MysqlConnectorSyncConfig(connection_config=connection_config, extension_config=_STORE_EXTENSION_CONFIG)
+    store = MysqlConnectorSyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator[PyMysqlStore, None]":
+    """Provide a ready PyMySQL Litestar store for contract tests."""
+    config = PyMysqlConfig(
+        connection_config=_mysql_connection_config(mysql_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = PyMysqlStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+def _resolve_store_case(request: pytest.FixtureRequest, case: StoreCase) -> StoreCaseContext:
+    return StoreCaseContext(case=case, store=request.getfixturevalue(case.fixture_name))
+
+
+@pytest.fixture(params=STORE_PARAMS)
+def store_case(request: pytest.FixtureRequest) -> StoreCaseContext:
+    """Resolve a Litestar store contract case by fixture name."""
+    return _resolve_store_case(request, request.param)
 
 
 def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> DriverCaseContext:

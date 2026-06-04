@@ -42,7 +42,11 @@ SYNC_MIGRATION_CASES = (
 
 ASYNC_MIGRATION_CASES = (
     MigrationCase(
-        "aiosqlite-async", "migration_config_aiosqlite", "aiosqlite", "async", marks=(SQLITE_XDIST_MARK, pytest.mark.anyio)
+        "aiosqlite-async",
+        "migration_config_aiosqlite",
+        "aiosqlite",
+        "async",
+        marks=(SQLITE_XDIST_MARK, pytest.mark.anyio),
     ),
     MigrationCase(
         "asyncmy-async", "migration_config_asyncmy", "asyncmy", "async", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)

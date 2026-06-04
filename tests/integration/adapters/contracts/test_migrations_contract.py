@@ -50,9 +50,7 @@ def test_sync_migration_current_contract(sync_migration_case: MigrationCaseConte
 
 async def test_async_migration_current_contract(async_migration_case: MigrationCaseContext, tmp_path: Path) -> None:
     """Async current command reports the applied revision."""
-    await assert_async_migration_current_contract(
-        async_migration_case.make_config, async_migration_case.case, tmp_path
-    )
+    await assert_async_migration_current_contract(async_migration_case.make_config, async_migration_case.case, tmp_path)
 
 
 def test_sync_migration_error_handling_contract(sync_migration_case: MigrationCaseContext, tmp_path: Path) -> None:
