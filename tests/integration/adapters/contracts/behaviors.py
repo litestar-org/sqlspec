@@ -77,6 +77,22 @@ async def dispatch_async_extra_assertions(driver: object, case: DriverCase, scop
         await entry[1](driver, case)
 
 
+DRIVER_BASICS_SCOPE = "driver_basics"
+DRIVER_BASICS_PROOF_KEY = "driver_basics:noop"
+
+
+def _driver_basics_noop_proof(driver: object, case: DriverCase) -> None:
+    """No-op proof demonstrating the hook fires in the live matrix without changing pass/fail."""
+
+
+async def _driver_basics_noop_proof_async(driver: object, case: DriverCase) -> None:
+    """No-op async proof demonstrating the hook fires in the live matrix without changing pass/fail."""
+
+
+register_sync_extra_assertion(DRIVER_BASICS_PROOF_KEY, DRIVER_BASICS_SCOPE, _driver_basics_noop_proof)
+register_async_extra_assertion(DRIVER_BASICS_PROOF_KEY, DRIVER_BASICS_SCOPE, _driver_basics_noop_proof_async)
+
+
 class SyncContractDriver(Protocol):
     """Sync driver surface used by adapter contract helpers."""
 
@@ -232,6 +248,8 @@ def assert_sync_driver_basics_contract(driver: object, case: DriverCase) -> None
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 0
 
+    dispatch_sync_extra_assertions(driver, case, DRIVER_BASICS_SCOPE)
+
 
 async def assert_async_driver_basics_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers run the CRUD lifecycle and expose result column metadata."""
@@ -261,6 +279,8 @@ async def assert_async_driver_basics_contract(driver: object, case: DriverCase) 
         assert_sql_result(delete_result, rows_affected=1)
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 0
+
+    await dispatch_async_extra_assertions(driver, case, DRIVER_BASICS_SCOPE)
 
 
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)

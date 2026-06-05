@@ -81,6 +81,7 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+        extra_assertions=("driver_basics:noop",),
     ),
     DriverCase(
         id="duckdb-sync",
@@ -251,6 +252,7 @@ ASYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+        extra_assertions=("driver_basics:noop",),
     ),
     DriverCase(
         id="aiomysql-async",
