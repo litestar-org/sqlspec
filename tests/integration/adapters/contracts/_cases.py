@@ -290,6 +290,8 @@ SYNC_DRIVER_CASES = (
         table_fixture="bigquery_contract_table",
         supports_execute_many=True,
         supports_exception_translation=False,
+        supports_connection_hook=True,
+        config_factory_fixture="lifecycle_config_bigquery",
         deviations=(
             "execute-rows-affected-unavailable",
             "emulator-no-grouped-subquery",

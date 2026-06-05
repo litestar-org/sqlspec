@@ -12,7 +12,6 @@ from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
     from google.auth.credentials import Credentials
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
 
@@ -120,19 +120,6 @@ class BigQueryConnectionContext(SyncPoolConnectionContext):
         return None
 
 
-class _BigQueryConnectionHook:
-    __slots__ = ("_hook",)
-
-    def __init__(self, hook: "Callable[[BigQueryConnection], None]") -> None:
-        self._hook = hook
-
-    def __call__(self, context: "dict[str, Any]") -> None:
-        connection = context.get("connection")
-        if connection is None:
-            return
-        self._hook(connection)
-
-
 class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
@@ -206,12 +193,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         statement_config = statement_config or build_statement_config(json_serializer=serializer)
 
-        local_observability = observability_config
-        if user_connection_hook is not None:
-            lifecycle_override = ObservabilityConfig(
-                lifecycle={"on_connection_create": [_BigQueryConnectionHook(user_connection_hook)]}
-            )
-            local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
+        # Fired directly in create_connection (the client-construction path) like every other adapter,
+        # rather than bridged through the observability lifecycle dispatcher (which only runs under the
+        # SQLSpec registry wrapper, not bare config.provide_session()).
+        self._user_connection_hook = user_connection_hook
 
         super().__init__(
             connection_config=self.connection_config,
@@ -221,7 +206,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
-            observability_config=local_observability,
+            observability_config=observability_config,
             **kwargs,
         )
 
@@ -287,6 +272,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             default_load_job_config = self.connection_config.get("default_load_job_config")
             if default_load_job_config is not None:
                 self.driver_features["default_load_job_config"] = default_load_job_config
+
+            if self._user_connection_hook is not None:
+                self._user_connection_hook(connection)
 
             self._connection_instance = connection
         except Exception as e:

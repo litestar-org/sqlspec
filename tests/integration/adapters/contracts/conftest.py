@@ -29,7 +29,7 @@ from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures, AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
-from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
+from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver, BigQueryDriverFeatures
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,
     CockroachAsyncpgDriver,
@@ -1073,6 +1073,24 @@ def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMy
         if driver_features is None:
             return PyMysqlConfig(connection_config=connection_config)
         return PyMysqlConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..., BigQueryConfig]":
+    """Build fresh BigQuery configs for the connection-hook lifecycle contract (no pooling)."""
+
+    def make(*, pooled: bool = False, driver_features: "BigQueryDriverFeatures | None" = None) -> BigQueryConfig:
+        connection_config: dict[str, Any] = {
+            "project": bigquery_service.project,
+            "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        }
+        if driver_features is None:
+            return BigQueryConfig(connection_config=connection_config)
+        return BigQueryConfig(connection_config=connection_config, driver_features=driver_features)
 
     return make
 

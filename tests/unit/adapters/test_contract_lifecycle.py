@@ -22,8 +22,8 @@ POOLING_CASES = (
     "oracledb-sync",
     "oracledb-async",
 )
-# mysqlconnector-async is a NoPool async config: connection-hook only, no pooling.
-CONNECTION_HOOK_CASES = (*POOLING_CASES, "mysqlconnector-async")
+# mysqlconnector-async and bigquery-sync are NoPool configs: connection-hook only, no pooling.
+CONNECTION_HOOK_CASES = (*POOLING_CASES, "mysqlconnector-async", "bigquery-sync")
 
 
 @pytest.mark.parametrize("case_id", POOLING_CASES)
