@@ -1,6 +1,7 @@
 """Public behavior helpers for adapter-local and central contract tests."""
 
 import contextlib
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 
 import pytest
@@ -18,6 +19,62 @@ from tests.integration.adapters.contracts._inputs import (
     StatementInputCase,
 )
 from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractRow, ContractTable
+
+SyncExtraAssertion = Callable[[object, DriverCase], None]
+AsyncExtraAssertion = Callable[[object, DriverCase], Awaitable[None]]
+
+_SYNC_EXTRA_ASSERTIONS: "dict[str, tuple[str, SyncExtraAssertion]]" = {}
+_ASYNC_EXTRA_ASSERTIONS: "dict[str, tuple[str, AsyncExtraAssertion]]" = {}
+
+
+def register_sync_extra_assertion(key: str, scope: str, fn: SyncExtraAssertion) -> SyncExtraAssertion:
+    """Register an additive sync proof under a unique key, owned by a behavior scope."""
+    if key in _SYNC_EXTRA_ASSERTIONS:
+        msg = f"duplicate sync extra assertion key {key!r}"
+        raise ValueError(msg)
+    _SYNC_EXTRA_ASSERTIONS[key] = (scope, fn)
+    return fn
+
+
+def register_async_extra_assertion(key: str, scope: str, fn: AsyncExtraAssertion) -> AsyncExtraAssertion:
+    """Register an additive async proof under a unique key, owned by a behavior scope."""
+    if key in _ASYNC_EXTRA_ASSERTIONS:
+        msg = f"duplicate async extra assertion key {key!r}"
+        raise ValueError(msg)
+    _ASYNC_EXTRA_ASSERTIONS[key] = (scope, fn)
+    return fn
+
+
+def known_extra_assertion_keys() -> "set[str]":
+    """Return every registered proof key across both sync and async registries."""
+    return set(_SYNC_EXTRA_ASSERTIONS) | set(_ASYNC_EXTRA_ASSERTIONS)
+
+
+def validate_extra_assertions(case: DriverCase) -> None:
+    """Fail loud if a case opts into a proof key registered in neither registry (no silent coverage loss)."""
+    known = known_extra_assertion_keys()
+    unknown = [key for key in case.extra_assertions if key not in known]
+    if unknown:
+        msg = f"{case.id} declares unregistered extra_assertions {unknown!r}"
+        raise KeyError(msg)
+
+
+def dispatch_sync_extra_assertions(driver: object, case: DriverCase, scope: str) -> None:
+    """Run the case's additive sync proofs owned by ``scope``; ignore keys owned elsewhere."""
+    for key in case.extra_assertions:
+        entry = _SYNC_EXTRA_ASSERTIONS.get(key)
+        if entry is None or entry[0] != scope:
+            continue
+        entry[1](driver, case)
+
+
+async def dispatch_async_extra_assertions(driver: object, case: DriverCase, scope: str) -> None:
+    """Await the case's additive async proofs owned by ``scope``; ignore keys owned elsewhere."""
+    for key in case.extra_assertions:
+        entry = _ASYNC_EXTRA_ASSERTIONS.get(key)
+        if entry is None or entry[0] != scope:
+            continue
+        await entry[1](driver, case)
 
 
 class SyncContractDriver(Protocol):

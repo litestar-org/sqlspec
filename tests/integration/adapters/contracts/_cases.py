@@ -47,6 +47,7 @@ class DriverCase:
     supports_vector: bool = False
     supports_exception_translation: bool = True
     deviations: tuple[str, ...] = ()
+    extra_assertions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
