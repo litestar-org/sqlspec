@@ -104,6 +104,7 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+        extra_assertions=("explain_modifiers:duckdb",),
     ),
     DriverCase(
         id="mysqlconnector-sync",
@@ -153,6 +154,7 @@ SYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
+        extra_assertions=("explain_modifiers:postgres",),
     ),
     DriverCase(
         id="cockroach-psycopg-sync",
@@ -227,6 +229,7 @@ SYNC_DRIVER_CASES = (
         supports_for_update=True,
         supports_returning=True,
         deviations=("no-for-share",),
+        extra_assertions=("explain_modifiers:oracle",),
     ),
     DriverCase(
         id="bigquery-sync",
@@ -276,6 +279,7 @@ ASYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
+        extra_assertions=("explain_modifiers:mysql",),
     ),
     DriverCase(
         id="asyncmy-async",
@@ -291,6 +295,7 @@ ASYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
+        extra_assertions=("explain_modifiers:mysql",),
     ),
     DriverCase(
         id="mysqlconnector-async",
@@ -325,6 +330,7 @@ ASYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
+        extra_assertions=("explain_modifiers:postgres",),
     ),
     DriverCase(
         id="psqlpy-async",
@@ -345,6 +351,7 @@ ASYNC_DRIVER_CASES = (
         supports_json=True,
         supports_arrays=True,
         deviations=("execute-rows-affected-unavailable",),
+        extra_assertions=("explain_modifiers:postgres",),
     ),
     DriverCase(
         id="psycopg-async",
@@ -364,6 +371,7 @@ ASYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
+        extra_assertions=("explain_modifiers:postgres",),
     ),
     DriverCase(
         id="cockroach-asyncpg-async",
@@ -419,6 +427,7 @@ ASYNC_DRIVER_CASES = (
         supports_for_update=True,
         supports_returning=True,
         deviations=("no-for-share",),
+        extra_assertions=("explain_modifiers:oracle",),
     ),
 )
 

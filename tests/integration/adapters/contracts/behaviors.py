@@ -7,6 +7,7 @@ from typing import Any, Protocol, cast
 import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
+from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
@@ -860,6 +861,117 @@ async def assert_async_explain_contract(driver: object, case: DriverCase, explai
     async_driver = cast("AsyncContractDriver", driver)
     result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, case.dialect)))
     assert result.data is not None
+
+
+EXPLAIN_MODIFIERS_SCOPE = "explain_modifiers"
+
+
+def _explain_select_sql(table: ContractTable) -> str:
+    return f"SELECT name, value FROM {table.name}"
+
+
+def _postgres_explain_modifier_artifacts(table: ContractTable) -> "list[object]":
+    base = _explain_select_sql(table)
+    return [
+        Explain(base, dialect="postgres").analyze().build(),
+        Explain(base, dialect="postgres").format("json").build(),
+        Explain(base, dialect="postgres").verbose().build(),
+        Explain(base, dialect="postgres").analyze().buffers().build(),
+        Explain(base, dialect="postgres").analyze().timing().build(),
+        Explain(base, dialect="postgres").analyze().verbose().buffers().timing().format("json").build(),
+        Explain(base, dialect="postgres").costs(False).build(),
+        Explain(base, dialect="postgres").analyze().summary().build(),
+    ]
+
+
+def _mysql_explain_modifier_artifacts(table: ContractTable) -> "list[object]":
+    base = _explain_select_sql(table)
+    return [
+        Explain(base, dialect="mysql").analyze().build(),
+        Explain(base, dialect="mysql").format("json").build(),
+        Explain(base, dialect="mysql").format("tree").build(),
+        Explain(base, dialect="mysql").format("traditional").build(),
+    ]
+
+
+def _duckdb_explain_modifier_artifacts(table: ContractTable) -> "list[object]":
+    base = _explain_select_sql(table)
+    return [
+        Explain(base, dialect="duckdb").analyze().build(),
+        Explain(base, dialect="duckdb").format("json").build(),
+        Explain(f"SELECT COUNT(*), SUM(value) FROM {table.name} GROUP BY name", dialect="duckdb").build(),
+    ]
+
+
+def _assert_sync_explain_artifacts(driver: object, artifacts: "list[object]") -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    for artifact in artifacts:
+        result = assert_sql_result(sync_driver.execute(artifact))
+        assert result.data is not None
+
+
+async def _assert_async_explain_artifacts(driver: object, artifacts: "list[object]") -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    for artifact in artifacts:
+        result = assert_sql_result(await async_driver.execute(artifact))
+        assert result.data is not None
+
+
+def _sync_explain_oracle_display(driver: object, case: DriverCase) -> None:
+    """Fold Oracle's two-step EXPLAIN PLAN FOR + DBMS_XPLAN.DISPLAY workflow."""
+    sync_driver = cast("SyncContractDriver", driver)
+    sync_driver.execute(Explain(_explain_select_sql(case.table), dialect="oracle").build())
+    plan = assert_sql_result(sync_driver.execute("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())"))
+    assert plan.data is not None
+    assert len(plan.data) > 0
+
+
+async def _async_explain_oracle_display(driver: object, case: DriverCase) -> None:
+    """Fold Oracle's two-step EXPLAIN PLAN FOR + DBMS_XPLAN.DISPLAY workflow (async)."""
+    async_driver = cast("AsyncContractDriver", driver)
+    await async_driver.execute(Explain(_explain_select_sql(case.table), dialect="oracle").build())
+    plan = assert_sql_result(await async_driver.execute("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())"))
+    assert plan.data is not None
+    assert len(plan.data) > 0
+
+
+register_sync_extra_assertion(
+    "explain_modifiers:postgres",
+    EXPLAIN_MODIFIERS_SCOPE,
+    lambda driver, case: _assert_sync_explain_artifacts(driver, _postgres_explain_modifier_artifacts(case.table)),
+)
+register_async_extra_assertion(
+    "explain_modifiers:postgres",
+    EXPLAIN_MODIFIERS_SCOPE,
+    lambda driver, case: _assert_async_explain_artifacts(driver, _postgres_explain_modifier_artifacts(case.table)),
+)
+register_sync_extra_assertion(
+    "explain_modifiers:mysql",
+    EXPLAIN_MODIFIERS_SCOPE,
+    lambda driver, case: _assert_sync_explain_artifacts(driver, _mysql_explain_modifier_artifacts(case.table)),
+)
+register_async_extra_assertion(
+    "explain_modifiers:mysql",
+    EXPLAIN_MODIFIERS_SCOPE,
+    lambda driver, case: _assert_async_explain_artifacts(driver, _mysql_explain_modifier_artifacts(case.table)),
+)
+register_sync_extra_assertion(
+    "explain_modifiers:duckdb",
+    EXPLAIN_MODIFIERS_SCOPE,
+    lambda driver, case: _assert_sync_explain_artifacts(driver, _duckdb_explain_modifier_artifacts(case.table)),
+)
+register_sync_extra_assertion("explain_modifiers:oracle", EXPLAIN_MODIFIERS_SCOPE, _sync_explain_oracle_display)
+register_async_extra_assertion("explain_modifiers:oracle", EXPLAIN_MODIFIERS_SCOPE, _async_explain_oracle_display)
+
+
+def assert_sync_explain_modifiers_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded dialect-specific EXPLAIN modifier proofs, if any."""
+    dispatch_sync_extra_assertions(driver, case, EXPLAIN_MODIFIERS_SCOPE)
+
+
+async def assert_async_explain_modifiers_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded dialect-specific EXPLAIN modifier proofs, if any."""
+    await dispatch_async_extra_assertions(driver, case, EXPLAIN_MODIFIERS_SCOPE)
 
 
 def assert_sync_arrow_contract(driver: object, case: DriverCase) -> None:
