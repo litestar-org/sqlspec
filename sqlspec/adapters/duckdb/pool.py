@@ -180,8 +180,9 @@ class DuckDBConnectionPool:
                 connection.execute(sql)
 
         if self._on_connection_create:
-            with suppress(Exception):
-                self._on_connection_create(connection)
+            # Let a failing user hook surface its real error instead of silently returning a
+            # half-configured connection (mirrors the sqlite/aiosqlite pools).
+            self._on_connection_create(connection)
 
         return connection
 

@@ -512,6 +512,8 @@ class AiosqliteConnectionPool:
         try:
             connection = await self._create_connection()
         except Exception:
+            # Surface the real cause (bad on_connection_create hook, bad DSN, disk full) instead of
+            # returning None and letting acquire() stall on an empty queue until connect_timeout.
             log_with_context(
                 logger,
                 logging.WARNING,
@@ -522,7 +524,7 @@ class AiosqliteConnectionPool:
                 pool_size=len(self._connection_registry),
                 max_size=self._pool_size,
             )
-            return None
+            raise
         else:
             connection.mark_as_in_use()
             return connection
