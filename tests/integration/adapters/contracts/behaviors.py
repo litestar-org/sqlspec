@@ -1867,6 +1867,99 @@ async def assert_async_param_codecs_contract(driver: object, case: DriverCase) -
     await dispatch_async_extra_assertions(driver, case, PARAM_CODECS_SCOPE)
 
 
+class SyncLifecycleConfig(Protocol):
+    """Sync config surface the pooling/connection-hook contracts exercise."""
+
+    def provide_session(self) -> "contextlib.AbstractContextManager[SyncContractDriver]": ...
+
+    def close_pool(self) -> None: ...
+
+
+class AsyncLifecycleConfig(Protocol):
+    """Async config surface the pooling/connection-hook contracts exercise."""
+
+    def provide_session(self) -> "contextlib.AbstractAsyncContextManager[AsyncContractDriver]": ...
+
+    async def close_pool(self) -> None: ...
+
+
+SyncConfigFactory = Callable[..., SyncLifecycleConfig]
+AsyncConfigFactory = Callable[..., AsyncLifecycleConfig]
+ConnectionHook = Callable[[object], None]
+
+
+def _pool_contract_table(case: DriverCase) -> str:
+    return f"pool_contract_{case.adapter}_{case.mode}"
+
+
+def assert_sync_connection_hook_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert the on_connection_create driver-feature hook fires for sync pooled/direct connections."""
+    hook_calls = 0
+
+    def hook(connection: object) -> None:
+        nonlocal hook_calls
+        hook_calls += 1
+
+    config = make_config(driver_features={"on_connection_create": hook})
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1")
+        assert hook_calls >= 1, f"{case.adapter} on_connection_create hook should fire at least once"
+    finally:
+        config.close_pool()
+
+
+async def assert_async_connection_hook_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Assert the on_connection_create driver-feature hook fires for async pooled/direct connections."""
+    hook_calls = 0
+
+    def hook(connection: object) -> None:
+        nonlocal hook_calls
+        hook_calls += 1
+
+    config = make_config(driver_features={"on_connection_create": hook})
+    try:
+        async with config.provide_session() as session:
+            await session.execute("SELECT 1")
+        assert hook_calls >= 1, f"{case.adapter} on_connection_create hook should fire at least once"
+    finally:
+        await config.close_pool()
+
+
+def assert_sync_pooling_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert sync pooled configs share data across sessions drawn from the same pool."""
+    config = make_config(pooled=True)
+    table = _pool_contract_table(case)
+    try:
+        with config.provide_session() as session:
+            session.execute_script(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, value VARCHAR)")
+            session.execute(f"INSERT INTO {table} (id, value) VALUES (1, 'shared')")
+            session.commit()
+        with config.provide_session() as session:
+            assert session.select_value(f"SELECT value FROM {table} WHERE id = 1") == "shared"
+            session.execute_script(f"DROP TABLE {table}")
+            session.commit()
+    finally:
+        config.close_pool()
+
+
+async def assert_async_pooling_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Assert async pooled configs share data across sessions drawn from the same pool."""
+    config = make_config(pooled=True)
+    table = _pool_contract_table(case)
+    try:
+        async with config.provide_session() as session:
+            await session.execute_script(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, value VARCHAR)")
+            await session.execute(f"INSERT INTO {table} (id, value) VALUES (1, 'shared')")
+            await session.commit()
+        async with config.provide_session() as session:
+            assert await session.select_value(f"SELECT value FROM {table} WHERE id = 1") == "shared"
+            await session.execute_script(f"DROP TABLE {table}")
+            await session.commit()
+    finally:
+        await config.close_pool()
+
+
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:
     """Assert sync drivers return equivalent rows for one statement input shape."""
     sync_driver = cast("SyncContractDriver", driver)

@@ -22,6 +22,7 @@ from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
+from sqlspec.adapters.aiosqlite.config import AiosqliteDriverFeatures
 from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
@@ -40,6 +41,7 @@ from sqlspec.adapters.cockroach_psycopg import (
 )
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
+from sqlspec.adapters.duckdb.config import DuckDBDriverFeatures
 from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
 from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConfig,
@@ -65,6 +67,7 @@ from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver
 from sqlspec.adapters.pymysql.litestar.store import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
+from sqlspec.adapters.sqlite.config import SqliteDriverFeatures
 from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
 from tests.integration.adapters.contracts._adk_cases import ADK_STORE_PARAMS, AdkStoreCase, AdkStoreCaseContext
 from tests.integration.adapters.contracts._cases import (
@@ -813,6 +816,53 @@ def async_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
     return _resolve_events_case(request, request.param)
 
 
+def _lifecycle_connection_config(database: str, *, pooled: bool) -> "dict[str, Any]":
+    """Build a connection_config dict, adding pool sizing keys (a superset of the typed params)."""
+    connection_config: dict[str, Any] = {"database": database}
+    if pooled:
+        connection_config.update({"pool_min_size": 2, "pool_max_size": 5})
+    return connection_config
+
+
+@pytest.fixture
+def lifecycle_config_sqlite(tmp_path: Path) -> "Callable[..., SqliteConfig]":
+    """Build fresh SQLite configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "SqliteDriverFeatures | None" = None) -> SqliteConfig:
+        connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle.db"), pooled=pooled)
+        if driver_features is None:
+            return SqliteConfig(connection_config=connection_config)
+        return SqliteConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig]":
+    """Build fresh aiosqlite configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "AiosqliteDriverFeatures | None" = None) -> AiosqliteConfig:
+        connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle_aiosqlite.db"), pooled=pooled)
+        if driver_features is None:
+            return AiosqliteConfig(connection_config=connection_config)
+        return AiosqliteConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_duckdb(tmp_path: Path) -> "Callable[..., DuckDBConfig]":
+    """Build fresh DuckDB configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "DuckDBDriverFeatures | None" = None) -> DuckDBConfig:
+        connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle.duckdb"), pooled=pooled)
+        if driver_features is None:
+            return DuckDBConfig(connection_config=connection_config)
+        return DuckDBConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
 @pytest.fixture
 def migration_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
     """Build SQLite configs for migration contract tests."""
@@ -1301,7 +1351,8 @@ def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> Dr
     driver = request.getfixturevalue(case.fixture_name)
     if case.table_fixture is not None:
         case = replace(case, table=request.getfixturevalue(case.table_fixture))
-    return DriverCaseContext(case=case, driver=driver)
+    make_config = request.getfixturevalue(case.config_factory_fixture) if case.config_factory_fixture else None
+    return DriverCaseContext(case=case, driver=driver, make_config=make_config)
 
 
 @pytest.fixture(params=SYNC_DRIVER_PARAMS)

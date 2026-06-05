@@ -1,11 +1,13 @@
 """Case records for shared adapter contract tests."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 from _pytest.mark.structures import Mark, MarkDecorator
 
+from sqlspec.config import DatabaseConfigProtocol
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
@@ -52,8 +54,10 @@ class DriverCase:
     supports_merge: bool = False
     supports_copy: bool = False
     supports_pooling: bool = False
+    supports_connection_hook: bool = False
     supports_multi_schema_migrations: bool = False
     supports_data_dictionary: bool = False
+    config_factory_fixture: str | None = None
     deviations: tuple[str, ...] = ()
     extra_assertions: tuple[str, ...] = ()
 
@@ -64,6 +68,7 @@ class DriverCaseContext:
 
     case: DriverCase
     driver: object
+    make_config: "Callable[..., DatabaseConfigProtocol[Any, Any, Any]] | None" = None
 
 
 SQLITE_XDIST_MARK = pytest.mark.xdist_group("sqlite")
@@ -89,6 +94,9 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+        supports_pooling=True,
+        supports_connection_hook=True,
+        config_factory_fixture="lifecycle_config_sqlite",
         extra_assertions=("driver_basics:noop",),
     ),
     DriverCase(
@@ -104,6 +112,9 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+        supports_pooling=True,
+        supports_connection_hook=True,
+        config_factory_fixture="lifecycle_config_duckdb",
         extra_assertions=(
             "explain_modifiers:duckdb",
             "arrow_specifics:duckdb",
