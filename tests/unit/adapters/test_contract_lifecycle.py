@@ -4,8 +4,8 @@ import pytest
 
 from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
 
-POOLING_CASES = ("sqlite-sync", "duckdb-sync")
-CONNECTION_HOOK_CASES = ("sqlite-sync", "duckdb-sync")
+POOLING_CASES = ("sqlite-sync", "duckdb-sync", "aiosqlite-async")
+CONNECTION_HOOK_CASES = ("sqlite-sync", "duckdb-sync", "aiosqlite-async")
 
 
 @pytest.mark.parametrize("case_id", POOLING_CASES)

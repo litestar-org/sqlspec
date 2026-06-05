@@ -291,6 +291,9 @@ ASYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
+        supports_pooling=True,
+        supports_connection_hook=True,
+        config_factory_fixture="lifecycle_config_aiosqlite",
         extra_assertions=("driver_basics:noop", "arrow_specifics:sqlite"),
     ),
     DriverCase(

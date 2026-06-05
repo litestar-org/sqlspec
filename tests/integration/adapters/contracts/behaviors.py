@@ -1913,7 +1913,7 @@ async def assert_async_connection_hook_contract(make_config: AsyncConfigFactory,
     """Assert the on_connection_create driver-feature hook fires for async pooled/direct connections."""
     hook_calls = 0
 
-    def hook(connection: object) -> None:
+    async def hook(connection: object) -> None:
         nonlocal hook_calls
         hook_calls += 1
 
@@ -1932,7 +1932,7 @@ def assert_sync_pooling_contract(make_config: SyncConfigFactory, case: DriverCas
     table = _pool_contract_table(case)
     try:
         with config.provide_session() as session:
-            session.execute_script(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, value VARCHAR)")
+            session.execute_script(case.table.pooling_create_sql.format(table=table))
             session.execute(f"INSERT INTO {table} (id, value) VALUES (1, 'shared')")
             session.commit()
         with config.provide_session() as session:
@@ -1949,7 +1949,7 @@ async def assert_async_pooling_contract(make_config: AsyncConfigFactory, case: D
     table = _pool_contract_table(case)
     try:
         async with config.provide_session() as session:
-            await session.execute_script(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, value VARCHAR)")
+            await session.execute_script(case.table.pooling_create_sql.format(table=table))
             await session.execute(f"INSERT INTO {table} (id, value) VALUES (1, 'shared')")
             await session.commit()
         async with config.provide_session() as session:

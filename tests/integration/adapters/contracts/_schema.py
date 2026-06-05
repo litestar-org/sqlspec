@@ -25,6 +25,7 @@ class ContractTable:
     select_by_name_qmark_sql: str
     select_count_sql: str
     select_ordered_sql: str
+    pooling_create_sql: str = "CREATE TABLE {table} (id INTEGER PRIMARY KEY, value TEXT)"
 
 
 DEFAULT_CONTRACT_TABLE = ContractTable(
@@ -55,6 +56,7 @@ DUCKDB_CONTRACT_TABLE = ContractTable(
             note VARCHAR
         )
     """,
+    pooling_create_sql="CREATE TABLE {table} (id INTEGER PRIMARY KEY, value VARCHAR)",
     delete_sql="DELETE FROM contract_items",
     insert_named_sql="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
     insert_qmark_sql="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
@@ -74,6 +76,7 @@ MYSQL_CONTRACT_TABLE = ContractTable(
             note TEXT
         )
     """,
+    pooling_create_sql="CREATE TABLE {table} (id INT PRIMARY KEY, value VARCHAR(50))",
     delete_sql="DELETE FROM contract_items",
     insert_named_sql="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
     insert_qmark_sql="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
@@ -113,6 +116,7 @@ ORACLE_CONTRACT_TABLE = ContractTable(
             note VARCHAR2(4000)
         )
     """,
+    pooling_create_sql="CREATE TABLE {table} (id NUMBER PRIMARY KEY, value VARCHAR2(50))",
     delete_sql="DELETE FROM contract_items",
     insert_named_sql="INSERT INTO contract_items (name, value, note) VALUES (:name, :value, :note)",
     insert_qmark_sql="INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
