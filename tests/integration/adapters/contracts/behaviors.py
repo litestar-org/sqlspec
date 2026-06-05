@@ -1547,6 +1547,169 @@ async def _mysql_param_codecs_async(driver: object, case: DriverCase) -> None:
         await _async_drop_table(async_driver, items)
 
 
+def _lower_row(row: "dict[str, Any]") -> "dict[str, Any]":
+    return {key.lower(): value for key, value in row.items()}
+
+
+def _read_lob_sync(value: object) -> object:
+    if hasattr(value, "read"):
+        return cast(Any, value).read()
+    return value
+
+
+async def _read_lob_async(value: object) -> object:
+    import inspect
+
+    if not hasattr(value, "read"):
+        return value
+    maybe_value = cast(Any, value).read()
+    if inspect.isawaitable(maybe_value):
+        return await maybe_value
+    return maybe_value
+
+
+_ORACLE_TYPED_DDL = (
+    "CREATE TABLE {table} (id NUMBER PRIMARY KEY, text_field VARCHAR2(100), number_field NUMBER, "
+    "date_field DATE, clob_field CLOB, raw_field RAW(16))"
+)
+_ORACLE_TYPED_INSERT = (
+    "INSERT INTO {table} (id, text_field, number_field, date_field, clob_field, raw_field) "
+    "VALUES (:id, :text_field, :number_field, TO_DATE(:date_text, 'YYYY-MM-DD'), :clob_field, HEXTORAW(:raw_hex))"
+)
+_ORACLE_TYPED_SELECT = (
+    "SELECT id, text_field, number_field, TO_CHAR(date_field, 'YYYY-MM-DD') AS date_text, "
+    "clob_field, RAWTOHEX(raw_field) AS raw_hex FROM {table} ORDER BY id"
+)
+
+
+def _oracle_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold Oracle params: typed DATE/CLOB/RAW/NUMBER + NULL binds, identifier-case, bind-count-mismatch (sync)."""
+    sync_driver = cast("SyncContractDriver", driver)
+
+    typed = _pc_table(case, "typed")
+    _sync_drop_table(sync_driver, typed)
+    sync_driver.execute_script(_ORACLE_TYPED_DDL.format(table=typed))
+    try:
+        sync_driver.execute(
+            _ORACLE_TYPED_INSERT.format(table=typed),
+            {
+                "id": 1,
+                "text_field": "typed values",
+                "number_field": 42,
+                "date_text": "2024-06-15",
+                "clob_field": "CLOB content",
+                "raw_hex": "DEADBEEF",
+            },
+        )
+        sync_driver.execute(
+            _ORACLE_TYPED_INSERT.format(table=typed),
+            {"id": 2, "text_field": None, "number_field": None, "date_text": None, "clob_field": None, "raw_hex": None},
+        )
+        rows = [_lower_row(row) for row in sync_driver.execute(_ORACLE_TYPED_SELECT.format(table=typed)).get_data()]
+        assert rows[0]["text_field"] == "typed values"
+        assert rows[0]["number_field"] == 42
+        assert rows[0]["date_text"] == "2024-06-15"
+        assert _read_lob_sync(rows[0]["clob_field"]) == "CLOB content"
+        assert rows[0]["raw_hex"] == "DEADBEEF"
+        assert rows[1] == {
+            "id": 2,
+            "text_field": None,
+            "number_field": None,
+            "date_text": None,
+            "clob_field": None,
+            "raw_hex": None,
+        }
+    finally:
+        _sync_drop_table(sync_driver, typed)
+
+    ident = sync_driver.execute(
+        'SELECT :upper_value AS UPPER_VALUE, :mixed_value AS "MixedCaseValue" FROM dual',
+        {"upper_value": "upper", "mixed_value": "mixed"},
+    ).get_data()[0]
+    assert ident["upper_value"] == "upper"
+    assert ident["MixedCaseValue"] == "mixed"
+
+    with pytest.raises(Exception):
+        sync_driver.execute("SELECT ? AS first_value, ? AS second_value FROM dual", None)
+
+
+async def _oracle_param_codecs_async(driver: object, case: DriverCase) -> None:
+    """Fold Oracle params: typed DATE/CLOB/RAW/NUMBER + NULL binds, JSON column NULL, identifier-case (async)."""
+    async_driver = cast("AsyncContractDriver", driver)
+
+    typed = _pc_table(case, "typed")
+    await _async_drop_table(async_driver, typed)
+    await async_driver.execute_script(_ORACLE_TYPED_DDL.format(table=typed))
+    try:
+        await async_driver.execute(
+            _ORACLE_TYPED_INSERT.format(table=typed),
+            {
+                "id": 1,
+                "text_field": "async typed values",
+                "number_field": 84,
+                "date_text": "2025-01-21",
+                "clob_field": "Async CLOB content",
+                "raw_hex": "FEEDFACE",
+            },
+        )
+        await async_driver.execute(
+            _ORACLE_TYPED_INSERT.format(table=typed),
+            {"id": 2, "text_field": None, "number_field": None, "date_text": None, "clob_field": None, "raw_hex": None},
+        )
+        rows = [
+            _lower_row(row) for row in (await async_driver.execute(_ORACLE_TYPED_SELECT.format(table=typed))).get_data()
+        ]
+        assert rows[0]["text_field"] == "async typed values"
+        assert rows[0]["number_field"] == 84
+        assert rows[0]["date_text"] == "2025-01-21"
+        assert await _read_lob_async(rows[0]["clob_field"]) == "Async CLOB content"
+        assert rows[0]["raw_hex"] == "FEEDFACE"
+        assert rows[1] == {
+            "id": 2,
+            "text_field": None,
+            "number_field": None,
+            "date_text": None,
+            "clob_field": None,
+            "raw_hex": None,
+        }
+    finally:
+        await _async_drop_table(async_driver, typed)
+
+    json_t = _pc_table(case, "json")
+    await _async_drop_table(async_driver, json_t)
+    await async_driver.execute_script(f"CREATE TABLE {json_t} (id NUMBER PRIMARY KEY, payload JSON)")
+    try:
+        await async_driver.execute(
+            f"INSERT INTO {json_t} (id, payload) VALUES (:id, :payload)", {"id": 1, "payload": None}
+        )
+        await async_driver.execute(
+            f"INSERT INTO {json_t} (id, payload) VALUES (:id, :payload)",
+            {"id": 2, "payload": {"status": "ok", "missing": None}},
+        )
+        json_rows = [
+            _lower_row(row)
+            for row in (await async_driver.execute(f"SELECT id, payload FROM {json_t} ORDER BY id")).get_data()
+        ]
+        assert json_rows[0] == {"id": 1, "payload": None}
+        assert json_rows[1]["payload"] == {"status": "ok", "missing": None}
+    finally:
+        await _async_drop_table(async_driver, json_t)
+
+    ident = (
+        await async_driver.execute(
+            'SELECT :upper_value AS UPPER_VALUE, :mixed_value AS "MixedCaseValue" FROM dual',
+            {"upper_value": "upper", "mixed_value": "mixed"},
+        )
+    ).get_data()[0]
+    assert ident["upper_value"] == "upper"
+    assert ident["MixedCaseValue"] == "mixed"
+
+    with pytest.raises(Exception):
+        await async_driver.execute("SELECT ? AS first_value, ? AS second_value FROM dual", None)
+
+
+register_sync_extra_assertion("param_codecs:oracle", PARAM_CODECS_SCOPE, _oracle_param_codecs)
+register_async_extra_assertion("param_codecs:oracle", PARAM_CODECS_SCOPE, _oracle_param_codecs_async)
 register_sync_extra_assertion("param_codecs:duckdb", PARAM_CODECS_SCOPE, _duckdb_param_codecs)
 register_async_extra_assertion("param_codecs:cockroach_asyncpg", PARAM_CODECS_SCOPE, _cockroach_asyncpg_param_codecs)
 register_sync_extra_assertion("param_codecs:cockroach_psycopg", PARAM_CODECS_SCOPE, _cockroach_psycopg_param_codecs)

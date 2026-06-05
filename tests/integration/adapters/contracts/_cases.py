@@ -242,7 +242,7 @@ SYNC_DRIVER_CASES = (
         supports_for_update=True,
         supports_returning=True,
         deviations=("no-for-share",),
-        extra_assertions=("explain_modifiers:oracle",),
+        extra_assertions=("explain_modifiers:oracle", "param_codecs:oracle"),
     ),
     DriverCase(
         id="bigquery-sync",
@@ -448,7 +448,7 @@ ASYNC_DRIVER_CASES = (
         supports_for_update=True,
         supports_returning=True,
         deviations=("no-for-share",),
-        extra_assertions=("explain_modifiers:oracle", "arrow_specifics:oracle"),
+        extra_assertions=("explain_modifiers:oracle", "arrow_specifics:oracle", "param_codecs:oracle"),
     ),
 )
 

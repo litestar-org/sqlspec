@@ -11,6 +11,7 @@ SYNC_PROOF_KEYS = (
     "param_codecs:duckdb",
     "param_codecs:cockroach_psycopg",
     "param_codecs:mysql",
+    "param_codecs:oracle",
 )
 ASYNC_PROOF_KEYS = (
     "param_codecs:asyncpg",
@@ -19,6 +20,7 @@ ASYNC_PROOF_KEYS = (
     "param_codecs:cockroach_asyncpg",
     "param_codecs:cockroach_psycopg",
     "param_codecs:mysql",
+    "param_codecs:oracle",
 )
 
 OPTED_IN = {
@@ -35,6 +37,8 @@ OPTED_IN = {
     "aiomysql-async": "param_codecs:mysql",
     "asyncmy-async": "param_codecs:mysql",
     "mysqlconnector-async": "param_codecs:mysql",
+    "oracledb-sync": "param_codecs:oracle",
+    "oracledb-async": "param_codecs:oracle",
 }
 
 
