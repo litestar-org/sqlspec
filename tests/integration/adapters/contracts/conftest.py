@@ -17,13 +17,13 @@ from pytest_databases.docker.oracle import OracleService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
+from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver, AiosqliteDriverFeatures
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyDriverFeatures
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures, AsyncpgPoolConfig
@@ -48,6 +48,7 @@ from sqlspec.adapters.duckdb.litestar import DuckdbStore
 from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConfig,
     MysqlConnectorAsyncDriver,
+    MysqlConnectorDriverFeatures,
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncDriver,
 )
@@ -71,7 +72,7 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncDriver,
 )
 from sqlspec.adapters.psycopg.litestar import PsycopgAsyncStore, PsycopgSyncStore
-from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver
+from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, PyMysqlDriverFeatures
 from sqlspec.adapters.pymysql.litestar import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
@@ -990,6 +991,87 @@ def lifecycle_config_cockroach_psycopg_async(
         if driver_features is None:
             return CockroachPsycopgAsyncConfig(connection_config=connection_config)
         return CockroachPsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., AiomysqlConfig]":
+    """Build fresh aiomysql configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "AiomysqlDriverFeatures | None" = None) -> AiomysqlConfig:
+        connection_config = _mysql_connection_config(mysql_service, database_key="db")
+        if pooled:
+            connection_config.update({"minsize": 2, "maxsize": 5})
+        if driver_features is None:
+            return AiomysqlConfig(connection_config=connection_config)
+        return AiomysqlConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., AsyncmyConfig]":
+    """Build fresh asyncmy configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "AsyncmyDriverFeatures | None" = None) -> AsyncmyConfig:
+        connection_config = _mysql_connection_config(mysql_service)
+        if pooled:
+            connection_config.update({"minsize": 2, "maxsize": 5})
+        if driver_features is None:
+            return AsyncmyConfig(connection_config=connection_config)
+        return AsyncmyConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_mysqlconnector_sync(
+    mysql_service: MySQLService,
+) -> "Callable[..., MysqlConnectorSyncConfig]":
+    """Build fresh mysql-connector sync configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(
+        *, pooled: bool = False, driver_features: "MysqlConnectorDriverFeatures | None" = None
+    ) -> MysqlConnectorSyncConfig:
+        connection_config = _mysql_connection_config(mysql_service)
+        connection_config["use_pure"] = True
+        if pooled:
+            connection_config["pool_size"] = 5
+        if driver_features is None:
+            return MysqlConnectorSyncConfig(connection_config=connection_config)
+        return MysqlConnectorSyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_mysqlconnector_async(
+    mysql_service: MySQLService,
+) -> "Callable[..., MysqlConnectorAsyncConfig]":
+    """Build fresh mysql-connector async configs for the connection-hook lifecycle contract (no pooling)."""
+
+    def make(
+        *, pooled: bool = False, driver_features: "MysqlConnectorDriverFeatures | None" = None
+    ) -> MysqlConnectorAsyncConfig:
+        connection_config = _mysql_connection_config(mysql_service)
+        connection_config["use_pure"] = True
+        if driver_features is None:
+            return MysqlConnectorAsyncConfig(connection_config=connection_config)
+        return MysqlConnectorAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMysqlConfig]":
+    """Build fresh PyMySQL configs for the pooling/connection-hook lifecycle contracts (thread-local pool)."""
+
+    def make(*, pooled: bool = False, driver_features: "PyMysqlDriverFeatures | None" = None) -> PyMysqlConfig:
+        connection_config = _mysql_connection_config(mysql_service)
+        if driver_features is None:
+            return PyMysqlConfig(connection_config=connection_config)
+        return PyMysqlConfig(connection_config=connection_config, driver_features=driver_features)
 
     return make
 

@@ -15,8 +15,13 @@ POOLING_CASES = (
     "psycopg-async",
     "cockroach-asyncpg-async",
     "cockroach-psycopg-async",
+    "mysqlconnector-sync",
+    "pymysql-sync",
+    "aiomysql-async",
+    "asyncmy-async",
 )
-CONNECTION_HOOK_CASES = POOLING_CASES
+# mysqlconnector-async is a NoPool async config: connection-hook only, no pooling.
+CONNECTION_HOOK_CASES = (*POOLING_CASES, "mysqlconnector-async")
 
 
 @pytest.mark.parametrize("case_id", POOLING_CASES)
