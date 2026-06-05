@@ -59,11 +59,7 @@ class _LiteralInliningTransform:
         self._json_serializer = json_serializer
 
     def __call__(
-        self,
-        expression: Any,
-        parameters: "ParameterPayload",
-        _parameter_profile: "ParameterProfile",
-        _is_many: bool = False,
+        self, expression: Any, parameters: "ParameterPayload", _parameter_profile: "ParameterProfile"
     ) -> "tuple[Any, object]":
         literal_expression = replace_placeholders_with_literals(
             expression, parameters, json_serializer=self._json_serializer
@@ -181,7 +177,7 @@ class _PlaceholderLiteralTransformer:
 
 def build_null_pruning_transform(
     *, dialect: str = "postgres"
-) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, ConvertedParameters]]":
+) -> "Callable[[Any, ParameterPayload, ParameterProfile, bool], tuple[Any, ConvertedParameters]]":
     """Return a callable that prunes NULL placeholders from an expression."""
     return _NullPruningTransform(dialect)
 
