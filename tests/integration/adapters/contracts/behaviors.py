@@ -573,7 +573,9 @@ def assert_sync_parameter_contract(driver: object, case: DriverCase, parameter_c
         assert_result_data(result, parameter_case.expected_result_data)
     if parameter_case.verification_statement is not None and parameter_case.expected_verification_data is not None:
         verification = _execute_sync(
-            sync_driver, _with_table(parameter_case.verification_statement, case.table), parameter_case.verification_parameters
+            sync_driver,
+            _with_table(parameter_case.verification_statement, case.table),
+            parameter_case.verification_parameters,
         )
         assert_result_data(verification, parameter_case.expected_verification_data)
 
@@ -585,14 +587,18 @@ async def assert_async_parameter_contract(
     async_driver = cast("AsyncContractDriver", driver)
     await _seed_async(async_driver, parameter_case.setup_rows, case.table)
 
-    result = await _execute_async(async_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters)
+    result = await _execute_async(
+        async_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters
+    )
     if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
     if parameter_case.verification_statement is not None and parameter_case.expected_verification_data is not None:
         verification = await _execute_async(
-            async_driver, _with_table(parameter_case.verification_statement, case.table), parameter_case.verification_parameters
+            async_driver,
+            _with_table(parameter_case.verification_statement, case.table),
+            parameter_case.verification_parameters,
         )
         assert_result_data(verification, parameter_case.expected_verification_data)
 
