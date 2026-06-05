@@ -19,6 +19,8 @@ POOLING_CASES = (
     "pymysql-sync",
     "aiomysql-async",
     "asyncmy-async",
+    "oracledb-sync",
+    "oracledb-async",
 )
 # mysqlconnector-async is a NoPool async config: connection-hook only, no pooling.
 CONNECTION_HOOK_CASES = (*POOLING_CASES, "mysqlconnector-async")

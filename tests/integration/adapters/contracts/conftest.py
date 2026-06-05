@@ -57,6 +57,7 @@ from sqlspec.adapters.mysqlconnector.litestar import MysqlConnectorAsyncStore, M
 from sqlspec.adapters.oracledb import (
     OracleAsyncConfig,
     OracleAsyncDriver,
+    OracleDriverFeatures,
     OraclePoolParams,
     OracleSyncConfig,
     OracleSyncDriver,
@@ -1072,6 +1073,32 @@ def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMy
         if driver_features is None:
             return PyMysqlConfig(connection_config=connection_config)
         return PyMysqlConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callable[..., OracleSyncConfig]":
+    """Build fresh Oracle sync configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "OracleDriverFeatures | None" = None) -> OracleSyncConfig:
+        connection_config = _oracle_pool_params(oracle_23ai_service)
+        if driver_features is None:
+            return OracleSyncConfig(connection_config=connection_config)
+        return OracleSyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_oracle_async(oracle_23ai_service: OracleService) -> "Callable[..., OracleAsyncConfig]":
+    """Build fresh Oracle async configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "OracleDriverFeatures | None" = None) -> OracleAsyncConfig:
+        connection_config = _oracle_pool_params(oracle_23ai_service)
+        if driver_features is None:
+            return OracleAsyncConfig(connection_config=connection_config)
+        return OracleAsyncConfig(connection_config=connection_config, driver_features=driver_features)
 
     return make
 

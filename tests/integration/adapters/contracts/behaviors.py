@@ -1892,18 +1892,24 @@ def _pool_contract_table(case: DriverCase) -> str:
     return f"pool_contract_{case.adapter}_{case.mode}"
 
 
+def _connection_probe_sql(case: DriverCase) -> str:
+    """Trivial query used to force a connection to be drawn so the create-hook fires."""
+    return "SELECT 1 FROM DUAL" if case.dialect == "oracle" else "SELECT 1"
+
+
 def assert_sync_connection_hook_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
     """Assert the on_connection_create driver-feature hook fires for sync pooled/direct connections."""
     hook_calls = 0
 
-    def hook(connection: object) -> None:
+    def hook(connection: object, *_args: object) -> None:
+        # *_args absorbs adapter-specific extra positionals (oracledb passes (connection, tag)).
         nonlocal hook_calls
         hook_calls += 1
 
     config = make_config(driver_features={"on_connection_create": hook})
     try:
         with config.provide_session() as session:
-            session.execute("SELECT 1")
+            session.execute(_connection_probe_sql(case))
         assert hook_calls >= 1, f"{case.adapter} on_connection_create hook should fire at least once"
     finally:
         config.close_pool()
@@ -1913,14 +1919,15 @@ async def assert_async_connection_hook_contract(make_config: AsyncConfigFactory,
     """Assert the on_connection_create driver-feature hook fires for async pooled/direct connections."""
     hook_calls = 0
 
-    async def hook(connection: object) -> None:
+    async def hook(connection: object, *_args: object) -> None:
+        # *_args absorbs adapter-specific extra positionals (oracledb passes (connection, tag)).
         nonlocal hook_calls
         hook_calls += 1
 
     config = make_config(driver_features={"on_connection_create": hook})
     try:
         async with config.provide_session() as session:
-            await session.execute("SELECT 1")
+            await session.execute(_connection_probe_sql(case))
         assert hook_calls >= 1, f"{case.adapter} on_connection_create hook should fire at least once"
     finally:
         await config.close_pool()
