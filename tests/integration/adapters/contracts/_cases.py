@@ -154,7 +154,12 @@ SYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "execute_many_specifics:postgres"),
+        extra_assertions=(
+            "explain_modifiers:postgres",
+            "arrow_specifics:postgres",
+            "execute_many_specifics:postgres",
+            "param_codecs:psycopg",
+        ),
     ),
     DriverCase(
         id="cockroach-psycopg-sync",
@@ -330,7 +335,12 @@ ASYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "execute_many_specifics:postgres"),
+        extra_assertions=(
+            "explain_modifiers:postgres",
+            "arrow_specifics:postgres",
+            "execute_many_specifics:postgres",
+            "param_codecs:asyncpg",
+        ),
     ),
     DriverCase(
         id="psqlpy-async",
@@ -351,7 +361,7 @@ ASYNC_DRIVER_CASES = (
         supports_json=True,
         supports_arrays=True,
         deviations=("execute-rows-affected-unavailable",),
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres"),
+        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "param_codecs:psqlpy"),
     ),
     DriverCase(
         id="psycopg-async",
@@ -371,7 +381,7 @@ ASYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres"),
+        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "param_codecs:psycopg"),
     ),
     DriverCase(
         id="cockroach-asyncpg-async",

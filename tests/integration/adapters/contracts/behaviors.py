@@ -865,6 +865,348 @@ async def assert_async_execute_many_specifics_contract(driver: object, case: Dri
     await dispatch_async_extra_assertions(driver, case, EXECUTE_MANY_SPECIFICS_SCOPE)
 
 
+PARAM_CODECS_SCOPE = "param_codecs"
+
+
+def _pc_table(case: DriverCase, suffix: str) -> str:
+    return f"pc_{suffix}_{case.adapter}_{case.mode}"
+
+
+async def _asyncpg_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold asyncpg native-codec params: arrays+ANY, native dict->JSONB, UUID/date/bool/NULL, float, count-mismatch."""
+    import math
+    from datetime import date
+    from uuid import uuid4
+
+    async_driver = cast("AsyncContractDriver", driver)
+
+    arrays = _pc_table(case, "arrays")
+    await _async_drop_table(async_driver, arrays)
+    await async_driver.execute(
+        f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])"
+    )
+    await async_driver.commit()
+    try:
+        await async_driver.execute_many(
+            f"INSERT INTO {arrays} (name, tags, scores) VALUES (?, ?, ?)",
+            [("Array 1", ["tag1", "tag2"], [10, 20, 30]), ("Array 2", ["tag3"], [40, 50])],
+        )
+        await async_driver.commit()
+        any_rows = (await async_driver.execute(f"SELECT name FROM {arrays} WHERE ? = ANY(tags)", "tag2")).get_data()
+        len_rows = (
+            await async_driver.execute(f"SELECT name FROM {arrays} WHERE array_length(scores, 1) > ? ORDER BY name", 1)
+        ).get_data()
+        assert any_rows == [{"name": "Array 1"}]
+        assert len_rows == [{"name": "Array 1"}, {"name": "Array 2"}]
+    finally:
+        await _async_drop_table(async_driver, arrays)
+
+    jsonb = _pc_table(case, "jsonb")
+    await _async_drop_table(async_driver, jsonb)
+    await async_driver.execute(f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB, config JSONB)")
+    await async_driver.commit()
+    try:
+        row = (
+            await async_driver.execute(
+                f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
+                "json-test",
+                {"score": 100, "active": True},
+                None,
+            )
+        ).get_data()
+        assert row == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
+    finally:
+        await _async_drop_table(async_driver, jsonb)
+
+    none_values = _pc_table(case, "none")
+    await _async_drop_table(async_driver, none_values)
+    await async_driver.execute(
+        f"CREATE TABLE {none_values} (id UUID PRIMARY KEY, text_col TEXT, nullable_text TEXT, "
+        f"bool_col BOOLEAN, nullable_bool BOOLEAN, date_col DATE, nullable_date DATE)"
+    )
+    await async_driver.commit()
+    test_id = uuid4()
+    try:
+        await async_driver.execute(
+            f"INSERT INTO {none_values} (id, text_col, nullable_text, bool_col, nullable_bool, date_col, nullable_date) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?)",
+            test_id,
+            "test_value",
+            None,
+            True,
+            None,
+            date(2025, 1, 21),
+            None,
+        )
+        await async_driver.commit()
+        stored = await async_driver.select_one(f"SELECT * FROM {none_values} WHERE id = ?", test_id)
+        assert stored["id"] == test_id
+        assert stored["nullable_text"] is None
+        assert stored["bool_col"] is True
+        assert stored["nullable_bool"] is None
+        assert stored["date_col"] is not None
+        assert stored["nullable_date"] is None
+    finally:
+        await _async_drop_table(async_driver, none_values)
+
+    float_row = (await async_driver.execute("SELECT ?::float AS value", math.pi)).get_data()
+    assert abs(float_row[0]["value"] - math.pi) < 0.001
+
+    with pytest.raises(Exception):
+        await async_driver.execute("SELECT ?::text AS first, ?::int AS second", None)
+
+
+async def _psqlpy_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold psqlpy native-codec params: scalar+JSON casts, JSONB dict/nested/NULL, decimal/timestamp, count-mismatch."""
+    import decimal
+    import math
+    from datetime import datetime
+
+    async_driver = cast("AsyncContractDriver", driver)
+
+    typed = (
+        await async_driver.execute(
+            "SELECT ?::text AS text_val, ?::int AS int_val, ?::float AS float_val, "
+            "?::bool AS bool_val, ?::json AS json_val",
+            "string_value",
+            42,
+            math.pi,
+            True,
+            {"key": "value"},
+        )
+    ).get_data()[0]
+    assert typed["text_val"] == "string_value"
+    assert typed["int_val"] == 42
+    assert abs(typed["float_val"] - math.pi) < 0.001
+    assert typed["bool_val"] is True
+    assert typed["json_val"]["key"] == "value"
+
+    jsonb = _pc_table(case, "jsonb")
+    await _async_drop_table(async_driver, jsonb)
+    await async_driver.execute(
+        f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB, config JSONB, tags JSONB)"
+    )
+    await async_driver.commit()
+    try:
+        inserted = (
+            await async_driver.execute(
+                f"INSERT INTO {jsonb} (name, metadata, config, tags) VALUES (?, ?, ?, ?) "
+                f"RETURNING name, metadata, config, tags",
+                "json-test",
+                {"user_id": 123},
+                None,
+                {"tags": ["one", None]},
+            )
+        ).get_data()[0]
+        assert inserted["metadata"] == {"user_id": 123}
+        assert inserted["config"] is None
+        assert inserted["tags"] == {"tags": ["one", None]}
+        updated = (
+            await async_driver.execute(
+                f"UPDATE {jsonb} SET metadata = ?, config = ? WHERE name = ? RETURNING metadata, config",
+                None,
+                {"updated": True},
+                "json-test",
+            )
+        ).get_data()
+        assert updated == [{"metadata": None, "config": {"updated": True}}]
+    finally:
+        await _async_drop_table(async_driver, jsonb)
+
+    decimal_val = decimal.Decimal("123.456789")
+    decimal_row = (await async_driver.execute("SELECT ?::float AS decimal_val", float(decimal_val))).get_data()
+    assert abs(float(decimal_row[0]["decimal_val"]) - float(decimal_val)) < 0.000001
+    timestamp_row = (
+        await async_driver.execute("SELECT ?::timestamp AS datetime_val", datetime(2024, 1, 1, 12, 0, 0).isoformat())
+    ).get_data()
+    assert timestamp_row[0]["datetime_val"] is not None
+
+    with pytest.raises(Exception):
+        await async_driver.execute("SELECT ?::text AS val1, ?::int AS val2", None)
+
+
+def _psycopg_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold psycopg native-codec params: arrays+ANY, serialized JSONB, UUID/date/bool/NULL, float, count-mismatch."""
+    import json as _json
+    import math
+    from datetime import date
+    from uuid import uuid4
+
+    sync_driver = cast("SyncContractDriver", driver)
+
+    arrays = _pc_table(case, "arrays")
+    _sync_drop_table(sync_driver, arrays)
+    sync_driver.execute(f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])")
+    sync_driver.commit()
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {arrays} (name, tags, scores) VALUES (?, ?, ?)",
+            [("Array 1", ["tag1", "tag2"], [10, 20, 30]), ("Array 2", ["tag3"], [40, 50])],
+        )
+        sync_driver.commit()
+        any_rows = sync_driver.execute(f"SELECT name FROM {arrays} WHERE ? = ANY(tags)", "tag2").get_data()
+        len_rows = sync_driver.execute(
+            f"SELECT name FROM {arrays} WHERE array_length(scores, 1) > ? ORDER BY name", 1
+        ).get_data()
+        assert any_rows == [{"name": "Array 1"}]
+        assert len_rows == [{"name": "Array 1"}, {"name": "Array 2"}]
+    finally:
+        _sync_drop_table(sync_driver, arrays)
+
+    jsonb = _pc_table(case, "jsonb")
+    _sync_drop_table(sync_driver, jsonb)
+    sync_driver.execute(f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB, config JSONB)")
+    sync_driver.commit()
+    try:
+        row = sync_driver.execute(
+            f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
+            "json-test",
+            _json.dumps({"score": 100, "active": True}),
+            None,
+        ).get_data()
+        assert row == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
+    finally:
+        _sync_drop_table(sync_driver, jsonb)
+
+    none_values = _pc_table(case, "none")
+    _sync_drop_table(sync_driver, none_values)
+    sync_driver.execute(
+        f"CREATE TABLE {none_values} (id UUID PRIMARY KEY, text_col TEXT, nullable_text TEXT, "
+        f"bool_col BOOLEAN, nullable_bool BOOLEAN, date_col DATE, nullable_date DATE)"
+    )
+    sync_driver.commit()
+    test_id = uuid4()
+    try:
+        sync_driver.execute(
+            f"INSERT INTO {none_values} (id, text_col, nullable_text, bool_col, nullable_bool, date_col, nullable_date) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?)",
+            test_id,
+            "test_value",
+            None,
+            True,
+            None,
+            date(2025, 1, 21),
+            None,
+        )
+        sync_driver.commit()
+        stored = sync_driver.select_one(f"SELECT * FROM {none_values} WHERE id = ?", test_id)
+        assert stored["id"] == test_id
+        assert stored["nullable_text"] is None
+        assert stored["bool_col"] is True
+        assert stored["nullable_bool"] is None
+        assert stored["date_col"] is not None
+        assert stored["nullable_date"] is None
+    finally:
+        _sync_drop_table(sync_driver, none_values)
+
+    float_row = sync_driver.execute("SELECT ?::float AS value", math.pi).get_data()
+    assert abs(float_row[0]["value"] - math.pi) < 0.001
+
+    with pytest.raises(Exception):
+        sync_driver.execute("SELECT ?::text AS first, ?::int AS second", None)
+
+
+async def _psycopg_param_codecs_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of the psycopg native-codec param fold (serialized JSONB, arrays, UUID/date/bool/NULL)."""
+    import json as _json
+    import math
+    from datetime import date
+    from uuid import uuid4
+
+    async_driver = cast("AsyncContractDriver", driver)
+
+    arrays = _pc_table(case, "arrays")
+    await _async_drop_table(async_driver, arrays)
+    await async_driver.execute(
+        f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])"
+    )
+    await async_driver.commit()
+    try:
+        await async_driver.execute_many(
+            f"INSERT INTO {arrays} (name, tags, scores) VALUES (?, ?, ?)",
+            [("Array 1", ["tag1", "tag2"], [10, 20, 30]), ("Array 2", ["tag3"], [40, 50])],
+        )
+        await async_driver.commit()
+        any_rows = (await async_driver.execute(f"SELECT name FROM {arrays} WHERE ? = ANY(tags)", "tag2")).get_data()
+        len_rows = (
+            await async_driver.execute(f"SELECT name FROM {arrays} WHERE array_length(scores, 1) > ? ORDER BY name", 1)
+        ).get_data()
+        assert any_rows == [{"name": "Array 1"}]
+        assert len_rows == [{"name": "Array 1"}, {"name": "Array 2"}]
+    finally:
+        await _async_drop_table(async_driver, arrays)
+
+    jsonb = _pc_table(case, "jsonb")
+    await _async_drop_table(async_driver, jsonb)
+    await async_driver.execute(f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB, config JSONB)")
+    await async_driver.commit()
+    try:
+        row = (
+            await async_driver.execute(
+                f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
+                "json-test",
+                _json.dumps({"score": 100, "active": True}),
+                None,
+            )
+        ).get_data()
+        assert row == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
+    finally:
+        await _async_drop_table(async_driver, jsonb)
+
+    none_values = _pc_table(case, "none")
+    await _async_drop_table(async_driver, none_values)
+    await async_driver.execute(
+        f"CREATE TABLE {none_values} (id UUID PRIMARY KEY, text_col TEXT, nullable_text TEXT, "
+        f"bool_col BOOLEAN, nullable_bool BOOLEAN, date_col DATE, nullable_date DATE)"
+    )
+    await async_driver.commit()
+    test_id = uuid4()
+    try:
+        await async_driver.execute(
+            f"INSERT INTO {none_values} (id, text_col, nullable_text, bool_col, nullable_bool, date_col, nullable_date) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?)",
+            test_id,
+            "test_value",
+            None,
+            True,
+            None,
+            date(2025, 1, 21),
+            None,
+        )
+        await async_driver.commit()
+        stored = await async_driver.select_one(f"SELECT * FROM {none_values} WHERE id = ?", test_id)
+        assert stored["id"] == test_id
+        assert stored["nullable_text"] is None
+        assert stored["bool_col"] is True
+        assert stored["nullable_bool"] is None
+        assert stored["date_col"] is not None
+        assert stored["nullable_date"] is None
+    finally:
+        await _async_drop_table(async_driver, none_values)
+
+    float_row = (await async_driver.execute("SELECT ?::float AS value", math.pi)).get_data()
+    assert abs(float_row[0]["value"] - math.pi) < 0.001
+
+    with pytest.raises(Exception):
+        await async_driver.execute("SELECT ?::text AS first, ?::int AS second", None)
+
+
+register_async_extra_assertion("param_codecs:asyncpg", PARAM_CODECS_SCOPE, _asyncpg_param_codecs)
+register_async_extra_assertion("param_codecs:psqlpy", PARAM_CODECS_SCOPE, _psqlpy_param_codecs)
+register_sync_extra_assertion("param_codecs:psycopg", PARAM_CODECS_SCOPE, _psycopg_param_codecs)
+register_async_extra_assertion("param_codecs:psycopg", PARAM_CODECS_SCOPE, _psycopg_param_codecs_async)
+
+
+def assert_sync_param_codecs_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-specific parameter-codec proofs (arrays/JSON/type fidelity), if any."""
+    dispatch_sync_extra_assertions(driver, case, PARAM_CODECS_SCOPE)
+
+
+async def assert_async_param_codecs_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-specific parameter-codec proofs (arrays/JSON/type fidelity), if any."""
+    await dispatch_async_extra_assertions(driver, case, PARAM_CODECS_SCOPE)
+
+
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:
     """Assert sync drivers return equivalent rows for one statement input shape."""
     sync_driver = cast("SyncContractDriver", driver)
