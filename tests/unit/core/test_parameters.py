@@ -777,10 +777,10 @@ def test_parameter_style_config_hash_same_for_same_output_transformer_reference(
 def test_parameter_style_config_hash_differs_for_different_ast_transformers() -> None:
     """Test different AST transformer callables produce different hashes."""
 
-    def transformer_a(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
+    def transformer_a(expr: Any, params: Any, profile: Any, is_many: bool) -> tuple[Any, Any]:
         return (expr, params)
 
-    def transformer_b(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
+    def transformer_b(expr: Any, params: Any, profile: Any, is_many: bool) -> tuple[Any, Any]:
         return (expr, params)
 
     config_a = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer_a)
@@ -791,7 +791,7 @@ def test_parameter_style_config_hash_differs_for_different_ast_transformers() ->
 def test_parameter_style_config_hash_same_for_same_ast_transformer_reference() -> None:
     """Test shared AST transformer references produce the same hash."""
 
-    def transformer(expr: Any, params: Any, profile: Any) -> tuple[Any, Any]:
+    def transformer(expr: Any, params: Any, profile: Any, is_many: bool) -> tuple[Any, Any]:
         return (expr, params)
 
     config_a = ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=transformer)

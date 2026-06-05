@@ -241,7 +241,7 @@ def _bigquery_contract_session(
             "project": bigquery_service.project,
             "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         }
     )
     try:
