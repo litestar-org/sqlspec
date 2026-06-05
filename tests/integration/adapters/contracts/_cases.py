@@ -46,6 +46,14 @@ class DriverCase:
     supports_arrays: bool = False
     supports_vector: bool = False
     supports_exception_translation: bool = True
+    supports_lob: bool = False
+    supports_native_array_codec: bool = False
+    supports_json_native: bool = False
+    supports_merge: bool = False
+    supports_copy: bool = False
+    supports_pooling: bool = False
+    supports_multi_schema_migrations: bool = False
+    supports_data_dictionary: bool = False
     deviations: tuple[str, ...] = ()
     extra_assertions: tuple[str, ...] = ()
 

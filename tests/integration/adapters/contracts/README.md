@@ -15,6 +15,37 @@ Keep adapter-specific SQL, optional service setup, and one-off regressions in ad
 Default local coverage currently runs SQLite, aiosqlite, DuckDB, and MySQL-family contracts. Service-backed adapters
 should keep their existing opt-in marks and xdist groups when they move from deferred rows to active rows.
 
+## Capability Flags
+
+`DriverCase` carries `supports_*` flags that gate behavior so a single contract can branch on
+capability instead of adapter name. Flags are **additive and opt-in**: every flag defaults to a value
+that means "no extra behavior" (`False`, except a few baseline truths like `supports_transactions`).
+An adapter that opts into nothing sees identical behavior to before the flag existed.
+
+Capability flags available for gating contracts:
+
+- Result/IO: `supports_arrow`, `supports_explain`, `supports_storage_bridge`, `supports_copy`
+- Statements: `supports_execute_many`, `supports_execute_script`, `supports_filtered_statement`,
+  `supports_loader_input`, `supports_merge`, `supports_returning`, `supports_for_update`
+- Types/codecs: `supports_json`, `supports_json_native`, `supports_arrays`,
+  `supports_native_array_codec`, `supports_vector`, `supports_lob`
+- Schema/migrations: `supports_migrations`, `supports_schema_qualified_ddl`,
+  `supports_multi_schema_migrations`, `supports_data_dictionary`
+- Connectivity: `supports_pooling`, `supports_transactions`, `supports_exception_translation`
+
+### Deviations vs Extra Assertions
+
+`deviations` is **subtractive**: a tuple of string keys that gate or relax a generic assertion
+(`if "key" not in case.deviations: ...`). Use it when an adapter cannot satisfy part of a shared
+contract.
+
+`extra_assertions` is the **additive** counterpart: a tuple of registered proof keys that let a single
+contract run adapter-specific extra checks without a separate per-adapter file. Register a proof with
+`register_sync_extra_assertion(key, scope, fn)` / `register_async_extra_assertion(...)` in
+`behaviors.py`, opt a case in via `extra_assertions=("scope:key",)`, and dispatch it from the owning
+behavior with `dispatch_sync_extra_assertions(driver, case, scope)`. Keys registered nowhere fail loud
+via `validate_extra_assertions(case)` so consolidating a per-adapter test never silently drops coverage.
+
 ## Parameter Styles
 
 Generic parameter-style behavior belongs in `test_parameter_styles_contract.py` with cases from `_inputs.py`.
