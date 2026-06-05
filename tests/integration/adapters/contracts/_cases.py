@@ -104,7 +104,7 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
-        extra_assertions=("explain_modifiers:duckdb", "arrow_specifics:duckdb"),
+        extra_assertions=("explain_modifiers:duckdb", "arrow_specifics:duckdb", "execute_many_specifics:duckdb"),
     ),
     DriverCase(
         id="mysqlconnector-sync",
@@ -154,7 +154,7 @@ SYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres"),
+        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "execute_many_specifics:postgres"),
     ),
     DriverCase(
         id="cockroach-psycopg-sync",
@@ -330,7 +330,7 @@ ASYNC_DRIVER_CASES = (
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres"),
+        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "execute_many_specifics:postgres"),
     ),
     DriverCase(
         id="psqlpy-async",

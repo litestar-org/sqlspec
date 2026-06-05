@@ -612,6 +612,255 @@ async def assert_async_execute_many_input_contract(driver: object, case: DriverC
     assert await async_driver.select_value(table.select_count_sql) == 202
 
 
+EXECUTE_MANY_SPECIFICS_SCOPE = "execute_many_specifics"
+
+
+def _em_table(case: DriverCase, suffix: str) -> str:
+    return f"em_spec_{suffix}_{case.adapter}_{case.mode}"
+
+
+def _postgres_execute_many_specifics(driver: object, case: DriverCase) -> None:
+    """Fold PostgreSQL execute_many edge cases: empty batch, NULLs, RETURNING, arrays, JSONB, UPSERT (sync)."""
+    sync_driver = cast("SyncContractDriver", driver)
+    batch = _em_table(case, "batch")
+    _sync_drop_table(sync_driver, batch)
+    sync_driver.execute(f"CREATE TABLE {batch} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, value INTEGER, category TEXT)")
+    sync_driver.commit()
+    insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
+    try:
+        empty = sync_driver.execute_many(insert, [])
+        assert empty.rows_affected in (-1, 0)
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
+
+        sync_driver.execute_many(
+            insert, [("String Item", 123, "CAT1"), ("Null Item", 456, None), ("Neg Item", -50, "CAT3")]
+        )
+        sync_driver.commit()
+        null_rows = sync_driver.execute(f"SELECT name FROM {batch} WHERE category IS NULL").get_data()
+        assert len(null_rows) == 1
+        assert null_rows[0]["name"] == "Null Item"
+
+        sync_driver.execute(f"DELETE FROM {batch}")
+        sync_driver.commit()
+        returning = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?) RETURNING id, name"
+        sync_driver.execute_many(returning, [("R1", 1, "RET"), ("R2", 2, "RET"), ("R3", 3, "RET")])
+        sync_driver.commit()
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch} WHERE category = 'RET'") == 3
+    finally:
+        _sync_drop_table(sync_driver, batch)
+
+    _postgres_em_arrays_json_sync(sync_driver, case)
+    _postgres_em_upsert_sync(sync_driver, case)
+
+
+def _postgres_em_arrays_json_sync(sync_driver: "SyncContractDriver", case: DriverCase) -> None:
+    arrays = _em_table(case, "arrays")
+    _sync_drop_table(sync_driver, arrays)
+    sync_driver.execute(f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])")
+    sync_driver.commit()
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {arrays} (name, tags, scores) VALUES (?, ?, ?)",
+            [("A1", ["tag1", "tag2"], [10, 20, 30]), ("A2", ["tag3"], [40, 50])],
+        )
+        sync_driver.commit()
+        counts = sync_driver.execute(
+            f"SELECT name, array_length(tags, 1) AS tag_count FROM {arrays} ORDER BY name"
+        ).get_data()
+        assert [row["tag_count"] for row in counts] == [2, 1]
+    finally:
+        _sync_drop_table(sync_driver, arrays)
+
+    json_table = _em_table(case, "json")
+    _sync_drop_table(sync_driver, json_table)
+    sync_driver.execute(f"CREATE TABLE {json_table} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB)")
+    sync_driver.commit()
+    try:
+        payloads = [
+            ("J1", json.dumps({"type": "test", "value": 100})),
+            ("J2", json.dumps({"type": "prod", "value": 200})),
+        ]
+        sync_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
+        sync_driver.commit()
+        rows = sync_driver.execute(
+            f"SELECT name, metadata->>'type' AS type FROM {json_table} ORDER BY name"
+        ).get_data()
+        assert [row["type"] for row in rows] == ["test", "prod"]
+    finally:
+        _sync_drop_table(sync_driver, json_table)
+
+
+def _postgres_em_upsert_sync(sync_driver: "SyncContractDriver", case: DriverCase) -> None:
+    upsert = _em_table(case, "upsert")
+    _sync_drop_table(sync_driver, upsert)
+    sync_driver.execute(f"CREATE TABLE {upsert} (id INTEGER PRIMARY KEY, name TEXT, counter INTEGER DEFAULT 1)")
+    sync_driver.commit()
+    try:
+        sync_driver.execute_many(f"INSERT INTO {upsert} (id, name) VALUES (?, ?)", [(1, "Item 1"), (2, "Item 2")])
+        sync_driver.commit()
+        sync_driver.execute_many(
+            f"INSERT INTO {upsert} (id, name) VALUES (?, ?) "
+            f"ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, counter = {upsert}.counter + 1",
+            [(1, "Updated 1"), (3, "Item 3")],
+        )
+        sync_driver.commit()
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {upsert}") == 3
+        assert sync_driver.select_value(f"SELECT counter FROM {upsert} WHERE id = 1") == 2
+    finally:
+        _sync_drop_table(sync_driver, upsert)
+
+
+async def _postgres_execute_many_specifics_async(driver: object, case: DriverCase) -> None:
+    """Fold PostgreSQL execute_many edge cases: empty batch, NULLs, RETURNING, arrays, JSONB (async)."""
+    async_driver = cast("AsyncContractDriver", driver)
+    batch = _em_table(case, "batch")
+    await _async_drop_table(async_driver, batch)
+    await async_driver.execute(
+        f"CREATE TABLE {batch} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, value INTEGER, category TEXT)"
+    )
+    await async_driver.commit()
+    insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
+    try:
+        empty = await async_driver.execute_many(insert, [])
+        assert empty.rows_affected in (-1, 0)
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
+
+        await async_driver.execute_many(
+            insert, [("String Item", 123, "CAT1"), ("Null Item", 456, None), ("Neg Item", -50, "CAT3")]
+        )
+        await async_driver.commit()
+        null_rows = (await async_driver.execute(f"SELECT name FROM {batch} WHERE category IS NULL")).get_data()
+        assert len(null_rows) == 1
+        assert null_rows[0]["name"] == "Null Item"
+
+        await async_driver.execute(f"DELETE FROM {batch}")
+        await async_driver.commit()
+        returning = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?) RETURNING id, name"
+        await async_driver.execute_many(returning, [("R1", 1, "RET"), ("R2", 2, "RET"), ("R3", 3, "RET")])
+        await async_driver.commit()
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch} WHERE category = 'RET'") == 3
+    finally:
+        await _async_drop_table(async_driver, batch)
+
+    arrays = _em_table(case, "arrays")
+    await _async_drop_table(async_driver, arrays)
+    await async_driver.execute(f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])")
+    await async_driver.commit()
+    try:
+        await async_driver.execute_many(
+            f"INSERT INTO {arrays} (name, tags, scores) VALUES (?, ?, ?)",
+            [("A1", ["tag1", "tag2"], [10, 20, 30]), ("A2", ["tag3"], [40, 50])],
+        )
+        await async_driver.commit()
+        counts = (
+            await async_driver.execute(f"SELECT name, array_length(tags, 1) AS tag_count FROM {arrays} ORDER BY name")
+        ).get_data()
+        assert [row["tag_count"] for row in counts] == [2, 1]
+    finally:
+        await _async_drop_table(async_driver, arrays)
+
+    json_table = _em_table(case, "json")
+    await _async_drop_table(async_driver, json_table)
+    await async_driver.execute(f"CREATE TABLE {json_table} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB)")
+    await async_driver.commit()
+    try:
+        payloads = [
+            ("J1", json.dumps({"type": "test", "value": 100})),
+            ("J2", json.dumps({"type": "prod", "value": 200})),
+        ]
+        await async_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
+        await async_driver.commit()
+        rows = (
+            await async_driver.execute(f"SELECT name, metadata->>'type' AS type FROM {json_table} ORDER BY name")
+        ).get_data()
+        assert [row["type"] for row in rows] == ["test", "prod"]
+    finally:
+        await _async_drop_table(async_driver, json_table)
+
+
+def _duckdb_execute_many_specifics(driver: object, case: DriverCase) -> None:
+    """Fold DuckDB execute_many edge cases: empty batch, mixed types, arrays, analytics, time series."""
+    from datetime import datetime, timedelta
+
+    sync_driver = cast("SyncContractDriver", driver)
+    batch = _em_table(case, "batch")
+    _sync_drop_table(sync_driver, batch)
+    sync_driver.execute(f"CREATE TABLE {batch} (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, value INTEGER, category VARCHAR)")
+    insert = f"INSERT INTO {batch} (id, name, value, category) VALUES (?, ?, ?, ?)"
+    try:
+        empty = sync_driver.execute_many(insert, [])
+        assert empty.rows_affected == 0
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
+
+        mixed = sync_driver.execute_many(
+            insert, [(1, "Item 1", 123, "CAT1"), (2, "Null Item", 456, None), (3, "Item 3", 0, "CAT2")]
+        )
+        assert mixed.rows_affected == 3
+        null_rows = sync_driver.execute(f"SELECT name FROM {batch} WHERE category IS NULL").get_data()
+        assert len(null_rows) == 1
+        assert null_rows[0]["name"] == "Null Item"
+
+        analytics = [(i + 10, f"A{i}", i * 10, f"G{i % 2}") for i in range(1, 11)]
+        sync_driver.execute_many(insert, analytics)
+        grouped = sync_driver.execute(
+            f"SELECT category, COUNT(*) AS count FROM {batch} WHERE id >= 10 GROUP BY category ORDER BY category"
+        ).get_data()
+        assert {row["category"] for row in grouped} == {"G0", "G1"}
+    finally:
+        _sync_drop_table(sync_driver, batch)
+
+    arrays = _em_table(case, "arrays")
+    _sync_drop_table(sync_driver, arrays)
+    sync_driver.execute(f"CREATE TABLE {arrays} (id INTEGER PRIMARY KEY, name VARCHAR, numbers INTEGER[], tags VARCHAR[])")
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {arrays} (id, name, numbers, tags) VALUES (?, ?, ?, ?)",
+            [(1, "A1", [10, 20, 30], ["t1", "t2"]), (2, "A2", [40], ["t3"])],
+        )
+        counts = sync_driver.execute(
+            f"SELECT name, len(numbers) AS num_count FROM {arrays} ORDER BY name"
+        ).get_data()
+        assert [row["num_count"] for row in counts] == [3, 1]
+    finally:
+        _sync_drop_table(sync_driver, arrays)
+
+    series = _em_table(case, "series")
+    _sync_drop_table(sync_driver, series)
+    sync_driver.execute(f"CREATE TABLE {series} (id INTEGER PRIMARY KEY, ts TIMESTAMP, metric VARCHAR, val DOUBLE)")
+    try:
+        base = datetime(2024, 1, 1)
+        rows = [(i, base + timedelta(hours=i), f"m{i % 3}", float(i * 10.5)) for i in range(1, 13)]
+        result = sync_driver.execute_many(f"INSERT INTO {series} (id, ts, metric, val) VALUES (?, ?, ?, ?)", rows)
+        assert result.rows_affected == 12
+        agg = sync_driver.execute(
+            f"SELECT metric, COUNT(*) AS points FROM {series} GROUP BY metric ORDER BY metric"
+        ).get_data()
+        assert len(agg) == 3
+    finally:
+        _sync_drop_table(sync_driver, series)
+
+
+register_sync_extra_assertion(
+    "execute_many_specifics:postgres", EXECUTE_MANY_SPECIFICS_SCOPE, _postgres_execute_many_specifics
+)
+register_async_extra_assertion(
+    "execute_many_specifics:postgres", EXECUTE_MANY_SPECIFICS_SCOPE, _postgres_execute_many_specifics_async
+)
+register_sync_extra_assertion(
+    "execute_many_specifics:duckdb", EXECUTE_MANY_SPECIFICS_SCOPE, _duckdb_execute_many_specifics
+)
+
+
+def assert_sync_execute_many_specifics_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-specific execute_many proofs (arrays/JSON/edge cases), if any."""
+    dispatch_sync_extra_assertions(driver, case, EXECUTE_MANY_SPECIFICS_SCOPE)
+
+
+async def assert_async_execute_many_specifics_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-specific execute_many proofs (arrays/JSON/edge cases), if any."""
+    await dispatch_async_extra_assertions(driver, case, EXECUTE_MANY_SPECIFICS_SCOPE)
+
+
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:
     """Assert sync drivers return equivalent rows for one statement input shape."""
     sync_driver = cast("SyncContractDriver", driver)
