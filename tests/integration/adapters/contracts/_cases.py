@@ -201,6 +201,7 @@ SYNC_DRIVER_CASES = (
         supports_storage_bridge=True,
         supports_exception_translation=False,
         deviations=("execute-rows-affected-unavailable",),
+        extra_assertions=("param_codecs:adbc_sqlite",),
     ),
     DriverCase(
         id="adbc-duckdb-sync",
@@ -214,6 +215,7 @@ SYNC_DRIVER_CASES = (
         supports_explain=True,
         supports_storage_bridge=True,
         deviations=("execute-rows-affected-unavailable",),
+        extra_assertions=("param_codecs:adbc_duckdb",),
     ),
     DriverCase(
         id="adbc-postgres-sync",
@@ -227,6 +229,7 @@ SYNC_DRIVER_CASES = (
         supports_storage_bridge=True,
         supports_for_update=True,
         deviations=("execute-rows-affected-unavailable", "explain-copy-incompatible"),
+        extra_assertions=("param_codecs:adbc_postgres",),
     ),
     DriverCase(
         id="oracledb-sync",

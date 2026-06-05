@@ -12,6 +12,9 @@ SYNC_PROOF_KEYS = (
     "param_codecs:cockroach_psycopg",
     "param_codecs:mysql",
     "param_codecs:oracle",
+    "param_codecs:adbc_postgres",
+    "param_codecs:adbc_sqlite",
+    "param_codecs:adbc_duckdb",
 )
 ASYNC_PROOF_KEYS = (
     "param_codecs:asyncpg",
@@ -39,6 +42,9 @@ OPTED_IN = {
     "mysqlconnector-async": "param_codecs:mysql",
     "oracledb-sync": "param_codecs:oracle",
     "oracledb-async": "param_codecs:oracle",
+    "adbc-sqlite-sync": "param_codecs:adbc_sqlite",
+    "adbc-duckdb-sync": "param_codecs:adbc_duckdb",
+    "adbc-postgres-sync": "param_codecs:adbc_postgres",
 }
 
 

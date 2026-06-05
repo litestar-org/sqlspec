@@ -1708,6 +1708,126 @@ async def _oracle_param_codecs_async(driver: object, case: DriverCase) -> None:
         await async_driver.execute("SELECT ? AS first_value, ? AS second_value FROM dual", None)
 
 
+def _adbc_postgres_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold ADBC-PostgreSQL params: NULL-literal pruning, repeated NULL, RETURNING+NULL, JSONB cast, count-mismatch."""
+    from datetime import date
+
+    sync_driver = cast("SyncContractDriver", driver)
+    items = _pc_table(case, "items")
+    jsonb = _pc_table(case, "jsonb")
+    _sync_drop_table(sync_driver, items)
+    _sync_drop_table(sync_driver, jsonb)
+    sync_driver.execute(
+        f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, active BOOLEAN, created_date DATE)"
+    )
+    sync_driver.execute(f"CREATE TABLE {jsonb} (id INTEGER PRIMARY KEY, metadata JSONB, config JSONB)")
+    sync_driver.commit()
+    try:
+        pruned = sync_driver.execute(
+            f"INSERT INTO {items} (id, name, value, active, created_date) VALUES ($1, $2, $3, $4, $5)",
+            1,
+            None,
+            42,
+            True,
+            date(2025, 1, 21),
+        )
+        sync_driver.commit()
+        assert pruned.rows_affected in (-1, 0, 1)
+        row = sync_driver.select_one(f"SELECT id, name, value, active, created_date FROM {items} WHERE id = $1", 1)
+        assert row["name"] is None
+        assert row["value"] == 42
+        assert row["active"] is True
+        assert row["created_date"] is not None
+
+        sync_driver.execute(f"DELETE FROM {items}")
+        sync_driver.commit()
+        sync_driver.execute_many(
+            f"INSERT INTO {items} (id, name, value) VALUES ($1, $2, $3)", [(1, "named", 10), (2, None, 20)]
+        )
+        sync_driver.commit()
+        repeated = sync_driver.execute(
+            f"SELECT id, name FROM {items} WHERE name = $1 OR ($1 IS NULL AND name IS NULL) ORDER BY id", None
+        ).get_data()
+        assert repeated == [{"id": 2, "name": None}]
+
+        sync_driver.execute(f"DELETE FROM {items}")
+        sync_driver.commit()
+        returning = sync_driver.execute(
+            f"INSERT INTO {items} (id, name, value, active) VALUES ($1, $2, $3, $4) RETURNING id, name, value, active",
+            10,
+            None,
+            200,
+            None,
+        ).get_data()
+        sync_driver.commit()
+        assert returning == [{"id": 10, "name": None, "value": 200, "active": None}]
+
+        jrow = sync_driver.execute(
+            f"INSERT INTO {jsonb} (id, metadata, config) VALUES ($1, $2::jsonb, $3::jsonb) "
+            f"RETURNING metadata ->> 'score' AS score, metadata ->> 'active' AS active, config",
+            20,
+            {"score": 100, "active": True},
+            None,
+        ).get_data()
+        sync_driver.commit()
+        assert jrow[0]["score"] == "100"
+        assert jrow[0]["active"] == "true"
+        assert jrow[0]["config"] is None
+
+        with pytest.raises(SQLSpecError):
+            sync_driver.execute(f"INSERT INTO {items} (id, name) VALUES ($1, $2)", 30, None, "extra")
+    finally:
+        _sync_drop_table(sync_driver, items)
+        _sync_drop_table(sync_driver, jsonb)
+
+
+def _adbc_sqlite_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold ADBC-SQLite params: qmark placeholders preserve NULLs and boolean values."""
+    sync_driver = cast("SyncContractDriver", driver)
+    items = _pc_table(case, "items")
+    _sync_drop_table(sync_driver, items)
+    sync_driver.execute(f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, active BOOLEAN)")
+    try:
+        inserted = sync_driver.execute(
+            f"INSERT INTO {items} (id, name, value, active) VALUES (?, ?, ?, ?)", 1, None, None, True
+        )
+        assert inserted.rows_affected in (-1, 0, 1)
+        row = sync_driver.select_one(f"SELECT name, value, active FROM {items} WHERE id = ?", 1)
+        assert row["name"] is None
+        assert row["value"] is None
+        assert row["active"] in (True, 1)
+    finally:
+        _sync_drop_table(sync_driver, items)
+
+
+def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold ADBC-DuckDB params: numeric placeholders with backend DDL, qmark feeding the native Arrow path."""
+    from sqlspec.typing import PYARROW_INSTALLED
+
+    sync_driver = cast("SyncContractDriver", driver)
+    items = _pc_table(case, "items")
+    _sync_drop_table(sync_driver, items)
+    sync_driver.execute(f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name VARCHAR, value INTEGER)")
+    try:
+        for entry in [(1, "low", 10), (2, "mid", 20), (3, "high", 30)]:
+            sync_driver.execute(f"INSERT INTO {items} (id, name, value) VALUES (?, ?, ?)", *entry)
+        numeric = sync_driver.execute(
+            f"SELECT name, value FROM {items} WHERE value >= $1 ORDER BY value", 20
+        ).get_data()
+        assert numeric == [{"name": "mid", "value": 20}, {"name": "high", "value": 30}]
+
+        if PYARROW_INSTALLED:
+            arrow = sync_driver.select_to_arrow(f"SELECT name, value FROM {items} WHERE value > ? ORDER BY value", 10)
+            frame = arrow.to_pandas()
+            assert list(frame["name"]) == ["mid", "high"]
+            assert list(frame["value"]) == [20, 30]
+    finally:
+        _sync_drop_table(sync_driver, items)
+
+
+register_sync_extra_assertion("param_codecs:adbc_postgres", PARAM_CODECS_SCOPE, _adbc_postgres_param_codecs)
+register_sync_extra_assertion("param_codecs:adbc_sqlite", PARAM_CODECS_SCOPE, _adbc_sqlite_param_codecs)
+register_sync_extra_assertion("param_codecs:adbc_duckdb", PARAM_CODECS_SCOPE, _adbc_duckdb_param_codecs)
 register_sync_extra_assertion("param_codecs:oracle", PARAM_CODECS_SCOPE, _oracle_param_codecs)
 register_async_extra_assertion("param_codecs:oracle", PARAM_CODECS_SCOPE, _oracle_param_codecs_async)
 register_sync_extra_assertion("param_codecs:duckdb", PARAM_CODECS_SCOPE, _duckdb_param_codecs)
