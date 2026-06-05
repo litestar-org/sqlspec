@@ -11,6 +11,7 @@ from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.utils.serializers import to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
 from tests.integration.adapters.contracts._inputs import (
@@ -678,10 +679,7 @@ def _postgres_em_arrays_json_sync(sync_driver: "SyncContractDriver", case: Drive
     sync_driver.execute(f"CREATE TABLE {json_table} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB)")
     sync_driver.commit()
     try:
-        payloads = [
-            ("J1", json.dumps({"type": "test", "value": 100})),
-            ("J2", json.dumps({"type": "prod", "value": 200})),
-        ]
+        payloads = [("J1", to_json({"type": "test", "value": 100})), ("J2", to_json({"type": "prod", "value": 200}))]
         sync_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
         sync_driver.commit()
         rows = sync_driver.execute(f"SELECT name, metadata->>'type' AS type FROM {json_table} ORDER BY name").get_data()
@@ -766,10 +764,7 @@ async def _postgres_execute_many_specifics_async(driver: object, case: DriverCas
     await async_driver.execute(f"CREATE TABLE {json_table} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB)")
     await async_driver.commit()
     try:
-        payloads = [
-            ("J1", json.dumps({"type": "test", "value": 100})),
-            ("J2", json.dumps({"type": "prod", "value": 200})),
-        ]
+        payloads = [("J1", to_json({"type": "test", "value": 100})), ("J2", to_json({"type": "prod", "value": 200}))]
         await async_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
         await async_driver.commit()
         rows = (
@@ -1027,7 +1022,6 @@ async def _psqlpy_param_codecs(driver: object, case: DriverCase) -> None:
 
 def _psycopg_param_codecs(driver: object, case: DriverCase) -> None:
     """Fold psycopg native-codec params: arrays+ANY, serialized JSONB, UUID/date/bool/NULL, float, count-mismatch."""
-    import json as _json
     import math
     from datetime import date
     from uuid import uuid4
@@ -1061,7 +1055,7 @@ def _psycopg_param_codecs(driver: object, case: DriverCase) -> None:
         row = sync_driver.execute(
             f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
             "json-test",
-            _json.dumps({"score": 100, "active": True}),
+            to_json({"score": 100, "active": True}),
             None,
         ).get_data()
         assert row == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
@@ -1108,7 +1102,6 @@ def _psycopg_param_codecs(driver: object, case: DriverCase) -> None:
 
 async def _psycopg_param_codecs_async(driver: object, case: DriverCase) -> None:
     """Async mirror of the psycopg native-codec param fold (serialized JSONB, arrays, UUID/date/bool/NULL)."""
-    import json as _json
     import math
     from datetime import date
     from uuid import uuid4
@@ -1145,7 +1138,7 @@ async def _psycopg_param_codecs_async(driver: object, case: DriverCase) -> None:
             await async_driver.execute(
                 f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
                 "json-test",
-                _json.dumps({"score": 100, "active": True}),
+                to_json({"score": 100, "active": True}),
                 None,
             )
         ).get_data()
