@@ -624,7 +624,9 @@ def _postgres_execute_many_specifics(driver: object, case: DriverCase) -> None:
     sync_driver = cast("SyncContractDriver", driver)
     batch = _em_table(case, "batch")
     _sync_drop_table(sync_driver, batch)
-    sync_driver.execute(f"CREATE TABLE {batch} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, value INTEGER, category TEXT)")
+    sync_driver.execute(
+        f"CREATE TABLE {batch} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, value INTEGER, category TEXT)"
+    )
     sync_driver.commit()
     insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
     try:
@@ -682,9 +684,7 @@ def _postgres_em_arrays_json_sync(sync_driver: "SyncContractDriver", case: Drive
         ]
         sync_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
         sync_driver.commit()
-        rows = sync_driver.execute(
-            f"SELECT name, metadata->>'type' AS type FROM {json_table} ORDER BY name"
-        ).get_data()
+        rows = sync_driver.execute(f"SELECT name, metadata->>'type' AS type FROM {json_table} ORDER BY name").get_data()
         assert [row["type"] for row in rows] == ["test", "prod"]
     finally:
         _sync_drop_table(sync_driver, json_table)
@@ -744,7 +744,9 @@ async def _postgres_execute_many_specifics_async(driver: object, case: DriverCas
 
     arrays = _em_table(case, "arrays")
     await _async_drop_table(async_driver, arrays)
-    await async_driver.execute(f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])")
+    await async_driver.execute(
+        f"CREATE TABLE {arrays} (id SERIAL PRIMARY KEY, name TEXT, tags TEXT[], scores INTEGER[])"
+    )
     await async_driver.commit()
     try:
         await async_driver.execute_many(
@@ -785,7 +787,9 @@ def _duckdb_execute_many_specifics(driver: object, case: DriverCase) -> None:
     sync_driver = cast("SyncContractDriver", driver)
     batch = _em_table(case, "batch")
     _sync_drop_table(sync_driver, batch)
-    sync_driver.execute(f"CREATE TABLE {batch} (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, value INTEGER, category VARCHAR)")
+    sync_driver.execute(
+        f"CREATE TABLE {batch} (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, value INTEGER, category VARCHAR)"
+    )
     insert = f"INSERT INTO {batch} (id, name, value, category) VALUES (?, ?, ?, ?)"
     try:
         empty = sync_driver.execute_many(insert, [])
@@ -811,15 +815,15 @@ def _duckdb_execute_many_specifics(driver: object, case: DriverCase) -> None:
 
     arrays = _em_table(case, "arrays")
     _sync_drop_table(sync_driver, arrays)
-    sync_driver.execute(f"CREATE TABLE {arrays} (id INTEGER PRIMARY KEY, name VARCHAR, numbers INTEGER[], tags VARCHAR[])")
+    sync_driver.execute(
+        f"CREATE TABLE {arrays} (id INTEGER PRIMARY KEY, name VARCHAR, numbers INTEGER[], tags VARCHAR[])"
+    )
     try:
         sync_driver.execute_many(
             f"INSERT INTO {arrays} (id, name, numbers, tags) VALUES (?, ?, ?, ?)",
             [(1, "A1", [10, 20, 30], ["t1", "t2"]), (2, "A2", [40], ["t3"])],
         )
-        counts = sync_driver.execute(
-            f"SELECT name, len(numbers) AS num_count FROM {arrays} ORDER BY name"
-        ).get_data()
+        counts = sync_driver.execute(f"SELECT name, len(numbers) AS num_count FROM {arrays} ORDER BY name").get_data()
         assert [row["num_count"] for row in counts] == [3, 1]
     finally:
         _sync_drop_table(sync_driver, arrays)

@@ -7,7 +7,12 @@ from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver
 from tests.integration.adapters.contracts.behaviors import ARROW_SPECIFICS_SCOPE, validate_extra_assertions
 
 SYNC_PROOF_KEYS = ("arrow_specifics:duckdb", "arrow_specifics:postgres")
-ASYNC_PROOF_KEYS = ("arrow_specifics:sqlite", "arrow_specifics:mysql", "arrow_specifics:postgres", "arrow_specifics:oracle")
+ASYNC_PROOF_KEYS = (
+    "arrow_specifics:sqlite",
+    "arrow_specifics:mysql",
+    "arrow_specifics:postgres",
+    "arrow_specifics:oracle",
+)
 
 OPTED_IN = {
     "aiosqlite-async": "arrow_specifics:sqlite",

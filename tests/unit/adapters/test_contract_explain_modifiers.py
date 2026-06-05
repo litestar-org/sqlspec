@@ -6,7 +6,12 @@ from tests.integration.adapters.contracts import behaviors
 from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
 from tests.integration.adapters.contracts.behaviors import EXPLAIN_MODIFIERS_SCOPE, validate_extra_assertions
 
-SYNC_PROOF_KEYS = ("explain_modifiers:postgres", "explain_modifiers:mysql", "explain_modifiers:duckdb", "explain_modifiers:oracle")
+SYNC_PROOF_KEYS = (
+    "explain_modifiers:postgres",
+    "explain_modifiers:mysql",
+    "explain_modifiers:duckdb",
+    "explain_modifiers:oracle",
+)
 ASYNC_PROOF_KEYS = ("explain_modifiers:postgres", "explain_modifiers:mysql", "explain_modifiers:oracle")
 
 OPTED_IN = {
