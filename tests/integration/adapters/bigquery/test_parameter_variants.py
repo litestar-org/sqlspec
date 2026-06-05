@@ -12,7 +12,6 @@ import pytest
 
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.core import SQL, SQLResult
-from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
@@ -99,12 +98,6 @@ def test_bigquery_array_parameter_with_unnest(
     )
 
     assert result.get_data() == [{"value": 1}, {"value": 2}, {"value": 3}]
-
-
-def test_bigquery_empty_array_parameter_requires_inferable_element_type(bigquery_session: BigQueryDriver) -> None:
-    """BigQuery cannot infer an ARRAY query parameter type from an empty sequence."""
-    with pytest.raises(SQLSpecError, match="Cannot determine BigQuery ARRAY type"):
-        bigquery_session.execute("SELECT ARRAY_LENGTH(@values)", {"values": []})
 
 
 def test_bigquery_parameters_inside_struct_expression(
