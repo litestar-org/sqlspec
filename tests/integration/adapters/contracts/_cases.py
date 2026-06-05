@@ -64,6 +64,8 @@ POSTGRES_XDIST_MARK = pytest.mark.xdist_group("postgres")
 COCKROACH_XDIST_MARK = pytest.mark.xdist_group("cockroachdb")
 ADBC_MARK = pytest.mark.adbc
 ORACLE_XDIST_MARK = pytest.mark.xdist_group("oracle")
+BIGQUERY_MARK = pytest.mark.bigquery
+BIGQUERY_XDIST_MARK = pytest.mark.xdist_group("bigquery")
 
 SYNC_DRIVER_CASES = (
     DriverCase(
@@ -215,6 +217,23 @@ SYNC_DRIVER_CASES = (
         supports_for_update=True,
         supports_returning=True,
         deviations=("no-for-share",),
+    ),
+    DriverCase(
+        id="bigquery-sync",
+        fixture_name="contract_bigquery_driver",
+        adapter="bigquery",
+        dialect="bigquery",
+        mode="sync",
+        marks=(BIGQUERY_MARK, BIGQUERY_XDIST_MARK),
+        table_fixture="bigquery_contract_table",
+        supports_execute_many=True,
+        supports_exception_translation=False,
+        deviations=(
+            "execute-rows-affected-unavailable",
+            "emulator-no-grouped-subquery",
+            "emulator-no-search-filter",
+            "emulator-retries-invalid-sql",
+        ),
     ),
 )
 
@@ -410,15 +429,6 @@ DEFERRED_DRIVER_CASES = (
         "sync",
         integration_status="deferred",
         reason="No active integration fixture exists for mssql_python.",
-    ),
-    DriverCase(
-        "bigquery-sync",
-        "",
-        "bigquery",
-        "bigquery",
-        "sync",
-        integration_status="deferred",
-        reason="BigQuery emulator hangs on DDL (300s retry timeout) with function-scoped contract fixtures; needs session-scoped client reuse like the local bigquery conftest. Fixture + ContractTable ready in conftest/_schema.",
     ),
     DriverCase(
         "spanner-sync",

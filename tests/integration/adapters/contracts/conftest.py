@@ -87,13 +87,13 @@ from tests.integration.adapters.contracts._migration_cases import (
     MigrationCaseContext,
 )
 from tests.integration.adapters.contracts._schema import (
-    BIGQUERY_CONTRACT_TABLE,
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
     ORACLE_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
     ContractTable,
+    build_bigquery_contract_table,
 )
 from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
 
@@ -220,27 +220,45 @@ def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generato
         config.close_pool()
 
 
-@pytest.fixture
-def contract_bigquery_driver(bigquery_service: BigQueryService) -> "Generator[BigQueryDriver, None, None]":
-    """Provide a fresh BigQuery driver for contract tests.
+@pytest.fixture(scope="session")
+def bigquery_contract_table(bigquery_service: BigQueryService) -> ContractTable:
+    """Resolve the fully-qualified BigQuery ContractTable for the running emulator."""
+    return build_bigquery_contract_table(f"`{bigquery_service.project}.{bigquery_service.dataset}.contract_items`")
 
-    Sets a dot-free dataset_id so the driver registers a default dataset and
-    unqualified ``contract_items`` references resolve to ``project.dataset.contract_items``.
+
+@pytest.fixture(scope="session")
+def _bigquery_contract_session(
+    bigquery_service: BigQueryService, bigquery_contract_table: ContractTable
+) -> "Generator[BigQueryDriver, None, None]":
+    """Session-scoped BigQuery driver; the contract table is created once.
+
+    The emulator is unreliable under repeated DDL and hangs on default-dataset job
+    config, so the client is reused across the xdist group, a dotted dataset_id keeps
+    the default dataset unset, and the table is referenced fully-qualified.
     """
     config = BigQueryConfig(
         connection_config={
             "project": bigquery_service.project,
-            "dataset_id": bigquery_service.dataset,
+            "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
             "credentials": AnonymousCredentials(),
         }
     )
     try:
         with config.provide_session() as driver:
-            driver.execute_script(BIGQUERY_CONTRACT_TABLE.create_sql)
+            driver.execute_script(bigquery_contract_table.create_sql)
             yield driver
     finally:
         config.close_pool()
+
+
+@pytest.fixture
+def contract_bigquery_driver(
+    _bigquery_contract_session: BigQueryDriver, bigquery_contract_table: ContractTable
+) -> BigQueryDriver:
+    """Provide the session BigQuery driver with an empty contract table per test."""
+    _bigquery_contract_session.execute(bigquery_contract_table.delete_sql)
+    return _bigquery_contract_session
 
 
 def _oracle_pool_params(oracle_service: OracleService) -> OraclePoolParams:

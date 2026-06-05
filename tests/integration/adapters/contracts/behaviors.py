@@ -90,6 +90,18 @@ class AsyncContractDriver(Protocol):
     async def load_from_storage(self, table: str, source: object, /, **kwargs: Any) -> Any: ...
 
 
+def _with_table(value: object, table: ContractTable) -> object:
+    """Rewrite the canonical ``contract_items`` table reference to the case's table name.
+
+    A no-op for adapters whose table is literally ``contract_items``; for adapters that
+    require a qualified identifier (e.g. BigQuery ``project.dataset.contract_items``) it
+    substitutes the resolved name into raw SQL strings.
+    """
+    if isinstance(value, str) and table.name != "contract_items":
+        return value.replace("contract_items", table.name)
+    return value
+
+
 def _row_parameters(rows: tuple[ContractRow, ...]) -> list[tuple[object, ...]]:
     return [(row.name, row.value, row.note) for row in rows]
 
@@ -284,8 +296,9 @@ def assert_sync_filter_contract(driver: object, case: DriverCase) -> None:
     in_collection = sync_driver.execute(base, InCollectionFilter("value", [20, 40]), OrderByFilter("value", "asc"))
     assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
 
-    searched = sync_driver.execute(base, SearchFilter("name", "lta"))
-    assert [row["name"] for row in searched.get_data()] == ["delta"]
+    if "emulator-no-search-filter" not in case.deviations:
+        searched = sync_driver.execute(base, SearchFilter("name", "lta"))
+        assert [row["name"] for row in searched.get_data()] == ["delta"]
 
 
 async def assert_async_filter_contract(driver: object, case: DriverCase) -> None:
@@ -303,12 +316,15 @@ async def assert_async_filter_contract(driver: object, case: DriverCase) -> None
     )
     assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
 
-    searched = await async_driver.execute(base, SearchFilter("name", "lta"))
-    assert [row["name"] for row in searched.get_data()] == ["delta"]
+    if "emulator-no-search-filter" not in case.deviations:
+        searched = await async_driver.execute(base, SearchFilter("name", "lta"))
+        assert [row["name"] for row in searched.get_data()] == ["delta"]
 
 
 def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers run grouped aggregation and correlated subquery selects."""
+    if "emulator-no-grouped-subquery" in case.deviations:
+        pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
     _seed_sync(sync_driver, _GROUPED_SEED_ROWS, table)
@@ -326,6 +342,8 @@ def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None
 
 async def assert_async_complex_query_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers run grouped aggregation and correlated subquery selects."""
+    if "emulator-no-grouped-subquery" in case.deviations:
+        pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
     await _seed_async(async_driver, _GROUPED_SEED_ROWS, table)
@@ -520,7 +538,7 @@ def assert_sync_statement_input_contract(driver: object, case: DriverCase, input
     sync_driver = cast("SyncContractDriver", driver)
     _seed_sync(sync_driver, input_case.setup_rows, case.table)
 
-    statement = input_case.statement_factory()
+    statement = input_case.statement_factory(case.table.name)
     result = _execute_sync(sync_driver, statement, input_case.parameters)
     assert_result_data(result, input_case.expected_data)
 
@@ -535,7 +553,7 @@ async def assert_async_statement_input_contract(
     async_driver = cast("AsyncContractDriver", driver)
     await _seed_async(async_driver, input_case.setup_rows, case.table)
 
-    statement = input_case.statement_factory()
+    statement = input_case.statement_factory(case.table.name)
     result = await _execute_async(async_driver, statement, input_case.parameters)
     assert_result_data(result, input_case.expected_data)
 
@@ -548,14 +566,14 @@ def assert_sync_parameter_contract(driver: object, case: DriverCase, parameter_c
     sync_driver = cast("SyncContractDriver", driver)
     _seed_sync(sync_driver, parameter_case.setup_rows, case.table)
 
-    result = _execute_sync(sync_driver, parameter_case.statement, parameter_case.parameters)
+    result = _execute_sync(sync_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters)
     if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
     if parameter_case.verification_statement is not None and parameter_case.expected_verification_data is not None:
         verification = _execute_sync(
-            sync_driver, parameter_case.verification_statement, parameter_case.verification_parameters
+            sync_driver, _with_table(parameter_case.verification_statement, case.table), parameter_case.verification_parameters
         )
         assert_result_data(verification, parameter_case.expected_verification_data)
 
@@ -567,14 +585,14 @@ async def assert_async_parameter_contract(
     async_driver = cast("AsyncContractDriver", driver)
     await _seed_async(async_driver, parameter_case.setup_rows, case.table)
 
-    result = await _execute_async(async_driver, parameter_case.statement, parameter_case.parameters)
+    result = await _execute_async(async_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters)
     if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
     if parameter_case.verification_statement is not None and parameter_case.expected_verification_data is not None:
         verification = await _execute_async(
-            async_driver, parameter_case.verification_statement, parameter_case.verification_parameters
+            async_driver, _with_table(parameter_case.verification_statement, case.table), parameter_case.verification_parameters
         )
         assert_result_data(verification, parameter_case.expected_verification_data)
 
@@ -586,10 +604,11 @@ def assert_sync_parameter_style_contract(
     sync_driver = cast("SyncContractDriver", driver)
     _seed_sync(sync_driver, parameter_style_case.setup_rows, case.table)
 
+    style_statement = _with_table(parameter_style_case.statement, case.table)
     if parameter_style_case.method == "execute_many":
-        result = sync_driver.execute_many(parameter_style_case.statement, parameter_style_case.parameters)
+        result = sync_driver.execute_many(style_statement, parameter_style_case.parameters)
     else:
-        result = _execute_sync(sync_driver, parameter_style_case.statement, parameter_style_case.parameters)
+        result = _execute_sync(sync_driver, style_statement, parameter_style_case.parameters)
 
     if parameter_style_case.expected_rows_affected is not None and (
         parameter_style_case.method == "execute_many" or _should_assert_execute_rows_affected(case)
@@ -602,7 +621,9 @@ def assert_sync_parameter_style_contract(
         and parameter_style_case.expected_verification_data is not None
     ):
         verification = _execute_sync(
-            sync_driver, parameter_style_case.verification_statement, parameter_style_case.verification_parameters
+            sync_driver,
+            _with_table(parameter_style_case.verification_statement, case.table),
+            parameter_style_case.verification_parameters,
         )
         assert_result_data(verification, parameter_style_case.expected_verification_data)
 
@@ -614,10 +635,11 @@ async def assert_async_parameter_style_contract(
     async_driver = cast("AsyncContractDriver", driver)
     await _seed_async(async_driver, parameter_style_case.setup_rows, case.table)
 
+    style_statement = _with_table(parameter_style_case.statement, case.table)
     if parameter_style_case.method == "execute_many":
-        result = await async_driver.execute_many(parameter_style_case.statement, parameter_style_case.parameters)
+        result = await async_driver.execute_many(style_statement, parameter_style_case.parameters)
     else:
-        result = await _execute_async(async_driver, parameter_style_case.statement, parameter_style_case.parameters)
+        result = await _execute_async(async_driver, style_statement, parameter_style_case.parameters)
 
     if parameter_style_case.expected_rows_affected is not None and (
         parameter_style_case.method == "execute_many" or _should_assert_execute_rows_affected(case)
@@ -630,7 +652,9 @@ async def assert_async_parameter_style_contract(
         and parameter_style_case.expected_verification_data is not None
     ):
         verification = await _execute_async(
-            async_driver, parameter_style_case.verification_statement, parameter_style_case.verification_parameters
+            async_driver,
+            _with_table(parameter_style_case.verification_statement, case.table),
+            parameter_style_case.verification_parameters,
         )
         assert_result_data(verification, parameter_style_case.expected_verification_data)
 
@@ -686,45 +710,49 @@ async def assert_async_result_contract(driver: object, case: DriverCase) -> None
 def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers execute scripts and normalize generic SQL errors."""
     sync_driver = cast("SyncContractDriver", driver)
+    table = case.table.name
 
-    result = sync_driver.execute_script("""
-        INSERT INTO contract_items (name, value, note) VALUES ('script1', 10, NULL);
-        INSERT INTO contract_items (name, value, note) VALUES ('script2', 20, NULL);
-        UPDATE contract_items SET value = 30 WHERE name = 'script1';
+    result = sync_driver.execute_script(f"""
+        INSERT INTO {table} (name, value, note) VALUES ('script1', 10, NULL);
+        INSERT INTO {table} (name, value, note) VALUES ('script2', 20, NULL);
+        UPDATE {table} SET value = 30 WHERE name = 'script1';
     """)
     assert_sql_result(result)
     assert result.operation_type == "SCRIPT"
     assert_result_data(
-        sync_driver.execute("SELECT name, value FROM contract_items WHERE name LIKE 'script%' ORDER BY name"),
+        sync_driver.execute(f"SELECT name, value FROM {table} WHERE name LIKE 'script%' ORDER BY name"),
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    with pytest.raises(SQLParsingError):
-        sync_driver.execute("SELCT * FROM contract_items")
-    with pytest.raises(SQLSpecError):
-        sync_driver.execute("SELECT * FROM missing_contract_table")
+    if "emulator-retries-invalid-sql" not in case.deviations:
+        with pytest.raises(SQLParsingError):
+            sync_driver.execute(f"SELCT * FROM {table}")
+        with pytest.raises(SQLSpecError):
+            sync_driver.execute("SELECT * FROM missing_contract_table")
 
 
 async def assert_async_script_error_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers execute scripts and normalize generic SQL errors."""
     async_driver = cast("AsyncContractDriver", driver)
+    table = case.table.name
 
-    result = await async_driver.execute_script("""
-        INSERT INTO contract_items (name, value, note) VALUES ('script1', 10, NULL);
-        INSERT INTO contract_items (name, value, note) VALUES ('script2', 20, NULL);
-        UPDATE contract_items SET value = 30 WHERE name = 'script1';
+    result = await async_driver.execute_script(f"""
+        INSERT INTO {table} (name, value, note) VALUES ('script1', 10, NULL);
+        INSERT INTO {table} (name, value, note) VALUES ('script2', 20, NULL);
+        UPDATE {table} SET value = 30 WHERE name = 'script1';
     """)
     assert_sql_result(result)
     assert result.operation_type == "SCRIPT"
     assert_result_data(
-        await async_driver.execute("SELECT name, value FROM contract_items WHERE name LIKE 'script%' ORDER BY name"),
+        await async_driver.execute(f"SELECT name, value FROM {table} WHERE name LIKE 'script%' ORDER BY name"),
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    with pytest.raises(SQLParsingError):
-        await async_driver.execute("SELCT * FROM contract_items")
-    with pytest.raises(SQLSpecError):
-        await async_driver.execute("SELECT * FROM missing_contract_table")
+    if "emulator-retries-invalid-sql" not in case.deviations:
+        with pytest.raises(SQLParsingError):
+            await async_driver.execute(f"SELCT * FROM {table}")
+        with pytest.raises(SQLSpecError):
+            await async_driver.execute("SELECT * FROM missing_contract_table")
 
 
 def _explain_skip_reason(case: DriverCase) -> str:
