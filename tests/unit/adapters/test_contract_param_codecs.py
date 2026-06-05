@@ -6,14 +6,35 @@ from tests.integration.adapters.contracts import behaviors
 from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
 from tests.integration.adapters.contracts.behaviors import PARAM_CODECS_SCOPE, validate_extra_assertions
 
-SYNC_PROOF_KEYS = ("param_codecs:psycopg",)
-ASYNC_PROOF_KEYS = ("param_codecs:asyncpg", "param_codecs:psqlpy", "param_codecs:psycopg")
+SYNC_PROOF_KEYS = (
+    "param_codecs:psycopg",
+    "param_codecs:duckdb",
+    "param_codecs:cockroach_psycopg",
+    "param_codecs:mysql",
+)
+ASYNC_PROOF_KEYS = (
+    "param_codecs:asyncpg",
+    "param_codecs:psqlpy",
+    "param_codecs:psycopg",
+    "param_codecs:cockroach_asyncpg",
+    "param_codecs:cockroach_psycopg",
+    "param_codecs:mysql",
+)
 
 OPTED_IN = {
     "asyncpg-async": "param_codecs:asyncpg",
     "psqlpy-async": "param_codecs:psqlpy",
     "psycopg-sync": "param_codecs:psycopg",
     "psycopg-async": "param_codecs:psycopg",
+    "duckdb-sync": "param_codecs:duckdb",
+    "cockroach-asyncpg-async": "param_codecs:cockroach_asyncpg",
+    "cockroach-psycopg-sync": "param_codecs:cockroach_psycopg",
+    "cockroach-psycopg-async": "param_codecs:cockroach_psycopg",
+    "mysqlconnector-sync": "param_codecs:mysql",
+    "pymysql-sync": "param_codecs:mysql",
+    "aiomysql-async": "param_codecs:mysql",
+    "asyncmy-async": "param_codecs:mysql",
+    "mysqlconnector-async": "param_codecs:mysql",
 }
 
 

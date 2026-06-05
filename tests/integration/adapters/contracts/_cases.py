@@ -104,7 +104,12 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_migrations=True,
         supports_storage_bridge=True,
-        extra_assertions=("explain_modifiers:duckdb", "arrow_specifics:duckdb", "execute_many_specifics:duckdb"),
+        extra_assertions=(
+            "explain_modifiers:duckdb",
+            "arrow_specifics:duckdb",
+            "execute_many_specifics:duckdb",
+            "param_codecs:duckdb",
+        ),
     ),
     DriverCase(
         id="mysqlconnector-sync",
@@ -120,6 +125,7 @@ SYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
+        extra_assertions=("param_codecs:mysql",),
     ),
     DriverCase(
         id="pymysql-sync",
@@ -135,6 +141,7 @@ SYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
+        extra_assertions=("param_codecs:mysql",),
     ),
     DriverCase(
         id="psycopg-sync",
@@ -180,6 +187,7 @@ SYNC_DRIVER_CASES = (
         supports_json=True,
         supports_arrays=True,
         deviations=("cockroach-serializable-transactions",),
+        extra_assertions=("param_codecs:cockroach_psycopg",),
     ),
     DriverCase(
         id="adbc-sqlite-sync",
@@ -284,7 +292,7 @@ ASYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("explain_modifiers:mysql", "arrow_specifics:mysql"),
+        extra_assertions=("explain_modifiers:mysql", "arrow_specifics:mysql", "param_codecs:mysql"),
     ),
     DriverCase(
         id="asyncmy-async",
@@ -300,7 +308,7 @@ ASYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("explain_modifiers:mysql", "arrow_specifics:mysql"),
+        extra_assertions=("explain_modifiers:mysql", "arrow_specifics:mysql", "param_codecs:mysql"),
     ),
     DriverCase(
         id="mysqlconnector-async",
@@ -316,6 +324,7 @@ ASYNC_DRIVER_CASES = (
         supports_migrations=True,
         supports_storage_bridge=True,
         deviations=("no-returning", "autocommit-ddl"),
+        extra_assertions=("param_codecs:mysql",),
     ),
     DriverCase(
         id="asyncpg-async",
@@ -402,6 +411,7 @@ ASYNC_DRIVER_CASES = (
         supports_json=True,
         supports_arrays=True,
         deviations=("cockroach-serializable-transactions",),
+        extra_assertions=("param_codecs:cockroach_asyncpg",),
     ),
     DriverCase(
         id="cockroach-psycopg-async",
@@ -422,6 +432,7 @@ ASYNC_DRIVER_CASES = (
         supports_json=True,
         supports_arrays=True,
         deviations=("cockroach-serializable-transactions",),
+        extra_assertions=("param_codecs:cockroach_psycopg",),
     ),
     DriverCase(
         id="oracledb-async",

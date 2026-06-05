@@ -1184,6 +1184,377 @@ async def _psycopg_param_codecs_async(driver: object, case: DriverCase) -> None:
         await async_driver.execute("SELECT ?::text AS first, ?::int AS second", None)
 
 
+def _duckdb_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold DuckDB native-codec params: typed arrays/REAL/BOOLEAN, array indexing, JSON strings, None+array, count."""
+    from datetime import date
+
+    sync_driver = cast("SyncContractDriver", driver)
+
+    types_t = _pc_table(case, "types")
+    _sync_drop_table(sync_driver, types_t)
+    sync_driver.execute(
+        f"CREATE TABLE {types_t} (id INTEGER PRIMARY KEY, int_val INTEGER, real_val REAL, "
+        f"text_val VARCHAR, bool_val BOOLEAN, list_val INTEGER[])"
+    )
+    try:
+        sync_driver.execute(
+            f"INSERT INTO {types_t} (id, int_val, real_val, text_val, bool_val, list_val) VALUES (?, ?, ?, ?, ?, ?)",
+            1,
+            42,
+            3.14159,
+            "hello",
+            True,
+            [1, 2, 3],
+        )
+        row = sync_driver.select_one(f"SELECT * FROM {types_t} WHERE int_val = ?", 42)
+        assert row["text_val"] == "hello"
+        assert row["bool_val"] is True
+        assert row["list_val"] == [1, 2, 3]
+        assert 3.13 < row["real_val"] < 3.15
+    finally:
+        _sync_drop_table(sync_driver, types_t)
+
+    arrays_t = _pc_table(case, "arrays")
+    _sync_drop_table(sync_driver, arrays_t)
+    sync_driver.execute(
+        f"CREATE TABLE {arrays_t} (id INTEGER PRIMARY KEY, name VARCHAR, numbers INTEGER[], tags VARCHAR[])"
+    )
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {arrays_t} (id, name, numbers, tags) VALUES (?, ?, ?, ?)",
+            [(1, "A1", [1, 2, 3, 4, 5], ["t1"]), (2, "A2", [10, 20, 30], ["t2"]), (3, "A3", [100, 200], ["t3"])],
+        )
+        big = sync_driver.execute(f"SELECT name FROM {arrays_t} WHERE len(numbers) >= ? ORDER BY name", 3).get_data()
+        assert [r["name"] for r in big] == ["A1", "A2"]
+        indexed = sync_driver.execute(f"SELECT name FROM {arrays_t} WHERE numbers[?] > ?", 1, 5).get_data()
+        assert len(indexed) >= 1
+    finally:
+        _sync_drop_table(sync_driver, arrays_t)
+
+    json_t = _pc_table(case, "json")
+    _sync_drop_table(sync_driver, json_t)
+    sync_driver.execute(f"CREATE TABLE {json_t} (id INTEGER PRIMARY KEY, name VARCHAR, metadata VARCHAR)")
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {json_t} (id, name, metadata) VALUES (?, ?, ?)",
+            [
+                (1, "j1", to_json({"type": "test", "value": 100})),
+                (2, "j2", to_json({"type": "test", "value": 200})),
+                (3, "j3", to_json({"type": "prod", "value": 300})),
+            ],
+        )
+        rows = sync_driver.execute(
+            f"SELECT name FROM {json_t} WHERE json_extract_string(metadata, '$.type') = ? ORDER BY name", "test"
+        ).get_data()
+        assert [r["name"] for r in rows] == ["j1", "j2"]
+    finally:
+        _sync_drop_table(sync_driver, json_t)
+
+    none_t = _pc_table(case, "none")
+    _sync_drop_table(sync_driver, none_t)
+    sync_driver.execute(
+        f"CREATE TABLE {none_t} (id INTEGER, col1 VARCHAR, col2 INTEGER, col3 REAL, "
+        f"col4 BOOLEAN, col5 DATE, col6 VARCHAR[])"
+    )
+    try:
+        result = sync_driver.execute(
+            f"INSERT INTO {none_t} (id, col1, col2, col3, col4, col5, col6) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            1,
+            "complex_test",
+            None,
+            3.14159,
+            None,
+            date(2025, 1, 21),
+            ["array", "with", "values"],
+        )
+        assert result.rows_affected == 1
+        stored = sync_driver.select_one(f"SELECT * FROM {none_t} WHERE id = ?", 1)
+        assert stored["col2"] is None
+        assert stored["col4"] is None
+        assert stored["col6"] == ["array", "with", "values"]
+    finally:
+        _sync_drop_table(sync_driver, none_t)
+
+    count_t = _pc_table(case, "count")
+    _sync_drop_table(sync_driver, count_t)
+    sync_driver.execute(f"CREATE TABLE {count_t} (col1 VARCHAR, col2 INTEGER)")
+    try:
+        with pytest.raises(Exception):
+            sync_driver.execute(f"INSERT INTO {count_t} (col1, col2) VALUES (?, ?)", "value1", None, "extra_param")
+        with pytest.raises(Exception):
+            sync_driver.execute(f"INSERT INTO {count_t} (col1, col2) VALUES (?, ?)", "value1")
+        ok = sync_driver.execute(f"INSERT INTO {count_t} (col1, col2) VALUES (?, ?)", "value1", None)
+        assert ok.rows_affected == 1
+    finally:
+        _sync_drop_table(sync_driver, count_t)
+
+
+async def _cockroach_asyncpg_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold CockroachDB asyncpg params: SERIAL RETURNING round-trip, native dict->JSONB, float, count-mismatch."""
+    import math
+
+    async_driver = cast("AsyncContractDriver", driver)
+
+    items = _pc_table(case, "items")
+    await _async_drop_table(async_driver, items)
+    await async_driver.execute(
+        f"CREATE TABLE {items} (id SERIAL PRIMARY KEY, name STRING NOT NULL, value INT DEFAULT 0, description STRING)"
+    )
+    await async_driver.commit()
+    try:
+        inserted = await async_driver.execute(
+            f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?) RETURNING id",
+            "serial-native",
+            500,
+            "Inserted with native numeric parameters",
+        )
+        record_id = inserted.get_data()[0]["id"]
+        await async_driver.commit()
+        assert isinstance(record_id, int)
+        fetched = await async_driver.execute(f"SELECT name, value FROM {items} WHERE id = ?", record_id)
+        assert fetched.get_data() == [{"name": "serial-native", "value": 500}]
+    finally:
+        await _async_drop_table(async_driver, items)
+
+    jsonb = _pc_table(case, "jsonb")
+    await _async_drop_table(async_driver, jsonb)
+    await async_driver.execute(
+        f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name STRING, metadata JSONB, config JSONB)"
+    )
+    await async_driver.commit()
+    try:
+        row = await async_driver.execute(
+            f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
+            "json-test",
+            {"score": 100, "active": True},
+            None,
+        )
+        await async_driver.commit()
+        assert row.get_data() == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
+    finally:
+        await _async_drop_table(async_driver, jsonb)
+
+    float_row = (await async_driver.execute("SELECT ?::FLOAT AS value", math.pi)).get_data()
+    assert abs(float_row[0]["value"] - math.pi) < 0.001
+
+    with pytest.raises(Exception):
+        await async_driver.execute("SELECT ?::STRING AS first, ?::INT AS second", None)
+
+
+def _cockroach_psycopg_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold CockroachDB psycopg params: SERIAL RETURNING round-trip, serialized JSONB, count-mismatch (sync)."""
+    sync_driver = cast("SyncContractDriver", driver)
+
+    items = _pc_table(case, "items")
+    _sync_drop_table(sync_driver, items)
+    sync_driver.execute(
+        f"CREATE TABLE {items} (id SERIAL PRIMARY KEY, name STRING NOT NULL, value INT DEFAULT 0, description STRING)"
+    )
+    sync_driver.commit()
+    try:
+        inserted = sync_driver.execute(
+            f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?) RETURNING id",
+            "serial-native",
+            500,
+            "Inserted with native pyformat parameters",
+        )
+        record_id = inserted.get_data()[0]["id"]
+        sync_driver.commit()
+        assert isinstance(record_id, int)
+        fetched = sync_driver.execute(f"SELECT name, value FROM {items} WHERE id = ?", record_id)
+        assert fetched.get_data() == [{"name": "serial-native", "value": 500}]
+    finally:
+        _sync_drop_table(sync_driver, items)
+
+    jsonb = _pc_table(case, "jsonb")
+    _sync_drop_table(sync_driver, jsonb)
+    sync_driver.execute(f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name STRING, metadata JSONB, config JSONB)")
+    sync_driver.commit()
+    try:
+        row = sync_driver.execute(
+            f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
+            "json-test",
+            to_json({"score": 100, "active": True}),
+            None,
+        )
+        sync_driver.commit()
+        assert row.get_data() == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
+    finally:
+        _sync_drop_table(sync_driver, jsonb)
+
+    with pytest.raises(Exception):
+        sync_driver.execute("SELECT ?::STRING AS first, ?::INT AS second", None)
+
+
+async def _cockroach_psycopg_param_codecs_async(driver: object, case: DriverCase) -> None:
+    """Fold CockroachDB psycopg params: SERIAL RETURNING round-trip, serialized JSONB, count-mismatch (async)."""
+    async_driver = cast("AsyncContractDriver", driver)
+
+    items = _pc_table(case, "items")
+    await _async_drop_table(async_driver, items)
+    await async_driver.execute(
+        f"CREATE TABLE {items} (id SERIAL PRIMARY KEY, name STRING NOT NULL, value INT DEFAULT 0, description STRING)"
+    )
+    await async_driver.commit()
+    try:
+        inserted = await async_driver.execute(
+            f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?) RETURNING id",
+            "serial-native",
+            500,
+            "Inserted with native pyformat parameters",
+        )
+        record_id = inserted.get_data()[0]["id"]
+        await async_driver.commit()
+        assert isinstance(record_id, int)
+        fetched = await async_driver.execute(f"SELECT name, value FROM {items} WHERE id = ?", record_id)
+        assert fetched.get_data() == [{"name": "serial-native", "value": 500}]
+    finally:
+        await _async_drop_table(async_driver, items)
+
+    jsonb = _pc_table(case, "jsonb")
+    await _async_drop_table(async_driver, jsonb)
+    await async_driver.execute(
+        f"CREATE TABLE {jsonb} (id SERIAL PRIMARY KEY, name STRING, metadata JSONB, config JSONB)"
+    )
+    await async_driver.commit()
+    try:
+        row = await async_driver.execute(
+            f"INSERT INTO {jsonb} (name, metadata, config) VALUES (?, ?, ?) RETURNING name, metadata, config",
+            "json-test",
+            to_json({"score": 100, "active": True}),
+            None,
+        )
+        await async_driver.commit()
+        assert row.get_data() == [{"name": "json-test", "metadata": {"score": 100, "active": True}, "config": None}]
+    finally:
+        await _async_drop_table(async_driver, jsonb)
+
+    with pytest.raises(Exception):
+        await async_driver.execute("SELECT ?::STRING AS first, ?::INT AS second", None)
+
+
+def _mysql_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold MySQL params: bool->TINYINT, float precision, empty-string!=NULL, special-char escaping, SQL object (sync)."""
+    import math
+
+    sync_driver = cast("SyncContractDriver", driver)
+    items = _pc_table(case, "items")
+    _sync_drop_table(sync_driver, items)
+    sync_driver.execute(
+        f"CREATE TABLE {items} (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, "
+        f"value INT DEFAULT 0, active TINYINT(1), float_value DOUBLE, description TEXT)"
+    )
+    sync_driver.commit()
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {items} (name, value, active, float_value, description) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("test1", 100, True, 1.5, "First test"),
+                ("test2", 200, False, 2.5, "Second test"),
+                ("test3", 300, True, math.pi, None),
+            ],
+        )
+        sync_driver.commit()
+
+        bool_rows = sync_driver.execute(f"SELECT name FROM {items} WHERE active = ? ORDER BY value", True).get_data()
+        assert bool_rows == [{"name": "test1"}, {"name": "test3"}]
+
+        float_rows = sync_driver.execute(
+            f"SELECT name, float_value FROM {items} WHERE float_value > ? ORDER BY value", 3.0
+        ).get_data()
+        assert len(float_rows) == 1
+        assert float_rows[0]["name"] == "test3"
+        assert abs(float_rows[0]["float_value"] - math.pi) < 0.0001
+
+        sync_driver.execute(f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?)", "empty_desc", 0, "")
+        sync_driver.commit()
+        empty_rows = sync_driver.execute(f"SELECT name FROM {items} WHERE description = ?", "").get_data()
+        assert empty_rows == [{"name": "empty_desc"}]
+
+        special_value = 'O\'Reilly & Sons "Test" <script>'
+        sync_driver.execute(
+            f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?)", "special", 0, special_value
+        )
+        sync_driver.commit()
+        special_rows = sync_driver.execute(f"SELECT description FROM {items} WHERE name = ?", "special").get_data()
+        assert special_rows == [{"description": special_value}]
+
+        between = sync_driver.execute(SQL(f"SELECT name, value FROM {items} WHERE value BETWEEN ? AND ?", 150, 250))
+        assert between.get_data() == [{"name": "test2", "value": 200}]
+    finally:
+        _sync_drop_table(sync_driver, items)
+
+
+async def _mysql_param_codecs_async(driver: object, case: DriverCase) -> None:
+    """Fold MySQL params: bool->TINYINT, float precision, empty-string!=NULL, special-char escaping, SQL object (async)."""
+    import math
+
+    async_driver = cast("AsyncContractDriver", driver)
+    items = _pc_table(case, "items")
+    await _async_drop_table(async_driver, items)
+    await async_driver.execute(
+        f"CREATE TABLE {items} (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, "
+        f"value INT DEFAULT 0, active TINYINT(1), float_value DOUBLE, description TEXT)"
+    )
+    await async_driver.commit()
+    try:
+        await async_driver.execute_many(
+            f"INSERT INTO {items} (name, value, active, float_value, description) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("test1", 100, True, 1.5, "First test"),
+                ("test2", 200, False, 2.5, "Second test"),
+                ("test3", 300, True, math.pi, None),
+            ],
+        )
+        await async_driver.commit()
+
+        bool_rows = (
+            await async_driver.execute(f"SELECT name FROM {items} WHERE active = ? ORDER BY value", True)
+        ).get_data()
+        assert bool_rows == [{"name": "test1"}, {"name": "test3"}]
+
+        float_rows = (
+            await async_driver.execute(
+                f"SELECT name, float_value FROM {items} WHERE float_value > ? ORDER BY value", 3.0
+            )
+        ).get_data()
+        assert len(float_rows) == 1
+        assert float_rows[0]["name"] == "test3"
+        assert abs(float_rows[0]["float_value"] - math.pi) < 0.0001
+
+        await async_driver.execute(
+            f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?)", "empty_desc", 0, ""
+        )
+        await async_driver.commit()
+        empty_rows = (await async_driver.execute(f"SELECT name FROM {items} WHERE description = ?", "")).get_data()
+        assert empty_rows == [{"name": "empty_desc"}]
+
+        special_value = 'O\'Reilly & Sons "Test" <script>'
+        await async_driver.execute(
+            f"INSERT INTO {items} (name, value, description) VALUES (?, ?, ?)", "special", 0, special_value
+        )
+        await async_driver.commit()
+        special_rows = (
+            await async_driver.execute(f"SELECT description FROM {items} WHERE name = ?", "special")
+        ).get_data()
+        assert special_rows == [{"description": special_value}]
+
+        between = await async_driver.execute(
+            SQL(f"SELECT name, value FROM {items} WHERE value BETWEEN ? AND ?", 150, 250)
+        )
+        assert between.get_data() == [{"name": "test2", "value": 200}]
+    finally:
+        await _async_drop_table(async_driver, items)
+
+
+register_sync_extra_assertion("param_codecs:duckdb", PARAM_CODECS_SCOPE, _duckdb_param_codecs)
+register_async_extra_assertion("param_codecs:cockroach_asyncpg", PARAM_CODECS_SCOPE, _cockroach_asyncpg_param_codecs)
+register_sync_extra_assertion("param_codecs:cockroach_psycopg", PARAM_CODECS_SCOPE, _cockroach_psycopg_param_codecs)
+register_async_extra_assertion(
+    "param_codecs:cockroach_psycopg", PARAM_CODECS_SCOPE, _cockroach_psycopg_param_codecs_async
+)
+register_sync_extra_assertion("param_codecs:mysql", PARAM_CODECS_SCOPE, _mysql_param_codecs)
+register_async_extra_assertion("param_codecs:mysql", PARAM_CODECS_SCOPE, _mysql_param_codecs_async)
 register_async_extra_assertion("param_codecs:asyncpg", PARAM_CODECS_SCOPE, _asyncpg_param_codecs)
 register_async_extra_assertion("param_codecs:psqlpy", PARAM_CODECS_SCOPE, _psqlpy_param_codecs)
 register_sync_extra_assertion("param_codecs:psycopg", PARAM_CODECS_SCOPE, _psycopg_param_codecs)
