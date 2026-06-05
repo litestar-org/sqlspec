@@ -1,6 +1,7 @@
 """Public behavior helpers for adapter-local and central contract tests."""
 
 import contextlib
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 
@@ -1103,6 +1104,340 @@ async def assert_async_arrow_polars_contract(driver: object, case: DriverCase) -
     frame = (await async_driver.select_to_arrow(table.select_ordered_sql)).to_polars()
     assert len(frame) == 2
     assert frame["name"].to_list() == ["a", "b"]
+
+
+ARROW_SPECIFICS_SCOPE = "arrow_specifics"
+
+
+def _arrow_spec_table(case: DriverCase, suffix: str) -> str:
+    return f"arrow_spec_{suffix}_{case.adapter}_{case.mode}"
+
+
+def _sync_drop_table(driver: "SyncContractDriver", name: str) -> None:
+    with contextlib.suppress(Exception):
+        driver.execute(f"DROP TABLE {name}")
+    with contextlib.suppress(Exception):
+        driver.commit()
+
+
+async def _async_drop_table(driver: "AsyncContractDriver", name: str) -> None:
+    with contextlib.suppress(Exception):
+        await driver.execute(f"DROP TABLE {name}")
+    with contextlib.suppress(Exception):
+        await driver.commit()
+
+
+def _as_json_obj(value: object) -> object:
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def _duckdb_arrow_specifics(driver: object, case: DriverCase) -> None:
+    """Fold DuckDB Arrow type preservation + JSON load_from_arrow."""
+    import pyarrow as pa
+
+    pytest.importorskip("pandas")
+    from pandas.api.types import is_string_dtype
+
+    sync_driver = cast("SyncContractDriver", driver)
+    types_table = _arrow_spec_table(case, "types")
+    _sync_drop_table(sync_driver, types_table)
+    sync_driver.execute(
+        f"CREATE TABLE {types_table} (id INTEGER, name VARCHAR, price DOUBLE, active BOOLEAN, created DATE)"
+    )
+    sync_driver.execute(
+        f"INSERT INTO {types_table} VALUES (1, 'Product A', 19.99, true, '2024-01-01'), "
+        f"(2, 'Product B', 29.99, false, '2024-01-02')"
+    )
+    try:
+        df = sync_driver.select_to_arrow(f"SELECT * FROM {types_table} ORDER BY id").to_pandas()
+        assert len(df) == 2
+        assert df["id"].dtype == "int32"
+        assert is_string_dtype(df["name"])
+        assert df["price"].dtype == "float64"
+        assert df["active"].dtype == "bool"
+    finally:
+        _sync_drop_table(sync_driver, types_table)
+
+    json_table = _arrow_spec_table(case, "json")
+    _sync_drop_table(sync_driver, json_table)
+    sync_driver.execute(f"CREATE TABLE {json_table} (id INTEGER, payload JSON)")
+    try:
+        arrow_table = pa.table({"id": [1, 2], "payload": ['{"name":"alpha"}', '{"name":"beta"}']})
+        job = sync_driver.load_from_arrow(json_table, arrow_table)
+        rows = sync_driver.execute(f"SELECT id, payload::VARCHAR AS payload FROM {json_table} ORDER BY id").get_data()
+        assert rows == [{"id": 1, "payload": '{"name":"alpha"}'}, {"id": 2, "payload": '{"name":"beta"}'}]
+        assert job.telemetry["rows_processed"] == 2
+    finally:
+        _sync_drop_table(sync_driver, json_table)
+
+
+def _sqlite_arrow_type_ddl(table: str) -> "tuple[str, str]":
+    create = f"CREATE TABLE {table} (id INTEGER, name TEXT, price REAL, created_at TEXT, is_active INTEGER)"
+    insert = (
+        f"INSERT INTO {table} VALUES (1, 'Item 1', 19.99, '2025-01-01 10:00:00', 1), "
+        f"(2, 'Item 2', 29.99, '2025-01-02 15:30:00', 0)"
+    )
+    return create, insert
+
+
+async def _sqlite_arrow_specifics(driver: object, case: DriverCase) -> None:
+    """Fold SQLite Arrow type preservation + JSON-as-text handling."""
+    pytest.importorskip("pandas")
+    from pandas.api.types import is_string_dtype
+
+    async_driver = cast("AsyncContractDriver", driver)
+    types_table = _arrow_spec_table(case, "types")
+    await _async_drop_table(async_driver, types_table)
+    create, insert = _sqlite_arrow_type_ddl(types_table)
+    await async_driver.execute(create)
+    await async_driver.execute(insert)
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {types_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+        assert is_string_dtype(df["name"])
+        assert df["is_active"].dtype in (int, "int64", "Int64")
+    finally:
+        await _async_drop_table(async_driver, types_table)
+
+    json_table = _arrow_spec_table(case, "json")
+    await _async_drop_table(async_driver, json_table)
+    await async_driver.execute(f"CREATE TABLE {json_table} (id INTEGER, data TEXT)")
+    await async_driver.execute(
+        f"""INSERT INTO {json_table} VALUES (1, '{{"name": "Alice"}}'), (2, '{{"name": "Bob"}}')"""
+    )
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {json_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+        assert isinstance(df["data"].iloc[0], str)
+        assert "Alice" in df["data"].iloc[0]
+    finally:
+        await _async_drop_table(async_driver, json_table)
+
+
+async def _mysql_arrow_specifics(driver: object, case: DriverCase) -> None:
+    """Fold MySQL Arrow type preservation + JSON column handling."""
+    pytest.importorskip("pandas")
+    from pandas.api.types import is_string_dtype
+
+    async_driver = cast("AsyncContractDriver", driver)
+    types_table = _arrow_spec_table(case, "types")
+    await _async_drop_table(async_driver, types_table)
+    await async_driver.execute(
+        f"CREATE TABLE {types_table} (id INT, name VARCHAR(100), price DECIMAL(10, 2), "
+        f"created_at DATETIME, is_active BOOLEAN)"
+    )
+    await async_driver.execute(
+        f"INSERT INTO {types_table} VALUES (1, 'Item 1', 19.99, '2025-01-01 10:00:00', true), "
+        f"(2, 'Item 2', 29.99, '2025-01-02 15:30:00', false)"
+    )
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {types_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+        assert is_string_dtype(df["name"])
+        assert df["is_active"].dtype in (bool, int, "int64", "Int64")
+    finally:
+        await _async_drop_table(async_driver, types_table)
+
+    json_table = _arrow_spec_table(case, "json")
+    await _async_drop_table(async_driver, json_table)
+    await async_driver.execute(f"CREATE TABLE {json_table} (id INT, data JSON)")
+    await async_driver.execute(
+        f"""INSERT INTO {json_table} VALUES (1, '{{"name": "Alice"}}'), (2, '{{"name": "Bob"}}')"""
+    )
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {json_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+    finally:
+        await _async_drop_table(async_driver, json_table)
+
+
+def _postgres_arrow_specifics(driver: object, case: DriverCase) -> None:
+    """Fold PostgreSQL Arrow type preservation, array handling, and JSON/JSONB load_from_arrow (sync)."""
+    import pyarrow as pa
+
+    pytest.importorskip("pandas")
+    from pandas.api.types import is_bool_dtype, is_string_dtype
+
+    sync_driver = cast("SyncContractDriver", driver)
+    types_table = _arrow_spec_table(case, "types")
+    _sync_drop_table(sync_driver, types_table)
+    sync_driver.execute(
+        f"CREATE TABLE {types_table} (id INTEGER, name TEXT, price NUMERIC, created_at TIMESTAMP, is_active BOOLEAN)"
+    )
+    sync_driver.execute(
+        f"INSERT INTO {types_table} VALUES (1, 'Item 1', 19.99, '2025-01-01 10:00:00', true), "
+        f"(2, 'Item 2', 29.99, '2025-01-02 15:30:00', false)"
+    )
+    sync_driver.commit()
+    try:
+        df = sync_driver.select_to_arrow(f"SELECT * FROM {types_table} ORDER BY id").to_pandas()
+        assert len(df) == 2
+        assert is_string_dtype(df["name"])
+        assert is_bool_dtype(df["is_active"])
+    finally:
+        _sync_drop_table(sync_driver, types_table)
+
+    array_table = _arrow_spec_table(case, "arr")
+    _sync_drop_table(sync_driver, array_table)
+    sync_driver.execute(f"CREATE TABLE {array_table} (id INTEGER, tags TEXT[])")
+    sync_driver.execute(f"INSERT INTO {array_table} VALUES (1, ARRAY['python', 'rust']), (2, ARRAY['js', 'ts'])")
+    sync_driver.commit()
+    try:
+        df = sync_driver.select_to_arrow(f"SELECT * FROM {array_table} ORDER BY id").to_pandas()
+        assert len(df) == 2
+    finally:
+        _sync_drop_table(sync_driver, array_table)
+
+    load_table = _arrow_spec_table(case, "load")
+    _sync_drop_table(sync_driver, load_table)
+    sync_driver.execute(
+        f"CREATE TABLE {load_table} (id INTEGER PRIMARY KEY, payload_json JSON NOT NULL, payload_jsonb JSONB NOT NULL)"
+    )
+    try:
+        arrow_table = pa.table({
+            "id": [1, 2],
+            "payload_json": ['{"name":"alpha"}', '{"name":"beta"}'],
+            "payload_jsonb": ['{"status":"ready"}', '{"status":"done"}'],
+        })
+        job = sync_driver.load_from_arrow(load_table, arrow_table)
+        rows = sync_driver.execute(f"SELECT * FROM {load_table} ORDER BY id").get_data()
+        assert len(rows) == 2
+        assert _as_json_obj(rows[0]["payload_jsonb"]) == {"status": "ready"}
+        assert job.telemetry["rows_processed"] == 2
+    finally:
+        _sync_drop_table(sync_driver, load_table)
+
+
+async def _postgres_arrow_specifics_async(driver: object, case: DriverCase) -> None:
+    """Fold PostgreSQL Arrow type preservation, array handling, and JSON/JSONB load_from_arrow (async)."""
+    import pyarrow as pa
+
+    pytest.importorskip("pandas")
+    from pandas.api.types import is_bool_dtype, is_string_dtype
+
+    async_driver = cast("AsyncContractDriver", driver)
+    types_table = _arrow_spec_table(case, "types")
+    await _async_drop_table(async_driver, types_table)
+    await async_driver.execute(
+        f"CREATE TABLE {types_table} (id INTEGER, name TEXT, price NUMERIC, created_at TIMESTAMP, is_active BOOLEAN)"
+    )
+    await async_driver.execute(
+        f"INSERT INTO {types_table} VALUES (1, 'Item 1', 19.99, '2025-01-01 10:00:00', true), "
+        f"(2, 'Item 2', 29.99, '2025-01-02 15:30:00', false)"
+    )
+    await async_driver.commit()
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {types_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+        assert is_string_dtype(df["name"])
+        assert is_bool_dtype(df["is_active"])
+    finally:
+        await _async_drop_table(async_driver, types_table)
+
+    array_table = _arrow_spec_table(case, "arr")
+    await _async_drop_table(async_driver, array_table)
+    await async_driver.execute(f"CREATE TABLE {array_table} (id INTEGER, tags TEXT[])")
+    await async_driver.execute(f"INSERT INTO {array_table} VALUES (1, ARRAY['python', 'rust']), (2, ARRAY['js', 'ts'])")
+    await async_driver.commit()
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {array_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+    finally:
+        await _async_drop_table(async_driver, array_table)
+
+    load_table = _arrow_spec_table(case, "load")
+    await _async_drop_table(async_driver, load_table)
+    await async_driver.execute(
+        f"CREATE TABLE {load_table} (id INTEGER PRIMARY KEY, payload_json JSON NOT NULL, payload_jsonb JSONB NOT NULL)"
+    )
+    try:
+        arrow_table = pa.table({
+            "id": [1, 2],
+            "payload_json": ['{"name":"alpha"}', '{"name":"beta"}'],
+            "payload_jsonb": ['{"status":"ready"}', '{"status":"done"}'],
+        })
+        job = await async_driver.load_from_arrow(load_table, arrow_table)
+        rows = (await async_driver.execute(f"SELECT * FROM {load_table} ORDER BY id")).get_data()
+        assert len(rows) == 2
+        assert _as_json_obj(rows[0]["payload_jsonb"]) == {"status": "ready"}
+        assert job.telemetry["rows_processed"] == 2
+    finally:
+        await _async_drop_table(async_driver, load_table)
+
+
+async def _oracle_arrow_specifics(driver: object, case: DriverCase) -> None:
+    """Fold Oracle Arrow type preservation, CLOB streaming, and JSON load_from_arrow (async)."""
+    import pyarrow as pa
+
+    pytest.importorskip("pandas")
+    from pandas.api.types import is_string_dtype
+
+    async_driver = cast("AsyncContractDriver", driver)
+    types_table = _arrow_spec_table(case, "types")
+    await _async_drop_table(async_driver, types_table)
+    await async_driver.execute(
+        f"CREATE TABLE {types_table} (id NUMBER, name VARCHAR2(100), price NUMBER, created_at DATE, is_active NUMBER(1))"
+    )
+    await async_driver.execute(
+        f"INSERT ALL INTO {types_table} VALUES (1, 'Item 1', 19.99, DATE '2025-01-01', 1) "
+        f"INTO {types_table} VALUES (2, 'Item 2', 29.99, DATE '2025-01-02', 0) SELECT * FROM dual"
+    )
+    await async_driver.commit()
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {types_table} ORDER BY id")).to_pandas()
+        assert len(df) == 2
+        assert is_string_dtype(df["name"])
+        assert set(df["is_active"].unique()) <= {0, 1}
+    finally:
+        await _async_drop_table(async_driver, types_table)
+
+    clob_table = _arrow_spec_table(case, "clob")
+    await _async_drop_table(async_driver, clob_table)
+    await async_driver.execute(f"CREATE TABLE {clob_table} (id NUMBER, description CLOB)")
+    await async_driver.execute(f"INSERT INTO {clob_table} VALUES (1, RPAD('A', 2048, 'A'))")
+    await async_driver.commit()
+    try:
+        df = (await async_driver.select_to_arrow(f"SELECT * FROM {clob_table}")).to_pandas()
+        assert len(df) == 1
+        assert isinstance(df["description"].iloc[0], str)
+    finally:
+        await _async_drop_table(async_driver, clob_table)
+
+    json_table = _arrow_spec_table(case, "json")
+    await _async_drop_table(async_driver, json_table)
+    await async_driver.execute(f"CREATE TABLE {json_table} (id NUMBER PRIMARY KEY, payload JSON)")
+    await async_driver.commit()
+    try:
+        payload = {"name": "alpha", "tags": ["north", "east"]}
+        arrow_table = pa.table({"id": [1], "payload": pa.array([payload])})
+        job = await async_driver.load_from_arrow(json_table, arrow_table)
+        row = await async_driver.select_one(f"SELECT payload FROM {json_table} WHERE id = 1")
+        assert _as_json_obj(row["payload"]) == payload
+        assert job.telemetry["rows_processed"] == arrow_table.num_rows
+    finally:
+        await _async_drop_table(async_driver, json_table)
+
+
+register_sync_extra_assertion("arrow_specifics:duckdb", ARROW_SPECIFICS_SCOPE, _duckdb_arrow_specifics)
+register_sync_extra_assertion("arrow_specifics:postgres", ARROW_SPECIFICS_SCOPE, _postgres_arrow_specifics)
+register_async_extra_assertion("arrow_specifics:sqlite", ARROW_SPECIFICS_SCOPE, _sqlite_arrow_specifics)
+register_async_extra_assertion("arrow_specifics:mysql", ARROW_SPECIFICS_SCOPE, _mysql_arrow_specifics)
+register_async_extra_assertion("arrow_specifics:postgres", ARROW_SPECIFICS_SCOPE, _postgres_arrow_specifics_async)
+register_async_extra_assertion("arrow_specifics:oracle", ARROW_SPECIFICS_SCOPE, _oracle_arrow_specifics)
+
+
+def assert_sync_arrow_specifics_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-specific Arrow proofs (type preservation, codecs, load), if any."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    dispatch_sync_extra_assertions(driver, case, ARROW_SPECIFICS_SCOPE)
+
+
+async def assert_async_arrow_specifics_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-specific Arrow proofs (type preservation, codecs, load), if any."""
+    if not case.supports_arrow:
+        pytest.skip(f"{case.adapter} has no verified Arrow support")
+    await dispatch_async_extra_assertions(driver, case, ARROW_SPECIFICS_SCOPE)
 
 
 _STORAGE_BRIDGE_EXPECTED = (
