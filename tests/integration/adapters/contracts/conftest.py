@@ -19,30 +19,32 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
-from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
-from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver, AiosqliteDriverFeatures
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
-from sqlspec.adapters.aiosqlite.config import AiosqliteDriverFeatures
-from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
+from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
-from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures, AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
-from sqlspec.adapters.asyncpg.config import AsyncpgPoolConfig
-from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
+from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
-from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig, CockroachAsyncpgDriver
+from sqlspec.adapters.cockroach_asyncpg import (
+    CockroachAsyncpgConfig,
+    CockroachAsyncpgDriver,
+    CockroachAsyncpgDriverFeatures,
+)
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
     CockroachPsycopgAsyncDriver,
+    CockroachPsycopgDriverFeatures,
     CockroachPsycopgSyncConfig,
     CockroachPsycopgSyncDriver,
 )
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeatures
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
-from sqlspec.adapters.duckdb.config import DuckDBDriverFeatures
-from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
+from sqlspec.adapters.duckdb.litestar import DuckdbStore
 from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConfig,
     MysqlConnectorAsyncDriver,
@@ -50,7 +52,7 @@ from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorSyncDriver,
 )
 from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore, MysqlConnectorSyncADKStore
-from sqlspec.adapters.mysqlconnector.litestar.store import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
+from sqlspec.adapters.mysqlconnector.litestar import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
 from sqlspec.adapters.oracledb import (
     OracleAsyncConfig,
     OracleAsyncDriver,
@@ -58,17 +60,22 @@ from sqlspec.adapters.oracledb import (
     OracleSyncConfig,
     OracleSyncDriver,
 )
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
-from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
-from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver, PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.adapters.psycopg.litestar.store import PsycopgAsyncStore, PsycopgSyncStore
+from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
+from sqlspec.adapters.psycopg import (
+    PsycopgAsyncConfig,
+    PsycopgAsyncDriver,
+    PsycopgDriverFeatures,
+    PsycopgSyncConfig,
+    PsycopgSyncDriver,
+)
+from sqlspec.adapters.psycopg.litestar import PsycopgAsyncStore, PsycopgSyncStore
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver
-from sqlspec.adapters.pymysql.litestar.store import PyMysqlStore
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.pymysql.litestar import PyMysqlStore
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
-from sqlspec.adapters.sqlite.config import SqliteDriverFeatures
-from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+from sqlspec.adapters.sqlite.litestar import SQLiteStore
 from tests.integration.adapters.contracts._adk_cases import ADK_STORE_PARAMS, AdkStoreCase, AdkStoreCaseContext
 from tests.integration.adapters.contracts._cases import (
     ASYNC_DRIVER_PARAMS,
@@ -859,6 +866,130 @@ def lifecycle_config_duckdb(tmp_path: Path) -> "Callable[..., DuckDBConfig]":
         if driver_features is None:
             return DuckDBConfig(connection_config=connection_config)
         return DuckDBConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_asyncpg(postgres_service: PostgresService) -> "Callable[..., AsyncpgConfig]":
+    """Build fresh asyncpg configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "AsyncpgDriverFeatures | None" = None) -> AsyncpgConfig:
+        connection_config: dict[str, Any] = _postgres_connection_config(postgres_service)
+        if pooled:
+            connection_config.update({"min_size": 2, "max_size": 5})
+        if driver_features is None:
+            return AsyncpgConfig(connection_config=connection_config)
+        return AsyncpgConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[..., PsqlpyConfig]":
+    """Build fresh psqlpy configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "PsqlpyDriverFeatures | None" = None) -> PsqlpyConfig:
+        connection_config: dict[str, Any] = {"dsn": _psqlpy_dsn(postgres_service)}
+        if pooled:
+            connection_config["max_db_pool_size"] = 5
+        if driver_features is None:
+            return PsqlpyConfig(connection_config=connection_config)
+        return PsqlpyConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., PsycopgSyncConfig]":
+    """Build fresh psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "PsycopgDriverFeatures | None" = None) -> PsycopgSyncConfig:
+        connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
+        if pooled:
+            connection_config.update({"min_size": 2, "max_size": 5})
+        if driver_features is None:
+            return PsycopgSyncConfig(connection_config=connection_config)
+        return PsycopgSyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_psycopg_async(postgres_service: PostgresService) -> "Callable[..., PsycopgAsyncConfig]":
+    """Build fresh psycopg async configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(*, pooled: bool = False, driver_features: "PsycopgDriverFeatures | None" = None) -> PsycopgAsyncConfig:
+        connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
+        if pooled:
+            connection_config.update({"min_size": 2, "max_size": 5})
+        if driver_features is None:
+            return PsycopgAsyncConfig(connection_config=connection_config)
+        return PsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_cockroach_asyncpg(
+    cockroachdb_service: CockroachDBService,
+) -> "Callable[..., CockroachAsyncpgConfig]":
+    """Build fresh CockroachDB asyncpg configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(
+        *, pooled: bool = False, driver_features: "CockroachAsyncpgDriverFeatures | None" = None
+    ) -> CockroachAsyncpgConfig:
+        connection_config: dict[str, Any] = {
+            "host": cockroachdb_service.host,
+            "port": cockroachdb_service.port,
+            "user": "root",
+            "password": "",
+            "database": cockroachdb_service.database,
+            "ssl": None,
+        }
+        if pooled:
+            connection_config.update({"min_size": 2, "max_size": 5})
+        if driver_features is None:
+            return CockroachAsyncpgConfig(connection_config=connection_config)
+        return CockroachAsyncpgConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_cockroach_psycopg_sync(
+    cockroachdb_service: CockroachDBService,
+) -> "Callable[..., CockroachPsycopgSyncConfig]":
+    """Build fresh CockroachDB psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(
+        *, pooled: bool = False, driver_features: "CockroachPsycopgDriverFeatures | None" = None
+    ) -> CockroachPsycopgSyncConfig:
+        connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
+        if pooled:
+            connection_config.update({"min_size": 2, "max_size": 5})
+        if driver_features is None:
+            return CockroachPsycopgSyncConfig(connection_config=connection_config)
+        return CockroachPsycopgSyncConfig(connection_config=connection_config, driver_features=driver_features)
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_cockroach_psycopg_async(
+    cockroachdb_service: CockroachDBService,
+) -> "Callable[..., CockroachPsycopgAsyncConfig]":
+    """Build fresh CockroachDB psycopg async configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(
+        *, pooled: bool = False, driver_features: "CockroachPsycopgDriverFeatures | None" = None
+    ) -> CockroachPsycopgAsyncConfig:
+        connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
+        if pooled:
+            connection_config.update({"min_size": 2, "max_size": 5})
+        if driver_features is None:
+            return CockroachPsycopgAsyncConfig(connection_config=connection_config)
+        return CockroachPsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
 
     return make
 
