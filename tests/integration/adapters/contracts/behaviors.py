@@ -1931,6 +1931,54 @@ register_sync_extra_assertion("driver_features:psycopg_copy", DRIVER_FEATURES_SC
 register_async_extra_assertion("driver_features:psycopg_copy", DRIVER_FEATURES_SCOPE, _psycopg_copy_async)
 
 
+def _duckdb_set_variable(driver: object, case: DriverCase) -> None:
+    """Fold duckdb SET VARIABLE persistence across execute() calls (issue #341): set/read, update, multi-var, ETL filter."""
+    sync_driver = cast("SyncContractDriver", driver)
+
+    sync_driver.execute("SET VARIABLE contract_var = 'first'")
+    assert sync_driver.execute("SELECT getvariable('contract_var') AS v").get_data()[0]["v"] == "first"
+    sync_driver.execute("SET VARIABLE contract_var = 42")
+    assert sync_driver.execute("SELECT getvariable('contract_var') AS v").get_data()[0]["v"] == 42
+    sync_driver.execute("SET VARIABLE contract_var = 'now_string'")
+    assert sync_driver.execute("SELECT getvariable('contract_var') AS v").get_data()[0]["v"] == "now_string"
+
+    sync_driver.execute("SET VARIABLE var_a = 'alpha'")
+    sync_driver.execute("SET VARIABLE var_b = 100")
+    multi = sync_driver.execute("SELECT getvariable('var_a') AS a, getvariable('var_b') AS b").get_data()[0]
+    assert multi == {"a": "alpha", "b": 100}
+
+    sync_driver.execute("SET VARIABLE multiplier = 10")
+    sync_driver.execute("SET VARIABLE base_val = 5")
+    calc = sync_driver.execute(
+        "SELECT getvariable('multiplier') * 3 + getvariable('base_val') AS calculated"
+    ).get_data()[0]
+    assert calc["calculated"] == 35
+
+    table = _pc_table(case, "ws")
+    _sync_drop_table(sync_driver, table)
+    sync_driver.execute_script(f"CREATE TABLE {table} (workspace_id TEXT, item_name TEXT, value INTEGER)")
+    try:
+        sync_driver.execute_many(
+            f"INSERT INTO {table} (workspace_id, item_name, value) VALUES (?, ?, ?)",
+            [("ws_001", "item_a", 10), ("ws_001", "item_b", 20), ("ws_002", "item_c", 30)],
+        )
+        sync_driver.execute("SET VARIABLE current_workspace = 'ws_001'")
+        ws1 = sync_driver.execute(
+            f"SELECT item_name FROM {table} WHERE workspace_id = getvariable('current_workspace') ORDER BY item_name"
+        ).get_data()
+        assert ws1 == [{"item_name": "item_a"}, {"item_name": "item_b"}]
+        sync_driver.execute("SET VARIABLE current_workspace = 'ws_002'")
+        ws2 = sync_driver.execute(
+            f"SELECT item_name FROM {table} WHERE workspace_id = getvariable('current_workspace') ORDER BY item_name"
+        ).get_data()
+        assert ws2 == [{"item_name": "item_c"}]
+    finally:
+        _sync_drop_table(sync_driver, table)
+
+
+register_sync_extra_assertion("driver_features:duckdb_set_variable", DRIVER_FEATURES_SCOPE, _duckdb_set_variable)
+
+
 def assert_sync_driver_features_contract(driver: object, case: DriverCase) -> None:
     """Run an adapter's folded driver-feature proofs (COPY, SET-variable persistence, native types), if any."""
     dispatch_sync_extra_assertions(driver, case, DRIVER_FEATURES_SCOPE)

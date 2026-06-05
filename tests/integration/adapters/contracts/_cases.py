@@ -120,6 +120,7 @@ SYNC_DRIVER_CASES = (
             "arrow_specifics:duckdb",
             "execute_many_specifics:duckdb",
             "param_codecs:duckdb",
+            "driver_features:duckdb_set_variable",
         ),
     ),
     DriverCase(
