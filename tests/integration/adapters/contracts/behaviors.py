@@ -1825,6 +1825,19 @@ def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
         _sync_drop_table(sync_driver, items)
 
 
+def _bigquery_param_codecs(driver: object, case: DriverCase) -> None:
+    """Fold the sqlspec-side BigQuery empty-ARRAY type-inference guard (raised before the query runs).
+
+    @-prefix key normalization, UNNEST(@values), and STRUCT(@...) parameter expressions need a typed
+    column or native BigQuery for the emulator to bind them, so they stay adapter-local.
+    """
+    sync_driver = cast("SyncContractDriver", driver)
+
+    with pytest.raises(SQLSpecError, match="Cannot determine BigQuery ARRAY type"):
+        sync_driver.execute("SELECT ARRAY_LENGTH(@values)", {"values": []})
+
+
+register_sync_extra_assertion("param_codecs:bigquery", PARAM_CODECS_SCOPE, _bigquery_param_codecs)
 register_sync_extra_assertion("param_codecs:adbc_postgres", PARAM_CODECS_SCOPE, _adbc_postgres_param_codecs)
 register_sync_extra_assertion("param_codecs:adbc_sqlite", PARAM_CODECS_SCOPE, _adbc_sqlite_param_codecs)
 register_sync_extra_assertion("param_codecs:adbc_duckdb", PARAM_CODECS_SCOPE, _adbc_duckdb_param_codecs)

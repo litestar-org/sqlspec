@@ -263,6 +263,7 @@ SYNC_DRIVER_CASES = (
             "emulator-no-search-filter",
             "emulator-retries-invalid-sql",
         ),
+        extra_assertions=("param_codecs:bigquery",),
     ),
 )
 

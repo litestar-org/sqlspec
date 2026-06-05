@@ -15,6 +15,7 @@ SYNC_PROOF_KEYS = (
     "param_codecs:adbc_postgres",
     "param_codecs:adbc_sqlite",
     "param_codecs:adbc_duckdb",
+    "param_codecs:bigquery",
 )
 ASYNC_PROOF_KEYS = (
     "param_codecs:asyncpg",
@@ -45,6 +46,7 @@ OPTED_IN = {
     "adbc-sqlite-sync": "param_codecs:adbc_sqlite",
     "adbc-duckdb-sync": "param_codecs:adbc_duckdb",
     "adbc-postgres-sync": "param_codecs:adbc_postgres",
+    "bigquery-sync": "param_codecs:bigquery",
 }
 
 
