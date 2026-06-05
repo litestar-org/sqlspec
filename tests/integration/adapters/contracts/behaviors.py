@@ -1867,6 +1867,80 @@ async def assert_async_param_codecs_contract(driver: object, case: DriverCase) -
     await dispatch_async_extra_assertions(driver, case, PARAM_CODECS_SCOPE)
 
 
+DRIVER_FEATURES_SCOPE = "driver_features"
+
+_COPY_TEXT_DATA = "1\ttext-a\t100\n2\ttext-b\t200\n"
+_COPY_CSV_DATA = "5,csv-a,500\n6,csv-b,600\n7,csv-c,700\n"
+
+
+def _psycopg_copy(driver: object, case: DriverCase) -> None:
+    """Fold psycopg COPY FROM STDIN: the data string binds as a single param for both text and csv formats."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "copy")
+    _sync_drop_table(sync_driver, table)
+    sync_driver.execute_script(f"CREATE TABLE {table} (id INTEGER, name TEXT, value INTEGER)")
+    try:
+        text_result = sync_driver.execute(f"COPY {table} FROM STDIN WITH (FORMAT text)", _COPY_TEXT_DATA)
+        assert isinstance(text_result, SQLResult)
+        assert text_result.rows_affected >= 0
+        text_rows = sync_driver.execute(f"SELECT id, name, value FROM {table} ORDER BY id").get_data()
+        assert len(text_rows) == 2
+        assert text_rows[0]["name"] == "text-a"
+        assert text_rows[1]["value"] == 200
+
+        sync_driver.execute_script(f"DELETE FROM {table}")
+        csv_result = sync_driver.execute(f"COPY {table} FROM STDIN WITH (FORMAT csv)", _COPY_CSV_DATA)
+        assert isinstance(csv_result, SQLResult)
+        assert csv_result.rows_affected == 3
+        csv_rows = sync_driver.execute(f"SELECT id, name, value FROM {table} ORDER BY id").get_data()
+        assert len(csv_rows) == 3
+        assert csv_rows[0]["name"] == "csv-a"
+        assert csv_rows[2]["value"] == 700
+    finally:
+        _sync_drop_table(sync_driver, table)
+
+
+async def _psycopg_copy_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of _psycopg_copy."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "copy")
+    await _async_drop_table(async_driver, table)
+    await async_driver.execute_script(f"CREATE TABLE {table} (id INTEGER, name TEXT, value INTEGER)")
+    try:
+        text_result = await async_driver.execute(f"COPY {table} FROM STDIN WITH (FORMAT text)", _COPY_TEXT_DATA)
+        assert isinstance(text_result, SQLResult)
+        assert text_result.rows_affected >= 0
+        text_rows = (await async_driver.execute(f"SELECT id, name, value FROM {table} ORDER BY id")).get_data()
+        assert len(text_rows) == 2
+        assert text_rows[0]["name"] == "text-a"
+        assert text_rows[1]["value"] == 200
+
+        await async_driver.execute_script(f"DELETE FROM {table}")
+        csv_result = await async_driver.execute(f"COPY {table} FROM STDIN WITH (FORMAT csv)", _COPY_CSV_DATA)
+        assert isinstance(csv_result, SQLResult)
+        assert csv_result.rows_affected == 3
+        csv_rows = (await async_driver.execute(f"SELECT id, name, value FROM {table} ORDER BY id")).get_data()
+        assert len(csv_rows) == 3
+        assert csv_rows[0]["name"] == "csv-a"
+        assert csv_rows[2]["value"] == 700
+    finally:
+        await _async_drop_table(async_driver, table)
+
+
+register_sync_extra_assertion("driver_features:psycopg_copy", DRIVER_FEATURES_SCOPE, _psycopg_copy)
+register_async_extra_assertion("driver_features:psycopg_copy", DRIVER_FEATURES_SCOPE, _psycopg_copy_async)
+
+
+def assert_sync_driver_features_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-feature proofs (COPY, SET-variable persistence, native types), if any."""
+    dispatch_sync_extra_assertions(driver, case, DRIVER_FEATURES_SCOPE)
+
+
+async def assert_async_driver_features_contract(driver: object, case: DriverCase) -> None:
+    """Run an adapter's folded driver-feature proofs (COPY, SET-variable persistence, native types), if any."""
+    await dispatch_async_extra_assertions(driver, case, DRIVER_FEATURES_SCOPE)
+
+
 class SyncLifecycleConfig(Protocol):
     """Sync config surface the pooling/connection-hook contracts exercise."""
 

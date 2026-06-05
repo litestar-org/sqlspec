@@ -186,6 +186,7 @@ SYNC_DRIVER_CASES = (
             "arrow_specifics:postgres",
             "execute_many_specifics:postgres",
             "param_codecs:psycopg",
+            "driver_features:psycopg_copy",
         ),
     ),
     DriverCase(
@@ -440,7 +441,12 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psycopg_async",
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "param_codecs:psycopg"),
+        extra_assertions=(
+            "explain_modifiers:postgres",
+            "arrow_specifics:postgres",
+            "param_codecs:psycopg",
+            "driver_features:psycopg_copy",
+        ),
     ),
     DriverCase(
         id="cockroach-asyncpg-async",
