@@ -273,7 +273,12 @@ SYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_oracle_sync",
         deviations=("no-for-share",),
-        extra_assertions=("explain_modifiers:oracle", "param_codecs:oracle"),
+        extra_assertions=(
+            "explain_modifiers:oracle",
+            "param_codecs:oracle",
+            "driver_features:oracle_sequence",
+            "driver_features:oracle_json_native",
+        ),
     ),
     DriverCase(
         id="bigquery-sync",
@@ -514,7 +519,13 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_oracle_async",
         deviations=("no-for-share",),
-        extra_assertions=("explain_modifiers:oracle", "arrow_specifics:oracle", "param_codecs:oracle"),
+        extra_assertions=(
+            "explain_modifiers:oracle",
+            "arrow_specifics:oracle",
+            "param_codecs:oracle",
+            "driver_features:oracle_sequence",
+            "driver_features:oracle_json_native",
+        ),
     ),
 )
 

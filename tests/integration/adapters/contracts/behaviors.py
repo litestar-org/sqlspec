@@ -1979,6 +1979,121 @@ def _duckdb_set_variable(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("driver_features:duckdb_set_variable", DRIVER_FEATURES_SCOPE, _duckdb_set_variable)
 
 
+_ORACLE_DROP_CODE = {"TABLE": -942, "SEQUENCE": -2289}
+
+
+def _oracle_drop_sql(kind: str, name: str) -> str:
+    return (
+        f"BEGIN EXECUTE IMMEDIATE 'DROP {kind} {name}'; "
+        f"EXCEPTION WHEN OTHERS THEN IF SQLCODE != {_ORACLE_DROP_CODE[kind]} THEN RAISE; END IF; END;"
+    )
+
+
+def _oracle_sequence(driver: object, case: DriverCase) -> None:
+    """Fold Oracle sequences: insert via seq.NEXTVAL, read seq.CURRVAL FROM dual, verify the row round-trips."""
+    sync_driver = cast("SyncContractDriver", driver)
+    seq = f"contract_seq_{case.adapter}_{case.mode}"
+    table = _pc_table(case, "seq")
+    sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    sync_driver.execute_script(_oracle_drop_sql("SEQUENCE", seq))
+    sync_driver.execute_script(f"CREATE SEQUENCE {seq} START WITH 1 INCREMENT BY 1")
+    sync_driver.execute_script(f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    try:
+        sync_driver.execute(f"INSERT INTO {table} (id, name) VALUES ({seq}.NEXTVAL, :1)", ("seq_name",))
+        last_id = sync_driver.select_value(f"SELECT {seq}.CURRVAL FROM dual")
+        row = sync_driver.select_one(f"SELECT id, name FROM {table} WHERE id = :1", (last_id,))
+        assert row["name"] == "seq_name"
+        assert row["id"] == last_id
+    finally:
+        sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+        sync_driver.execute_script(_oracle_drop_sql("SEQUENCE", seq))
+
+
+async def _oracle_sequence_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of _oracle_sequence."""
+    async_driver = cast("AsyncContractDriver", driver)
+    seq = f"contract_seq_{case.adapter}_{case.mode}"
+    table = _pc_table(case, "seq")
+    await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    await async_driver.execute_script(_oracle_drop_sql("SEQUENCE", seq))
+    await async_driver.execute_script(f"CREATE SEQUENCE {seq} START WITH 1 INCREMENT BY 1")
+    await async_driver.execute_script(f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    try:
+        await async_driver.execute(f"INSERT INTO {table} (id, name) VALUES ({seq}.NEXTVAL, :1)", ("seq_name",))
+        last_id = await async_driver.select_value(f"SELECT {seq}.CURRVAL FROM dual")
+        row = await async_driver.select_one(f"SELECT id, name FROM {table} WHERE id = :1", (last_id,))
+        assert row["name"] == "seq_name"
+        assert row["id"] == last_id
+    finally:
+        await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+        await async_driver.execute_script(_oracle_drop_sql("SEQUENCE", seq))
+
+
+register_sync_extra_assertion("driver_features:oracle_sequence", DRIVER_FEATURES_SCOPE, _oracle_sequence)
+register_async_extra_assertion("driver_features:oracle_sequence", DRIVER_FEATURES_SCOPE, _oracle_sequence_async)
+
+
+def _oracle_json_payloads() -> "list[object]":
+    """Payloads exercising the native DB_TYPE_JSON path: dict, list[dict], >4000B dict, special values."""
+    return [
+        {"foo": "bar", "n": 42, "nested": {"x": [1, 2, 3]}},
+        [{"a": 1}, {"b": 2}, {"c": [10, 20, 30]}],
+        {"big": "x" * 8000, "n": list(range(500))},
+        {
+            "active": True,
+            "deleted": False,
+            "missing": None,
+            "count": 42,
+            "tags": ["alpha", "beta", "gamma"],
+            "labels": {"env": "prod", "tier": "primary"},
+        },
+    ]
+
+
+def _oracle_json_native(driver: object, case: DriverCase) -> None:
+    """Fold Oracle native JSON: dict / list[dict] / >4000B / special-value payloads + executemany round-trip."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "json")
+    sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    sync_driver.execute_script(f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, payload JSON)")
+    try:
+        for row_id, payload in enumerate(_oracle_json_payloads(), start=1):
+            sync_driver.execute(f"INSERT INTO {table} (id, payload) VALUES (:1, :2)", (row_id, payload))
+            stored = sync_driver.select_one(f"SELECT payload FROM {table} WHERE id = :1", (row_id,))
+            assert stored["payload"] == payload
+        sync_driver.execute_script(f"DELETE FROM {table}")
+        many = [(i, {"index": i, "label": f"row-{i}"}) for i in range(1, 6)]
+        sync_driver.execute_many(f"INSERT INTO {table} (id, payload) VALUES (:1, :2)", many)
+        rows = sync_driver.execute(f"SELECT id, payload FROM {table} ORDER BY id").get_data()
+        assert [(r["id"], r["payload"]) for r in rows] == many
+    finally:
+        sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+async def _oracle_json_native_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of _oracle_json_native."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "json")
+    await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    await async_driver.execute_script(f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, payload JSON)")
+    try:
+        for row_id, payload in enumerate(_oracle_json_payloads(), start=1):
+            await async_driver.execute(f"INSERT INTO {table} (id, payload) VALUES (:1, :2)", (row_id, payload))
+            stored = await async_driver.select_one(f"SELECT payload FROM {table} WHERE id = :1", (row_id,))
+            assert stored["payload"] == payload
+        await async_driver.execute_script(f"DELETE FROM {table}")
+        many = [(i, {"index": i, "label": f"row-{i}"}) for i in range(1, 6)]
+        await async_driver.execute_many(f"INSERT INTO {table} (id, payload) VALUES (:1, :2)", many)
+        rows = (await async_driver.execute(f"SELECT id, payload FROM {table} ORDER BY id")).get_data()
+        assert [(r["id"], r["payload"]) for r in rows] == many
+    finally:
+        await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+register_sync_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native)
+register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native_async)
+
+
 def assert_sync_driver_features_contract(driver: object, case: DriverCase) -> None:
     """Run an adapter's folded driver-feature proofs (COPY, SET-variable persistence, native types), if any."""
     dispatch_sync_extra_assertions(driver, case, DRIVER_FEATURES_SCOPE)

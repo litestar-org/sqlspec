@@ -144,64 +144,6 @@ def test_sync_select_value(oracle_sync_session: "OracleSyncDriver", parameters: 
     )
 
 
-def test_sync_insert_with_sequence(oracle_sync_session: "OracleSyncDriver") -> None:
-    """Test Oracle's sequences and NEXTVAL/CURRVAL functionality."""
-
-    oracle_sync_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq_oracledb_sync';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -2289 THEN RAISE; END IF;
-        END;
-        """)
-    oracle_sync_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_sync';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 THEN RAISE; END IF;
-        END;
-        """)
-
-    oracle_sync_session.execute_script("""
-        CREATE SEQUENCE test_seq_oracledb_sync START WITH 1 INCREMENT BY 1;
-        CREATE TABLE test_table_oracledb_sync (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-    """)
-
-    oracle_sync_session.execute(
-        "INSERT INTO test_table_oracledb_sync (id, name) VALUES (test_seq_oracledb_sync.NEXTVAL, :1)", ("test_name",)
-    )
-
-    result = oracle_sync_session.execute("SELECT test_seq_oracledb_sync.CURRVAL as last_id FROM dual")
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    last_id = result.get_data()[0]["last_id"]
-
-    verify_result = oracle_sync_session.execute(
-        "SELECT id, name FROM test_table_oracledb_sync WHERE id = :1", (last_id,)
-    )
-    assert isinstance(verify_result, SQLResult)
-    assert verify_result.data is not None
-    assert len(verify_result.data) == 1
-    assert verify_result.get_data()[0]["name"] == "test_name"
-    assert verify_result.get_data()[0]["id"] == last_id
-
-    oracle_sync_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_sync';
-            EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq_oracledb_sync';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 AND SQLCODE != -2289 THEN RAISE; END IF;
-        END;
-    """)
-
-
 def test_sync_execute_many_insert(oracle_sync_session: "OracleSyncDriver") -> None:
     """Test execute_many functionality for batch inserts."""
 

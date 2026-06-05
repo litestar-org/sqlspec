@@ -146,64 +146,6 @@ async def test_async_select_value(
     )
 
 
-async def test_async_insert_with_sequence(oracle_async_session: "OracleAsyncDriver") -> None:
-    """Test Oracle's sequences and NEXTVAL/CURRVAL functionality."""
-
-    await oracle_async_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq_oracledb_async';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -2289 THEN RAISE; END IF;
-        END;
-        """)
-    await oracle_async_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_async';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 THEN RAISE; END IF;
-        END;
-        """)
-
-    await oracle_async_session.execute_script("""
-        CREATE SEQUENCE test_seq_oracledb_async START WITH 1 INCREMENT BY 1;
-        CREATE TABLE test_table_oracledb_async (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-    """)
-
-    await oracle_async_session.execute(
-        "INSERT INTO test_table_oracledb_async (id, name) VALUES (test_seq_oracledb_async.NEXTVAL, :1)", ("test_name",)
-    )
-
-    result = await oracle_async_session.execute("SELECT test_seq_oracledb_async.CURRVAL as last_id FROM dual")
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    last_id = result.get_data()[0]["last_id"]
-
-    verify_result = await oracle_async_session.execute(
-        "SELECT id, name FROM test_table_oracledb_async WHERE id = :1", (last_id,)
-    )
-    assert isinstance(verify_result, SQLResult)
-    assert verify_result.data is not None
-    assert len(verify_result.data) == 1
-    assert verify_result.get_data()[0]["name"] == "test_name"
-    assert verify_result.get_data()[0]["id"] == last_id
-
-    await oracle_async_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_async';
-            EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq_oracledb_async';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 AND SQLCODE != -2289 THEN RAISE; END IF;
-        END;
-    """)
-
-
 async def test_async_execute_many_insert(oracle_async_session: "OracleAsyncDriver") -> None:
     """Test execute_many functionality for batch inserts."""
 
