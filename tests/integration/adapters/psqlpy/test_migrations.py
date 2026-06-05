@@ -7,6 +7,8 @@ contract matrix.
 """
 
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -14,16 +16,71 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands
-from tests.integration.adapters._postgres_migration_schema import (
-    async_table_exists,
-    create_schema_sql,
-    drop_schema_sql,
-    unique_identifier,
-    write_non_transactional_unqualified_table_migration,
-    write_unqualified_table_migration,
-)
+from sqlspec.utils.text import quote_identifier
 
 pytestmark = pytest.mark.xdist_group("postgres")
+
+
+def unique_identifier(prefix: str) -> str:
+    """Return a short PostgreSQL-safe identifier for integration tests."""
+    return f"{prefix}_{uuid4().hex[:10]}"
+
+
+def create_schema_sql(schema: str) -> str:
+    """Return PostgreSQL CREATE SCHEMA SQL for a trusted test identifier."""
+    return f"CREATE SCHEMA {quote_identifier(schema)}"
+
+
+def drop_schema_sql(schema: str) -> str:
+    """Return PostgreSQL DROP SCHEMA SQL for a trusted test identifier."""
+    return f"DROP SCHEMA IF EXISTS {quote_identifier(schema)} CASCADE"
+
+
+async def async_table_exists(driver: Any, schema: str, table_name: str, *, style: str = "numeric") -> bool:
+    """Return whether the table exists using an async SQLSpec driver."""
+    placeholders = "%s AND table_name = %s" if style == "pyformat" else "$1 AND table_name = $2"
+    result = await driver.execute(
+        f"SELECT 1 FROM information_schema.tables WHERE table_schema = {placeholders}", (schema, table_name)
+    )
+    return bool(result.data)
+
+
+def write_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+    """Write a Python migration that creates an unqualified table."""
+    (migration_dir / "0001_create_unqualified_table.py").write_text(
+        f'''"""Create an unqualified table."""
+
+
+def up():
+    """Create an unqualified table."""
+    return ["""
+        CREATE TABLE {table_name} (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL
+        )
+    """]
+
+
+def down():
+    """Drop the unqualified table."""
+    return ["DROP TABLE IF EXISTS {table_name}"]
+'''
+    )
+
+
+def write_non_transactional_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+    """Write a SQL migration that creates an unqualified table without a transaction."""
+    (migration_dir / "0001_create_unqualified_table.sql").write_text(
+        f"""-- transactional: false
+-- name: migrate-0001-up
+CREATE TABLE {table_name} (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+-- name: migrate-0001-down
+DROP TABLE IF EXISTS {table_name};"""
+    )
 
 
 async def test_psqlpy_migration_default_schema_applies_to_ddl(

@@ -1757,6 +1757,17 @@ def _storage_bridge_rustfs_names(case: DriverCase) -> "tuple[str, str, str, str]
     return alias, prefix, destination, object_name
 
 
+def _register_rustfs_alias(alias: str, rustfs_service: Any, bucket: str, *, prefix: str = "storage-bridge") -> str:
+    """Register a storage registry alias backed by the pytest-databases RustFS service."""
+    from sqlspec.storage.registry import storage_registry
+    from tests.fixtures.rustfs import rustfs_fsspec_kwargs
+
+    storage_registry.register_alias(
+        alias, f"s3://{bucket}/{prefix}", backend="fsspec", **rustfs_fsspec_kwargs(rustfs_service)
+    )
+    return prefix
+
+
 def assert_sync_storage_bridge_rustfs_contract(
     driver: object, case: DriverCase, rustfs_service: Any, rustfs_bucket_name: str
 ) -> None:
@@ -1765,7 +1776,6 @@ def assert_sync_storage_bridge_rustfs_contract(
         pytest.skip(f"{case.adapter} has no verified storage-bridge support")
     from sqlspec.storage.registry import storage_registry
     from tests.fixtures.rustfs import rustfs_object_size
-    from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
 
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
@@ -1773,7 +1783,7 @@ def assert_sync_storage_bridge_rustfs_contract(
 
     storage_registry.clear()
     try:
-        register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
+        _register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
         _seed_sync(sync_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table)
 
         export_job = sync_driver.select_to_storage(
@@ -1798,7 +1808,6 @@ async def assert_async_storage_bridge_rustfs_contract(
         pytest.skip(f"{case.adapter} has no verified storage-bridge support")
     from sqlspec.storage.registry import storage_registry
     from tests.fixtures.rustfs import rustfs_object_size
-    from tests.integration.adapters._storage_bridge_helpers import register_rustfs_alias
 
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
@@ -1806,7 +1815,7 @@ async def assert_async_storage_bridge_rustfs_contract(
 
     storage_registry.clear()
     try:
-        register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
+        _register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
         await _seed_async(async_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table)
 
         export_job = await async_driver.select_to_storage(

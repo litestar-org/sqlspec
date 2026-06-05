@@ -5,8 +5,29 @@ from typing import Any
 
 import pytest
 
-from tests.integration.adapters._events_helpers import setup_async_event_channel, setup_sync_event_channel
+from sqlspec import SQLSpec
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from tests.integration.adapters.contracts._events_cases import EventsCase
+
+
+async def setup_async_event_channel(config: Any) -> 'tuple["SQLSpec", Any]':
+    """Run async migrations and return SQLSpec + event channel."""
+    commands = AsyncMigrationCommands(config)
+    await commands.upgrade()
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    return spec, spec.event_channel(config)
+
+
+def setup_sync_event_channel(config: Any) -> 'tuple["SQLSpec", Any]':
+    """Run sync migrations and return SQLSpec + event channel."""
+    commands = SyncMigrationCommands(config)
+    commands.upgrade()
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    return spec, spec.event_channel(config)
 
 
 def _events_extension_config(case: EventsCase, behavior: str) -> "tuple[str, dict[str, Any], str]":
