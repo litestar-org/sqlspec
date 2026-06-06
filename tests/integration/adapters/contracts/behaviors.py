@@ -4,6 +4,7 @@ import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
+from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 
 import msgspec
 import pytest
@@ -2294,6 +2295,157 @@ async def assert_async_lowercase_columns_contract(make_config: AsyncConfigFactor
             await session.execute_script(_oracle_drop_sql("TABLE", table))
     finally:
         await disabled_config.close_pool()
+
+
+def _oracle_uuid_variants() -> "list[tuple[int, UUID]]":
+    return [(10, uuid1()), (11, uuid4()), (12, uuid5(NAMESPACE_DNS, "example.com"))]
+
+
+def _oracle_uuid_sync(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    table = _pc_table(case, "uuid")
+    create = f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, uuid_col RAW(16))"
+
+    enabled = make_config(driver_features={"enable_uuid_binary": True})
+    try:
+        with enabled.provide_session() as session:
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+            session.execute_script(create)
+            value = uuid4()
+            session.execute(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", (1, value))
+            session.execute(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", (2, None))
+            row = session.select_one(f"SELECT uuid_col FROM {table} WHERE id = :1", (1,))
+            assert isinstance(row["uuid_col"], UUID)
+            assert row["uuid_col"] == value
+            null_row = session.select_one(f"SELECT uuid_col FROM {table} WHERE id = :1", (2,))
+            assert null_row["uuid_col"] is None
+            # variants (v1/v4/v5) + executemany bulk binding
+            batch = _oracle_uuid_variants() + [(i, uuid4()) for i in range(100, 150)]
+            session.execute_many(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", batch)
+            stored = {
+                r["id"]: r["uuid_col"]
+                for r in session.execute(f"SELECT id, uuid_col FROM {table} WHERE id >= 10 ORDER BY id").get_data()
+            }
+            for rid, expected in batch:
+                assert isinstance(stored[rid], UUID)
+                assert stored[rid] == expected
+            assert session.select_value(f"SELECT COUNT(*) FROM {table} WHERE id >= 100") == 50
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        enabled.close_pool()
+
+    disabled = make_config(driver_features={"enable_uuid_binary": False})
+    try:
+        with disabled.provide_session() as session:
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+            session.execute_script(create)
+            value = uuid4()
+            session.execute(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", (1, value.bytes))
+            row = session.select_one(f"SELECT uuid_col FROM {table} WHERE id = :1", (1,))
+            assert isinstance(row["uuid_col"], bytes)
+            assert row["uuid_col"] == value.bytes
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        disabled.close_pool()
+
+
+async def _oracle_uuid_async(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    table = _pc_table(case, "uuid")
+    create = f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, uuid_col RAW(16))"
+
+    enabled = make_config(driver_features={"enable_uuid_binary": True})
+    try:
+        async with enabled.provide_session() as session:
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await session.execute_script(create)
+            value = uuid4()
+            await session.execute(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", (1, value))
+            await session.execute(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", (2, None))
+            row = await session.select_one(f"SELECT uuid_col FROM {table} WHERE id = :1", (1,))
+            assert isinstance(row["uuid_col"], UUID)
+            assert row["uuid_col"] == value
+            null_row = await session.select_one(f"SELECT uuid_col FROM {table} WHERE id = :1", (2,))
+            assert null_row["uuid_col"] is None
+            batch = _oracle_uuid_variants() + [(i, uuid4()) for i in range(100, 150)]
+            await session.execute_many(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", batch)
+            stored = {
+                r["id"]: r["uuid_col"]
+                for r in (
+                    await session.execute(f"SELECT id, uuid_col FROM {table} WHERE id >= 10 ORDER BY id")
+                ).get_data()
+            }
+            for rid, expected in batch:
+                assert isinstance(stored[rid], UUID)
+                assert stored[rid] == expected
+            assert await session.select_value(f"SELECT COUNT(*) FROM {table} WHERE id >= 100") == 50
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        await enabled.close_pool()
+
+    disabled = make_config(driver_features={"enable_uuid_binary": False})
+    try:
+        async with disabled.provide_session() as session:
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await session.execute_script(create)
+            value = uuid4()
+            await session.execute(f"INSERT INTO {table} (id, uuid_col) VALUES (:1, :2)", (1, value.bytes))
+            row = await session.select_one(f"SELECT uuid_col FROM {table} WHERE id = :1", (1,))
+            assert isinstance(row["uuid_col"], bytes)
+            assert row["uuid_col"] == value.bytes
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        await disabled.close_pool()
+
+
+_DUCKDB_UUID_STR = "550e8400-e29b-41d4-a716-446655440000"
+
+
+def _duckdb_uuid_sync(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    table = _pc_table(case, "uuid")
+    create = f"CREATE TABLE {table} (id UUID)"
+
+    default = make_config()
+    try:
+        with default.provide_session() as session:
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            session.execute_script(create)
+            session.execute(f"INSERT INTO {table} (id) VALUES (?)", (_DUCKDB_UUID_STR,))
+            row = session.select_one(f"SELECT id FROM {table}")
+            assert isinstance(row["id"], UUID)
+            assert str(row["id"]) == _DUCKDB_UUID_STR
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+    finally:
+        default.close_pool()
+
+    # DuckDB returns native UUID objects from UUID columns even when input conversion is disabled.
+    disabled = make_config(driver_features={"enable_uuid_conversion": False})
+    try:
+        with disabled.provide_session() as session:
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            session.execute_script(create)
+            session.execute(f"INSERT INTO {table} (id) VALUES (?)", (_DUCKDB_UUID_STR,))
+            row = session.select_one(f"SELECT id FROM {table}")
+            assert isinstance(row["id"], UUID)
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+    finally:
+        disabled.close_pool()
+
+
+def assert_sync_uuid_feature_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert the UUID driver feature: enabled binds/returns uuid.UUID; disabled returns the raw form."""
+    if case.dialect == "oracle":
+        _oracle_uuid_sync(make_config, case)
+    elif case.dialect == "duckdb":
+        _duckdb_uuid_sync(make_config, case)
+    else:
+        pytest.skip(f"{case.adapter} has no UUID-feature contract mapping")
+
+
+async def assert_async_uuid_feature_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Async UUID driver-feature contract (oracle only; duckdb has no async driver)."""
+    if case.dialect == "oracle":
+        await _oracle_uuid_async(make_config, case)
+    else:
+        pytest.skip(f"{case.adapter} has no async UUID-feature contract mapping")
 
 
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:

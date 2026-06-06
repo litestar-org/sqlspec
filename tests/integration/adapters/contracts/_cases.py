@@ -119,6 +119,7 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_duckdb",
+        supports_uuid_feature=True,
         extra_assertions=(
             "explain_modifiers:duckdb",
             "arrow_specifics:duckdb",
@@ -277,6 +278,7 @@ SYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_oracle_sync",
         supports_lowercase_columns=True,
+        supports_uuid_feature=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
@@ -526,6 +528,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_oracle_async",
         supports_lowercase_columns=True,
+        supports_uuid_feature=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",

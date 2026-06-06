@@ -11,9 +11,11 @@ from tests.integration.adapters.contracts.behaviors import (
     assert_async_connection_hook_contract,
     assert_async_lowercase_columns_contract,
     assert_async_pooling_contract,
+    assert_async_uuid_feature_contract,
     assert_sync_connection_hook_contract,
     assert_sync_lowercase_columns_contract,
     assert_sync_pooling_contract,
+    assert_sync_uuid_feature_contract,
 )
 
 
@@ -71,3 +73,17 @@ async def test_async_lowercase_columns_contract(async_driver_case: DriverCaseCon
     if not async_driver_case.case.supports_lowercase_columns:
         pytest.skip(f"{async_driver_case.case.adapter} has no verified column-case feature")
     await assert_async_lowercase_columns_contract(_async_factory(async_driver_case), async_driver_case.case)
+
+
+def test_sync_uuid_feature_contract(sync_driver_case: DriverCaseContext) -> None:
+    """Sync drivers honor the UUID driver feature (enabled binds/returns uuid.UUID; disabled returns raw form)."""
+    if not sync_driver_case.case.supports_uuid_feature:
+        pytest.skip(f"{sync_driver_case.case.adapter} has no verified UUID feature")
+    assert_sync_uuid_feature_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+
+
+async def test_async_uuid_feature_contract(async_driver_case: DriverCaseContext) -> None:
+    """Async drivers honor the UUID driver feature (enabled binds/returns uuid.UUID; disabled returns raw form)."""
+    if not async_driver_case.case.supports_uuid_feature:
+        pytest.skip(f"{async_driver_case.case.adapter} has no verified UUID feature")
+    await assert_async_uuid_feature_contract(_async_factory(async_driver_case), async_driver_case.case)
