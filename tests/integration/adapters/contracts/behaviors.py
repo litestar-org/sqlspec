@@ -2095,6 +2095,61 @@ async def _oracle_json_native_async(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native)
 register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native_async)
 
+def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
+    """Fold BigQuery dialect scalar SQL: math/string/conditional/specific functions + ARRAY/STRUCT.
+
+    Window functions + schema DDL are left as bigquery-local residuals (emulator-flaky; see the
+    case's emulator-* deviations).
+    """
+    sync_driver = cast("SyncContractDriver", driver)
+
+    math_row = sync_driver.execute(
+        "SELECT ABS(-42) AS abs_value, ROUND(3.15159234, 2) AS rounded, MOD(17, 5) AS mod_result, "
+        "POWER(2, 3) AS power_result"
+    ).get_data()[0]
+    assert math_row == {"abs_value": 42, "rounded": 3.15, "mod_result": 2, "power_result": 8}
+
+    string_row = sync_driver.execute(
+        "SELECT UPPER('hello') AS u, LOWER('WORLD') AS l, LENGTH('BigQuery') AS n, "
+        "CONCAT('Hello', ' ', 'World') AS c"
+    ).get_data()[0]
+    assert string_row == {"u": "HELLO", "l": "world", "n": 8, "c": "Hello World"}
+
+    cond_row = sync_driver.execute(
+        "SELECT CASE WHEN 1 > 0 THEN 'positive' ELSE 'negative' END AS case_result, "
+        "IF(10 > 5, 'greater', 'lesser') AS if_result, IFNULL(NULL, 'default_value') AS ifnull_result, "
+        "NULLIF(5, 5) AS nullif_result, COALESCE(NULL, NULL, 'first_non_null') AS coalesce_result"
+    ).get_data()[0]
+    assert cond_row == {
+        "case_result": "positive",
+        "if_result": "greater",
+        "ifnull_result": "default_value",
+        "nullif_result": None,
+        "coalesce_result": "first_non_null",
+    }
+
+    fn_row = sync_driver.execute("SELECT GENERATE_UUID() AS uuid_val, FARM_FINGERPRINT('test') AS fingerprint").get_data()[
+        0
+    ]
+    assert fn_row["uuid_val"] is not None
+    assert fn_row["fingerprint"] is not None
+
+    array_row = sync_driver.execute(
+        "SELECT ARRAY[1, 2, 3, 4, 5] AS numbers, ARRAY_LENGTH(ARRAY[1, 2, 3, 4, 5]) AS array_len"
+    ).get_data()[0]
+    assert array_row["numbers"] == [1, 2, 3, 4, 5]
+    assert array_row["array_len"] == 5
+
+    struct_row = sync_driver.execute(
+        "SELECT STRUCT('Alice' AS name, 25 AS age) AS person, STRUCT('Alice' AS name, 25 AS age).name AS person_name"
+    ).get_data()[0]
+    assert struct_row["person"]["name"] == "Alice"
+    assert struct_row["person"]["age"] == 25
+    assert struct_row["person_name"] == "Alice"
+
+
+register_sync_extra_assertion("driver_features:bigquery_sql_features", DRIVER_FEATURES_SCOPE, _bigquery_sql_features)
+
 
 def assert_sync_driver_features_contract(driver: object, case: DriverCase) -> None:
     """Run an adapter's folded driver-feature proofs (COPY, SET-variable persistence, native types), if any."""

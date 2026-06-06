@@ -361,41 +361,6 @@ def test_bigquery_performance_bulk_operations(
     assert page_result.get_data()[0]["name"] == "bulk_user_21"
 
 
-def test_bigquery_specific_features(bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService") -> None:
-    """Test BigQuery-specific features."""
-
-    functions_result = bigquery_session.execute("""
-        SELECT
-            GENERATE_UUID() as uuid_val,
-            FARM_FINGERPRINT('test') as fingerprint
-    """)
-    assert isinstance(functions_result, SQLResult)
-    assert functions_result.data is not None
-    assert functions_result.get_data()[0]["uuid_val"] is not None
-    assert functions_result.get_data()[0]["fingerprint"] is not None
-
-    array_result = bigquery_session.execute("""
-        SELECT
-            ARRAY[1, 2, 3, 4, 5] as numbers,
-            ARRAY_LENGTH(ARRAY[1, 2, 3, 4, 5]) as array_len
-    """)
-    assert isinstance(array_result, SQLResult)
-    assert array_result.data is not None
-    assert array_result.get_data()[0]["numbers"] == [1, 2, 3, 4, 5]
-    assert array_result.get_data()[0]["array_len"] == 5
-
-    struct_result = bigquery_session.execute("""
-        SELECT
-            STRUCT('Alice' as name, 25 as age) as person,
-            STRUCT('Alice' as name, 25 as age).name as person_name
-    """)
-    assert isinstance(struct_result, SQLResult)
-    assert struct_result.data is not None
-    assert struct_result.get_data()[0]["person"]["name"] == "Alice"
-    assert struct_result.get_data()[0]["person"]["age"] == 25
-    assert struct_result.get_data()[0]["person_name"] == "Alice"
-
-
 def test_bigquery_analytical_functions(bigquery_session: "BigQueryDriver", native_driver_test_table: str) -> None:
     """Test BigQuery analytical and window functions."""
     analytics_data = [
