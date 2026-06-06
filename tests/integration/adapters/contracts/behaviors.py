@@ -2290,7 +2290,8 @@ def assert_sync_connection_instance_contract(make_config: SyncConfigFactory, cas
         source.close_pool()
 
     fresh = make_config(pooled=True, connection_instance=None)
-    assert fresh.connection_instance is None
+    fresh_instance = fresh.connection_instance
+    assert fresh_instance is None
     try:
         assert fresh.provide_pool() is not None
         with fresh.provide_session() as session:
@@ -2320,7 +2321,8 @@ async def assert_async_connection_instance_contract(make_config: AsyncConfigFact
         await source.close_pool()
 
     fresh = make_config(pooled=True, connection_instance=None)
-    assert fresh.connection_instance is None
+    fresh_instance = fresh.connection_instance
+    assert fresh_instance is None
     try:
         assert await fresh.provide_pool() is not None
         async with fresh.provide_session() as session:
