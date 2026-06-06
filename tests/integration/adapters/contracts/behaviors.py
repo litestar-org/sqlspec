@@ -2095,6 +2095,7 @@ async def _oracle_json_native_async(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native)
 register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native_async)
 
+
 def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
     """Fold BigQuery dialect scalar SQL: math/string/conditional/specific functions + ARRAY/STRUCT.
 
@@ -2110,8 +2111,7 @@ def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
     assert math_row == {"abs_value": 42, "rounded": 3.15, "mod_result": 2, "power_result": 8}
 
     string_row = sync_driver.execute(
-        "SELECT UPPER('hello') AS u, LOWER('WORLD') AS l, LENGTH('BigQuery') AS n, "
-        "CONCAT('Hello', ' ', 'World') AS c"
+        "SELECT UPPER('hello') AS u, LOWER('WORLD') AS l, LENGTH('BigQuery') AS n, CONCAT('Hello', ' ', 'World') AS c"
     ).get_data()[0]
     assert string_row == {"u": "HELLO", "l": "world", "n": 8, "c": "Hello World"}
 
@@ -2128,9 +2128,9 @@ def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
         "coalesce_result": "first_non_null",
     }
 
-    fn_row = sync_driver.execute("SELECT GENERATE_UUID() AS uuid_val, FARM_FINGERPRINT('test') AS fingerprint").get_data()[
-        0
-    ]
+    fn_row = sync_driver.execute(
+        "SELECT GENERATE_UUID() AS uuid_val, FARM_FINGERPRINT('test') AS fingerprint"
+    ).get_data()[0]
     assert fn_row["uuid_val"] is not None
     assert fn_row["fingerprint"] is not None
 
@@ -2591,8 +2591,7 @@ def assert_sync_custom_type_adapters_contract(make_config: SyncConfigFactory, ca
     test_list = [1, 2, 3, "four"]
 
     enabled = make_config(
-        driver_features={"enable_custom_adapters": True},
-        connection_overrides={"detect_types": sqlite3.PARSE_DECLTYPES},
+        driver_features={"enable_custom_adapters": True}, connection_overrides={"detect_types": sqlite3.PARSE_DECLTYPES}
     )
     try:
         with enabled.provide_session() as session:

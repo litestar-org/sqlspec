@@ -1038,9 +1038,7 @@ def lifecycle_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., Asyn
 
 
 @pytest.fixture
-def lifecycle_config_mysqlconnector_sync(
-    mysql_service: MySQLService,
-) -> "Callable[..., MysqlConnectorSyncConfig]":
+def lifecycle_config_mysqlconnector_sync(mysql_service: MySQLService) -> "Callable[..., MysqlConnectorSyncConfig]":
     """Build fresh mysql-connector sync configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
@@ -1058,9 +1056,7 @@ def lifecycle_config_mysqlconnector_sync(
 
 
 @pytest.fixture
-def lifecycle_config_mysqlconnector_async(
-    mysql_service: MySQLService,
-) -> "Callable[..., MysqlConnectorAsyncConfig]":
+def lifecycle_config_mysqlconnector_async(mysql_service: MySQLService) -> "Callable[..., MysqlConnectorAsyncConfig]":
     """Build fresh mysql-connector async configs for the connection-hook lifecycle contract (no pooling)."""
 
     def make(

@@ -1,6 +1,5 @@
 """Integration tests for SQLite driver features configuration."""
 
-
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
