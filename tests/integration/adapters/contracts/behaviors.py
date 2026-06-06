@@ -2527,6 +2527,47 @@ async def assert_async_custom_json_serializer_contract(make_config: AsyncConfigF
         await config.close_pool()
 
 
+def assert_sync_custom_type_adapters_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert the sqlite enable_custom_adapters feature hydrates JSON columns to dict/list (str without it)."""
+    import sqlite3
+
+    table = _pc_table(case, "adapters")
+    test_dict = {"key": "value", "count": 42}
+    test_list = [1, 2, 3, "four"]
+
+    enabled = make_config(
+        driver_features={"enable_custom_adapters": True},
+        connection_overrides={"detect_types": sqlite3.PARSE_DECLTYPES},
+    )
+    try:
+        with enabled.provide_session() as session:
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            session.execute(f"CREATE TABLE {table} (id INTEGER, data JSON, items JSON)")
+            session.execute(
+                f"INSERT INTO {table} (id, data, items) VALUES (?, ?, ?)",
+                (1, json.dumps(test_dict), json.dumps(test_list)),
+            )
+            session.commit()
+            row = session.select_one(f"SELECT data, items FROM {table} WHERE id = 1")
+            assert row["data"] == test_dict
+            assert row["items"] == test_list
+    finally:
+        enabled.close_pool()
+
+    disabled = make_config()
+    try:
+        with disabled.provide_session() as session:
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            session.execute(f"CREATE TABLE {table} (id INTEGER, data TEXT)")
+            session.execute(f"INSERT INTO {table} (id, data) VALUES (?, ?)", (1, json.dumps(test_dict)))
+            session.commit()
+            row = session.select_one(f"SELECT data FROM {table} WHERE id = 1")
+            assert isinstance(row["data"], str)
+            assert json.loads(row["data"]) == test_dict
+    finally:
+        disabled.close_pool()
+
+
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:
     """Assert sync drivers return equivalent rows for one statement input shape."""
     sync_driver = cast("SyncContractDriver", driver)

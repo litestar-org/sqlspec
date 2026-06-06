@@ -15,6 +15,7 @@ from tests.integration.adapters.contracts.behaviors import (
     assert_async_uuid_feature_contract,
     assert_sync_connection_hook_contract,
     assert_sync_custom_json_serializer_contract,
+    assert_sync_custom_type_adapters_contract,
     assert_sync_lowercase_columns_contract,
     assert_sync_pooling_contract,
     assert_sync_uuid_feature_contract,
@@ -103,3 +104,10 @@ async def test_async_custom_json_serializer_contract(async_driver_case: DriverCa
     if not async_driver_case.case.supports_custom_json_serializer:
         pytest.skip(f"{async_driver_case.case.adapter} has no verified custom-json-serializer feature")
     await assert_async_custom_json_serializer_contract(_async_factory(async_driver_case), async_driver_case.case)
+
+
+def test_sync_custom_type_adapters_contract(sync_driver_case: DriverCaseContext) -> None:
+    """Sync drivers hydrate JSON columns to dict/list with custom type adapters enabled (str without)."""
+    if not sync_driver_case.case.supports_custom_type_adapters:
+        pytest.skip(f"{sync_driver_case.case.adapter} has no verified custom-type-adapters feature")
+    assert_sync_custom_type_adapters_contract(_sync_factory(sync_driver_case), sync_driver_case.case)

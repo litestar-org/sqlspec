@@ -102,6 +102,7 @@ SYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_sqlite",
         supports_custom_json_serializer=True,
+        supports_custom_type_adapters=True,
         extra_assertions=("driver_basics:noop",),
     ),
     DriverCase(
