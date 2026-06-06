@@ -1,9 +1,9 @@
 """Unit tests for Oracle UUID type handlers."""
 
+import inspect
 import uuid
 from unittest.mock import Mock, patch
 
-from sqlspec.adapters.oracledb._json_handlers import _ChainedInputHandler, _ChainedOutputHandler
 from sqlspec.adapters.oracledb._uuid_handlers import (
     register_uuid_handlers,
     uuid_converter_in,
@@ -248,5 +248,8 @@ def test_uuid_handlers_use_generic_chained_wrappers() -> None:
 
     register_uuid_handlers(connection)
 
-    assert isinstance(connection.inputtypehandler, _ChainedInputHandler)
-    assert isinstance(connection.outputtypehandler, _ChainedOutputHandler)
+    assert callable(connection.inputtypehandler)
+    assert callable(connection.outputtypehandler)
+    # oracledb keys its calling convention on inspect.signature parameter count.
+    assert len(inspect.signature(connection.outputtypehandler).parameters) == 2
+    assert len(inspect.signature(connection.inputtypehandler).parameters) == 3

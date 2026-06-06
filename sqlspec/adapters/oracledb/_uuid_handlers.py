@@ -7,7 +7,7 @@ via connection type handlers. Uses stdlib uuid (no external dependencies).
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.oracledb._json_handlers import _ChainedInputHandler, _ChainedOutputHandler
+from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
 from sqlspec.utils.logging import get_logger
 
@@ -130,5 +130,5 @@ def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     except AttributeError:
         existing_output = None
 
-    connection.inputtypehandler = _ChainedInputHandler(_input_type_handler, existing_input)
-    connection.outputtypehandler = _ChainedOutputHandler(_output_type_handler, existing_output)
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
