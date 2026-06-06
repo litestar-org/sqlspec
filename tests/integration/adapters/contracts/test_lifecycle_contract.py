@@ -9,11 +9,13 @@ from tests.integration.adapters.contracts.behaviors import (
     AsyncConfigFactory,
     SyncConfigFactory,
     assert_async_connection_hook_contract,
+    assert_async_connection_instance_contract,
     assert_async_custom_json_serializer_contract,
     assert_async_lowercase_columns_contract,
     assert_async_pooling_contract,
     assert_async_uuid_feature_contract,
     assert_sync_connection_hook_contract,
+    assert_sync_connection_instance_contract,
     assert_sync_custom_json_serializer_contract,
     assert_sync_custom_type_adapters_contract,
     assert_sync_lowercase_columns_contract,
@@ -48,6 +50,20 @@ async def test_async_pooling_contract(async_driver_case: DriverCaseContext) -> N
     if not async_driver_case.case.supports_pooling:
         pytest.skip(f"{async_driver_case.case.adapter} has no verified pooling support")
     await assert_async_pooling_contract(_async_factory(async_driver_case), async_driver_case.case)
+
+
+def test_sync_connection_instance_contract(sync_driver_case: DriverCaseContext) -> None:
+    """Sync configs honor an injected connection_instance pool."""
+    if not sync_driver_case.case.supports_connection_instance:
+        pytest.skip(f"{sync_driver_case.case.adapter} has no verified connection-instance support")
+    assert_sync_connection_instance_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+
+
+async def test_async_connection_instance_contract(async_driver_case: DriverCaseContext) -> None:
+    """Async configs honor an injected connection_instance pool."""
+    if not async_driver_case.case.supports_connection_instance:
+        pytest.skip(f"{async_driver_case.case.adapter} has no verified connection-instance support")
+    await assert_async_connection_instance_contract(_async_factory(async_driver_case), async_driver_case.case)
 
 
 def test_sync_connection_hook_contract(sync_driver_case: DriverCaseContext) -> None:

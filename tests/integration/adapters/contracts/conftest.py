@@ -846,13 +846,17 @@ def lifecycle_config_sqlite(tmp_path: Path) -> "Callable[..., SqliteConfig]":
         pooled: bool = False,
         driver_features: "SqliteDriverFeatures | None" = None,
         connection_overrides: "dict[str, Any] | None" = None,
+        connection_instance: object | None = None,
     ) -> SqliteConfig:
         connection_config = _lifecycle_connection_config(
             str(tmp_path / "lifecycle.db"), pooled=pooled, connection_overrides=connection_overrides
         )
-        if driver_features is None:
-            return SqliteConfig(connection_config=connection_config)
-        return SqliteConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return SqliteConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -861,11 +865,19 @@ def lifecycle_config_sqlite(tmp_path: Path) -> "Callable[..., SqliteConfig]":
 def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig]":
     """Build fresh aiosqlite configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "AiosqliteDriverFeatures | None" = None) -> AiosqliteConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "AiosqliteDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> AiosqliteConfig:
         connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle_aiosqlite.db"), pooled=pooled)
-        if driver_features is None:
-            return AiosqliteConfig(connection_config=connection_config)
-        return AiosqliteConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return AiosqliteConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -874,11 +886,19 @@ def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig
 def lifecycle_config_duckdb(tmp_path: Path) -> "Callable[..., DuckDBConfig]":
     """Build fresh DuckDB configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "DuckDBDriverFeatures | None" = None) -> DuckDBConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "DuckDBDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> DuckDBConfig:
         connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle.duckdb"), pooled=pooled)
-        if driver_features is None:
-            return DuckDBConfig(connection_config=connection_config)
-        return DuckDBConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return DuckDBConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -887,13 +907,21 @@ def lifecycle_config_duckdb(tmp_path: Path) -> "Callable[..., DuckDBConfig]":
 def lifecycle_config_asyncpg(postgres_service: PostgresService) -> "Callable[..., AsyncpgConfig]":
     """Build fresh asyncpg configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "AsyncpgDriverFeatures | None" = None) -> AsyncpgConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "AsyncpgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> AsyncpgConfig:
         connection_config: dict[str, Any] = _postgres_connection_config(postgres_service)
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return AsyncpgConfig(connection_config=connection_config)
-        return AsyncpgConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return AsyncpgConfig(connection_config=connection_config, **extra)
 
     return make
 

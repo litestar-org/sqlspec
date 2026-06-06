@@ -2164,7 +2164,11 @@ async def assert_async_driver_features_contract(driver: object, case: DriverCase
 class SyncLifecycleConfig(Protocol):
     """Sync config surface the pooling/connection-hook contracts exercise."""
 
+    connection_instance: object
+
     def provide_session(self) -> "contextlib.AbstractContextManager[SyncContractDriver]": ...
+
+    def provide_pool(self) -> object: ...
 
     def close_pool(self) -> None: ...
 
@@ -2172,7 +2176,11 @@ class SyncLifecycleConfig(Protocol):
 class AsyncLifecycleConfig(Protocol):
     """Async config surface the pooling/connection-hook contracts exercise."""
 
+    connection_instance: object
+
     def provide_session(self) -> "contextlib.AbstractAsyncContextManager[AsyncContractDriver]": ...
+
+    async def provide_pool(self) -> object: ...
 
     async def close_pool(self) -> None: ...
 
@@ -2259,6 +2267,66 @@ async def assert_async_pooling_contract(make_config: AsyncConfigFactory, case: D
             await session.commit()
     finally:
         await config.close_pool()
+
+
+def assert_sync_connection_instance_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert an injected connection_instance pool is honored end-to-end; None builds a fresh pool."""
+    source = make_config(pooled=True)
+    injected_pool = source.provide_pool()
+    table = _pool_contract_table(case)
+    try:
+        config = make_config(pooled=True, connection_instance=injected_pool)
+        assert config.connection_instance is injected_pool
+        assert config.provide_pool() is injected_pool
+        with config.provide_session() as session:
+            session.execute_script(case.table.pooling_create_sql.format(table=table))
+            session.execute(f"INSERT INTO {table} (id, value) VALUES (1, 'injected')")
+            session.commit()
+        with config.provide_session() as session:
+            assert session.select_value(f"SELECT value FROM {table} WHERE id = 1") == "injected"
+            session.execute_script(f"DROP TABLE {table}")
+            session.commit()
+    finally:
+        source.close_pool()
+
+    fresh = make_config(pooled=True, connection_instance=None)
+    assert fresh.connection_instance is None
+    try:
+        assert fresh.provide_pool() is not None
+        with fresh.provide_session() as session:
+            assert session.select_value("SELECT 1") == 1
+    finally:
+        fresh.close_pool()
+
+
+async def assert_async_connection_instance_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Assert an injected connection_instance pool is honored end-to-end; None builds a fresh pool."""
+    source = make_config(pooled=True)
+    injected_pool = await source.provide_pool()
+    table = _pool_contract_table(case)
+    try:
+        config = make_config(pooled=True, connection_instance=injected_pool)
+        assert config.connection_instance is injected_pool
+        assert await config.provide_pool() is injected_pool
+        async with config.provide_session() as session:
+            await session.execute_script(case.table.pooling_create_sql.format(table=table))
+            await session.execute(f"INSERT INTO {table} (id, value) VALUES (1, 'injected')")
+            await session.commit()
+        async with config.provide_session() as session:
+            assert await session.select_value(f"SELECT value FROM {table} WHERE id = 1") == "injected"
+            await session.execute_script(f"DROP TABLE {table}")
+            await session.commit()
+    finally:
+        await source.close_pool()
+
+    fresh = make_config(pooled=True, connection_instance=None)
+    assert fresh.connection_instance is None
+    try:
+        assert await fresh.provide_pool() is not None
+        async with fresh.provide_session() as session:
+            assert await session.select_value("SELECT 1") == 1
+    finally:
+        await fresh.close_pool()
 
 
 class _ColumnCaseRow(msgspec.Struct):

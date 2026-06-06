@@ -55,6 +55,7 @@ class DriverCase:
     supports_copy: bool = False
     supports_pooling: bool = False
     supports_connection_hook: bool = False
+    supports_connection_instance: bool = False
     supports_lowercase_columns: bool = False
     supports_uuid_feature: bool = False
     supports_custom_json_serializer: bool = False
@@ -101,6 +102,7 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_sqlite",
+        supports_connection_instance=True,
         supports_custom_json_serializer=True,
         supports_custom_type_adapters=True,
         extra_assertions=("driver_basics:noop",),
@@ -121,6 +123,7 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_duckdb",
+        supports_connection_instance=True,
         supports_uuid_feature=True,
         supports_custom_json_serializer=True,
         extra_assertions=(
@@ -329,6 +332,7 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_aiosqlite",
+        supports_connection_instance=True,
         extra_assertions=("driver_basics:noop", "arrow_specifics:sqlite"),
     ),
     DriverCase(
@@ -411,6 +415,7 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_asyncpg",
+        supports_connection_instance=True,
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
