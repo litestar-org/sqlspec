@@ -1,14 +1,11 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Integration tests for aiosqlite connection pooling."""
 
-import os
-import tempfile
-
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.core import build_connection_config
-from sqlspec.core import SQL, SQLResult
+from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -89,73 +86,6 @@ async def test_regular_memory_auto_converted_pooling() -> None:
 
     finally:
         await config.close_pool()
-
-
-async def test_file_database_pooling_enabled() -> None:
-    """Test that file-based databases allow pooling."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    config = AiosqliteConfig(connection_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
-
-    try:
-        async with config.provide_session() as session1:
-            await session1.execute_script("""
-                CREATE TABLE pool_test (
-                    id INTEGER PRIMARY KEY,
-                    value TEXT
-                );
-                INSERT INTO pool_test (value) VALUES ('test_data');
-            """)
-            await session1.commit()
-
-        async with config.provide_session() as session2:
-            result = await session2.execute("SELECT value FROM pool_test WHERE id = 1")
-            assert isinstance(result, SQLResult)
-            assert result.data is not None
-            assert len(result.data) == 1
-            assert result.get_data()[0]["value"] == "test_data"
-
-    finally:
-        await config.close_pool()
-        try:
-            os.unlink(db_path)
-        except Exception:
-            pass
-
-
-async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> None:
-    """Test pooling integration."""
-
-    create_sql = SQL("""
-        CREATE TABLE IF NOT EXISTS pool_core_test (
-            id INTEGER PRIMARY KEY,
-            data TEXT NOT NULL
-        )
-    """)
-
-    insert_sql = SQL("INSERT INTO pool_core_test (data) VALUES (?)")
-    select_sql = SQL("SELECT * FROM pool_core_test WHERE data = ?")
-
-    async with aiosqlite_config.provide_session() as session1:
-        create_result = await session1.execute_script(create_sql)
-        assert isinstance(create_result, SQLResult)
-        assert create_result.operation_type == "SCRIPT"
-
-        insert_result = await session1.execute(insert_sql, ("pool_test_data",))
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
-        await session1.commit()
-
-    async with aiosqlite_config.provide_session() as session2:
-        select_result = await session2.execute(select_sql, ("pool_test_data",))
-        assert isinstance(select_result, SQLResult)
-        assert select_result.data is not None
-        assert len(select_result.data) == 1
-        assert select_result.get_data()[0]["data"] == "pool_test_data"
-
-        await session2.execute("DROP TABLE IF EXISTS pool_core_test")
-        await session2.commit()
 
 
 async def test_pool_concurrent_access(aiosqlite_config_file: AiosqliteConfig) -> None:

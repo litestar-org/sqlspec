@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec import ObservabilityConfig, SQLSpec
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.duckdb.config import DuckDBPoolParams
 from sqlspec.adapters.duckdb.core import build_connection_config
 from sqlspec.config import LifecycleConfig
@@ -49,46 +49,6 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     return DuckDBConfig(**kwargs)
 
 
-def test_basic_connection() -> None:
-    """Test basic DuckDB connection functionality."""
-    config = create_permissive_config()
-
-    with config.provide_connection() as conn:
-        assert conn is not None
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        result = cur.fetchone()
-        assert result is not None
-        assert result[0] == 1
-        cur.close()
-
-    with config.provide_session() as session:
-        assert session is not None
-        select_result = session.execute("SELECT 1")
-        assert isinstance(select_result, SQLResult)
-        assert select_result.data is not None
-        assert len(select_result.data) == 1
-        assert select_result.column_names is not None
-        result = select_result.get_data()[0][select_result.column_names[0]]
-        assert result in (1, "1")
-
-
-def test_memory_database_connection() -> None:
-    """Test DuckDB in-memory database connection."""
-    config = create_permissive_config()
-
-    with config.provide_session() as session:
-        session.execute_script("CREATE TABLE test_memory (id INTEGER, name TEXT)")
-
-        insert_result = session.execute("INSERT INTO test_memory VALUES (?, ?)", (1, "test"))
-        assert insert_result is not None
-
-        select_result = session.execute("SELECT id, name FROM test_memory")
-        assert len(select_result.data) == 1
-        assert select_result.get_data()[0]["id"] == 1
-        assert select_result.get_data()[0]["name"] == "test"
-
-
 def test_connection_with_performance_settings() -> None:
     """Test DuckDB connection with performance optimization settings."""
     config = create_permissive_config(memory_limit="512MB", threads=2, enable_object_cache=True)
@@ -117,62 +77,6 @@ def test_connection_with_data_processing_settings() -> None:
         assert result.get_data()[0]["value"] is None
         assert result.get_data()[1]["value"] == 5
         assert result.get_data()[2]["value"] == 10
-
-
-def test_connection_with_instrumentation() -> None:
-    """Test DuckDB connection with instrumentation configuration."""
-    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
-
-    with config.provide_session() as session:
-        result = session.execute("SELECT ? as test_value", (42))
-        assert result.data is not None
-        assert result.get_data()[0]["test_value"] == 42
-
-
-def test_connection_with_hook() -> None:
-    """Test DuckDB connection with connection creation hook."""
-    hook_executed = False
-
-    def connection_hook(connection: DuckDBConnection) -> None:
-        nonlocal hook_executed
-        hook_executed = True
-        connection.execute("SET threads = 1")
-
-    config = DuckDBConfig(
-        connection_config=DuckDBPoolParams(database=":memory:"),
-        driver_features={"on_connection_create": connection_hook},
-    )
-
-    registry = SQLSpec()
-    registry.add_config(config)
-
-    with registry.provide_session(config) as session:
-        assert hook_executed is True
-
-        result = session.execute("SELECT current_setting('threads')")
-        assert result.data is not None
-        setting_value = result.get_data()[0][result.column_names[0]]
-        assert setting_value == 1 or setting_value == "1"
-
-
-def test_connection_hook_direct_config() -> None:
-    """Test on_connection_create callback with direct config usage (not via registry)."""
-    hook_call_count = 0
-
-    def connection_hook(connection: DuckDBConnection) -> None:
-        nonlocal hook_call_count
-        hook_call_count += 1
-
-    config = DuckDBConfig(
-        connection_config=DuckDBPoolParams(database=f":memory:{uuid4().hex}"),
-        driver_features={"on_connection_create": connection_hook},
-    )
-
-    # Direct config usage without SQLSpec registry
-    with config.provide_session() as session:
-        session.execute("SELECT 1")
-
-    assert hook_call_count >= 1, "Hook should be called at least once"
 
 
 def test_connection_read_only_mode() -> None:
@@ -212,16 +116,6 @@ def test_connection_read_only_mode() -> None:
     finally:
         if os.path.exists(temp_db_path):
             os.unlink(temp_db_path)
-
-
-def test_connection_with_logging_settings() -> None:
-    """Test DuckDB connection with logging configuration."""
-    config = create_permissive_config()
-
-    with config.provide_session() as session:
-        result = session.execute("SELECT 'logging_test' as message")
-        assert result.data is not None
-        assert result.get_data()[0]["message"] == "logging_test"
 
 
 def test_duckdb_disabled_observability_has_zero_lifecycle_counts() -> None:

@@ -3,9 +3,16 @@
 Tests shared memory database conversion and connection pooling functionality.
 """
 
+import threading
+from typing import TYPE_CHECKING
+
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.config import DuckDBPoolParams
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.duckdb import DuckDBConnectionPool
 
 pytestmark = pytest.mark.xdist_group("duckdb")
 
@@ -126,3 +133,31 @@ def test_default_config_conversion() -> None:
     with config.provide_session() as session:
         result = session.execute("SELECT 'default_test' as test").get_data()
         assert result[0]["test"] == "default_test"
+
+
+def test_duckdb_pool_concurrency() -> None:
+    """Verify that multiple concurrent calls to provide_pool result in a single pool (Sync)."""
+    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
+
+    results: list[DuckDBConnectionPool | None] = [None] * 50
+    exceptions: list[Exception] = []
+
+    def get_pool(index: int) -> None:
+        try:
+            results[index] = config.provide_pool()
+        except Exception as e:
+            exceptions.append(e)
+
+    threads = [threading.Thread(target=get_pool, args=(i,)) for i in range(50)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    if exceptions:
+        pytest.fail(f"Exceptions in threads: {exceptions}")
+
+    unique_pools = {id(p) for p in results if p is not None}
+    config.close_pool()
+
+    assert len(unique_pools) == 1, f"Race condition detected! {len(unique_pools)} unique DuckDB pools created."
