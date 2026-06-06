@@ -185,10 +185,13 @@ def test_limit_offset_filter_uses_descriptive_parameters() -> None:
     assert named["offset"] == 50
 
 
-def test_limit_offset_filter_has_no_pagination_intermediate_base() -> None:
-    """LimitOffsetFilter should inherit directly from StatementFilter."""
-    assert "PaginationFilter" not in {cls.__name__ for cls in LimitOffsetFilter.__mro__}
-    assert LimitOffsetFilter.__mro__[1] is StatementFilter
+def test_limit_offset_filter_inherits_pagination_filter_base() -> None:
+    """LimitOffsetFilter inherits from the public PaginationFilter base (downstream API)."""
+    from sqlspec.core.filters import PaginationFilter
+
+    assert issubclass(LimitOffsetFilter, PaginationFilter)
+    assert issubclass(PaginationFilter, StatementFilter)
+    assert LimitOffsetFilter.__mro__[1] is PaginationFilter
 
 
 def test_limit_offset_filter_raw_sql_only_path() -> None:

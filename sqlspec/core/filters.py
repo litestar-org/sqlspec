@@ -55,6 +55,7 @@ __all__ = (
     "OffsetPagination",
     "OnBeforeAfterFilter",
     "OrderByFilter",
+    "PaginationFilter",
     "SearchFilter",
     "StatementFilter",
     "apply_filter",
@@ -511,7 +512,17 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     _parameter_suffix: ClassVar[str] = "not_any"
 
 
-class LimitOffsetFilter(StatementFilter):
+class PaginationFilter(StatementFilter, ABC):
+    """Base class for pagination-related filters."""
+
+    __slots__ = ()
+
+    @abstractmethod
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        raise NotImplementedError
+
+
+class LimitOffsetFilter(PaginationFilter):
     """Filter for LIMIT and OFFSET clauses.
 
     Adds pagination support through LIMIT/OFFSET SQL clauses.
