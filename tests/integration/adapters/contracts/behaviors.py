@@ -173,10 +173,19 @@ def _with_table(value: object, table: ContractTable) -> object:
 
     A no-op for adapters whose table is literally ``contract_items``; for adapters that
     require a qualified identifier (e.g. BigQuery ``project.dataset.contract_items``) it
-    substitutes the resolved name into raw SQL strings.
+    substitutes the resolved name into raw SQL strings and ``SQL`` statement objects.
     """
-    if isinstance(value, str) and table.name != "contract_items":
+    if table.name == "contract_items":
+        return value
+    if isinstance(value, str):
         return value.replace("contract_items", table.name)
+    if isinstance(value, SQL):
+        rewritten = value.raw_sql.replace("contract_items", table.name)
+        if value.named_parameters:
+            return SQL(rewritten, **value.named_parameters)
+        if value.positional_parameters:
+            return SQL(rewritten, value.positional_parameters)
+        return SQL(rewritten)
     return value
 
 

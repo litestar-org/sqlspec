@@ -97,6 +97,23 @@ _BQ_TYPE_MAP: "dict[type, tuple[str, str | None]]" = {
 }
 
 
+def _has_synthetic_positional_keys(parameters: "list[dict[str, Any]]") -> bool:
+    """Return True when the first parameter mapping is keyed only by synthetic positional names.
+
+    Synthetic names are ``param_<int>`` or bare digit strings produced by qmark/positional
+    parameter expansion. They do not correspond to the target table's columns, so a Parquet
+    column-load cannot be built from them.
+    """
+    if not parameters:
+        return False
+    first = parameters[0]
+    if not isinstance(first, dict) or not first:
+        return False
+    return all(
+        isinstance(key, str) and (key.isdigit() or (key.startswith("param_") and key[6:].isdigit())) for key in first
+    )
+
+
 def try_bulk_insert(
     connection: "BigQueryConnection",
     sql: str,
@@ -119,6 +136,9 @@ def try_bulk_insert(
     """
     table_name = extract_insert_table(sql, expression, allow_parse=allow_parse)
     if not table_name:
+        return None
+
+    if _has_synthetic_positional_keys(parameters):
         return None
 
     try:

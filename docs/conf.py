@@ -83,7 +83,6 @@ extensions = [
 ]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "msgspec": ("https://jcristharif.com/msgspec/", None),
     "litestar": ("https://docs.litestar.dev/latest/", None),
     "click": ("https://click.palletsprojects.com/en/stable/", None),
     "anyio": ("https://anyio.readthedocs.io/en/stable/", None),
