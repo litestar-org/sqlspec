@@ -5,6 +5,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 
+import msgspec
 import pytest
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
@@ -2202,6 +2203,97 @@ async def assert_async_pooling_contract(make_config: AsyncConfigFactory, case: D
             await session.commit()
     finally:
         await config.close_pool()
+
+
+class _ColumnCaseRow(msgspec.Struct):
+    """Lowercase-field struct used to probe Oracle implicit column-name casing."""
+
+    id: int
+    name: str
+
+
+def _column_case_table(case: DriverCase) -> str:
+    return f"colcase_{case.adapter}_{case.mode}"
+
+
+def assert_sync_lowercase_columns_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert Oracle hydrates implicit columns lowercase by default and uppercase when the feature is disabled."""
+    table = _column_case_table(case)
+    create = f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
+
+    default_config = make_config()
+    try:
+        with default_config.provide_session() as session:
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+            session.execute_script(create)
+            session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            result = session.execute(f"SELECT id, name FROM {table}")
+            row = result.get_first()
+            assert row is not None
+            assert "id" in row and "ID" not in row
+            hydrated = result.get_first(schema_type=_ColumnCaseRow)
+            assert hydrated is not None
+            assert hydrated.id == 1
+            assert hydrated.name == "widget"
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        default_config.close_pool()
+
+    disabled_config = make_config(driver_features={"enable_lowercase_column_names": False})
+    try:
+        with disabled_config.provide_session() as session:
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+            session.execute_script(create)
+            session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            result = session.execute(f"SELECT id, name FROM {table}")
+            row = result.get_first()
+            assert row is not None
+            assert "ID" in row and "id" not in row
+            with pytest.raises(msgspec.ValidationError):
+                result.get_first(schema_type=_ColumnCaseRow)
+            session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        disabled_config.close_pool()
+
+
+async def assert_async_lowercase_columns_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Async mirror of assert_sync_lowercase_columns_contract."""
+    table = _column_case_table(case)
+    create = f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
+
+    default_config = make_config()
+    try:
+        async with default_config.provide_session() as session:
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await session.execute_script(create)
+            await session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            result = await session.execute(f"SELECT id, name FROM {table}")
+            row = result.get_first()
+            assert row is not None
+            assert "id" in row and "ID" not in row
+            hydrated = result.get_first(schema_type=_ColumnCaseRow)
+            assert hydrated is not None
+            assert hydrated.id == 1
+            assert hydrated.name == "widget"
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        await default_config.close_pool()
+
+    disabled_config = make_config(driver_features={"enable_lowercase_column_names": False})
+    try:
+        async with disabled_config.provide_session() as session:
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await session.execute_script(create)
+            await session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            result = await session.execute(f"SELECT id, name FROM {table}")
+            row = result.get_first()
+            assert row is not None
+            assert "ID" in row and "id" not in row
+            with pytest.raises(msgspec.ValidationError):
+                result.get_first(schema_type=_ColumnCaseRow)
+            await session.execute_script(_oracle_drop_sql("TABLE", table))
+    finally:
+        await disabled_config.close_pool()
 
 
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:

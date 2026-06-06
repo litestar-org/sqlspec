@@ -55,6 +55,10 @@ class DriverCase:
     supports_copy: bool = False
     supports_pooling: bool = False
     supports_connection_hook: bool = False
+    supports_lowercase_columns: bool = False
+    supports_uuid_feature: bool = False
+    supports_custom_json_serializer: bool = False
+    supports_custom_type_adapters: bool = False
     supports_multi_schema_migrations: bool = False
     supports_data_dictionary: bool = False
     config_factory_fixture: str | None = None
@@ -272,6 +276,7 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_oracle_sync",
+        supports_lowercase_columns=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
@@ -520,6 +525,7 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_oracle_async",
+        supports_lowercase_columns=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",

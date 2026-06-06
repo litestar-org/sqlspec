@@ -2,7 +2,6 @@
 
 from typing import Any, Literal
 
-import msgspec
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
@@ -410,77 +409,6 @@ def test_oracle_sync_for_share_locking_unsupported(oracle_sync_session: "OracleS
     finally:
         oracle_sync_session.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN NULL; END;"
-        )
-
-
-def test_sync_lowercase_columns_default(oracle_sync_session: "OracleSyncDriver") -> None:
-    """Ensure implicit Oracle column names hydrate to lowercase when feature enabled."""
-    oracle_sync_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-    )
-    oracle_sync_session.execute_script("""
-        CREATE TABLE test_case_table_oracledb_sync (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-    """)
-
-    oracle_sync_session.execute("INSERT INTO test_case_table_oracledb_sync (id, name) VALUES (:1, :2)", (1, "widget"))
-
-    class Product(msgspec.Struct):
-        id: int
-        name: str
-
-    result = oracle_sync_session.execute("SELECT id, name FROM test_case_table_oracledb_sync")
-    row_dict = result.get_first()
-    assert row_dict is not None
-    assert "id" in row_dict
-    assert "ID" not in row_dict
-    assert row_dict["id"] == 1
-
-    hydrated = result.get_first(schema_type=Product)
-    assert hydrated is not None
-    assert hydrated.id == 1
-    assert hydrated.name == "widget"
-
-    oracle_sync_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN NULL; END;"
-    )
-
-
-def test_sync_uppercase_columns_when_disabled(oracle_sync_config: OracleSyncConfig) -> None:
-    """Ensure disabling lowercase feature preserves uppercase columns."""
-    custom_config = OracleSyncConfig(
-        connection_config=oracle_sync_config.connection_config, driver_features={"enable_lowercase_column_names": False}
-    )
-
-    with custom_config.provide_session() as session:
-        session.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        session.execute_script("""
-            CREATE TABLE test_case_table_oracledb_sync (
-                id NUMBER PRIMARY KEY,
-                name VARCHAR2(50)
-            )
-        """)
-
-        session.execute("INSERT INTO test_case_table_oracledb_sync (id, name) VALUES (:1, :2)", (1, "widget"))
-
-        class Product(msgspec.Struct):
-            id: int
-            name: str
-
-        result = session.execute("SELECT id, name FROM test_case_table_oracledb_sync")
-        row = result.get_first()
-        assert row is not None
-        assert "ID" in row
-        assert "id" not in row
-        with pytest.raises(msgspec.ValidationError):
-            result.get_first(schema_type=Product)
-
-        session.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_case_table_oracledb_sync'; EXCEPTION WHEN OTHERS THEN NULL; END;"
         )
 
 

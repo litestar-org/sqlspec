@@ -43,9 +43,17 @@ def test_connection_hook_case_declares_factory(case_id: str) -> None:
 
 
 def test_lifecycle_flags_require_config_factory() -> None:
-    """No case may declare pooling/connection-hook support without a config factory (no untestable claim)."""
+    """No case may declare a config-factory-driven feature without a config factory (no untestable claim)."""
     for case in DRIVER_CASES:
-        if case.supports_pooling or case.supports_connection_hook:
+        needs_factory = (
+            case.supports_pooling
+            or case.supports_connection_hook
+            or case.supports_lowercase_columns
+            or case.supports_uuid_feature
+            or case.supports_custom_json_serializer
+            or case.supports_custom_type_adapters
+        )
+        if needs_factory:
             assert case.config_factory_fixture is not None, (
-                f"{case.id} declares lifecycle support without a config_factory_fixture"
+                f"{case.id} declares a config-factory feature without a config_factory_fixture"
             )
