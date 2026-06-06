@@ -384,6 +384,23 @@ def test_replace_placeholders_with_literals_named_mapping() -> None:
     assert transformed.sql(dialect="bigquery") == "SELECT 'bob' AS user"
 
 
+def test_replace_placeholders_with_literals_named_mapping_none_inlines_null() -> None:
+    """A None value present in a named mapping inlines as NULL, not a surviving placeholder.
+
+    Regression: a present-but-None mapping value was treated as "missing" and the @param_N
+    placeholder survived, producing SQL that BigQuery rejects with "not enough query arguments".
+    """
+    expression = sqlglot.parse_one(
+        "INSERT INTO t (name, value, note) VALUES (@param_0, @param_1, @param_2)", dialect="bigquery"
+    )
+    transformed = replace_placeholders_with_literals(
+        expression, {"param_0": "alpha", "param_1": 1, "param_2": None}, json_serializer=json.dumps
+    )
+    rendered = transformed.sql(dialect="bigquery")
+    assert "@param" not in rendered
+    assert rendered == "INSERT INTO t (name, value, note) VALUES ('alpha', 1, NULL)"
+
+
 @pytest.mark.parametrize(
     ("sql", "parameters"), [("SELECT :name AS name", {":name": "alpha"}), ("SELECT @name AS name", {"@name": "alpha"})]
 )

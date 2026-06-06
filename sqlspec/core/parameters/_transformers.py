@@ -32,6 +32,9 @@ __all__ = (
 )
 
 
+_MISSING_PARAMETER = object()
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPruningTransform:
     __slots__ = ("_dialect",)
@@ -123,7 +126,7 @@ class _PlaceholderLiteralTransformer:
         self._json_serializer = json_serializer
         self._placeholder_index = 0
 
-    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object | None:
+    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object:
         candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
         for candidate in candidate_names:
             if candidate in payload:
@@ -131,7 +134,7 @@ class _PlaceholderLiteralTransformer:
         normalized = param_name.lstrip("@:$")
         if normalized in payload:
             return cast("object", get_value_attribute(payload[normalized]))
-        return None
+        return _MISSING_PARAMETER
 
     def __call__(self, node: Any) -> Any:
         if (
@@ -151,7 +154,7 @@ class _PlaceholderLiteralTransformer:
 
             if isinstance(self._parameters, Mapping):
                 resolved_value = self._resolve_mapping_value(param_name, self._parameters)
-                if resolved_value is not None:
+                if resolved_value is not _MISSING_PARAMETER:
                     return _create_literal_expression(resolved_value, self._json_serializer)
                 return node
 
