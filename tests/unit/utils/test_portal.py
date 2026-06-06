@@ -11,16 +11,19 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.portal import Portal, PortalManager, PortalProvider, get_global_portal
 
 
-@pytest.fixture(autouse=True)
-def _cleanup_portal_manager() -> Generator[None, None, None]:
-    """Clean up the portal manager after each test."""
-    yield
+def _reset_portal_manager() -> None:
     manager = PortalManager()
     if manager.is_running:
         manager.stop()
-
-    # Reset singleton instance
     PortalManager._instance = None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_portal_manager() -> Generator[None, None, None]:
+    """Reset the portal manager singleton before and after each test."""
+    _reset_portal_manager()
+    yield
+    _reset_portal_manager()
 
 
 @pytest.fixture()
