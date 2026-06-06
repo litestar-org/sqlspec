@@ -825,20 +825,31 @@ def async_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
     return _resolve_events_case(request, request.param)
 
 
-def _lifecycle_connection_config(database: str, *, pooled: bool) -> "dict[str, Any]":
+def _lifecycle_connection_config(
+    database: str, *, pooled: bool, connection_overrides: "dict[str, Any] | None" = None
+) -> "dict[str, Any]":
     """Build a connection_config dict, adding pool sizing keys (a superset of the typed params)."""
     connection_config: dict[str, Any] = {"database": database}
     if pooled:
         connection_config.update({"pool_min_size": 2, "pool_max_size": 5})
+    if connection_overrides:
+        connection_config.update(connection_overrides)
     return connection_config
 
 
 @pytest.fixture
 def lifecycle_config_sqlite(tmp_path: Path) -> "Callable[..., SqliteConfig]":
-    """Build fresh SQLite configs for the pooling/connection-hook lifecycle contracts."""
+    """Build fresh SQLite configs for the pooling/connection-hook and driver-feature contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "SqliteDriverFeatures | None" = None) -> SqliteConfig:
-        connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle.db"), pooled=pooled)
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "SqliteDriverFeatures | None" = None,
+        connection_overrides: "dict[str, Any] | None" = None,
+    ) -> SqliteConfig:
+        connection_config = _lifecycle_connection_config(
+            str(tmp_path / "lifecycle.db"), pooled=pooled, connection_overrides=connection_overrides
+        )
         if driver_features is None:
             return SqliteConfig(connection_config=connection_config)
         return SqliteConfig(connection_config=connection_config, driver_features=driver_features)

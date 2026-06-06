@@ -13,7 +13,6 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
-from sqlspec.utils.serializers import from_json, to_json
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -190,58 +189,6 @@ async def test_aiomysql_statement_stack_continue_on_error(aiomysql_driver: Aiomy
         "SELECT COUNT(*) AS total FROM test_table_aiomysql WHERE name LIKE ?", ("mysql-%",)
     )
     assert verify.get_data()[0]["total"] == 2
-
-
-async def test_aiomysql_driver_features_custom_serializers(mysql_service: MySQLService) -> None:
-    """Ensure custom serializer and deserializer driver features are applied."""
-
-    serializer_calls: list[object] = []
-
-    def tracking_serializer(value: object) -> str:
-        serializer_calls.append(value)
-        return to_json(value)
-
-    def tracking_deserializer(value: str | bytes) -> object:
-        decoded = from_json(value)
-        if isinstance(decoded, dict):
-            decoded["extra_marker"] = True
-        return decoded
-
-    config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": True,
-        },
-        driver_features={"json_serializer": tracking_serializer, "json_deserializer": tracking_deserializer},
-    )
-
-    async with config.provide_session() as session:
-        await session.execute_script(
-            """
-            CREATE TABLE IF NOT EXISTS driver_feature_test_aiomysql (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                payload JSON
-            );
-            DELETE FROM driver_feature_test_aiomysql;
-            """
-        )
-
-        payload = {"foo": "bar"}
-        await session.execute("INSERT INTO driver_feature_test_aiomysql (payload) VALUES (?)", (payload,))
-
-        assert serializer_calls
-        assert serializer_calls[0] == payload
-
-        select_result = await session.execute(
-            "SELECT payload FROM driver_feature_test_aiomysql ORDER BY id DESC LIMIT 1"
-        )
-        stored_row = select_result.get_data()[0]
-        assert stored_row["payload"]["foo"] == "bar"
-        assert stored_row["payload"]["extra_marker"] is True
 
 
 async def test_aiomysql_transaction_management(aiomysql_driver: AiomysqlDriver) -> None:

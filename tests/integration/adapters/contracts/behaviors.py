@@ -13,7 +13,7 @@ from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
 from tests.integration.adapters.contracts._inputs import (
@@ -2446,6 +2446,85 @@ async def assert_async_uuid_feature_contract(make_config: AsyncConfigFactory, ca
         await _oracle_uuid_async(make_config, case)
     else:
         pytest.skip(f"{case.adapter} has no async UUID-feature contract mapping")
+
+
+def _marking_deserializer(value: "str | bytes") -> object:
+    decoded = from_json(value)
+    if isinstance(decoded, dict):
+        decoded["extra_marker"] = True
+    return decoded
+
+
+def _assert_json_serializer_read(case: DriverCase, stored: object, payload: "dict[str, str]") -> None:
+    """DuckDB returns the serialized JSON string; sqlite/mysql deserialize (custom deserializer adds a marker)."""
+    if case.dialect == "duckdb":
+        assert stored == to_json(payload)
+    else:
+        assert isinstance(stored, dict)
+        assert stored["foo"] == "bar"
+        assert stored["extra_marker"] is True
+
+
+def assert_sync_custom_json_serializer_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert a custom json_serializer driver feature is invoked when binding a dict to a JSON column."""
+    payloads: list[object] = []
+
+    def tracking_serializer(value: object) -> str:
+        payloads.append(value)
+        return to_json(value)
+
+    features: dict[str, Any] = {"json_serializer": tracking_serializer, "json_deserializer": _marking_deserializer}
+    if case.dialect == "sqlite":
+        import sqlite3
+
+        features["enable_custom_adapters"] = True
+        config = make_config(driver_features=features, connection_overrides={"detect_types": sqlite3.PARSE_DECLTYPES})
+    else:
+        config = make_config(driver_features=features)
+
+    table = _pc_table(case, "jsonser")
+    payload = {"foo": "bar"}
+    try:
+        with config.provide_session() as session:
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            session.execute_script(f"CREATE TABLE {table} (data JSON)")
+            session.execute(f"INSERT INTO {table} (data) VALUES (?)", (payload,))
+            session.commit()
+            assert payloads
+            assert payloads[0] == payload
+            stored = session.execute(f"SELECT data FROM {table}").get_data()[0]["data"]
+            _assert_json_serializer_read(case, stored, payload)
+            session.execute_script(f"DROP TABLE IF EXISTS {table}")
+    finally:
+        config.close_pool()
+
+
+async def assert_async_custom_json_serializer_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Async mirror of assert_sync_custom_json_serializer_contract (mysql adapters)."""
+    payloads: list[object] = []
+
+    def tracking_serializer(value: object) -> str:
+        payloads.append(value)
+        return to_json(value)
+
+    features: dict[str, Any] = {"json_serializer": tracking_serializer, "json_deserializer": _marking_deserializer}
+    config = make_config(driver_features=features)
+
+    table = _pc_table(case, "jsonser")
+    payload = {"foo": "bar"}
+    try:
+        async with config.provide_session() as session:
+            await session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            await session.execute_script(f"CREATE TABLE {table} (data JSON)")
+            await session.execute(f"INSERT INTO {table} (data) VALUES (?)", (payload,))
+            await session.commit()
+            assert payloads
+            assert payloads[0] == payload
+            stored = (await session.execute(f"SELECT data FROM {table}")).get_data()[0]["data"]
+            _assert_json_serializer_read(case, stored, payload)
+            await session.execute_script(f"DROP TABLE IF EXISTS {table}")
+    finally:
+        await config.close_pool()
 
 
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:

@@ -2,7 +2,6 @@
 
 import json
 import sqlite3
-from typing import Any
 
 import pytest
 
@@ -54,40 +53,6 @@ def test_json_serialization_with_custom_adapters() -> None:
         assert result is not None
         assert result["data"] == test_dict
         assert result["items"] == test_list
-
-
-@pytest.mark.sqlite
-def test_custom_json_serializer() -> None:
-    """Test using custom JSON serializer function."""
-
-    def custom_serializer(obj: Any) -> str:
-        return json.dumps(obj, separators=(",", ":"))
-
-    def custom_deserializer(text: str) -> Any:
-        return json.loads(text)
-
-    config = SqliteConfig(
-        connection_config={"database": ":memory:", "detect_types": sqlite3.PARSE_DECLTYPES},
-        driver_features={
-            "enable_custom_adapters": True,
-            "json_serializer": custom_serializer,
-            "json_deserializer": custom_deserializer,
-        },
-    )
-
-    sql = SQLSpec()
-    sql.add_config(config)
-
-    with sql.provide_session(config) as session:
-        session.execute("CREATE TABLE test_custom (id INTEGER, data JSON)")
-
-        test_data = {"compact": True, "separator": "no_space"}
-        session.execute("INSERT INTO test_custom (id, data) VALUES (?, ?)", (1, json.dumps(test_data)))
-
-        result = session.select_one("SELECT data FROM test_custom WHERE id = 1")
-
-        assert result is not None
-        assert result["data"] == test_data
 
 
 @pytest.mark.sqlite

@@ -7,7 +7,6 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec import SQL, SQLResult, sql
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig, MysqlConnectorAsyncDriver
-from sqlspec.utils.serializers import from_json, to_json
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector]
 
@@ -136,58 +135,6 @@ async def test_mysqlconnector_async_data_types(mysqlconnector_async_driver: Mysq
     assert row["bool_col"] in (True, 1)
     assert isinstance(row["json_col"], dict)
     assert row["json_col"]["key"] == "value"
-
-
-async def test_mysqlconnector_async_driver_features_custom_serializers(mysql_service: MySQLService) -> None:
-    """Ensure custom serializer and deserializer driver features are applied."""
-    serializer_calls: list[object] = []
-
-    def tracking_serializer(value: object) -> str:
-        serializer_calls.append(value)
-        return to_json(value)
-
-    def tracking_deserializer(value: str | bytes) -> object:
-        decoded = from_json(value)
-        if isinstance(decoded, dict):
-            decoded["extra_marker"] = True
-        return decoded
-
-    config = MysqlConnectorAsyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "use_pure": True,
-        },
-        driver_features={"json_serializer": tracking_serializer, "json_deserializer": tracking_deserializer},
-    )
-
-    async with config.provide_session() as session:
-        await session.execute_script(
-            """
-            CREATE TABLE IF NOT EXISTS driver_feature_test_mysqlconnector_async (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                payload JSON
-            );
-            DELETE FROM driver_feature_test_mysqlconnector_async;
-            """
-        )
-
-        payload = {"foo": "bar"}
-        await session.execute("INSERT INTO driver_feature_test_mysqlconnector_async (payload) VALUES (?)", (payload,))
-
-        assert serializer_calls
-        assert serializer_calls[0] == payload
-
-        select_result = await session.execute(
-            "SELECT payload FROM driver_feature_test_mysqlconnector_async ORDER BY id DESC LIMIT 1"
-        )
-        stored_row = select_result.get_data()[0]
-        assert stored_row["payload"]["foo"] == "bar"
-        assert stored_row["payload"]["extra_marker"] is True
 
 
 async def test_mysqlconnector_async_transactions(mysqlconnector_async_driver: MysqlConnectorAsyncDriver) -> None:
