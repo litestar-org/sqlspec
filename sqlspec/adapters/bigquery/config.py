@@ -89,6 +89,11 @@ class BigQueryDriverFeatures(TypedDict):
         Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             BigQuery does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
+        job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
+        job_result_timeout: Per-request HTTP transport timeout (seconds) for ``QueryJob.result()``.
+            Bounds each poll for job completion before falling back to retry, so a stalled server
+            response raises instead of blocking indefinitely. Defaults to the client polling default
+            (waits indefinitely for the job using the API's per-call default timeouts).
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -99,6 +104,8 @@ class BigQueryDriverFeatures(TypedDict):
     enable_uuid_conversion: NotRequired[bool]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    job_retry_deadline: NotRequired[float]
+    job_result_timeout: NotRequired[float]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):

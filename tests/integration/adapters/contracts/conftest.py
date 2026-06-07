@@ -254,7 +254,8 @@ def _bigquery_contract_session(
             "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        }
+        },
+        driver_features={"job_result_timeout": 30.0},
     )
     try:
         with config.provide_session() as driver:

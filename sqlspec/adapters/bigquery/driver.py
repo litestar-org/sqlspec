@@ -6,8 +6,9 @@ type coercion, error handling, and query job management.
 """
 
 import io
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
+from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
@@ -37,7 +38,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
-from sqlspec.exceptions import MissingDependencyError, SQLSpecError, StorageCapabilityError
+from sqlspec.exceptions import MissingDependencyError, StorageCapabilityError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -96,6 +97,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_job_result_timeout",
         "_job_retry",
         "_job_retry_deadline",
         "_json_serializer",
@@ -127,6 +129,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_retry(self._job_retry_deadline)
+        self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -151,7 +154,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config=None,
             json_serializer=self._json_serializer,
         )
-        job_result = cursor.job.result(job_retry=self._job_retry)
+        job_result = cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
             statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
@@ -219,7 +222,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config=None,
             json_serializer=self._json_serializer,
         )
-        cursor.job.result(job_retry=self._job_retry)
+        cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -251,7 +254,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 job_config=None,
                 json_serializer=self._json_serializer,
             )
-            job.result(job_retry=self._job_retry)
+            job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
             last_job = job
             last_rowcount = normalize_script_rowcount(last_rowcount, job)
             successful_count += 1
@@ -377,7 +380,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 job_config=None,
                 json_serializer=self._json_serializer,
             )
-            query_job.result()  # Wait for completion
+            query_job.result(timeout=self._job_result_timeout)  # Wait for completion
 
             # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()

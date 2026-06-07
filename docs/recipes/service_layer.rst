@@ -358,10 +358,9 @@ forwarded through the service to the driver:
 
 .. code-block:: python
 
-   from typing import Annotated
-
    from litestar import Controller, get
-   from litestar.params import Dependency
+   from litestar.di import NamedDependency
+   from litestar.params import SkipValidation
    from sqlspec.core.filters import FilterTypes, OffsetPagination
    from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
@@ -380,7 +379,7 @@ forwarded through the service to the driver:
        async def list_users(
            self,
            users_service: UserService,
-           filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)],
+           filters: SkipValidation[NamedDependency[list[FilterTypes]]],
        ) -> OffsetPagination[User]:
            return await users_service.list_with_count(*filters)
 

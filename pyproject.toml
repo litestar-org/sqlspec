@@ -383,6 +383,11 @@ filterwarnings = [
   "ignore::DeprecationWarning:google.gcloud",
   "ignore::DeprecationWarning:google.iam",
   "ignore::DeprecationWarning:google",
+  # google-adk deprecated BaseAgentConfig; its own internal config subclasses trip the
+  # warning at class-creation time (attributed to abc.py, so the :google module filter misses it).
+  "ignore:BaseAgentConfig is deprecated:DeprecationWarning",
+  # starlette/fastapi TestClient warns about httpx at import time; nothing we can change here.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated",
   "ignore::DeprecationWarning:websockets.connection",
   "ignore::DeprecationWarning:websockets.legacy",
   "ignore::PendingDeprecationWarning:rich_click.*",
