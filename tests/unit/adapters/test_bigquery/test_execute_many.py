@@ -5,37 +5,16 @@
 from types import SimpleNamespace
 from typing import Any, cast
 
-from google.cloud.bigquery import LoadJobConfig
 
-
-class _LoadJob:
+class _LocalEndpointConnection:
     def __init__(self) -> None:
-        self.result_called = False
-
-    def result(self) -> None:
-        self.result_called = True
-
-
-class _BulkLoadConnection:
-    def __init__(self) -> None:
-        self.job = _LoadJob()
-        self.loaded_rows: list[dict[str, Any]] = []
-        self.job_config: LoadJobConfig | None = None
-        self.table_name: str | None = None
-
-    def load_table_from_file(self, buffer: Any, table_name: str, *, job_config: LoadJobConfig) -> _LoadJob:
-        import pyarrow.parquet as pq
-
-        self.table_name = table_name
-        self.job_config = job_config
-        self.loaded_rows = pq.read_table(buffer).to_pylist()
-        return self.job
-
-
-class _LocalEndpointBulkLoadConnection(_BulkLoadConnection):
-    def __init__(self) -> None:
-        super().__init__()
         self._connection = SimpleNamespace(API_BASE_URL="http://127.0.0.1:9050")
+        self.load_called = False
+
+    def load_table_from_file(self, *_args: Any, **_kwargs: Any) -> None:
+        self.load_called = True
+        msg = "local BigQuery endpoint must not start a load upload"
+        raise AssertionError(msg)
 
 
 def test_is_simple_insert_operation_basic_insert() -> None:
@@ -109,49 +88,16 @@ def test_extract_table_from_insert_malformed() -> None:
     assert extract_insert_table("NOT VALID SQL") is None
 
 
-def test_try_bulk_insert_maps_sequence_rows_to_insert_columns() -> None:
-    """Test that tuple rows load through real INSERT column names."""
-    from sqlspec.adapters.bigquery.core import try_bulk_insert
-
-    connection = _BulkLoadConnection()
-    rowcount = try_bulk_insert(
-        cast(Any, connection),
-        "INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)",
-        [("dict1", 100, None), ("dict2", 200, "n2")],
-    )
-
-    assert rowcount == 2
-    assert connection.table_name == "contract_items"
-    assert connection.job.result_called
-    assert connection.loaded_rows == [
-        {"name": "dict1", "value": 100, "note": None},
-        {"name": "dict2", "value": 200, "note": "n2"},
-    ]
-
-
-def test_try_bulk_insert_rejects_sequence_rows_that_do_not_match_insert_columns() -> None:
-    """Test that ambiguous tuple rows fall back instead of loading bad columns."""
-    from sqlspec.adapters.bigquery.core import try_bulk_insert
-
-    connection = _BulkLoadConnection()
-    rowcount = try_bulk_insert(
-        cast(Any, connection), "INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)", [("dict1", 100)]
-    )
-
-    assert rowcount is None
-    assert connection.table_name is None
-    assert not connection.job.result_called
-
-
 def test_try_bulk_insert_skips_local_bigquery_endpoint() -> None:
     """Test that emulator/local endpoints do not attempt resumable uploads."""
     from sqlspec.adapters.bigquery.core import try_bulk_insert
 
-    connection = _LocalEndpointBulkLoadConnection()
+    connection = _LocalEndpointConnection()
     rowcount = try_bulk_insert(
-        cast(Any, connection), "INSERT INTO contract_items (name, value, note) VALUES (?, ?, ?)", [("dict1", 100, None)]
+        cast(Any, connection),
+        "INSERT INTO contract_items (name, value, note) VALUES (@name, @value, @note)",
+        [{"name": "dict1", "value": 100, "note": None}],
     )
 
     assert rowcount is None
-    assert connection.table_name is None
-    assert not connection.job.result_called
+    assert not connection.load_called
