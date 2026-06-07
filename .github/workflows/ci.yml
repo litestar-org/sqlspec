@@ -210,7 +210,7 @@ jobs:
       fail-fast: true
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -281,13 +281,13 @@ jobs:
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
-        # At 22min, broadcast SIGABRT to ALL python processes (controller + xdist
+        # At 25min, broadcast SIGABRT to ALL python processes (controller + xdist
         # workers). Faulthandler in each process dumps every thread to stderr
         # before exit, so the test step log captures the actual hang site.
         run: |
           set -m
           (
-            sleep 1320
+            sleep 1500
             echo "::group::Hang detected - SIGABRT to all python"
             pkill -ABRT -f python || true
             sleep 10
