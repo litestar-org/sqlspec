@@ -15,9 +15,11 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
+from sqlspec.core import SQL
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.protocols import NotificationProtocol
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,6 +33,8 @@ logger = get_logger("sqlspec.adapters.psqlpy.events.hub")
 
 
 _PSQLPY_CALLBACK_MIN_ARGS = 3
+_READY_TIMEOUT = 5.0
+_READY_PAYLOAD_PREFIX = "__sqlspec_psqlpy_ready__:"
 
 
 class _PsqlpyHubCallback:
@@ -77,6 +81,7 @@ class PsqlpyListenerHub:
         "_lock",
         "_pool_destroying_registered",
         "_queues",
+        "_ready_events",
         "_shutting_down",
     )
 
@@ -85,6 +90,7 @@ class PsqlpyListenerHub:
         self._lock = asyncio.Lock()
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._callbacks: dict[str, _PsqlpyHubCallback] = {}
+        self._ready_events: dict[str, dict[str, asyncio.Event]] = {}
         self._listener: Any | None = None
         self._listener_started = False
         self._shutting_down = False
@@ -138,6 +144,7 @@ class PsqlpyListenerHub:
             was_started = self._listener_started
             self._queues.clear()
             self._callbacks.clear()
+            self._ready_events.clear()
             self._listener = None
             self._listener_started = False
         if listener is not None:
@@ -192,11 +199,11 @@ class PsqlpyListenerHub:
             self._queues.pop(channel, None)
             self._callbacks.pop(channel, None)
             raise
-        if not self._listener_started:
-            listener.listen()
-            self._listener_started = True
-            # Give psqlpy a brief moment to actually start its consumer
-            await asyncio.sleep(0.05)
+        if self._listener_started:
+            listener.abort_listen()
+        listener.listen()
+        self._listener_started = True
+        await self._wait_until_ready(channel)
         return consumer_queue
 
     async def _ensure_listener_locked(self) -> "PsqlpyListener":
@@ -219,7 +226,27 @@ class PsqlpyListenerHub:
     def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
         return self.shutdown()
 
+    async def _wait_until_ready(self, channel: str) -> None:
+        payload = f"{_READY_PAYLOAD_PREFIX}{uuid4().hex}"
+        ready = asyncio.Event()
+        self._ready_events.setdefault(channel, {})[payload] = ready
+        try:
+            async with self._config.provide_session() as driver:
+                await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, payload))
+                await driver.commit()
+            await asyncio.wait_for(ready.wait(), timeout=_READY_TIMEOUT)
+        finally:
+            payloads = self._ready_events.get(channel)
+            if payloads is not None:
+                payloads.pop(payload, None)
+                if not payloads:
+                    self._ready_events.pop(channel, None)
+
     def _dispatch(self, channel: str, payload: str) -> None:
+        ready = self._ready_events.get(channel, {}).get(payload)
+        if ready is not None:
+            ready.set()
+            return
         queues = self._queues.get(channel)
         if queues is None:
             return

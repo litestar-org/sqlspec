@@ -95,21 +95,29 @@ def sqlite_driver() -> "Generator[SqliteDriver, None, None]":
 
 
 @pytest.fixture
-def sqlite_config_shared_memory() -> "SqliteConfig":
+def sqlite_config_shared_memory() -> "Generator[SqliteConfig, None, None]":
     """Create SQLite config with shared memory for pooling tests."""
-    return SqliteConfig(
+    config = SqliteConfig(
         connection_config=cast(
             "Any", {"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
         )
     )
+    try:
+        yield config
+    finally:
+        config.close_pool()
 
 
 @pytest.fixture
-def sqlite_config_regular_memory() -> "SqliteConfig":
+def sqlite_config_regular_memory() -> "Generator[SqliteConfig, None, None]":
     """Create SQLite config with regular memory for auto-conversion tests."""
-    return SqliteConfig(
+    config = SqliteConfig(
         connection_config=cast("Any", {"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
     )
+    try:
+        yield config
+    finally:
+        config.close_pool()
 
 
 @pytest.fixture
@@ -118,12 +126,15 @@ def sqlite_temp_file_config() -> "Generator[SqliteConfig, None, None]":
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
+    config: SqliteConfig | None = None
     try:
         config = SqliteConfig(
             connection_config=cast("Any", {"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
         )
         yield config
     finally:
+        if config is not None:
+            config.close_pool()
         try:
             os.unlink(db_path)
         except Exception:
