@@ -576,6 +576,11 @@ class SQL:
             self._positional_parameters.extend(actual_params)
 
     @property
+    def sql(self) -> str:
+        """Get the raw SQL string (alias of :attr:`raw_sql`)."""
+        return self._get_raw_sql()
+
+    @property
     def raw_sql(self) -> str:
         """Get raw SQL string (public API).
 
