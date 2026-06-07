@@ -71,7 +71,7 @@ def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuil
 
 def _parse_join_table(builder: "SQLBuilderProtocol", table: str | exp.Expr | Any, alias: str | None) -> exp.Expr:
     if isinstance(table, str):
-        return parse_table_expression(table, alias)
+        return parse_table_expression(table, alias, dialect=builder.dialect)
     if has_parameter_builder(table):
         return _handle_query_builder_table(table, alias, builder)
     if isinstance(table, exp.Expr):

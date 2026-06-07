@@ -5,7 +5,7 @@ passed as strings to builder methods.
 """
 
 import contextlib
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp, maybe_parse
 
@@ -18,6 +18,9 @@ from sqlspec.utils.type_guards import (
     has_expression_attr,
     has_parameter_builder,
 )
+
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = (
     "extract_expression",
@@ -108,25 +111,32 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
     return exp.maybe_parse(column_input) or exp.column(str(column_input))  # pyright: ignore[reportArgumentType]
 
 
-def parse_table_expression(table_input: str, explicit_alias: str | None = None) -> exp.Expr:
-    """Parses a table string that can be a name, a name with an alias, or a subquery string."""
+def parse_table_expression(
+    table_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
+) -> exp.Expr:
+    r"""Parses a table string that can be a name, a name with an alias, or a subquery string.
+
+    The ``dialect`` selects the identifier-quoting rules so dialect-quoted identifiers such as
+    BigQuery's ``\`project.dataset.table\``` are parsed into their qualified parts instead of a
+    single literal name.
+    """
     if explicit_alias is None and " " in table_input.strip():
         parts = table_input.strip().split(None, 1)
         if len(parts) == ALIAS_PARTS_EXPECTED_COUNT:
             base_table, alias = parts
-            return exp.to_table(base_table, alias=alias)
+            return exp.to_table(base_table, alias=alias, dialect=dialect)
 
     with contextlib.suppress(Exception):
-        parsed: exp.Expr | None = exp.maybe_parse(f"SELECT * FROM {table_input}")
-        if isinstance(parsed, exp.Select) and parsed.args.get("from"):
-            from_clause = cast("exp.From", parsed.args.get("from"))
-            table_expr = from_clause.this
+        parsed: exp.Expr | None = exp.maybe_parse(f"SELECT * FROM {table_input}", dialect=dialect)
+        if isinstance(parsed, exp.Select):
+            from_clause = parsed.find(exp.From)
+            if from_clause is not None:
+                table_expr = from_clause.this
+                if explicit_alias:
+                    return exp.alias_(table_expr, explicit_alias)
+                return table_expr  # type: ignore[no-any-return]
 
-            if explicit_alias:
-                return exp.alias_(table_expr, explicit_alias)
-            return table_expr  # type: ignore[no-any-return]
-
-    return exp.to_table(table_input, alias=explicit_alias)
+    return exp.to_table(table_input, alias=explicit_alias, dialect=dialect)
 
 
 def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:

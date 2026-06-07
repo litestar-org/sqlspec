@@ -26,7 +26,7 @@ class StatementInputCase:
     """Statement shape that should produce the same selected rows."""
 
     id: str
-    statement_factory: Callable[[str], object]
+    statement_factory: "Callable[[str, str | None], object]"
     parameters: object | None
     setup_rows: tuple[ContractRow, ...]
     expected_data: tuple[dict[str, object], ...]
@@ -85,19 +85,19 @@ class ExceptionViolationCase:
     teardown_script: str
 
 
-def _raw_qmark_statement(table: str) -> str:
+def _raw_qmark_statement(table: str, dialect: "str | None" = None) -> str:
     return f"SELECT name, value FROM {table} WHERE value >= ? ORDER BY value"
 
 
-def _sql_object_statement(table: str) -> SQL:
+def _sql_object_statement(table: str, dialect: "str | None" = None) -> SQL:
     return SQL(f"SELECT name, value FROM {table} WHERE value >= :minimum ORDER BY value", minimum=20)
 
 
-def _builder_statement(table: str) -> Select:
-    return sql.select("name", "value").from_(table).where("value >= :minimum", minimum=20).order_by("value")
+def _builder_statement(table: str, dialect: "str | None" = None) -> Select:
+    return sql.select("name", "value", dialect=dialect).from_(table).where("value >= :minimum", minimum=20).order_by("value")
 
 
-def _loader_statement(table: str) -> SQL:
+def _loader_statement(table: str, dialect: "str | None" = None) -> SQL:
     with TemporaryDirectory() as temp_dir:
         sql_path = Path(temp_dir) / "contract_queries.sql"
         sql_path.write_text(

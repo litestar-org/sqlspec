@@ -2706,7 +2706,7 @@ def assert_sync_statement_input_contract(driver: object, case: DriverCase, input
     sync_driver = cast("SyncContractDriver", driver)
     _seed_sync(sync_driver, input_case.setup_rows, case.table)
 
-    statement = input_case.statement_factory(case.table.name)
+    statement = input_case.statement_factory(case.table.name, case.dialect)
     result = _execute_sync(sync_driver, statement, input_case.parameters)
     assert_result_data(result, input_case.expected_data)
 
@@ -2721,7 +2721,7 @@ async def assert_async_statement_input_contract(
     async_driver = cast("AsyncContractDriver", driver)
     await _seed_async(async_driver, input_case.setup_rows, case.table)
 
-    statement = input_case.statement_factory(case.table.name)
+    statement = input_case.statement_factory(case.table.name, case.dialect)
     result = await _execute_async(async_driver, statement, input_case.parameters)
     assert_result_data(result, input_case.expected_data)
 

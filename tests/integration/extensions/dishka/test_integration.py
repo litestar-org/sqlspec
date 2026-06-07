@@ -20,7 +20,7 @@ def test_simple_sync_dishka_provider(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     config_module = '''
 from dishka import make_container
-from tests.integration.dishka.conftest import simple_sqlite_provider
+from tests.integration.extensions.dishka.conftest import simple_sqlite_provider
 
 def get_config_from_dishka():
     """Get config from Dishka container synchronously."""

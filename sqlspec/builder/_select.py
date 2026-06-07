@@ -324,7 +324,7 @@ class SelectClauseMixin:
         from_expr: exp.Expr
 
         if isinstance(table, str):
-            from_expr = parse_table_expression(table, alias)
+            from_expr = parse_table_expression(table, alias, dialect=builder.dialect)
         elif is_expression(table):
             from_expr = exp.alias_(table, alias) if alias else table
         elif has_parameter_builder(table):

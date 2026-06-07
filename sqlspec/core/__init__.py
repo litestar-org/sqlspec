@@ -88,6 +88,7 @@ Example Usage:
 """
 
 from sqlspec.core import filters
+from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -146,7 +147,6 @@ from sqlspec.core.hashing import (
     hash_sql_statement,
 )
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.parameters import (
     DRIVER_PARAMETER_PROFILES,
     EXECUTE_MANY_MIN_ROWS,
