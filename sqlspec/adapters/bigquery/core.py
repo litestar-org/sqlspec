@@ -3,8 +3,10 @@
 import datetime
 import importlib
 import io
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse
 
 import sqlglot
 from google.api_core.retry import Retry
@@ -72,6 +74,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
+LOCAL_BIGQUERY_ENDPOINT_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
 
 
 def storage_api_available() -> bool:
@@ -114,10 +117,80 @@ def _has_synthetic_positional_keys(parameters: "list[dict[str, Any]]") -> bool:
     )
 
 
+def _uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
+    """Return True when a BigQuery client points at a local emulator endpoint."""
+    api_base_url = getattr(getattr(connection, "_connection", None), "API_BASE_URL", None)
+    if not isinstance(api_base_url, str):
+        return False
+    try:
+        hostname = urlparse(api_base_url).hostname
+    except ValueError:
+        return False
+    return hostname in LOCAL_BIGQUERY_ENDPOINT_HOSTS
+
+
+def _extract_insert_columns(
+    sql: str, expression: "exp.Expr | None" = None, *, allow_parse: bool = True
+) -> "list[str] | None":
+    """Extract target column names from a simple INSERT statement."""
+    if expression is None and not allow_parse:
+        return None
+
+    try:
+        parsed = expression or sqlglot.parse_one(sql, dialect="bigquery")
+    except Exception:
+        logger.debug("Failed to extract INSERT column names")
+        return None
+
+    if not isinstance(parsed, exp.Insert) or not isinstance(parsed.this, exp.Schema):
+        return None
+
+    column_names: list[str] = []
+    for column in parsed.this.expressions:
+        column_name = column.name
+        if not column_name:
+            return None
+        column_names.append(column_name)
+    return column_names or None
+
+
+def _is_sequence_parameter_row(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _normalize_bulk_insert_rows(
+    sql: str, parameters: "list[Any]", expression: "exp.Expr | None" = None, *, allow_parse: bool = True
+) -> "list[dict[str, Any]] | None":
+    if not parameters:
+        return []
+
+    if isinstance(parameters[0], dict):
+        if not all(isinstance(row, dict) for row in parameters):
+            return None
+        dict_parameters = cast("list[dict[str, Any]]", parameters)
+        if _has_synthetic_positional_keys(dict_parameters):
+            return None
+        return dict_parameters
+
+    insert_columns = _extract_insert_columns(sql, expression, allow_parse=allow_parse)
+    if not insert_columns:
+        return None
+
+    normalized_rows: list[dict[str, Any]] = []
+    for row in parameters:
+        if not _is_sequence_parameter_row(row):
+            return None
+        values = list(row)
+        if len(values) != len(insert_columns):
+            return None
+        normalized_rows.append(dict(zip(insert_columns, values, strict=True)))
+    return normalized_rows
+
+
 def try_bulk_insert(
     connection: "BigQueryConnection",
     sql: str,
-    parameters: "list[dict[str, Any]]",
+    parameters: "list[Any]",
     expression: "exp.Expr | None" = None,
     *,
     allow_parse: bool = True,
@@ -134,18 +207,22 @@ def try_bulk_insert(
     Returns:
         Inserted row count if bulk insert succeeds, otherwise None.
     """
+    if _uses_local_bigquery_endpoint(connection):
+        return None
+
     table_name = extract_insert_table(sql, expression, allow_parse=allow_parse)
     if not table_name:
         return None
 
-    if _has_synthetic_positional_keys(parameters):
+    normalized_rows = _normalize_bulk_insert_rows(sql, parameters, expression, allow_parse=allow_parse)
+    if normalized_rows is None:
         return None
 
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        arrow_table = pa.Table.from_pylist(parameters)
+        arrow_table = pa.Table.from_pylist(normalized_rows)
 
         buffer = io.BytesIO()
         pq.write_table(arrow_table, buffer)
@@ -154,7 +231,7 @@ def try_bulk_insert(
         job_config = build_load_job_config("parquet", overwrite=False)
         job = connection.load_table_from_file(buffer, table_name, job_config=job_config)
         job.result()
-        return len(parameters)
+        return len(normalized_rows)
     except ImportError:
         logger.debug("pyarrow not available, falling back to literal inlining")
         return None
