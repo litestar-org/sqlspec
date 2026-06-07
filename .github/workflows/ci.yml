@@ -194,7 +194,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always()
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: coverage-unit.xml
           flags: unit,py${{ matrix.python-version }}
@@ -306,7 +306,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always() && steps.pytest.outcome != 'skipped'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: coverage-integration.xml
           flags: integration,py${{ matrix.python-version }}
