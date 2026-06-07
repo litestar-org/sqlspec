@@ -94,7 +94,13 @@ def _sql_object_statement(table: str, dialect: "str | None" = None) -> SQL:
 
 
 def _builder_statement(table: str, dialect: "str | None" = None) -> Select:
-    return sql.select("name", "value", dialect=dialect).from_(table).where("value >= :minimum", minimum=20).order_by("value")
+    return (
+        sql
+        .select("name", "value", dialect=dialect)
+        .from_(table)
+        .where("value >= :minimum", minimum=20)
+        .order_by("value")
+    )
 
 
 def _loader_statement(table: str, dialect: "str | None" = None) -> SQL:
