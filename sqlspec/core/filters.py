@@ -28,7 +28,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
-from sqlspec.core.pagination import OffsetPagination
+from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.query_modifiers import parse_column_for_condition
 from sqlspec.utils.type_guards import has_field_name
 
