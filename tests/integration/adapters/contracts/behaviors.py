@@ -2887,8 +2887,8 @@ def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
     table = case.table.name
 
     result = sync_driver.execute_script(f"""
-        INSERT INTO {table} (name, value, note) VALUES ('script1', 10, NULL);
-        INSERT INTO {table} (name, value, note) VALUES ('script2', 20, NULL);
+        INSERT INTO {table} (name, value) VALUES ('script1', 10);
+        INSERT INTO {table} (name, value) VALUES ('script2', 20);
         UPDATE {table} SET value = 30 WHERE name = 'script1';
     """)
     assert_sql_result(result)
@@ -2911,8 +2911,8 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
     table = case.table.name
 
     result = await async_driver.execute_script(f"""
-        INSERT INTO {table} (name, value, note) VALUES ('script1', 10, NULL);
-        INSERT INTO {table} (name, value, note) VALUES ('script2', 20, NULL);
+        INSERT INTO {table} (name, value) VALUES ('script1', 10);
+        INSERT INTO {table} (name, value) VALUES ('script2', 20);
         UPDATE {table} SET value = 30 WHERE name = 'script1';
     """)
     assert_sql_result(result)
