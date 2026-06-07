@@ -1,6 +1,7 @@
 """Unit tests for BigQuery core performance helpers."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 from google.cloud.bigquery import QueryJobConfig
@@ -8,13 +9,27 @@ from google.cloud.bigquery import QueryJobConfig
 from sqlspec.adapters.bigquery.core import (
     _COPY_JOB_FIELDS,
     build_profile,
+    build_retry,
     collect_rows,
     copy_job_config,
     driver_profile,
     resolve_column_names,
+    run_query_job,
 )
+from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import ParameterStyle
+from sqlspec.utils.serializers import to_json
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.job = object()
+        self.queries: list[tuple[str, dict[str, Any]]] = []
+
+    def query(self, sql: str, **kwargs: Any) -> object:
+        self.queries.append((sql, kwargs))
+        return self.job
 
 
 def _schema_field(name: str) -> SimpleNamespace:
@@ -112,6 +127,58 @@ def test_copy_job_attribute_helper_removed() -> None:
     import sqlspec.adapters.bigquery.core as bigquery_core
 
     assert not hasattr(bigquery_core, "_should_copy_job_attribute")
+
+
+def test_run_query_job_passes_query_start_retry_timeout_and_job_retry() -> None:
+    connection = _RecordingConnection()
+    retry = build_retry(1.0)
+    job_retry = build_retry(2.0)
+    job = run_query_job(
+        cast(Any, connection),
+        "SELECT @name",
+        {"name": "alpha"},
+        default_job_config=None,
+        job_config=None,
+        json_serializer=to_json,
+        retry=retry,
+        timeout=3.0,
+        job_retry=job_retry,
+    )
+
+    assert job is connection.job
+    sql, kwargs = connection.queries[0]
+    assert sql == "SELECT @name"
+    assert kwargs["retry"] is retry
+    assert kwargs["timeout"] == 3.0
+    assert kwargs["job_retry"] is job_retry
+
+    job_config = kwargs["job_config"]
+    assert isinstance(job_config, QueryJobConfig)
+    assert job_config.query_parameters is not None
+    assert len(job_config.query_parameters) == 1
+    assert job_config.query_parameters[0].name == "name"
+
+
+def test_bigquery_driver_applies_result_timeout_to_query_start_request() -> None:
+    connection = _RecordingConnection()
+    driver = BigQueryDriver(
+        cast(Any, connection), driver_features={"job_result_timeout": 3.0, "job_retry_deadline": 1.0}
+    )
+    job = driver._run_query_job(cast(Any, connection), "SELECT @name", {"name": "alpha"})  # type: ignore[protected-access]
+
+    assert job is connection.job
+    _, kwargs = connection.queries[0]
+    assert kwargs["retry"] is kwargs["job_retry"]
+    assert kwargs["timeout"] == 3.0
+
+
+def test_bigquery_driver_does_not_pass_polling_sentinel_as_query_start_timeout() -> None:
+    connection = _RecordingConnection()
+    driver = BigQueryDriver(cast(Any, connection))
+    driver._run_query_job(cast(Any, connection), "SELECT 1", None)  # type: ignore[protected-access]
+
+    _, kwargs = connection.queries[0]
+    assert "timeout" not in kwargs
 
 
 def test_type_converter_bigquery_output_converter_is_final() -> None:

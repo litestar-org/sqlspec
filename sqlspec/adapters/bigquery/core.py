@@ -422,6 +422,9 @@ def run_query_job(
     default_job_config: QueryJobConfig | None,
     job_config: QueryJobConfig | None,
     json_serializer: "Callable[[Any], str]",
+    retry: Retry | None = None,
+    timeout: float | None = None,
+    job_retry: Retry | None = None,
 ) -> QueryJob:
     """Execute a BigQuery query job with merged configuration.
 
@@ -432,6 +435,9 @@ def run_query_job(
         default_job_config: Default job configuration to merge.
         job_config: Optional job configuration override.
         json_serializer: JSON serializer for parameter values.
+        retry: Retry policy for the API request that starts the query job.
+        timeout: Per-request HTTP timeout for the API request that starts the query job.
+        job_retry: Retry policy attached to the returned query job.
 
     Returns:
         QueryJob object representing the executed job.
@@ -442,7 +448,15 @@ def run_query_job(
     if job_config:
         copy_job_config(job_config, final_job_config)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
-    return connection.query(sql, job_config=final_job_config)
+
+    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
+    if retry is not None:
+        query_kwargs["retry"] = retry
+    if timeout is not None:
+        query_kwargs["timeout"] = timeout
+    if job_retry is not None:
+        query_kwargs["job_retry"] = job_retry
+    return connection.query(sql, **query_kwargs)
 
 
 def build_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "LoadJobConfig":

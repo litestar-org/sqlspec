@@ -114,7 +114,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         features = driver_features or {}
 
         if statement_config is None:
-            statement_config = default_statement_config.replace(cache_config=get_cache_config())
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
 
         parameter_json_serializer = statement_config.parameter_config.json_serializer
         if parameter_json_serializer is None:
@@ -131,6 +133,25 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_retry = build_retry(self._job_retry_deadline)
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
 
+    def _job_request_timeout(self) -> float | None:
+        timeout = self._job_result_timeout
+        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+            return float(timeout)
+        return None
+
+    def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
+        return run_query_job(
+            connection,
+            sql,
+            parameters,
+            default_job_config=self._default_query_job_config,
+            job_config=None,
+            json_serializer=self._json_serializer,
+            retry=self._job_retry,
+            timeout=self._job_request_timeout(),
+            job_retry=self._job_retry,
+        )
+
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
@@ -146,14 +167,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with query results and metadata
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.job = run_query_job(
-            cursor,
-            sql,
-            parameters,
-            default_job_config=self._default_query_job_config,
-            job_config=None,
-            json_serializer=self._json_serializer,
-        )
+        cursor.job = self._run_query_job(cursor, sql, parameters)
         job_result = cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
@@ -214,14 +228,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         script_sql = build_inlined_script(
             sql, prepared_parameters, parsed_expression, allow_parse=allow_parse, literal_inliner=self._literal_inliner
         )
-        cursor.job = run_query_job(
-            cursor,
-            script_sql,
-            None,
-            default_job_config=self._default_query_job_config,
-            job_config=None,
-            json_serializer=self._json_serializer,
-        )
+        cursor.job = self._run_query_job(cursor, script_sql, None)
         cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -246,14 +253,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         last_rowcount = 0
 
         for stmt in statements:
-            job = run_query_job(
-                cursor,
-                stmt,
-                prepared_parameters or {},
-                default_job_config=self._default_query_job_config,
-                job_config=None,
-                json_serializer=self._json_serializer,
-            )
+            job = self._run_query_job(cursor, stmt, prepared_parameters or {})
             job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
             last_job = job
             last_rowcount = normalize_script_rowcount(last_rowcount, job)
@@ -372,15 +372,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         arrow_result: ArrowResult | None = None
 
         with exc_handler:
-            query_job = run_query_job(
-                self.connection,
-                sql,
-                driver_params,
-                default_job_config=self._default_query_job_config,
-                job_config=None,
-                json_serializer=self._json_serializer,
-            )
-            query_job.result(timeout=self._job_result_timeout)  # Wait for completion
+            query_job = self._run_query_job(self.connection, sql, driver_params)
+            query_job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)  # Wait for completion
 
             # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()
