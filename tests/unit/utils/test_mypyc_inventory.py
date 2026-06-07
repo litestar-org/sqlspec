@@ -185,9 +185,10 @@ def test_dead_code_removal_c13_detect_schema_type_helper_removed() -> None:
     assert not hasattr(schema_module, "_detect_schema_type")
 
 
-def test_dead_code_removal_c13_correlation_context_function_removed() -> None:
-    assert "correlation_context" not in correlation_module.__all__
-    assert not hasattr(correlation_module, "correlation_context")
-    with CorrelationContext.context("request-id") as correlation_id:
+def test_correlation_context_function_is_public() -> None:
+    """correlation_context is a public helper (imported by downstream consumers)."""
+    assert "correlation_context" in correlation_module.__all__
+    assert hasattr(correlation_module, "correlation_context")
+    with correlation_module.correlation_context("request-id") as correlation_id:
         assert correlation_id == "request-id"
         assert CorrelationContext.get() == "request-id"
