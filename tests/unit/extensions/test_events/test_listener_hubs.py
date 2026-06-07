@@ -69,11 +69,15 @@ class _AsyncpgConfig:
 
 
 class _PsqlpyListener:
+    def __init__(self, emit_on_add: str | None = None) -> None:
+        self.emit_on_add = emit_on_add
+
     async def startup(self) -> None:
         pass
 
     async def add_callback(self, *, channel: str, callback: Any) -> None:
-        _ = (channel, callback)
+        if self.emit_on_add is not None:
+            await callback(0, channel, self.emit_on_add)
 
     def listen(self) -> None:
         pass
@@ -89,16 +93,16 @@ class _PsqlpyListener:
 
 
 class _PsqlpyPool:
-    def __init__(self) -> None:
-        self.listener_handle = _PsqlpyListener()
+    def __init__(self, listener_handle: _PsqlpyListener | None = None) -> None:
+        self.listener_handle = listener_handle or _PsqlpyListener()
 
     def listener(self) -> _PsqlpyListener:
         return self.listener_handle
 
 
 class _PsqlpyConfig:
-    def __init__(self) -> None:
-        self.pool = _PsqlpyPool()
+    def __init__(self, listener_handle: _PsqlpyListener | None = None) -> None:
+        self.pool = _PsqlpyPool(listener_handle)
         self._runtime = _StubRuntime()
 
     async def provide_pool(self) -> _PsqlpyPool:
@@ -247,6 +251,16 @@ async def test_psqlpy_listener_hub_broadcasts_to_same_channel_consumers() -> Non
     result_a, result_b = await asyncio.gather(task_a, task_b)
     assert result_a == payload
     assert result_b == payload
+    await hub.shutdown()
+
+
+async def test_psqlpy_listener_hub_attaches_consumer_before_callback_registration() -> None:
+    payload = "payload-1"
+    hub = PsqlpyListenerHub(_PsqlpyConfig(_PsqlpyListener(emit_on_add=payload)))  # type: ignore[arg-type]
+
+    result = await hub.dequeue("alerts", 0.25)
+
+    assert result == payload
     await hub.shutdown()
 
 

@@ -97,22 +97,7 @@ class PsqlpyListenerHub:
                 raise RuntimeError(msg)
             if channel in self._queues:
                 return
-            normalize_event_channel_name(channel)
-            listener = await self._ensure_listener_locked()
-            callback = _PsqlpyHubCallback(channel, self._dispatch)
-            self._queues[channel] = WeakKeyDictionary()
-            self._callbacks[channel] = callback
-            try:
-                await listener.add_callback(channel=channel, callback=callback.__call__)
-            except Exception:
-                self._queues.pop(channel, None)
-                self._callbacks.pop(channel, None)
-                raise
-            if not self._listener_started:
-                listener.listen()
-                self._listener_started = True
-                # Give psqlpy a brief moment to actually start its consumer
-                await asyncio.sleep(0.05)
+            await self._subscribe_locked(channel)
 
     async def unsubscribe(self, channel: str) -> None:
         async with self._lock:
@@ -127,9 +112,15 @@ class PsqlpyListenerHub:
                 await listener.clear_channel_callbacks(channel=channel)
 
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
-        if channel not in self._queues:
-            await self.subscribe(channel)
-        queue = self._get_consumer_queue(channel)
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover
+            msg = "PsqlpyListenerHub.dequeue requires an active asyncio task"
+            raise RuntimeError(msg)
+        async with self._lock:
+            if channel not in self._queues:
+                queue = await self._subscribe_locked(channel, consumer_task=task)
+            else:
+                queue = self._get_consumer_queue(channel, task=task)
         if queue is None:
             return None
         try:
@@ -163,8 +154,10 @@ class PsqlpyListenerHub:
     def is_subscribed(self, channel: str) -> bool:
         return channel in self._queues
 
-    def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
-        task = asyncio.current_task()
+    def _get_consumer_queue(
+        self, channel: str, *, task: "asyncio.Task[Any] | None" = None
+    ) -> "asyncio.Queue[str] | None":
+        task = task or asyncio.current_task()
         if task is None:  # pragma: no cover
             msg = "PsqlpyListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
@@ -176,6 +169,35 @@ class PsqlpyListenerHub:
             queue = asyncio.Queue()
             queues[task] = queue
         return queue
+
+    async def _subscribe_locked(
+        self, channel: str, *, consumer_task: "asyncio.Task[Any] | None" = None
+    ) -> "asyncio.Queue[str] | None":
+        if self._shutting_down:
+            msg = "PsqlpyListenerHub is shutting down"
+            raise RuntimeError(msg)
+        normalize_event_channel_name(channel)
+        listener = await self._ensure_listener_locked()
+        callback = _PsqlpyHubCallback(channel, self._dispatch)
+        queues: WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]] = WeakKeyDictionary()
+        consumer_queue: asyncio.Queue[str] | None = None
+        if consumer_task is not None:
+            consumer_queue = asyncio.Queue()
+            queues[consumer_task] = consumer_queue
+        self._queues[channel] = queues
+        self._callbacks[channel] = callback
+        try:
+            await listener.add_callback(channel=channel, callback=callback.__call__)
+        except Exception:
+            self._queues.pop(channel, None)
+            self._callbacks.pop(channel, None)
+            raise
+        if not self._listener_started:
+            listener.listen()
+            self._listener_started = True
+            # Give psqlpy a brief moment to actually start its consumer
+            await asyncio.sleep(0.05)
+        return consumer_queue
 
     async def _ensure_listener_locked(self) -> "PsqlpyListener":
         if self._listener is not None:
