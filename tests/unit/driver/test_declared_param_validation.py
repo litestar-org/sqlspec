@@ -79,7 +79,10 @@ def test_type_mismatch_raises(driver: _MockDriver) -> None:
 
 
 def test_type_match_passes(driver: _MockDriver) -> None:
-    sql = SQL("select :a, :b", declared_parameters=_declared(ParameterDeclaration("a", "int"), ParameterDeclaration("b", "str")))
+    sql = SQL(
+        "select :a, :b",
+        declared_parameters=_declared(ParameterDeclaration("a", "int"), ParameterDeclaration("b", "str")),
+    )
     prepared = driver.prepare_statement(sql, ({"a": 1, "b": "x"},))
     assert prepared.named_parameters == {"a": 1, "b": "x"}
 
@@ -120,18 +123,35 @@ def test_undeclared_query_is_untouched(driver: _MockDriver) -> None:
 
 def test_positional_binding_skips_name_checks(driver: _MockDriver) -> None:
     """Positional binding can't be name-matched; arity was checked at load (Ch4)."""
-    sql = SQL("select ?", 1, declared_parameters=_declared(ParameterDeclaration("a", "int")), statement_config=StatementConfig())
+    sql = SQL(
+        "select ?",
+        1,
+        declared_parameters=_declared(ParameterDeclaration("a", "int")),
+        statement_config=StatementConfig(),
+    )
     prepared = driver.prepare_statement(sql, ())
     assert prepared.positional_parameters == [1]
 
 
 def test_execute_many_validates_first_row(driver: _MockDriver) -> None:
-    bad = SQL("select :a", [{"b": 2}, {"a": 1}], is_many=True, declared_parameters=_declared(ParameterDeclaration("a", "int")), statement_config=StatementConfig())
+    bad = SQL(
+        "select :a",
+        [{"b": 2}, {"a": 1}],
+        is_many=True,
+        declared_parameters=_declared(ParameterDeclaration("a", "int")),
+        statement_config=StatementConfig(),
+    )
     with pytest.raises(SQLSpecError, match="a"):
         driver.prepare_statement(bad, ())
 
 
 def test_execute_many_first_row_valid_passes(driver: _MockDriver) -> None:
-    good = SQL("select :a", [{"a": 1}, {"a": 2}], is_many=True, declared_parameters=_declared(ParameterDeclaration("a", "int")), statement_config=StatementConfig())
+    good = SQL(
+        "select :a",
+        [{"a": 1}, {"a": 2}],
+        is_many=True,
+        declared_parameters=_declared(ParameterDeclaration("a", "int")),
+        statement_config=StatementConfig(),
+    )
     prepared = driver.prepare_statement(good, ())
     assert prepared.is_many

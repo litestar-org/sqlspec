@@ -46,8 +46,7 @@ TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 PARAM_PATTERN = re.compile(
-    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?:\s+(?P<desc>.*\S))?\s*$",
-    re.IGNORECASE,
+    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?:\s+(?P<desc>.*\S))?\s*$", re.IGNORECASE
 )
 
 PARAM_PREFIX_PATTERN = re.compile(r"^\s*--\s*param\s*:", re.IGNORECASE)
@@ -440,6 +439,7 @@ class SQLFileLoader:
         Args:
             content: Raw SQL file content to parse.
             file_path: File path for error reporting.
+            strict_parameter_annotations: Raise on malformed parameter declarations instead of skipping them.
 
         Returns:
             Dictionary mapping normalized statement names to NamedStatement objects.
@@ -478,9 +478,7 @@ class SQLFileLoader:
                         file_path, file_path, ValueError(f"Duplicate statement name: {raw_statement_name}")
                     )
 
-                SQLFileLoader._validate_declared_parameters(
-                    clean_sql, declared_params, raw_statement_name, file_path
-                )
+                SQLFileLoader._validate_declared_parameters(clean_sql, declared_params, raw_statement_name, file_path)
 
                 statements[normalized_name] = NamedStatement(
                     name=normalized_name,

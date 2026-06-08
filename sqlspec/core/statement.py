@@ -321,6 +321,7 @@ class SQL:
             *parameters: Parameters and filters
             statement_config: Configuration
             is_many: Mark as execute_many operation
+            declared_parameters: Parameter declarations to validate against at execute time
             **kwargs: Additional parameters
         """
         config = statement_config or self._create_auto_config(statement, parameters, kwargs)
@@ -338,7 +339,7 @@ class SQL:
         self._is_script = False
         self._raw_expression: exp.Expr | None = None
         self._rebind_processor: ParameterProcessor | None = None
-        self._declared_parameters: "tuple[ParameterDeclaration, ...]" = declared_parameters
+        self._declared_parameters: tuple[ParameterDeclaration, ...] = declared_parameters
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)

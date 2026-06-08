@@ -336,9 +336,7 @@ def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
     return tuple(hashes)
 
 
-def _check_declared_named_row(
-    declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]"
-) -> None:
+def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
     """Validate a single named-parameter mapping against declared params.
 
     Each declared param must be present; a present non-``None`` value whose declared
@@ -348,15 +346,15 @@ def _check_declared_named_row(
     for declaration in declared:
         name = declaration.name
         if name not in supplied:
-            raise SQLSpecError(f"Missing required parameter '{name}' for declared SQL statement.")
+            msg = f"Missing required parameter '{name}' for declared SQL statement."
+            raise SQLSpecError(msg)
         value = supplied[name]
         if value is None:
             continue
         resolved = resolve_param_type(declaration.type_str)
         if resolved is not None and not isinstance(value, resolved):
-            raise SQLSpecError(
-                f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
-            )
+            msg = f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
+            raise SQLSpecError(msg)
 
 
 def _validate_declared_parameters(sql_statement: "SQL") -> None:

@@ -5,11 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from sqlspec.core.parameters._declared import (
-    ParameterDeclaration,
-    register_param_type,
-    resolve_param_type,
-)
+from sqlspec.core.parameters._declared import ParameterDeclaration, register_param_type, resolve_param_type
 
 
 def test_declaration_fields() -> None:
