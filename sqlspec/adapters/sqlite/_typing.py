@@ -19,13 +19,15 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     SqliteConnection: TypeAlias = _SqliteConnection
+    SqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
     SqliteRawCursor: TypeAlias = sqlite3.Cursor
 
 if not TYPE_CHECKING:
     SqliteConnection = _SqliteConnection
+    SqliteConnectionFactory = type[sqlite3.Connection]
     SqliteRawCursor = sqlite3.Cursor
 
-__all__ = ("SqliteConnection", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")
+__all__ = ("SqliteConnection", "SqliteConnectionFactory", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")
 
 
 class SqliteCursor:

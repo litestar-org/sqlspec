@@ -7,6 +7,7 @@ from typing import Literal, get_args, get_origin, get_type_hints
 import pytest
 
 import sqlspec.adapters.sqlite.core as sqlite_core
+from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 from sqlspec.adapters.sqlite.core import build_connection_config
 
@@ -80,6 +81,7 @@ def test_sqlite_connection_params_describe_current_sync_config_surface() -> None
     annotations = get_type_hints(SqliteConnectionParams, include_extras=True)
 
     assert _annotation_has_origin(annotations["database"], PathLike)
+    assert _annotation_contains(annotations["factory"], SqliteConnectionFactory)
     assert _annotation_contains(annotations["isolation_level"], type(None))
     assert _annotation_has_origin(annotations["isolation_level"], Literal)
     assert annotations["autocommit"] is not None

@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite._typing import SqliteConnection, SqliteCursor, SqliteSessionContext
+from sqlspec.adapters.sqlite._typing import (
+    SqliteConnection,
+    SqliteConnectionFactory,
+    SqliteCursor,
+    SqliteSessionContext,
+)
 from sqlspec.adapters.sqlite.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
@@ -34,7 +39,7 @@ class SqliteConnectionParams(TypedDict):
     detect_types: NotRequired[int]
     isolation_level: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"] | None]
     check_same_thread: NotRequired[bool]
-    factory: "NotRequired[type[SqliteConnection] | None]"
+    factory: "NotRequired[SqliteConnectionFactory | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
     autocommit: NotRequired[bool]
@@ -226,6 +231,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             "Literal": Literal,
             "SqliteConnectionContext": SqliteConnectionContext,
             "SqliteConnection": SqliteConnection,
+            "SqliteConnectionFactory": SqliteConnectionFactory,
             "SqliteConnectionParams": SqliteConnectionParams,
             "SqliteConnectionPool": SqliteConnectionPool,
             "SqliteCursor": SqliteCursor,
