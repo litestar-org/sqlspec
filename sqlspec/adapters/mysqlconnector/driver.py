@@ -189,7 +189,8 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def with_cursor(self, connection: "MysqlConnectorSyncConnection") -> "MysqlConnectorSyncCursor":
-        return MysqlConnectorSyncCursor(connection)
+        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
+        return MysqlConnectorSyncCursor(connection, dict(cursor_options))
 
     def handle_database_exceptions(self) -> "MysqlConnectorSyncExceptionHandler":
         return MysqlConnectorSyncExceptionHandler()
@@ -418,7 +419,8 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def with_cursor(self, connection: "MysqlConnectorAsyncConnection") -> "MysqlConnectorAsyncCursor":
-        return MysqlConnectorAsyncCursor(connection)
+        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
+        return MysqlConnectorAsyncCursor(connection, dict(cursor_options))
 
     def handle_database_exceptions(self) -> "MysqlConnectorAsyncExceptionHandler":
         return MysqlConnectorAsyncExceptionHandler()

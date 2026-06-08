@@ -58,14 +58,17 @@ __all__ = (
 class MysqlConnectorSyncCursor:
     """Context manager for mysql-connector sync cursor operations."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("connection", "cursor", "cursor_options")
 
-    def __init__(self, connection: "MysqlConnectorSyncConnection") -> None:
+    def __init__(
+        self, connection: "MysqlConnectorSyncConnection", cursor_options: "dict[str, Any] | None" = None
+    ) -> None:
         self.connection = connection
         self.cursor: MysqlConnectorSyncRawCursor | None = None
+        self.cursor_options = cursor_options or {}
 
     def __enter__(self) -> "MysqlConnectorSyncRawCursor":
-        self.cursor = self.connection.cursor()
+        self.cursor = self.connection.cursor(**self.cursor_options)
         return self.cursor
 
     def __exit__(self, *_: Any) -> None:
@@ -76,14 +79,17 @@ class MysqlConnectorSyncCursor:
 class MysqlConnectorAsyncCursor:
     """Async context manager for mysql-connector async cursor operations."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("connection", "cursor", "cursor_options")
 
-    def __init__(self, connection: "MysqlConnectorAsyncConnection") -> None:
+    def __init__(
+        self, connection: "MysqlConnectorAsyncConnection", cursor_options: "dict[str, Any] | None" = None
+    ) -> None:
         self.connection = connection
         self.cursor: MysqlConnectorAsyncRawCursor | None = None
+        self.cursor_options = cursor_options or {}
 
     async def __aenter__(self) -> "MysqlConnectorAsyncRawCursor":
-        self.cursor = await self.connection.cursor()
+        self.cursor = await self.connection.cursor(**self.cursor_options)
         return self.cursor
 
     async def __aexit__(self, *_: Any) -> None:
