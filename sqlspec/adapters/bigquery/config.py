@@ -43,8 +43,8 @@ class BigQueryConnectionParams(TypedDict):
 
     default_query_job_config: NotRequired[QueryJobConfig]
     default_load_job_config: NotRequired[LoadJobConfig]
+    default_job_creation_mode: NotRequired[str]
     dataset_id: NotRequired[str]
-    credentials_path: NotRequired[str]
     use_query_cache: NotRequired[bool]
     maximum_bytes_billed: NotRequired[int]
     enable_bigquery_ml: NotRequired[bool]
@@ -73,8 +73,6 @@ class BigQueryDriverFeatures(TypedDict):
 
     Attributes:
         connection_instance: Pre-existing BigQuery connection instance to use.
-        on_job_start: Callback invoked when a query job starts.
-        on_job_complete: Callback invoked when a query job completes.
         on_connection_create: Callback invoked when connection is created.
         json_serializer: Custom JSON serializer for dict/list parameter conversion.
             Defaults to sqlspec.utils.serializers.to_json if not provided.
@@ -97,8 +95,6 @@ class BigQueryDriverFeatures(TypedDict):
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
-    on_job_start: NotRequired["Callable[[str], None]"]
-    on_job_complete: NotRequired["Callable[[str, Any], None]"]
     on_connection_create: NotRequired["Callable[[Any], None]"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
@@ -264,21 +260,22 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             return cast("BigQueryConnection", self._connection_instance)
 
         try:
-            client_fields = {"project", "location", "credentials", "client_options", "client_info"}
+            client_fields = {
+                "project",
+                "location",
+                "credentials",
+                "client_options",
+                "client_info",
+                "default_query_job_config",
+                "default_load_job_config",
+                "default_job_creation_mode",
+            }
             config_dict: dict[str, Any] = {
                 field: value
                 for field, value in self.connection_config.items()
                 if field in client_fields and value is not None and value is not Empty
             }
             connection = self.connection_type(**config_dict)
-
-            default_query_job_config = self.connection_config.get("default_query_job_config")
-            if default_query_job_config is not None:
-                self.driver_features["default_query_job_config"] = default_query_job_config
-
-            default_load_job_config = self.connection_config.get("default_load_job_config")
-            if default_load_job_config is not None:
-                self.driver_features["default_load_job_config"] = default_load_job_config
 
             if self._user_connection_hook is not None:
                 self._user_connection_hook(connection)

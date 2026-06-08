@@ -1,7 +1,20 @@
 """BigQuery configuration tests covering statement config builders."""
 
-from sqlspec.adapters.bigquery.config import BigQueryConfig
+from typing import Any, cast
+
+from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
+from pytest import MonkeyPatch
+
+from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams, BigQueryDriverFeatures
 from sqlspec.adapters.bigquery.core import build_statement_config
+
+
+class _RecordingBigQueryClient:
+    instances: list["_RecordingBigQueryClient"] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.__class__.instances.append(self)
 
 
 def test_build_statement_config_custom_serializer() -> None:
@@ -49,3 +62,38 @@ def test_bigquery_config_job_timeout_ms_overrides_query_timeout_ms() -> None:
     )
     default_job_config = config.connection_config["default_query_job_config"]
     assert int(default_job_config.job_timeout_ms) == 30000
+
+
+def test_bigquery_config_routes_current_client_level_settings(monkeypatch: MonkeyPatch) -> None:
+    """Current BigQuery Client constructor settings should reach client creation."""
+    _RecordingBigQueryClient.instances.clear()
+    monkeypatch.setattr(BigQueryConfig, "connection_type", _RecordingBigQueryClient)
+    query_job_config = QueryJobConfig()
+    load_job_config = LoadJobConfig()
+
+    config = BigQueryConfig(
+        connection_config={
+            "project": "p",
+            "location": "US",
+            "default_query_job_config": query_job_config,
+            "default_load_job_config": load_job_config,
+            "default_job_creation_mode": "JOB_CREATION_OPTIONAL",
+        }
+    )
+
+    connection = cast(_RecordingBigQueryClient, config.create_connection())
+
+    assert connection.kwargs == {
+        "project": "p",
+        "location": "US",
+        "default_query_job_config": query_job_config,
+        "default_load_job_config": load_job_config,
+        "default_job_creation_mode": "JOB_CREATION_OPTIONAL",
+    }
+
+
+def test_bigquery_config_typed_surfaces_do_not_advertise_inert_settings() -> None:
+    """Typed public settings should only include options that SQLSpec routes."""
+    assert "credentials_path" not in BigQueryConnectionParams.__annotations__
+    assert "on_job_start" not in BigQueryDriverFeatures.__annotations__
+    assert "on_job_complete" not in BigQueryDriverFeatures.__annotations__
