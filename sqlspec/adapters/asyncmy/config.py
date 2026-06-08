@@ -1,5 +1,6 @@
 """Asyncmy database configuration."""
 
+import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
@@ -19,18 +20,47 @@ from sqlspec.adapters.asyncmy.core import apply_driver_features, default_stateme
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    import ssl
+    from collections.abc import Awaitable, Callable, Mapping
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
 
-__all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams")
+__all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams", "AsyncmySSLParams")
+
+
+_ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
+_ASYNCMY_POOL_KEYS = _ASYNCMY_POOL_ONLY_KEYS | {"echo"}
+_ASYNCMY_LOCAL_INFILE_GATE = "allow_local_infile"
+
+
+def _get_asyncmy_connect_parameter_names() -> "frozenset[str]":
+    try:
+        return frozenset(inspect.signature(asyncmy.connect).parameters)
+    except (TypeError, ValueError):
+        return frozenset()
+
+
+_ASYNCMY_CONNECT_PARAMETER_NAMES = _get_asyncmy_connect_parameter_names()
+
+
+class AsyncmySSLParams(TypedDict):
+    """Asyncmy TLS parameters."""
+
+    ca: NotRequired[str]
+    capath: NotRequired[str]
+    cert: NotRequired[str]
+    key: NotRequired[str]
+    cipher: NotRequired[str]
+    check_hostname: NotRequired[bool]
+    verify_mode: NotRequired[bool | int | str]
 
 
 class AsyncmyConnectionParams(TypedDict):
@@ -40,18 +70,31 @@ class AsyncmyConnectionParams(TypedDict):
     user: NotRequired[str]
     password: NotRequired[str]
     database: NotRequired[str]
+    db: NotRequired[str]
     port: NotRequired[int]
     unix_socket: NotRequired[str]
     charset: NotRequired[str]
-    connect_timeout: NotRequired[int]
+    connect_timeout: NotRequired[int | float]
     read_default_file: NotRequired[str]
     read_default_group: NotRequired[str]
     autocommit: NotRequired[bool]
+    allow_local_infile: NotRequired[bool]
     local_infile: NotRequired[bool]
-    ssl: NotRequired[Any]
+    ssl: NotRequired["AsyncmySSLParams | ssl.SSLContext | dict[str, Any]"]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
+    auth_plugin_map: NotRequired["dict[str | bytes, type[Any]]"]
+    binary_prefix: NotRequired[bool]
+    client_flag: NotRequired[int]
+    conv: NotRequired["dict[Any, Any]"]
     cursor_class: NotRequired[type["AsyncmyRawCursor"] | type["AsyncmyDictCursor"]]
+    cursor_cls: NotRequired[type["AsyncmyRawCursor"] | type["AsyncmyDictCursor"]]
+    max_allowed_packet: NotRequired[int]
+    program_name: NotRequired[str]
+    read_timeout: NotRequired[int | float]
+    server_public_key: NotRequired[str | bytes]
+    use_unicode: NotRequired[bool]
+    write_timeout: NotRequired[int | float]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -62,6 +105,51 @@ class AsyncmyPoolParams(AsyncmyConnectionParams):
     maxsize: NotRequired[int]
     echo: NotRequired[bool]
     pool_recycle: NotRequired[int]
+
+
+def _normalize_asyncmy_connection_config(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Normalize SQLSpec asyncmy config keys before storing them."""
+    config = normalize_connection_config(connection_config)
+
+    if "cursor_class" in config:
+        cursor_class = config.pop("cursor_class")
+        existing_cursor_cls = config.get("cursor_cls")
+        if existing_cursor_cls is not None and existing_cursor_cls is not cursor_class:
+            msg = "Asyncmy connection_config received conflicting 'cursor_cls' and legacy 'cursor_class' values."
+            raise ImproperConfigurationError(msg)
+        config["cursor_cls"] = cursor_class
+
+    allow_local_infile = bool(config.pop(_ASYNCMY_LOCAL_INFILE_GATE, False))
+    local_infile = bool(config.get("local_infile", False))
+    if local_infile and not allow_local_infile:
+        msg = "Asyncmy local_infile=True requires allow_local_infile=True because LOAD DATA LOCAL INFILE can read client files."
+        raise ImproperConfigurationError(msg)
+    config["local_infile"] = bool(local_infile and allow_local_infile)
+
+    return config
+
+
+def _split_asyncmy_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[str, Any], dict[str, Any]]":
+    """Split pool constructor settings from connection settings."""
+    pool_kwargs: dict[str, Any] = {}
+    connection_kwargs: dict[str, Any] = {}
+
+    for key, value in connection_config.items():
+        if value is None:
+            continue
+        if key in _ASYNCMY_POOL_KEYS:
+            pool_kwargs[key] = value
+            continue
+        if key == "write_timeout" and key not in _ASYNCMY_CONNECT_PARAMETER_NAMES:
+            continue
+        connection_kwargs[key] = value
+
+    return pool_kwargs, connection_kwargs
+
+
+def _build_asyncmy_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    pool_kwargs, connection_kwargs = _split_asyncmy_pool_config(connection_config)
+    return {**connection_kwargs, **pool_kwargs}
 
 
 class AsyncmyDriverFeatures(TypedDict):
@@ -190,7 +278,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = _normalize_asyncmy_connection_config(connection_config)
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
@@ -227,7 +315,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         Future driver_features can be added here if needed.
         """
-        return cast("AsyncmyPool", await asyncmy.create_pool(**dict(self.connection_config)))
+        return cast("AsyncmyPool", await asyncmy.create_pool(**_build_asyncmy_pool_config(self.connection_config)))
 
     async def _ensure_connection_initialized(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
