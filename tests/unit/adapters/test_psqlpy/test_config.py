@@ -1,17 +1,36 @@
 """Psqlpy configuration tests covering statement config builders."""
 
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
-from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
-from sqlspec.adapters.psqlpy.config import PsqlpyConfig
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpySessionContext
+from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyDriverFeatures
 from sqlspec.adapters.psqlpy.core import (
     build_postgres_extension_probe_names,
     build_statement_config,
     resolve_postgres_extension_state,
 )
 from sqlspec.core import StatementConfig
+
+
+class _ExtensionQueryResult:
+    def __init__(self, extension_names: set[str]) -> None:
+        self._extension_names = extension_names
+
+    def result(self) -> list[dict[str, str]]:
+        return [{"extname": name} for name in self._extension_names]
+
+
+class _ExtensionConnection:
+    def __init__(self, extension_names: set[str]) -> None:
+        self._extension_names = extension_names
+        self.queries: list[tuple[str, list[list[str]]]] = []
+
+    async def fetch(self, query: str, parameters: list[list[str]]) -> _ExtensionQueryResult:
+        self.queries.append((query, parameters))
+        return _ExtensionQueryResult(self._extension_names)
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -38,6 +57,25 @@ def test_psqlpy_config_applies_driver_feature_serializer() -> None:
     assert parameter_config.json_serializer is serializer
 
 
+def test_psqlpy_driver_features_declares_cast_detection() -> None:
+    """Driver feature typing should expose every consumed feature flag."""
+    assert "enable_cast_detection" in PsqlpyDriverFeatures.__annotations__
+
+
+def test_psqlpy_config_defaults_cast_detection_feature() -> None:
+    """Cast-aware parameter processing should be declared and enabled by default."""
+    config = PsqlpyConfig()
+
+    assert config.driver_features["enable_cast_detection"] is True
+
+
+def test_psqlpy_config_preserves_cast_detection_override() -> None:
+    """Callers should be able to disable cast-aware parameter processing."""
+    config = PsqlpyConfig(driver_features={"enable_cast_detection": False})
+
+    assert config.driver_features["enable_cast_detection"] is False
+
+
 def test_psqlpy_build_postgres_extension_probe_names_filters_disabled_features() -> None:
     """Only enabled extension probes should be returned."""
     assert build_postgres_extension_probe_names({"enable_pgvector": True, "enable_paradedb": False}) == ["vector"]
@@ -52,6 +90,19 @@ def test_psqlpy_resolve_postgres_extension_state_promotes_paradedb() -> None:
     assert statement_config.dialect == "paradedb"
     assert pgvector_available is True
     assert paradedb_available is True
+
+
+@pytest.mark.anyio
+async def test_psqlpy_enable_pgvector_detects_extension_and_promotes_dialect() -> None:
+    """Psqlpy pgvector support should mean extension detection and dialect promotion."""
+    config = PsqlpyConfig(driver_features={"enable_pgvector": True, "enable_paradedb": False})
+    connection = _ExtensionConnection({"vector"})
+
+    await config._ensure_connection_initialized(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
+
+    assert connection.queries[0][1] == [["vector"]]
+    assert config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
+    assert config.statement_config.dialect == "pgvector"
 
 
 @pytest.mark.anyio

@@ -257,6 +257,7 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     serializer = features.get("json_serializer", to_json)
     features.setdefault("json_serializer", serializer)
+    features.setdefault("enable_cast_detection", True)
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
 

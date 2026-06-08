@@ -86,10 +86,14 @@ class PsqlpyPoolParams(PsqlpyConnectionParams):
 class PsqlpyDriverFeatures(TypedDict):
     """Psqlpy driver feature flags.
 
-    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
-     Requires pgvector-python package installed.
-     Defaults to True when pgvector is installed.
-     Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
+    enable_cast_detection: Enable cast-aware parameter processing.
+     Defaults to True. When enabled, SQL casts in prepared statements guide
+     psqlpy parameter coercion for JSON, UUID, and timestamp-like values.
+    enable_pgvector: Enable pgvector extension detection for vector similarity search.
+     Defaults to True when the pgvector Python package is installed.
+     Detects the PostgreSQL vector extension and promotes the dialect to "pgvector".
+     It does not register psqlpy type handlers; use psqlpy.extra_types.PgVector
+     or explicit SQL casts for vector values.
     enable_paradedb: Enable ParadeDB (pg_search) extension detection.
      When enabled and the pg_search extension is detected, the SQL dialect
      switches to "paradedb" which supports search operators (@@@, &&&, etc.)
@@ -112,6 +116,7 @@ class PsqlpyDriverFeatures(TypedDict):
      Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
     """
 
+    enable_cast_detection: NotRequired[bool]
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -262,8 +267,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         conn_id = id(connection)
         if conn_id in self._initialized_connection_ids:
             return
-        if self._pgvector_available:
-            pass
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
         self._initialized_connection_ids.add(conn_id)
