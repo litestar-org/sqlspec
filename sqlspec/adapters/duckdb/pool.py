@@ -111,6 +111,8 @@ class DuckDBConnectionPool:
         for key, value in self._connection_config.items():
             if key in {"database", "read_only"}:
                 connect_parameters[key] = value
+            elif key == "config" and isinstance(value, dict):
+                config_dict.update(value)
             else:
                 config_dict[key] = value
 
@@ -131,53 +133,19 @@ class DuckDBConnectionPool:
                 install_kwargs["version"] = ext_config["version"]
             if "repository" in ext_config:
                 install_kwargs["repository"] = ext_config["repository"]
+            if "repository_url" in ext_config:
+                install_kwargs["repository_url"] = ext_config["repository_url"]
             if ext_config.get("force_install", False):
                 install_kwargs["force_install"] = True
 
-            try:
-                if install_kwargs:
-                    connection.install_extension(ext_name, **install_kwargs)
-                connection.load_extension(ext_name)
-            except Exception as e:
-                log_with_context(
-                    logger,
-                    logging.DEBUG,
-                    "pool.extension.load.failed",
-                    adapter=_ADAPTER_NAME,
-                    pool_id=self._pool_id,
-                    database=self._database_name,
-                    extension=ext_name,
-                    error=str(e),
-                )
+            if install_kwargs:
+                connection.install_extension(ext_name, **install_kwargs)
+            else:
+                connection.install_extension(ext_name)
+            connection.load_extension(ext_name)
 
         for secret_config in self._secrets:
-            secret_type = secret_config.get("secret_type")
-            secret_name = secret_config.get("name")
-            secret_value = secret_config.get("value")
-
-            if not (secret_type and secret_name and secret_value):
-                continue
-
-            _validate_sql_identifier(secret_name, "secret_name")
-            _validate_sql_identifier(secret_type, "secret_type")
-
-            value_pairs = []
-            for key, value in secret_value.items():
-                escaped_value = str(value).replace("'", "''")
-                value_pairs.append(f"'{key}' = '{escaped_value}'")
-            value_string = ", ".join(value_pairs)
-            scope_clause = ""
-            if "scope" in secret_config:
-                scope_clause = f" SCOPE '{secret_config['scope']}'"
-
-            sql = f"""
-                CREATE SECRET {secret_name} (
-                    TYPE {secret_type},
-                    {value_string}
-                ){scope_clause}
-            """
-            with suppress(Exception):
-                connection.execute(sql)
+            _create_secret(connection, secret_config)
 
         if self._on_connection_create:
             # Let a failing user hook surface its real error instead of silently returning a
@@ -359,3 +327,81 @@ def _validate_sql_identifier(value: str, field_name: str) -> None:
             "Must start with a letter and contain only letters, digits, and underscores."
         )
         raise ValueError(msg)
+
+
+def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) -> None:
+    secret_name = secret_config.get("name")
+    secret_type = secret_config.get("secret_type")
+    if not (secret_name and secret_type):
+        return
+
+    _validate_sql_identifier(secret_name, "secret_name")
+    _validate_sql_identifier(secret_type, "secret_type")
+
+    sql = _build_secret_sql(secret_config, secret_name, secret_type)
+    connection.execute(sql)
+    _verify_secret(connection, secret_config, secret_name, secret_type)
+
+
+def _build_secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:
+    parts = [f"TYPE {secret_type}"]
+
+    provider = secret_config.get("provider")
+    if provider:
+        _validate_sql_identifier(str(provider), "secret_provider")
+        parts.append(f"PROVIDER {provider}")
+
+    secret_value = secret_config.get("value") or {}
+    if not isinstance(secret_value, dict):
+        msg = "DuckDB secret value must be a dictionary"
+        raise TypeError(msg)
+
+    for key, value in secret_value.items():
+        parts.append(f"{_format_secret_key(key)} {_format_secret_literal(value)}")
+
+    scope = secret_config.get("scope")
+    if scope is not None:
+        parts.append(f"SCOPE {_format_secret_literal(scope)}")
+
+    create = "CREATE PERSISTENT SECRET" if secret_config.get("persistent", False) else "CREATE SECRET"
+    body = ",\n    ".join(parts)
+    return f"{create} {secret_name} (\n    {body}\n)"
+
+
+def _format_secret_key(key: Any) -> str:
+    key_text = str(key)
+    _validate_sql_identifier(key_text, "secret_value_key")
+    return key_text.upper()
+
+
+def _format_secret_literal(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _verify_secret(
+    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str
+) -> None:
+    row = connection.execute(
+        "SELECT name, type, scope, persistent FROM duckdb_secrets() WHERE name = ?", (secret_name,)
+    ).fetchone()
+    if not row:
+        msg = f"DuckDB secret {secret_name!r} was not visible after creation"
+        raise RuntimeError(msg)
+
+    actual_name, actual_type, actual_scope, actual_persistent = row
+    expected_persistent = bool(secret_config.get("persistent", False))
+    scope = secret_config.get("scope")
+    scopes = list(actual_scope or [])
+    if (
+        actual_name != secret_name
+        or str(actual_type).lower() != secret_type.lower()
+        or bool(actual_persistent) != expected_persistent
+        or (scope is not None and scope not in scopes)
+    ):
+        msg = f"DuckDB secret {secret_name!r} verification failed"
+        raise RuntimeError(msg)

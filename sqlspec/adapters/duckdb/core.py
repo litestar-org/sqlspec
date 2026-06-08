@@ -77,15 +77,30 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    excluded_keys = {
-        "pool_min_size",
-        "pool_max_size",
-        "pool_timeout",
-        "pool_recycle_seconds",
-        "health_check_interval",
-        "extra",
-    }
-    return {key: value for key, value in connection_config.items() if value is not None and key not in excluded_keys}
+    pool_only_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval"}
+    connect_parameters: dict[str, Any] = {}
+    duckdb_config: dict[str, Any] = {}
+
+    nested_config = connection_config.get("config")
+    if isinstance(nested_config, dict):
+        duckdb_config.update({key: value for key, value in nested_config.items() if value is not None})
+
+    for key, value in connection_config.items():
+        if value is None or key in pool_only_keys or key in {"config", "extra"}:
+            continue
+        if key in {"database", "read_only"}:
+            connect_parameters[key] = value
+        else:
+            duckdb_config[key] = value
+
+    extra = connection_config.get("extra")
+    if isinstance(extra, dict):
+        duckdb_config.update({key: value for key, value in extra.items() if value is not None})
+
+    if duckdb_config:
+        connect_parameters["config"] = duckdb_config
+
+    return connect_parameters
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:

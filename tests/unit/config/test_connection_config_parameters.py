@@ -228,10 +228,13 @@ def test_aiosqlite_config_accepts_connection_parameters() -> None:
 
 def test_duckdb_config_accepts_connection_parameters() -> None:
     """Test DuckDBConfig accepts connection_config and connection_instance."""
-    config = DuckDBConfig(
-        connection_config=DuckDBPoolParams(database=":memory:", read_only=False, pool_min_size=3, pool_max_size=12),
-        connection_instance=None,
-    )
+    connection_config: dict[str, Any] = {
+        "database": ":memory:",
+        "read_only": False,
+        "pool_min_size": 3,
+        "pool_max_size": 12,
+    }
+    config = DuckDBConfig(connection_config=connection_config, connection_instance=None)
 
     # DuckDB converts :memory: to :memory:shared_db for pooling
     assert "memory" in config.connection_config["database"]

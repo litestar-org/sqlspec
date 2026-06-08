@@ -65,11 +65,11 @@ class DuckDBConnectionParams(TypedDict):
     enable_external_access: NotRequired[bool]
     secret_directory: NotRequired[str]
     enable_object_cache: NotRequired[bool]
-    parquet_metadata_cache: NotRequired[str]
+    parquet_metadata_cache: NotRequired[bool]
     enable_external_file_cache: NotRequired[bool]
     checkpoint_threshold: NotRequired[str]
     enable_progress_bar: NotRequired[bool]
-    progress_bar_time: NotRequired[float]
+    progress_bar_time: NotRequired[int]
     enable_logging: NotRequired[bool]
     log_query_path: NotRequired[str]
     logging_level: NotRequired[str]
@@ -86,13 +86,10 @@ class DuckDBConnectionParams(TypedDict):
 class DuckDBPoolParams(DuckDBConnectionParams):
     """Complete pool configuration for DuckDB adapter.
 
-    Extends DuckDBConnectionParams with pool sizing and lifecycle settings so SQLSpec can manage
-    per-thread DuckDB connections safely while honoring DuckDB's thread-safety constraints.
+    Extends DuckDBConnectionParams with lifecycle settings consumed by SQLSpec's
+    thread-local DuckDB connection manager.
     """
 
-    pool_min_size: NotRequired[int]
-    pool_max_size: NotRequired[int]
-    pool_timeout: NotRequired[float]
     pool_recycle_seconds: NotRequired[int]
     health_check_interval: NotRequired[float]
 
@@ -109,6 +106,9 @@ class DuckDBExtensionConfig(TypedDict):
     repository: NotRequired[str]
     """Repository for the extension (core, community, or custom URL)."""
 
+    repository_url: NotRequired[str]
+    """Custom repository URL for the extension."""
+
     force_install: NotRequired[bool]
     """Force reinstallation of the extension."""
 
@@ -122,11 +122,17 @@ class DuckDBSecretConfig(TypedDict):
     name: str
     """Name of the secret."""
 
-    value: "dict[str, Any]"
+    value: NotRequired["dict[str, Any]"]
     """Secret configuration values."""
 
+    provider: NotRequired[str]
+    """Secret provider, such as config or credential_chain."""
+
     scope: NotRequired[str]
-    """Scope of the secret (LOCAL or PERSISTENT)."""
+    """Optional path or storage-prefix scope for the secret."""
+
+    persistent: NotRequired[bool]
+    """Persist the secret to DuckDB's configured secret directory."""
 
 
 class DuckDBDriverFeatures(TypedDict):
