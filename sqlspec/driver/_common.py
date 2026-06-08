@@ -1456,6 +1456,7 @@ class CommonDriverAttributesMixin:
         statement_config: "StatementConfig",
         kwargs: "dict[str, Any]",
     ) -> "SQL":
+        declared = sql_statement.declared_parameters
         if data_parameters or kwargs:
             merged_parameters = (
                 (*sql_statement.positional_parameters, *tuple(data_parameters))
@@ -1463,7 +1464,13 @@ class CommonDriverAttributesMixin:
                 else sql_statement.positional_parameters
             )
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
-            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
+            return SQL(
+                statement_seed,
+                *merged_parameters,
+                statement_config=statement_config,
+                declared_parameters=declared,
+                **kwargs,
+            )
 
         needs_rebuild = False
         if statement_config.dialect and (
@@ -1481,10 +1488,26 @@ class CommonDriverAttributesMixin:
         if needs_rebuild:
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
             if sql_statement.is_many and sql_statement.parameters:
-                return SQL(statement_seed, sql_statement.parameters, statement_config=statement_config, is_many=True)
+                return SQL(
+                    statement_seed,
+                    sql_statement.parameters,
+                    statement_config=statement_config,
+                    is_many=True,
+                    declared_parameters=declared,
+                )
             if sql_statement.named_parameters:
-                return SQL(statement_seed, statement_config=statement_config, **sql_statement.named_parameters)
-            return SQL(statement_seed, *sql_statement.positional_parameters, statement_config=statement_config)
+                return SQL(
+                    statement_seed,
+                    statement_config=statement_config,
+                    declared_parameters=declared,
+                    **sql_statement.named_parameters,
+                )
+            return SQL(
+                statement_seed,
+                *sql_statement.positional_parameters,
+                statement_config=statement_config,
+                declared_parameters=declared,
+            )
         return sql_statement
 
     def _prepare_from_string(

@@ -19,6 +19,7 @@ from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
 from sqlspec.core.parameters import (
     ParameterConverter,
+    ParameterDeclaration,
     ParameterProcessor,
     ParameterProfile,
     ParameterStyle,
@@ -310,6 +311,7 @@ class SQL:
         *parameters: "Any | StatementFilter | list[Any | StatementFilter]",
         statement_config: "StatementConfig | None" = None,
         is_many: bool | None = None,
+        declared_parameters: "tuple[ParameterDeclaration, ...]" = (),
         **kwargs: Any,
     ) -> None:
         """Initialize SQL statement.
@@ -336,7 +338,7 @@ class SQL:
         self._is_script = False
         self._raw_expression: exp.Expr | None = None
         self._rebind_processor: ParameterProcessor | None = None
-        self._declared_parameters: "tuple[Any, ...]" = ()
+        self._declared_parameters: "tuple[ParameterDeclaration, ...]" = declared_parameters
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)
@@ -616,7 +618,7 @@ class SQL:
         return self._original_parameters
 
     @property
-    def declared_parameters(self) -> "tuple[Any, ...]":
+    def declared_parameters(self) -> "tuple[ParameterDeclaration, ...]":
         """Get declared parameter metadata carried with this statement (public API)."""
         return self._declared_parameters
 
@@ -884,7 +886,13 @@ class SQL:
         config = self._statement_config
         is_many = self._is_many
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(statement_seed, *original_params, statement_config=config, is_many=is_many)
+        new_sql = SQL(
+            statement_seed,
+            *original_params,
+            statement_config=config,
+            is_many=is_many,
+            declared_parameters=self._declared_parameters,
+        )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
@@ -1083,7 +1091,11 @@ class SQL:
             New SQL instance with the expression and copied state
         """
         new_sql = SQL(
-            new_expr, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
+            new_expr,
+            *self._original_parameters,
+            statement_config=self._statement_config,
+            is_many=self._is_many,
+            declared_parameters=self._declared_parameters,
         )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -1105,7 +1117,13 @@ class SQL:
         config = self._statement_config
         is_many = self._is_many
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(statement_seed, *original_params, statement_config=config, is_many=is_many)
+        new_sql = SQL(
+            statement_seed,
+            *original_params,
+            statement_config=config,
+            is_many=is_many,
+            declared_parameters=self._declared_parameters,
+        )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._named_parameters[name] = value
         new_sql._positional_parameters = self._positional_parameters.copy()

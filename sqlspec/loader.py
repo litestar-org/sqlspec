@@ -806,7 +806,7 @@ class SQLFileLoader:
         if parsed_statement.dialect:
             sqlglot_dialect = _normalize_dialect(parsed_statement.dialect)
 
-        sql = SQL(parsed_statement.sql, dialect=sqlglot_dialect)
+        sql = SQL(parsed_statement.sql, dialect=sqlglot_dialect, declared_parameters=parsed_statement.parameters)
         try:
             sql.compile()
         except Exception as exc:
