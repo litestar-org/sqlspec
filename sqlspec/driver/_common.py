@@ -17,6 +17,7 @@ from sqlspec.builder import QueryBuilder
 from sqlspec.core import (
     SQL,
     CachedStatement,
+    ParameterDeclaration,
     ParameterStyle,
     SQLResult,
     Statement,
@@ -24,6 +25,7 @@ from sqlspec.core import (
     TypedParameter,
     get_cache,
     get_cache_config,
+    resolve_param_type,
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
@@ -43,7 +45,13 @@ from sqlspec.driver._storage_helpers import (
     coerce_arrow_table,
     create_storage_job,
 )
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    NotFoundError,
+    SQLFileNotFoundError,
+    SQLSpecError,
+    StorageCapabilityError,
+)
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.utils.dispatch import TypeDispatcher
@@ -326,6 +334,50 @@ def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
         digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
         hashes.append(digest[:16])
     return tuple(hashes)
+
+
+def _check_declared_named_row(
+    declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]"
+) -> None:
+    """Validate a single named-parameter mapping against declared params.
+
+    Each declared param must be present; a present non-``None`` value whose declared
+    type resolves via the registry must satisfy ``isinstance``. ``None`` is allowed
+    (SQL ``NULL``); unresolved types are documentation-only. Extra keys are ignored.
+    """
+    for declaration in declared:
+        name = declaration.name
+        if name not in supplied:
+            raise SQLSpecError(f"Missing required parameter '{name}' for declared SQL statement.")
+        value = supplied[name]
+        if value is None:
+            continue
+        resolved = resolve_param_type(declaration.type_str)
+        if resolved is not None and not isinstance(value, resolved):
+            raise SQLSpecError(
+                f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
+            )
+
+
+def _validate_declared_parameters(sql_statement: "SQL") -> None:
+    """Enforce declared-parameter contracts on the original user params.
+
+    No-op unless the statement carries declarations and is not a script. Runs before
+    driver style conversion, so declared names and raw values are intact. Named binding
+    is validated for presence and type; ``execute_many`` checks the first row only;
+    positional binding is skipped (arity is validated at load time).
+    """
+    declared = sql_statement.declared_parameters
+    if not declared or sql_statement.is_script:
+        return
+    if sql_statement.is_many:
+        rows = sql_statement.positional_parameters
+        if rows and isinstance(rows[0], dict):
+            _check_declared_named_row(declared, rows[0])
+        return
+    if sql_statement.positional_parameters:
+        return
+    _check_declared_named_row(declared, sql_statement.named_parameters)
 
 
 class StackExecutionObserver:
@@ -1017,6 +1069,7 @@ class CommonDriverAttributesMixin:
             if not filters and not kwargs and isinstance(statement, str):
                 self._statement_cache[statement] = sql_statement
 
+        _validate_declared_parameters(sql_statement)
         return self._apply_filters(sql_statement, filters)
 
     def split_script_statements(
