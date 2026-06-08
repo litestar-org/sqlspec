@@ -1,6 +1,6 @@
 """Psycopg database configuration with direct field-based configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -39,6 +39,11 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
+    from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
+    from psycopg.abc import AdaptContext
+    from psycopg.rows import AsyncRowFactory, RowFactory
+    from psycopg_pool.abc import AsyncConnectFailedCB, AsyncConnectionCB, ConnectFailedCB, ConnectionCB
+
     from sqlspec.core import StatementConfig
 
 __all__ = (
@@ -50,6 +55,9 @@ __all__ = (
     "PsycopgSyncConfig",
     "PsycopgSyncCursor",
 )
+
+
+PsycopgSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
 
 class PsycopgConnectionParams(TypedDict):
@@ -64,11 +72,15 @@ class PsycopgConnectionParams(TypedDict):
     connect_timeout: NotRequired[int]
     options: NotRequired[str]
     application_name: NotRequired[str]
-    sslmode: NotRequired[str]
+    sslmode: NotRequired[PsycopgSSLMode]
     sslcert: NotRequired[str]
     sslkey: NotRequired[str]
     sslrootcert: NotRequired[str]
     autocommit: NotRequired[bool]
+    prepare_threshold: NotRequired[int | None]
+    context: NotRequired["AdaptContext | None"]
+    row_factory: NotRequired["RowFactory[Any] | AsyncRowFactory[Any] | None"]
+    cursor_factory: NotRequired["type[Cursor[Any] | AsyncCursor[Any]] | None"]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -77,6 +89,7 @@ class PsycopgPoolParams(PsycopgConnectionParams):
 
     min_size: NotRequired[int]
     max_size: NotRequired[int]
+    connection_class: NotRequired["type[Connection[Any] | AsyncConnection[Any]]"]
     name: NotRequired[str]
     timeout: NotRequired[float]
     max_waiting: NotRequired[int]
@@ -84,7 +97,12 @@ class PsycopgPoolParams(PsycopgConnectionParams):
     max_idle: NotRequired[float]
     reconnect_timeout: NotRequired[float]
     num_workers: NotRequired[int]
-    configure: NotRequired["Callable[..., Any]"]
+    open: NotRequired[bool | None]
+    configure: NotRequired["ConnectionCB[PsycopgSyncConnection] | AsyncConnectionCB[PsycopgAsyncConnection] | None"]
+    check: NotRequired["ConnectionCB[PsycopgSyncConnection] | AsyncConnectionCB[PsycopgAsyncConnection] | None"]
+    reset: NotRequired["ConnectionCB[PsycopgSyncConnection] | AsyncConnectionCB[PsycopgAsyncConnection] | None"]
+    close_returns: NotRequired[bool]
+    reconnect_failed: NotRequired["ConnectFailedCB | AsyncConnectFailedCB | None"]
     kwargs: NotRequired["dict[str, Any]"]
 
 
@@ -252,6 +270,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         all_config = dict(self.connection_config)
 
         pool_parameters = {
+            "connection_class": all_config.pop("connection_class", None),
             "min_size": all_config.pop("min_size", 4),
             "max_size": all_config.pop("max_size", None),
             "name": all_config.pop("name", None),
@@ -260,7 +279,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             "max_lifetime": all_config.pop("max_lifetime", 3600.0),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
             "num_workers": all_config.pop("num_workers", 3),
+            "open": all_config.pop("open", True),
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "close_returns": all_config.pop("close_returns", False),
         }
 
         pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
@@ -268,12 +292,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
+        kwargs = all_config.pop("kwargs", {})
+        all_config.update(kwargs)
         if conninfo:
-            pool = ConnectionPool(conninfo, open=True, **pool_parameters)
+            pool = ConnectionPool(conninfo, kwargs=all_config, **pool_parameters)
         else:
-            kwargs = all_config.pop("kwargs", {})
-            all_config.update(kwargs)
-            pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
+            pool = ConnectionPool("", kwargs=all_config, **pool_parameters)
 
         return pool
 
@@ -510,8 +534,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Create the actual async connection pool."""
 
         all_config = dict(self.connection_config)
+        open_provided = "open" in all_config
+        open_setting = all_config.pop("open", None)
 
         pool_parameters = {
+            "connection_class": all_config.pop("connection_class", None),
             "min_size": all_config.pop("min_size", 4),
             "max_size": all_config.pop("max_size", None),
             "name": all_config.pop("name", None),
@@ -520,7 +547,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "max_lifetime": all_config.pop("max_lifetime", 3600.0),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
             "num_workers": all_config.pop("num_workers", 3),
+            "open": open_setting if open_provided else False,
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "close_returns": all_config.pop("close_returns", False),
         }
 
         pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
@@ -528,14 +560,15 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
+        kwargs = all_config.pop("kwargs", {})
+        all_config.update(kwargs)
         if conninfo:
-            pool = AsyncConnectionPool(conninfo, open=False, **pool_parameters)
+            pool = AsyncConnectionPool(conninfo, kwargs=all_config, **pool_parameters)
         else:
-            kwargs = all_config.pop("kwargs", {})
-            all_config.update(kwargs)
-            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_parameters)
+            pool = AsyncConnectionPool("", kwargs=all_config, **pool_parameters)
 
-        await pool.open()
+        if not open_provided:
+            await pool.open()
 
         return pool
 
