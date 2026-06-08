@@ -1,6 +1,5 @@
 """Aiosqlite database configuration."""
 
-import sqlite3
 import uuid
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
@@ -8,7 +7,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteSessionContext
+from sqlspec.adapters.aiosqlite._typing import (
+    AiosqliteConnection,
+    AiosqliteConnectionFactory,
+    AiosqliteCursor,
+    AiosqliteSessionContext,
+)
 from sqlspec.adapters.aiosqlite.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
@@ -45,7 +49,7 @@ class AiosqliteConnectionParams(TypedDict):
     detect_types: NotRequired[int]
     isolation_level: NotRequired[SQLiteIsolationLevel]
     check_same_thread: NotRequired[bool]
-    factory: NotRequired[type[sqlite3.Connection] | None]
+    factory: "NotRequired[AiosqliteConnectionFactory | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
     iter_chunk_size: NotRequired[int]
@@ -279,6 +283,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         namespace.update({
             "AiosqliteConnectionContext": AiosqliteConnectionContext,
             "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionFactory": AiosqliteConnectionFactory,
             "AiosqliteConnectionParams": AiosqliteConnectionParams,
             "AiosqliteConnectionPool": AiosqliteConnectionPool,
             "AiosqliteCursor": AiosqliteCursor,

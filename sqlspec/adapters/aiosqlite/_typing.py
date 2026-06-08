@@ -6,6 +6,7 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -21,13 +22,21 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
+    AiosqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
     AiosqliteRawCursor: TypeAlias = aiosqlite.Cursor
 
 if not TYPE_CHECKING:
     AiosqliteConnection = _AiosqliteConnection
+    AiosqliteConnectionFactory = type[sqlite3.Connection]
     AiosqliteRawCursor = aiosqlite.Cursor
 
-__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteRawCursor", "AiosqliteSessionContext")
+__all__ = (
+    "AiosqliteConnection",
+    "AiosqliteConnectionFactory",
+    "AiosqliteCursor",
+    "AiosqliteRawCursor",
+    "AiosqliteSessionContext",
+)
 
 
 class AiosqliteCursor:

@@ -1,12 +1,21 @@
 import sqlite3
 from pathlib import Path
+from typing import get_args, get_type_hints
 
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams
 from sqlspec.adapters.aiosqlite.core import build_connection_config
 
 
 class CustomConnection(sqlite3.Connection):
     """Connection subclass used to validate factory passthrough."""
+
+
+def _annotation_contains(annotation: object, expected: object) -> bool:
+    """Return whether an annotation tree contains the expected object."""
+    if annotation is expected:
+        return True
+    return any(_annotation_contains(arg, expected) for arg in get_args(annotation))
 
 
 def test_connection_params_accept_pathlike_and_modern_connection_options(tmp_path: Path) -> None:
@@ -21,6 +30,12 @@ def test_connection_params_accept_pathlike_and_modern_connection_options(tmp_pat
     }
 
     assert params["database"] == db_path
+
+
+def test_connection_params_factory_uses_adapter_alias() -> None:
+    annotations = get_type_hints(AiosqliteConnectionParams, include_extras=True)
+
+    assert _annotation_contains(annotations["factory"], AiosqliteConnectionFactory)
 
 
 def test_build_connection_config_filters_pool_keys_and_gates_autocommit(tmp_path: Path) -> None:
