@@ -1,7 +1,8 @@
 """MysqlConnector database configuration."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
 
 import mysql.connector
@@ -30,7 +31,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable
     from types import TracebackType
 
     from mysql.connector.pooling import MySQLConnectionPool
@@ -42,15 +43,22 @@ if TYPE_CHECKING:
 __all__ = (
     "MysqlConnectorAsyncConfig",
     "MysqlConnectorAsyncConnectionParams",
+    "MysqlConnectorCursorParams",
     "MysqlConnectorDriverFeatures",
+    "MysqlConnectorFailoverTarget",
     "MysqlConnectorPoolParams",
     "MysqlConnectorSyncConfig",
     "MysqlConnectorSyncConnectionParams",
 )
 
 
-class MysqlConnectorSyncConnectionParams(TypedDict):
-    """MysqlConnector sync connection parameters."""
+MysqlConnectorClientFlags = int | list[int] | tuple[int, ...]
+MysqlConnectorPathSequence = str | list[str] | tuple[str, ...]
+MysqlConnectorStringSequence = list[str] | tuple[str, ...]
+
+
+class MysqlConnectorFailoverTarget(TypedDict):
+    """Connector/Python failover target parameters."""
 
     host: NotRequired[str]
     user: NotRequired[str]
@@ -58,50 +66,102 @@ class MysqlConnectorSyncConnectionParams(TypedDict):
     database: NotRequired[str]
     port: NotRequired[int]
     unix_socket: NotRequired[str]
+    pool_name: NotRequired[str]
+    pool_size: NotRequired[int]
+
+
+class MysqlConnectorCursorParams(TypedDict):
+    """Connector/Python cursor parameters routed by SQLSpec."""
+
+    buffered: NotRequired[bool]
+    raw: NotRequired[bool]
+    dictionary: NotRequired[bool]
+    prepared: NotRequired[bool]
+    cursor_class: NotRequired[type[Any]]
+
+
+class _MysqlConnectorBaseConnectionParams(TypedDict):
+    """Common Connector/Python connection parameters."""
+
+    host: NotRequired[str]
+    user: NotRequired[str]
+    username: NotRequired[str]
+    password: NotRequired[str]
+    passwd: NotRequired[str]
+    password1: NotRequired[str]
+    password2: NotRequired[str]
+    password3: NotRequired[str]
+    database: NotRequired[str]
+    db: NotRequired[str]
+    port: NotRequired[int]
+    unix_socket: NotRequired[str]
+    conn_attrs: NotRequired[dict[str, str]]
+    init_command: NotRequired[str]
+    auth_plugin: NotRequired[str]
+    webauthn_callback: NotRequired[Callable[[], None] | str]
+    openid_token_file: NotRequired[str]
+    use_unicode: NotRequired[bool]
     charset: NotRequired[str]
-    connection_timeout: NotRequired[int]
+    collation: NotRequired[str]
     autocommit: NotRequired[bool]
-    use_pure: NotRequired[bool]
+    time_zone: NotRequired[str]
+    sql_mode: NotRequired[str]
+    get_warnings: NotRequired[bool]
+    raise_on_warnings: NotRequired[bool]
+    connection_timeout: NotRequired[int | float]
+    connect_timeout: NotRequired[int | float]
+    read_timeout: NotRequired[int | float]
+    write_timeout: NotRequired[int | float]
+    client_flags: NotRequired[MysqlConnectorClientFlags]
+    buffered: NotRequired[bool]
+    raw: NotRequired[bool]
+    consume_results: NotRequired[bool]
+    tls_versions: NotRequired[MysqlConnectorStringSequence]
+    tls_ciphersuites: NotRequired[MysqlConnectorStringSequence]
     ssl_ca: NotRequired[str]
     ssl_cert: NotRequired[str]
     ssl_key: NotRequired[str]
+    ssl_cipher: NotRequired[str]
+    ssl_disabled: NotRequired[bool]
     ssl_verify_cert: NotRequired[bool]
     ssl_verify_identity: NotRequired[bool]
-    client_flags: NotRequired[int]
+    force_ipv6: NotRequired[bool]
+    dns_srv: NotRequired[bool]
+    kerberos_auth_mode: NotRequired[Literal["SSPI", "GSSAPI"]]
+    krb_service_principal: NotRequired[str]
+    oci_config_file: NotRequired[str]
+    oci_config_profile: NotRequired[str]
+    compress: NotRequired[bool]
+    converter_class: NotRequired[type[Any]]
+    converter_str_fallback: NotRequired[bool]
+    failover: NotRequired[list[MysqlConnectorFailoverTarget] | tuple[MysqlConnectorFailoverTarget, ...]]
+    option_files: NotRequired[MysqlConnectorPathSequence]
+    option_groups: NotRequired[MysqlConnectorStringSequence]
+    allow_local_infile: NotRequired[bool]
+    allow_local_infile_in_path: NotRequired[str]
+    use_pure: NotRequired[bool]
+    dsn: NotRequired[str]
+    extra: NotRequired["dict[str, Any]"]
+
+
+class MysqlConnectorSyncConnectionParams(_MysqlConnectorBaseConnectionParams):
+    """MysqlConnector sync connection parameters."""
+
     pool_name: NotRequired[str]
     pool_size: NotRequired[int]
     pool_reset_session: NotRequired[bool]
-    extra: NotRequired["dict[str, Any]"]
 
 
 class MysqlConnectorPoolParams(MysqlConnectorSyncConnectionParams):
     """MysqlConnector pooling parameters.
 
-    Note: pool_name, pool_size, and pool_reset_session are inherited
-    from MysqlConnectorSyncConnectionParams.
+    Note: pool_name, pool_size, and pool_reset_session are inherited from
+    MysqlConnectorSyncConnectionParams.
     """
 
 
-class MysqlConnectorAsyncConnectionParams(TypedDict):
+class MysqlConnectorAsyncConnectionParams(_MysqlConnectorBaseConnectionParams):
     """MysqlConnector async connection parameters."""
-
-    host: NotRequired[str]
-    user: NotRequired[str]
-    password: NotRequired[str]
-    database: NotRequired[str]
-    port: NotRequired[int]
-    unix_socket: NotRequired[str]
-    charset: NotRequired[str]
-    connection_timeout: NotRequired[int]
-    autocommit: NotRequired[bool]
-    use_pure: NotRequired[bool]
-    ssl_ca: NotRequired[str]
-    ssl_cert: NotRequired[str]
-    ssl_key: NotRequired[str]
-    ssl_verify_cert: NotRequired[bool]
-    ssl_verify_identity: NotRequired[bool]
-    client_flags: NotRequired[int]
-    extra: NotRequired["dict[str, Any]"]
 
 
 class MysqlConnectorDriverFeatures(TypedDict):
@@ -119,6 +179,8 @@ class MysqlConnectorDriverFeatures(TypedDict):
      Defaults to True when extension_config["events"] is configured.
     events_backend: Event channel backend selection.
      Only option: "table_queue".
+    cursor_options: Cursor keyword arguments SQLSpec forwards to
+     ``connection.cursor()`` for statement execution.
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -126,6 +188,7 @@ class MysqlConnectorDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    cursor_options: NotRequired[MysqlConnectorCursorParams]
 
 
 class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
@@ -235,8 +298,9 @@ class MysqlConnectorSyncConfig(
         **kwargs: Any,
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
-        connection_config.setdefault("host", "localhost")
+        connection_config.setdefault("host", "127.0.0.1")
         connection_config.setdefault("port", 3306)
+        connection_config.setdefault("allow_local_infile", False)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -350,8 +414,9 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         **kwargs: Any,
     ) -> None:
         self.connection_config = normalize_connection_config(connection_config)
-        self.connection_config.setdefault("host", "localhost")
+        self.connection_config.setdefault("host", "127.0.0.1")
         self.connection_config.setdefault("port", 3306)
+        self.connection_config.setdefault("allow_local_infile", False)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
