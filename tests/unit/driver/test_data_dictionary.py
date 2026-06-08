@@ -102,6 +102,32 @@ def test_public_data_dictionary_classes_remain_constructible() -> None:
         assert dictionary_type().__class__ is dictionary_type
 
 
+def test_postgres_data_dictionary_normalizes_identifier_binds() -> None:
+    """PostgreSQL metadata lookups should bind normalized schema and table identifiers."""
+    mock_driver = Mock(spec=SyncDriverAdapterBase)
+    mock_driver.select.return_value = []
+
+    data_dict = PsycopgSyncDataDictionary()
+    data_dict.get_columns(mock_driver, table="Widgets", schema="Tenant")
+
+    _, kwargs = mock_driver.select.call_args
+    assert kwargs["schema_name"] == "tenant"
+    assert kwargs["table_name"] == "widgets"
+
+
+def test_oracle_data_dictionary_normalizes_lowercase_schema_and_preserves_mixed_case_table() -> None:
+    """Oracle metadata lookups should normalize lowercase users without flattening mixed-case names."""
+    mock_driver = Mock(spec=SyncDriverAdapterBase)
+    mock_driver.select.return_value = []
+
+    data_dict = OracledbSyncDataDictionary()
+    data_dict.get_columns(mock_driver, table="MixedCase", schema="myapp")
+
+    _, kwargs = mock_driver.select.call_args
+    assert kwargs["schema_name"] == "MYAPP"
+    assert kwargs["table_name"] == "MixedCase"
+
+
 def test_sqlite_get_version_success() -> None:
     """Test successful version detection for SQLite."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)

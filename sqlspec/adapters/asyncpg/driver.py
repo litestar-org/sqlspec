@@ -38,7 +38,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
@@ -237,12 +237,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         await self.connection.execute(f'SET LOCAL search_path TO {quoted_schema}, "$user", public')
 
     async def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         await self.connection.execute(f'SET search_path TO {quoted_schema}, "$user", public')
 
     async def reset_migration_session_schema(self) -> None:
@@ -251,8 +253,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
+        normalized_schema = normalize_identifier(schema, "postgres")
         return bool(
-            await self.connection.fetchval("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", schema)
+            await self.connection.fetchval(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", normalized_schema
+            )
         )
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":

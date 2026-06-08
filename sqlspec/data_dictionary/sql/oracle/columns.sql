@@ -7,7 +7,7 @@ SELECT
     data_default AS column_default
 FROM all_tab_columns
 WHERE owner = COALESCE(:schema_name, USER)
-  AND table_name = UPPER(:table_name)
+  AND table_name = :table_name
 ORDER BY column_id;
 
 -- name: columns_by_schema

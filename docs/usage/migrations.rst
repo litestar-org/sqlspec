@@ -144,9 +144,9 @@ opt in raises ``MigrationError`` before any DDL is issued.
    * - ``oracledb`` (sync and async)
      - Supported
      - ``ALTER SESSION SET CURRENT_SCHEMA``; validates ``ALL_USERS``. The
-       schema is matched verbatim, so callers must pass the literal stored
-       identifier — typically uppercase for users created unquoted, the
-       exact case for users created with quoted identifiers.
+       schema is normalized to Oracle's stored identifier rules: lowercase
+       unquoted names are uppercased, while mixed-case and explicitly quoted
+       names are preserved.
    * - ``duckdb``
      - Supported
      - ``SET search_path``; validates ``information_schema.schemata``.

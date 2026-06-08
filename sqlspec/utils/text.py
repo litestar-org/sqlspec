@@ -12,6 +12,7 @@ from functools import lru_cache
 __all__ = (
     "camelize",
     "kebabize",
+    "normalize_identifier",
     "pascalize",
     "quote_backtick_identifier",
     "quote_identifier",
@@ -28,6 +29,7 @@ _SNAKE_CASE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])", re.UN
 _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 _SNAKE_CASE_REMOVE_NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
+_MIN_QUOTED_IDENTIFIER_LENGTH = 2
 
 
 def slugify(value: str, allow_unicode: bool = False, separator: str | None = None) -> str:
@@ -125,9 +127,7 @@ def quote_identifier(identifier: str) -> str:
     identifier-shaped values (schemas, tables, columns) into SQL where
     bind parameters are not allowed (DDL identifiers, ``SET`` commands).
 
-    Dialect-aware case-folding (Oracle uppercases unquoted identifiers,
-    PostgreSQL lowercases them) is a separate concern; callers must
-    pre-normalize when binding identifier values into metadata queries.
+    Dialect-aware case-folding is handled by ``normalize_identifier``.
 
     Args:
         identifier: SQL identifier (schema, table, column, ...).
@@ -136,6 +136,30 @@ def quote_identifier(identifier: str) -> str:
         Double-quoted, escape-safe identifier.
     """
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def normalize_identifier(identifier: str, dialect: str) -> str:
+    """Normalize an identifier-shaped value for dialect metadata lookups.
+
+    Args:
+        identifier: SQL identifier supplied by the caller.
+        dialect: SQL dialect name.
+
+    Returns:
+        Identifier in the form expected by the dialect's metadata tables.
+    """
+    value = identifier.strip()
+    if len(value) >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == '"':
+        return value[1:-1].replace('""', '"')
+    if len(value) >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == "`":
+        return value[1:-1].replace("``", "`")
+
+    normalized_dialect = dialect.lower().replace("-", "_")
+    if normalized_dialect in {"postgres", "postgresql", "cockroach", "cockroachdb"}:
+        return value.lower()
+    if normalized_dialect == "oracle" and value.islower():
+        return value.upper()
+    return value
 
 
 def quote_backtick_identifier(identifier: str) -> str:
