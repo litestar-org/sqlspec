@@ -21,7 +21,7 @@ JOIN all_cons_columns rcc
   AND cc.position = rcc.position
 WHERE c.constraint_type = 'R'
   AND c.owner = COALESCE(:schema_name, USER)
-  AND (:table_name IS NULL OR c.table_name = UPPER(:table_name));
+  AND (:table_name IS NULL OR c.table_name = :table_name);
 
 -- name: foreign_keys_by_schema
 -- dialect: oracle

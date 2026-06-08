@@ -17,7 +17,7 @@ LEFT JOIN all_constraints c
   ON c.owner = i.owner
   AND c.index_name = i.index_name
   AND c.constraint_type = 'P'
-WHERE i.table_name = UPPER(:table_name)
+WHERE i.table_name = :table_name
   AND i.owner = COALESCE(:schema_name, USER)
 GROUP BY i.index_name, i.table_name, i.uniqueness;
 

@@ -119,6 +119,34 @@ async def test_asyncpg_migration_schema_hooks() -> None:
 
 
 @pytest.mark.anyio
+async def test_asyncpg_migration_schema_hooks_normalize_unquoted_identifier() -> None:
+    connection = FakeAsyncpgConnection()
+    driver = AsyncpgDriver(connection)  # type: ignore[arg-type]
+
+    await driver.set_migration_session_schema("Tenant")
+    assert await driver.has_schema("Tenant") is True
+
+    assert connection.executed == [
+        ('SET LOCAL search_path TO "tenant", "$user", public', ()),
+        ("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", ("tenant",)),
+    ]
+
+
+@pytest.mark.anyio
+async def test_asyncpg_migration_schema_hooks_preserve_explicitly_quoted_identifier() -> None:
+    connection = FakeAsyncpgConnection()
+    driver = AsyncpgDriver(connection)  # type: ignore[arg-type]
+
+    await driver.set_migration_session_schema('"Tenant"')
+    assert await driver.has_schema('"Tenant"') is True
+
+    assert connection.executed == [
+        ('SET LOCAL search_path TO "Tenant", "$user", public', ()),
+        ("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", ("Tenant",)),
+    ]
+
+
+@pytest.mark.anyio
 async def test_asyncpg_non_transactional_migration_schema_hooks() -> None:
     connection = FakeAsyncpgConnection()
     driver = AsyncpgDriver(connection)  # type: ignore[arg-type]

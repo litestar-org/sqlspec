@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
-from sqlspec.adapters.oracledb.migrations import OracleSyncMigrationTracker
+from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
@@ -92,13 +92,56 @@ async def test_async_tracker_introspects_bare_table_name_with_schema() -> None:
     driver.execute.assert_not_awaited()
 
 
-def test_oracle_tracker_uppercases_qualified_tracking_table() -> None:
-    """Oracle tracker should qualify migration table names using Oracle's uppercase convention."""
+def test_oracle_tracker_quotes_lowercase_qualified_tracking_table() -> None:
+    """Oracle tracker should normalize lowercase names before quoting them."""
     tracker = OracleSyncMigrationTracker(version_table_name="ddl_migrations", version_table_schema="app_owner")
 
-    assert tracker.version_table == "APP_OWNER.DDL_MIGRATIONS"
+    assert tracker.version_table == '"APP_OWNER"."DDL_MIGRATIONS"'
     assert tracker.version_table_schema == "app_owner"
     assert tracker.version_table_name == "ddl_migrations"
+
+
+def test_oracle_tracker_preserves_mixed_case_qualified_tracking_table() -> None:
+    """Oracle tracker should preserve mixed-case schema/table names as quoted identifiers."""
+    tracker = OracleSyncMigrationTracker(version_table_name="DdlMigrations", version_table_schema="AppOwner")
+
+    assert tracker.version_table == '"AppOwner"."DdlMigrations"'
+    assert tracker.version_table_schema == "AppOwner"
+    assert tracker.version_table_name == "DdlMigrations"
+
+
+def test_oracle_sync_tracker_introspects_unmodified_table_name_with_schema() -> None:
+    """Oracle data-dictionary calls should preserve mixed-case configured identifiers."""
+    tracker = OracleSyncMigrationTracker(version_table_name="DdlMigrations", version_table_schema="AppOwner")
+    driver = Mock()
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": column.name}
+        for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.data_dictionary.get_columns.assert_called_once_with(driver, "DdlMigrations", schema="AppOwner")
+    driver.execute.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_oracle_async_tracker_introspects_unmodified_table_name_with_schema() -> None:
+    """Oracle async data-dictionary calls should preserve mixed-case configured identifiers."""
+    tracker = OracleAsyncMigrationTracker(version_table_name="DdlMigrations", version_table_schema="AppOwner")
+    driver = MagicMock()
+    driver.data_dictionary.get_columns = AsyncMock(
+        return_value=[
+            {"column_name": column.name}
+            for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+        ]
+    )
+    driver.execute = AsyncMock()
+
+    await tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+
+    driver.data_dictionary.get_columns.assert_awaited_once_with(driver, "DdlMigrations", schema="AppOwner")
+    driver.execute.assert_not_awaited()
 
 
 def test_sync_driver_migration_schema_hook_logs_noop(caplog: pytest.LogCaptureFixture) -> None:

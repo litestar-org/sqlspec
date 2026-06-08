@@ -57,7 +57,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import is_readable
 
 if TYPE_CHECKING:
@@ -347,14 +347,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
     def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
@@ -367,8 +369,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
+        normalized_schema = normalize_identifier(schema, "postgres")
         with self.with_cursor(self.connection) as cursor:
-            cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (schema,))
+            cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (normalized_schema,))
             return cursor.fetchone() is not None
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
@@ -834,14 +837,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 
     async def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
@@ -854,8 +859,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
+        normalized_schema = normalize_identifier(schema, "postgres")
         async with self.with_cursor(self.connection) as cursor:
-            await cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (schema,))
+            await cursor.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (normalized_schema,)
+            )
             row = await cursor.fetchone()
             return row is not None
 

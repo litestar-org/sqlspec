@@ -26,6 +26,7 @@ from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
+from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.driver import AdbcDriver
@@ -62,13 +63,22 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return None
 
     def _resolve_schema(self, dialect: str, schema: "str | None") -> "str | None":
-        if schema is not None:
-            return schema
         try:
             config = get_dialect_config(dialect)
         except ValueError:
+            return schema
+        if schema is not None:
+            return normalize_identifier(schema, config.name)
+        if config.default_schema is None:
             return None
-        return config.default_schema
+        return normalize_identifier(config.default_schema, config.name)
+
+    def _resolve_identifier(self, dialect: str, identifier: str) -> str:
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return identifier
+        return normalize_identifier(identifier, config.name)
 
     def _resolve_feature_flag(self, dialect: str, feature: str, version_info: "VersionInfo | None") -> bool:
         try:
@@ -205,7 +215,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 query_text = self._get_query_text(dialect, "columns_by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
             query_text = self._get_query_text(dialect, "columns_by_table").format(schema_prefix=schema_prefix)
-            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
+            table_name = self._resolve_identifier(dialect, table)
+            return driver.select(query_text, table_name=table_name, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if dialect == "sqlite":
             schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
@@ -222,10 +233,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(
                 self._get_query(dialect, "columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
+        table_name = self._resolve_identifier(dialect, table)
         return driver.select(
             self._get_query(dialect, "columns_by_table"),
             schema_name=schema_name,
-            table_name=table,
+            table_name=table_name,
             schema_type=ColumnMetadata,
         )
 
@@ -287,10 +299,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 self._get_query(dialect, "indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
+        table_name = self._resolve_identifier(dialect, table)
         return driver.select(
             self._get_query(dialect, "indexes_by_table"),
             schema_name=schema_name,
-            table_name=table,
+            table_name=table_name,
             schema_type=IndexMetadata,
         )
 
@@ -315,7 +328,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             query_text = self._get_query_text(dialect, "foreign_keys_by_table").format(
                 kcu_table=kcu_table, rc_table=rc_table
             )
-            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+            table_name = self._resolve_identifier(dialect, table)
+            return driver.select(
+                query_text, table_name=table_name, schema_name=schema_name, schema_type=ForeignKeyMetadata
+            )
 
         if dialect == "sqlite":
             if table is None:
@@ -334,9 +350,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             if query_text_optional is not None:
                 return driver.select(query_text_optional, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
+        resolved_table_name = self._resolve_identifier(dialect, table) if table is not None else None
         return driver.select(
             self._get_query(dialect, "foreign_keys_by_table"),
             schema_name=schema_name,
-            table_name=table,
+            table_name=resolved_table_name,
             schema_type=ForeignKeyMetadata,
         )

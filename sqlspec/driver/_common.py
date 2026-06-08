@@ -49,6 +49,7 @@ from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProt
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
+from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import (
     has_array_interface,
     has_asdict_method,
@@ -457,10 +458,16 @@ class DataDictionaryDialectMixin:
 
     def resolve_schema(self, schema: "str | None") -> "str | None":
         """Return a schema name using dialect defaults when missing."""
-        if schema is not None:
-            return schema
         config = self.get_dialect_config()
-        return config.default_schema
+        if schema is not None:
+            return normalize_identifier(schema, config.name)
+        if config.default_schema is None:
+            return None
+        return normalize_identifier(config.default_schema, config.name)
+
+    def resolve_identifier(self, identifier: str) -> str:
+        """Return a dialect-normalized identifier value."""
+        return normalize_identifier(identifier, self.get_dialect_config().name)
 
     def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
         """Resolve a feature flag using dialect config and version info."""

@@ -15,6 +15,7 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
+from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
@@ -50,9 +51,16 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
 
     def resolve_schema(self, schema: str | None) -> str | None:
         """Return a schema name using runtime dialect defaults when missing."""
+        config = self.get_dialect_config()
         if schema is not None:
-            return schema
-        return self.get_dialect_config().default_schema
+            return normalize_identifier(schema, config.name)
+        if config.default_schema is None:
+            return None
+        return normalize_identifier(config.default_schema, config.name)
+
+    def resolve_identifier(self, identifier: str) -> str:
+        """Return a runtime-dialect-normalized identifier."""
+        return normalize_identifier(identifier, self.get_dialect_config().name)
 
     def get_version(self, driver: "ArrowOdbcDriver") -> VersionInfo | None:
         """Get database version information when the runtime dialect provides a query."""
@@ -110,7 +118,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         query_name = "columns_by_table" if table is not None else "columns_by_schema"
         parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
         if table is not None:
-            parameters["table_name"] = table
+            parameters["table_name"] = self.resolve_identifier(table)
         try:
             return driver.select(self.get_query(query_name), schema_type=ColumnMetadata, **parameters)
         except SQLFileNotFoundError:
@@ -123,7 +131,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         query_name = "indexes_by_table" if table is not None else "indexes_by_schema"
         parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
         if table is not None:
-            parameters["table_name"] = table
+            parameters["table_name"] = self.resolve_identifier(table)
         try:
             return driver.select(self.get_query(query_name), schema_type=IndexMetadata, **parameters)
         except SQLFileNotFoundError:
@@ -136,7 +144,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         query_name = "foreign_keys_by_table" if table is not None else "foreign_keys_by_schema"
         parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
         if table is not None:
-            parameters["table_name"] = table
+            parameters["table_name"] = self.resolve_identifier(table)
         try:
             return driver.select(self.get_query(query_name), schema_type=ForeignKeyMetadata, **parameters)
         except SQLFileNotFoundError:

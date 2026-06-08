@@ -81,6 +81,19 @@ def test_oracle_sync_preserves_mixed_case_identifier() -> None:
     ]
 
 
+def test_oracle_sync_normalizes_lowercase_identifier() -> None:
+    cursor = FakeSyncCursor()
+    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
+
+    driver.set_migration_session_schema("tenant")
+    assert driver.has_schema("tenant") is True
+
+    assert cursor.executed == [
+        ('ALTER SESSION SET CURRENT_SCHEMA = "TENANT"', None),
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :schema_name", {"schema_name": "TENANT"}),
+    ]
+
+
 @pytest.mark.anyio
 async def test_oracle_async_migration_schema_hooks() -> None:
     cursor = FakeAsyncCursor()
