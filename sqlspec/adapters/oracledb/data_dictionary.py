@@ -26,6 +26,7 @@ from sqlspec.data_dictionary.dialects.oracle import (
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
@@ -97,9 +98,12 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
 
     def resolve_schema(self, schema: "str | None") -> "str | None":
         """Return a schema name using dialect defaults when missing."""
+        config = self.get_dialect_config()
         if schema is not None:
-            return schema
-        return self.get_dialect_config().default_schema
+            return normalize_identifier(schema, config.name)
+        if config.default_schema is None:
+            return None
+        return normalize_identifier(config.default_schema, config.name)
 
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
@@ -207,9 +211,13 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             return driver.select(
                 self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
         return driver.select(
-            self.get_query("columns_by_table"), schema_name=schema_name, table_name=table, schema_type=ColumnMetadata
+            self.get_query("columns_by_table"),
+            schema_name=schema_name,
+            table_name=table_name,
+            schema_type=ColumnMetadata,
         )
 
     def get_indexes(
@@ -222,9 +230,13 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             return driver.select(
                 self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
         return driver.select(
-            self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+            self.get_query("indexes_by_table"),
+            schema_name=schema_name,
+            table_name=table_name,
+            schema_type=IndexMetadata,
         )
 
     def get_foreign_keys(
@@ -237,11 +249,12 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             return driver.select(
                 self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return driver.select(
             self.get_query("foreign_keys_by_table"),
             schema_name=schema_name,
-            table_name=table,
+            table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
 
@@ -261,9 +274,12 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
 
     def resolve_schema(self, schema: "str | None") -> "str | None":
         """Return a schema name using dialect defaults when missing."""
+        config = self.get_dialect_config()
         if schema is not None:
-            return schema
-        return self.get_dialect_config().default_schema
+            return normalize_identifier(schema, config.name)
+        if config.default_schema is None:
+            return None
+        return normalize_identifier(config.default_schema, config.name)
 
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
@@ -371,9 +387,13 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             return await driver.select(
                 self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
         return await driver.select(
-            self.get_query("columns_by_table"), schema_name=schema_name, table_name=table, schema_type=ColumnMetadata
+            self.get_query("columns_by_table"),
+            schema_name=schema_name,
+            table_name=table_name,
+            schema_type=ColumnMetadata,
         )
 
     async def get_indexes(
@@ -386,9 +406,13 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             return await driver.select(
                 self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
         return await driver.select(
-            self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+            self.get_query("indexes_by_table"),
+            schema_name=schema_name,
+            table_name=table_name,
+            schema_type=IndexMetadata,
         )
 
     async def get_foreign_keys(
@@ -401,10 +425,11 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             return await driver.select(
                 self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return await driver.select(
             self.get_query("foreign_keys_by_table"),
             schema_name=schema_name,
-            table_name=table,
+            table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )

@@ -34,7 +34,7 @@ from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -289,7 +289,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         if not self._is_postgres:
             super().set_migration_session_schema(schema)
             return
-        quoted_schema = quote_identifier(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
+        quoted_schema = quote_identifier(normalized_schema)
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(f'SET search_path TO {quoted_schema}, "$user", public')
 
@@ -309,8 +310,11 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Return whether a PostgreSQL schema exists when using ADBC PostgreSQL."""
         if not self._is_postgres:
             return super().has_schema(schema)
+        normalized_schema = normalize_identifier(schema, "postgres")
         with self.with_cursor(self.connection) as cursor:
-            cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", parameters=[schema])
+            cursor.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", parameters=[normalized_schema]
+            )
             return cursor.fetchone() is not None
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":

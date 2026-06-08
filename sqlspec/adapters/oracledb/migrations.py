@@ -13,6 +13,7 @@ from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -41,18 +42,29 @@ class OracleMigrationTrackerMixin:
     version_table_name: str
     version_table_schema: str | None
 
+    @staticmethod
+    def _normalize_oracle_identifier(identifier: str) -> str:
+        """Return an Oracle metadata identifier without SQL quoting."""
+        return normalize_identifier(identifier, "oracle")
+
+    @classmethod
+    def _quote_oracle_identifier(cls, identifier: str) -> str:
+        """Return a quoted Oracle identifier after dialect normalization."""
+        return quote_identifier(cls._normalize_oracle_identifier(identifier))
+
     def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
-        """Return Oracle tracker table name, uppercasing qualified identifiers."""
+        """Return a safely quoted Oracle tracker table name."""
+        quoted_table_name = self._quote_oracle_identifier(version_table_name)
         if version_table_schema:
-            return f"{version_table_schema.upper()}.{version_table_name.upper()}"
-        return version_table_name
+            return f"{self._quote_oracle_identifier(version_table_schema)}.{quoted_table_name}"
+        return quoted_table_name
 
     def _get_create_table_builder(self) -> CreateTable:
         """Return an Oracle CREATE TABLE builder for the tracker table."""
-        table_name = self.version_table_name.upper() if self.version_table_schema else self.version_table_name
+        table_name = self._normalize_oracle_identifier(self.version_table_name)
         builder = sql.create_table(table_name)
         if self.version_table_schema:
-            builder.in_schema(self.version_table_schema.upper())
+            builder.in_schema(self._normalize_oracle_identifier(self.version_table_schema))
         return builder
 
     def _get_create_table_sql(self) -> CreateTable:
@@ -167,7 +179,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         try:
             if self.version_table_schema:
                 columns_data = driver.data_dictionary.get_columns(
-                    driver, self.version_table_name.upper(), schema=self.version_table_schema.upper()
+                    driver, self.version_table_name, schema=self.version_table_schema
                 )
             else:
                 columns_data = driver.data_dictionary.get_columns(driver, self.version_table_name)
@@ -368,7 +380,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         try:
             if self.version_table_schema:
                 columns_data = await driver.data_dictionary.get_columns(
-                    driver, self.version_table_name.upper(), schema=self.version_table_schema.upper()
+                    driver, self.version_table_name, schema=self.version_table_schema
                 )
             else:
                 columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)

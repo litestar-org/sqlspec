@@ -6,7 +6,7 @@ camelCase conversion, and snake_case conversion.
 
 import pytest
 
-from sqlspec.utils.text import camelize, slugify, snake_case
+from sqlspec.utils.text import camelize, normalize_identifier, slugify, snake_case
 
 
 def test_slugify_basic() -> None:
@@ -184,6 +184,36 @@ def test_text_utilities_integration() -> None:
 
     slugified = slugify(original)
     assert slugified == "hello-world-test"
+
+
+@pytest.mark.parametrize(
+    ("dialect", "identifier", "expected"),
+    [
+        ("postgres", "MyApp", "myapp"),
+        ("postgresql", "MyApp", "myapp"),
+        ("cockroachdb", "MyApp", "myapp"),
+        ("oracle", "myapp", "MYAPP"),
+        ("oracle", "MYAPP", "MYAPP"),
+        ("oracle", "MixedCase", "MixedCase"),
+        ("sqlite", "MixedCase", "MixedCase"),
+    ],
+)
+def test_normalize_identifier_applies_dialect_case_rules(dialect: str, identifier: str, expected: str) -> None:
+    assert normalize_identifier(identifier, dialect) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "identifier", "expected"),
+    [
+        ("postgres", '"MixedCase"', "MixedCase"),
+        ("oracle", '"MixedCase"', "MixedCase"),
+        ("mysql", "`MixedCase`", "MixedCase"),
+    ],
+)
+def test_normalize_identifier_preserves_explicitly_quoted_identifiers(
+    dialect: str, identifier: str, expected: str
+) -> None:
+    assert normalize_identifier(identifier, dialect) == expected
 
 
 @pytest.mark.parametrize(

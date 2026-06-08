@@ -81,9 +81,13 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
                 self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
 
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
         return await driver.select(
-            self.get_query("columns_by_table"), schema_name=schema_name, table_name=table, schema_type=ColumnMetadata
+            self.get_query("columns_by_table"),
+            schema_name=schema_name,
+            table_name=table_name,
+            schema_type=ColumnMetadata,
         )
 
     async def get_indexes(
@@ -97,9 +101,13 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
                 self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
         return await driver.select(
-            self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+            self.get_query("indexes_by_table"),
+            schema_name=schema_name,
+            table_name=table_name,
+            schema_type=IndexMetadata,
         )
 
     async def get_foreign_keys(
@@ -112,10 +120,11 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
             return await driver.select(
                 self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        table_name = self.resolve_identifier(table)
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return await driver.select(
             self.get_query("foreign_keys_by_table"),
             schema_name=schema_name,
-            table_name=table,
+            table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
