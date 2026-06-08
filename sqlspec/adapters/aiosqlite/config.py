@@ -1,12 +1,18 @@
 """Aiosqlite database configuration."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from os import PathLike
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteSessionContext
+from sqlspec.adapters.aiosqlite._typing import (
+    AiosqliteConnection,
+    AiosqliteConnectionFactory,
+    AiosqliteCursor,
+    AiosqliteSessionContext,
+)
 from sqlspec.adapters.aiosqlite.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
@@ -31,26 +37,34 @@ __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteDriverFeatu
 
 logger = get_logger("sqlspec.adapters.aiosqlite")
 
+SQLiteIsolationLevel = Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"] | None
+SQLiteAutocommitMode = bool | Literal[-1]
+
 
 class AiosqliteConnectionParams(TypedDict):
     """TypedDict for aiosqlite connection parameters."""
 
-    database: NotRequired[str]
+    database: NotRequired[str | PathLike[str]]
     timeout: NotRequired[float]
     detect_types: NotRequired[int]
-    isolation_level: NotRequired[str | None]
+    isolation_level: NotRequired[SQLiteIsolationLevel]
     check_same_thread: NotRequired[bool]
+    factory: "NotRequired[AiosqliteConnectionFactory | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
+    iter_chunk_size: NotRequired[int]
+    autocommit: NotRequired[SQLiteAutocommitMode]
 
 
 class AiosqlitePoolParams(AiosqliteConnectionParams):
     """TypedDict for aiosqlite pool parameters, inheriting connection parameters."""
 
     pool_size: NotRequired[int]
+    min_size: NotRequired[int]
     connect_timeout: NotRequired[float]
     idle_timeout: NotRequired[float]
     operation_timeout: NotRequired[float]
+    health_check_interval: NotRequired[float]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -222,16 +236,24 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             AiosqliteConnectionPool: The connection pool instance.
         """
         pool_size = self.connection_config.get("pool_size") or 5
+        min_size = self.connection_config.get("min_size")
+        if min_size is None:
+            min_size = 0
         connect_timeout = self.connection_config.get("connect_timeout") or 30.0
         idle_timeout = self.connection_config.get("idle_timeout") or 24 * 60 * 60
         operation_timeout = self.connection_config.get("operation_timeout") or 10.0
+        health_check_interval = self.connection_config.get("health_check_interval")
+        if health_check_interval is None:
+            health_check_interval = 30.0
 
         pool = AiosqliteConnectionPool(
             connection_parameters=build_connection_config(self.connection_config),
             pool_size=pool_size,
+            min_size=min_size,
             connect_timeout=connect_timeout,
             idle_timeout=idle_timeout,
             operation_timeout=operation_timeout,
+            health_check_interval=health_check_interval,
             on_connection_create=self._user_connection_hook,
         )
 
@@ -261,6 +283,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         namespace.update({
             "AiosqliteConnectionContext": AiosqliteConnectionContext,
             "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionFactory": AiosqliteConnectionFactory,
             "AiosqliteConnectionParams": AiosqliteConnectionParams,
             "AiosqliteConnectionPool": AiosqliteConnectionPool,
             "AiosqliteCursor": AiosqliteCursor,

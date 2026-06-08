@@ -1,5 +1,6 @@
 """AIOSQLite adapter compiled helpers."""
 
+import sys
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -159,15 +160,19 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     """
     excluded_keys = {
         "pool_size",
+        "min_size",
         "connect_timeout",
         "idle_timeout",
         "operation_timeout",
+        "health_check_interval",
         "extra",
         "pool_min_size",
         "pool_max_size",
         "pool_timeout",
         "pool_recycle_seconds",
     }
+    if sys.version_info < (3, 12):
+        excluded_keys.add("autocommit")
     return {key: value for key, value in connection_config.items() if key not in excluded_keys}
 
 
