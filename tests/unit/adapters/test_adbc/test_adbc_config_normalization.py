@@ -119,6 +119,86 @@ def test_connection_config_dict_flattens_db_kwargs_for_non_bigquery() -> None:
     assert resolved["foo"] == "bar"
 
 
+def test_flightsql_lifts_username_password_into_db_kwargs() -> None:
+    """Top-level username/password move into db_kwargs for GizmoSQL."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "username": "alice", "password": "secret"})
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"] == {"username": "alice", "password": "secret"}
+    assert "username" not in resolved
+    assert "password" not in resolved
+
+
+def test_flightsql_lifts_tls_skip_verify_true() -> None:
+    """tls_skip_verify=True maps to the FlightSQL ADBC option key."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": True})
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
+
+
+def test_flightsql_lifts_tls_skip_verify_false() -> None:
+    """tls_skip_verify=False maps to the FlightSQL ADBC option key."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": False})
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "false"
+
+
+def test_flightsql_lifts_authorization_header() -> None:
+    """authorization_header maps to the FlightSQL ADBC option key."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "authorization_header": "Bearer token"})
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["adbc.flight.sql.authorization_header"] == "Bearer token"
+
+
+def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts() -> None:
+    """User-supplied db_kwargs entries take precedence over top-level shortcuts."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "username": "alice",
+            "tls_skip_verify": False,
+            "db_kwargs": {"username": "override", "adbc.flight.sql.client_option.tls_skip_verify": "true"},
+        }
+    )
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["db_kwargs"]["username"] == "override"
+    assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
+
+
+def test_flightsql_gizmosql_backend_is_stripped_from_outgoing_config() -> None:
+    """gizmosql_backend drives dialect selection but does not leak to FlightSQL."""
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"})
+    resolved = _get_connection_config_dict(config)
+
+    assert "gizmosql_backend" not in resolved
+    assert config.statement_config.dialect == "sqlite"
+
+
+def test_postgres_config_unchanged_by_flightsql_branch() -> None:
+    """PostgreSQL keeps historical non-BigQuery db_kwargs flattening behavior."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgres", "username": "alice", "db_kwargs": {"sslmode": "require"}}
+    )
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["username"] == "alice"
+    assert resolved["sslmode"] == "require"
+    assert "db_kwargs" not in resolved
+
+
+def test_duckdb_config_unchanged_by_flightsql_branch() -> None:
+    """DuckDB configs are not affected by the FlightSQL branch."""
+    config = AdbcConfig(connection_config={"driver_name": "duckdb", "path": "/tmp/sqlspec-test.duckdb"})
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["path"] == "/tmp/sqlspec-test.duckdb"
+    assert "db_kwargs" not in resolved
+
+
 def test_gizmosql_default_dialect_is_duckdb() -> None:
     """Default GizmoSQL connections to DuckDB dialect."""
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})

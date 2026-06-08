@@ -155,6 +155,9 @@ _PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ..
 )
 
 _BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "token")
+_FLIGHTSQL_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("username", "password")
+_FLIGHTSQL_TLS_SKIP_VERIFY_KEY: Final[str] = "adbc.flight.sql.client_option.tls_skip_verify"
+_FLIGHTSQL_AUTHORIZATION_HEADER_KEY: Final[str] = "adbc.flight.sql.authorization_header"
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 
 
@@ -173,7 +176,15 @@ def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_diale
     try:
         driver_info = connection.adbc_get_info()
         vendor_name = driver_info.get("vendor_name", "").lower()
+        vendor_version = driver_info.get("vendor_version", "").lower()
         driver_name = driver_info.get("driver_name", "").lower()
+
+        if "gizmosql" in vendor_name or "gizmosql" in vendor_version:
+            if "sqlite" in vendor_version:
+                return "sqlite"
+            if "duckdb" in vendor_version:
+                return "duckdb"
+            return "duckdb"
 
         for dialect, patterns in DIALECT_PATTERNS.items():
             for pattern in patterns:
@@ -371,6 +382,37 @@ def resolve_parameter_styles(driver_path: str | None, logger: Any | None = None)
     return (("qmark",), "qmark")
 
 
+def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
+    try:
+        from adbc_driver_flightsql import DatabaseOptions
+    except ImportError:
+        return _FLIGHTSQL_TLS_SKIP_VERIFY_KEY, _FLIGHTSQL_AUTHORIZATION_HEADER_KEY
+    return DatabaseOptions.TLS_SKIP_VERIFY.value, DatabaseOptions.AUTHORIZATION_HEADER.value
+
+
+def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
+    db_kwargs = config.pop("db_kwargs", None)
+    db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+    tls_skip_verify_key, authorization_header_key = _resolve_flightsql_db_kwargs_keys()
+
+    for field in _FLIGHTSQL_DB_KWARGS_FIELDS:
+        if field in config:
+            db_kwargs_dict.setdefault(field, config.pop(field))
+
+    if "tls_skip_verify" in config:
+        tls_skip_verify = config.pop("tls_skip_verify")
+        if isinstance(tls_skip_verify, bool):
+            tls_skip_verify = str(tls_skip_verify).lower()
+        db_kwargs_dict.setdefault(tls_skip_verify_key, tls_skip_verify)
+
+    if "authorization_header" in config:
+        db_kwargs_dict.setdefault(authorization_header_key, config.pop("authorization_header"))
+
+    config.pop("gizmosql_backend", None)
+    if db_kwargs_dict:
+        config["db_kwargs"] = db_kwargs_dict
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build a normalized connection configuration dictionary.
 
@@ -396,7 +438,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["path"] = uri[9:]
         config.pop("uri", None)
 
-    if isinstance(driver_name, str) and driver_kind == "bigquery":
+    if driver_kind in {"gizmosql", "flightsql"}:
+        _lift_flightsql_db_kwargs(config)
+    elif isinstance(driver_name, str) and driver_kind == "bigquery":
         db_kwargs = config.get("db_kwargs")
         db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
         for param in _BIGQUERY_DB_KWARGS_FIELDS:

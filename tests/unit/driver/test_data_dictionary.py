@@ -24,7 +24,7 @@ from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary,
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
-from sqlspec.data_dictionary import VersionInfo
+from sqlspec.data_dictionary import IndexMetadata, VersionInfo
 from sqlspec.driver import SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
 
@@ -363,6 +363,18 @@ def test_adbc_get_version_duckdb() -> None:
     assert version.major == 0
     assert version.minor == 9
     assert version.patch == 2
+
+
+def test_adbc_duckdb_indexes_use_parameterless_query() -> None:
+    """DuckDB ADBC index queries should not receive unused bind parameters."""
+    mock_driver = Mock()
+    mock_driver.dialect = "duckdb"
+    mock_driver.select.return_value = []
+
+    indexes = AdbcDataDictionary().get_indexes(mock_driver, table="example", schema="main")
+
+    assert indexes == []
+    assert mock_driver.select.call_args.kwargs == {"schema_type": IndexMetadata}
 
 
 def test_adbc_get_version_bigquery() -> None:
