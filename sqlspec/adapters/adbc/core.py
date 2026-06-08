@@ -418,9 +418,13 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["path"] = uri[9:]
         config.pop("uri", None)
 
+    legacy_entrypoint = config.pop("adbc_driver_manager_entrypoint", None)
+    if legacy_entrypoint is not None:
+        config.setdefault("entrypoint", legacy_entrypoint)
+
     if driver_kind in {"gizmosql", "flightsql"}:
         _lift_flightsql_db_kwargs(config)
-    elif isinstance(driver_name, str) and driver_kind == "bigquery":
+    elif driver_kind == "bigquery":
         db_kwargs = config.get("db_kwargs")
         db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
         for param in _BIGQUERY_DB_KWARGS_FIELDS:
@@ -428,10 +432,6 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
                 db_kwargs_dict[param] = config.pop(param)
         if db_kwargs_dict:
             config["db_kwargs"] = db_kwargs_dict
-    elif isinstance(driver_name, str) and "db_kwargs" in config and driver_kind != "bigquery":
-        db_kwargs = config.pop("db_kwargs")
-        if isinstance(db_kwargs, dict):
-            config.update(db_kwargs)
 
     config.pop("driver_name", None)
 

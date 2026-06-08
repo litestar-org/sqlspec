@@ -42,6 +42,8 @@ class AdbcConnectionParams(TypedDict):
     driver_name: NotRequired[str]
     db_kwargs: NotRequired[dict[str, Any]]
     conn_kwargs: NotRequired[dict[str, Any]]
+    entrypoint: NotRequired[str]
+    profile: NotRequired[str]
     adbc_driver_manager_entrypoint: NotRequired[str]
     autocommit: NotRequired[bool]
     isolation_level: NotRequired[str]

@@ -1,8 +1,9 @@
 """Unit tests for ADBC config normalization helpers."""
 
-from typing import Any
+from typing import Any, get_type_hints
 
 from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.config import AdbcConnectionParams
 from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_name_from_config
 
 
@@ -111,12 +112,22 @@ def test_connection_config_dict_moves_bigquery_fields_for_bq_alias() -> None:
     assert resolved["db_kwargs"]["dataset_id"] == "d"
 
 
-def test_connection_config_dict_flattens_db_kwargs_for_non_bigquery() -> None:
-    """Flatten db_kwargs into top-level for non-BigQuery drivers."""
+def test_connection_config_dict_moves_bigquery_fields_for_bigquery_uri() -> None:
+    """Move BigQuery fields into db_kwargs when the driver is inferred from the URI."""
+    config = AdbcConfig(connection_config={"uri": "bigquery://", "project_id": "p", "dataset_id": "d"})
+    resolved = _get_connection_config_dict(config)
+    assert "project_id" not in resolved
+    assert "dataset_id" not in resolved
+    assert resolved["db_kwargs"]["project_id"] == "p"
+    assert resolved["db_kwargs"]["dataset_id"] == "d"
+
+
+def test_connection_config_dict_preserves_db_kwargs_for_non_bigquery() -> None:
+    """Preserve db_kwargs for drivers whose dbapi.connect accepts nested database kwargs."""
     config = AdbcConfig(connection_config={"driver_name": "postgres", "db_kwargs": {"foo": "bar"}})
     resolved = _get_connection_config_dict(config)
-    assert "db_kwargs" not in resolved
-    assert resolved["foo"] == "bar"
+    assert resolved["db_kwargs"] == {"foo": "bar"}
+    assert "foo" not in resolved
 
 
 def test_flightsql_lifts_username_password_into_db_kwargs() -> None:
@@ -179,15 +190,14 @@ def test_flightsql_gizmosql_backend_is_stripped_from_outgoing_config() -> None:
 
 
 def test_postgres_config_unchanged_by_flightsql_branch() -> None:
-    """PostgreSQL keeps historical non-BigQuery db_kwargs flattening behavior."""
+    """PostgreSQL keeps db_kwargs nested while preserving top-level connection shortcuts."""
     config = AdbcConfig(
         connection_config={"driver_name": "postgres", "username": "alice", "db_kwargs": {"sslmode": "require"}}
     )
     resolved = _get_connection_config_dict(config)
 
     assert resolved["username"] == "alice"
-    assert resolved["sslmode"] == "require"
-    assert "db_kwargs" not in resolved
+    assert resolved["db_kwargs"] == {"sslmode": "require"}
 
 
 def test_duckdb_config_unchanged_by_flightsql_branch() -> None:
@@ -197,6 +207,31 @@ def test_duckdb_config_unchanged_by_flightsql_branch() -> None:
 
     assert resolved["path"] == "/tmp/sqlspec-test.duckdb"
     assert "db_kwargs" not in resolved
+
+
+def test_adbc_connection_params_include_current_driver_manager_keys() -> None:
+    """Typed config should include current driver-manager keys and the legacy alias."""
+    annotations = get_type_hints(AdbcConnectionParams, include_extras=True)
+
+    assert "entrypoint" in annotations
+    assert "profile" in annotations
+    assert "adbc_driver_manager_entrypoint" in annotations
+
+
+def test_legacy_entrypoint_alias_normalizes_to_entrypoint() -> None:
+    """Legacy adbc_driver_manager_entrypoint should normalize to current entrypoint."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "postgres",
+            "adbc_driver_manager_entrypoint": "PostgreSQL",
+            "profile": "analytics",
+        }
+    )
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["entrypoint"] == "PostgreSQL"
+    assert resolved["profile"] == "analytics"
+    assert "adbc_driver_manager_entrypoint" not in resolved
 
 
 def test_gizmosql_default_dialect_is_duckdb() -> None:
