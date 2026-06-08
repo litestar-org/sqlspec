@@ -1,7 +1,8 @@
 """SQLite database configuration with thread-local connections."""
 
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from os import PathLike
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -28,14 +29,19 @@ __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
 class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
 
-    database: NotRequired[str]
+    database: NotRequired[str | PathLike[str]]
     timeout: NotRequired[float]
     detect_types: NotRequired[int]
-    isolation_level: "NotRequired[str | None]"
+    isolation_level: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"] | None]
     check_same_thread: NotRequired[bool]
     factory: "NotRequired[type[SqliteConnection] | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
+    autocommit: NotRequired[bool]
+    pool_recycle_seconds: NotRequired[int]
+    health_check_interval: NotRequired[float]
+    enable_optimizations: NotRequired[bool]
+    extra: NotRequired[dict[str, Any]]
 
 
 class SqliteDriverFeatures(TypedDict):
@@ -216,6 +222,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """
         namespace = super().get_signature_namespace()
         namespace.update({
+            "PathLike": PathLike,
+            "Literal": Literal,
             "SqliteConnectionContext": SqliteConnectionContext,
             "SqliteConnection": SqliteConnection,
             "SqliteConnectionParams": SqliteConnectionParams,

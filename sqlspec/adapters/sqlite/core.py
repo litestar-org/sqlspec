@@ -1,5 +1,7 @@
 """SQLite adapter compiled helpers."""
 
+import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -26,7 +28,7 @@ from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_co
 from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
 __all__ = (
     "apply_driver_features",
@@ -57,6 +59,7 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT = sys.version_info >= (3, 12)
 
 
 _TIME_TO_ISO = time_iso_convert
@@ -167,7 +170,24 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         "pool_recycle_seconds",
         "extra",
     }
-    return {key: value for key, value in connection_config.items() if value is not None and key not in excluded_keys}
+    connection_parameters = {
+        key: value
+        for key, value in connection_config.items()
+        if key not in excluded_keys
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
+
+    extra = connection_config.get("extra")
+    if isinstance(extra, Mapping):
+        connection_parameters.update({
+            key: value
+            for key, value in extra.items()
+            if (value is not None or key == "isolation_level")
+            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+        })
+
+    return connection_parameters
 
 
 def _create_sqlite_error(
