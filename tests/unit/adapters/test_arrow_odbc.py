@@ -9,7 +9,10 @@ pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import (
     ArrowOdbcConfig,
+    ArrowOdbcConnectionParams,
     ArrowOdbcDriver,
+    ArrowOdbcDriverFeatures,
+    build_connection_config,
     odbc_type_to_arrow,
     resolve_dialect_from_dbms_name,
 )
@@ -187,6 +190,43 @@ def test_arrow_odbc_config_connects_with_verified_keyword_names(monkeypatch: Any
 
     assert calls == [("Driver={ODBC Driver 18 for SQL Server};", {"login_timeout_sec": 3, "autocommit": False})]
     assert connection.closed is True
+
+
+def test_arrow_odbc_connection_params_declares_routed_security_keys() -> None:
+    """Connection params should type the ODBC security keys routed by core."""
+    expected_keys = {"trusted_connection", "trust_server_certificate", "encrypt"}
+
+    assert expected_keys.issubset(ArrowOdbcConnectionParams.__annotations__)
+
+
+def test_arrow_odbc_driver_features_declares_json_serializers() -> None:
+    """Driver features should type the JSON hooks already defaulted by core."""
+    expected_keys = {"json_serializer", "json_deserializer"}
+
+    assert expected_keys.issubset(ArrowOdbcDriverFeatures.__annotations__)
+
+
+def test_arrow_odbc_build_connection_config_formats_security_fields_and_kwargs() -> None:
+    """Routed security fields should become canonical ODBC string keys."""
+    connection_string, kwargs = build_connection_config({
+        "driver": "ODBC Driver 18 for SQL Server",
+        "server": "localhost",
+        "database": "app",
+        "uid": "sa",
+        "pwd": "secret",
+        "trusted_connection": True,
+        "trust_server_certificate": True,
+        "encrypt": "mandatory",
+        "login_timeout": 7,
+        "packet_size": 8192,
+        "autocommit": True,
+    })
+
+    assert connection_string == (
+        "Driver=ODBC Driver 18 for SQL Server;Server=localhost;Database=app;UID=sa;PWD=secret;"
+        "Trusted_Connection=yes;TrustServerCertificate=yes;Encrypt=mandatory;"
+    )
+    assert kwargs == {"login_timeout_sec": 7, "packet_size": 8192, "autocommit": True}
 
 
 def test_arrow_odbc_session_release_allows_connections_without_close(monkeypatch: Any) -> None:
