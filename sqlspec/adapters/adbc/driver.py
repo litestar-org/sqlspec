@@ -328,39 +328,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         return AdbcCursor(connection)
 
-    @staticmethod
-    def _resolve_count_result_rowcount(cursor: "AdbcRawCursor", *, fallback: int) -> int:
-        """Consume ADBC count result streams and return their row count."""
-        if not cursor.description:
-            return fallback
-        try:
-            rows = cursor.fetchall()
-        except Exception:
-            return fallback
-        if not rows:
-            return fallback
-
-        first_row = rows[0]
-        if isinstance(first_row, dict):
-            first_value = next(iter(first_row.values()), None)
-        elif isinstance(first_row, (tuple, list)) and first_row:
-            first_value = first_row[0]
-        else:
-            first_value = first_row
-
-        if isinstance(first_value, int):
-            return first_value
-        return fallback
-
-    @staticmethod
-    def _detect_flightsql_connection(connection: "AdbcConnection") -> bool:
-        try:
-            driver_info = connection.adbc_get_info()
-        except Exception:
-            return False
-        driver_name = str(driver_info.get("driver_name", "")).lower()
-        return "flight sql" in driver_name or "flightsql" in driver_name
-
     def handle_database_exceptions(self) -> "AdbcExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
@@ -544,19 +511,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Resolve rowcount from ADBC cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        ADBC uses explicit BEGIN and does not expose reliable transaction state.
-
-        Returns:
-            False - ADBC requires explicit transaction management.
-        """
-        return False
-
-    def _resolve_column_names(self, description: Any) -> list[str]:
-        return resolve_column_names(description, self._column_name_cache)
-
     def prepare_driver_parameters(
         self,
         parameters: Any,
@@ -604,6 +558,52 @@ class AdbcDriver(SyncDriverAdapterBase):
             )
 
         return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        ADBC uses explicit BEGIN and does not expose reliable transaction state.
+
+        Returns:
+            False - ADBC requires explicit transaction management.
+        """
+        return False
+
+    @staticmethod
+    def _detect_flightsql_connection(connection: "AdbcConnection") -> bool:
+        try:
+            driver_info = connection.adbc_get_info()
+        except Exception:
+            return False
+        driver_name = str(driver_info.get("driver_name", "")).lower()
+        return "flight sql" in driver_name or "flightsql" in driver_name
+
+    def _resolve_column_names(self, description: Any) -> list[str]:
+        return resolve_column_names(description, self._column_name_cache)
+
+    @staticmethod
+    def _resolve_count_result_rowcount(cursor: "AdbcRawCursor", *, fallback: int) -> int:
+        """Consume ADBC count result streams and return their row count."""
+        if not cursor.description:
+            return fallback
+        try:
+            rows = cursor.fetchall()
+        except Exception:
+            return fallback
+        if not rows:
+            return fallback
+
+        first_row = rows[0]
+        if isinstance(first_row, dict):
+            first_value = next(iter(first_row.values()), None)
+        elif isinstance(first_row, (tuple, list)) and first_row:
+            first_value = first_row[0]
+        else:
+            first_value = first_row
+
+        if isinstance(first_value, int):
+            return first_value
+        return fallback
 
 
 register_driver_profile("adbc", driver_profile)
