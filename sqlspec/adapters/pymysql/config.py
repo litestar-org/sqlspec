@@ -1,10 +1,12 @@
 """PyMySQL database configuration."""
 
+import ssl
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlSessionContext
+from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlRawCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandler
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
@@ -14,12 +16,43 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
-__all__ = ("PyMysqlConfig", "PyMysqlConnectionParams", "PyMysqlDriverFeatures", "PyMysqlPoolParams")
+__all__ = (
+    "PyMysqlConfig",
+    "PyMysqlConnectionParams",
+    "PyMysqlConverter",
+    "PyMysqlDriverFeatures",
+    "PyMysqlPoolParams",
+    "PyMysqlSslConfig",
+    "PyMysqlSslParams",
+    "PyMysqlTimeout",
+)
+
+
+PyMysqlConverter = Mapping[int | type[Any], Callable[..., Any]]
+PyMysqlTimeout = int | float
+
+
+class PyMysqlSslParams(TypedDict):
+    """Mapping-style PyMySQL SSL parameters.
+
+    Passing an ``ssl`` mapping is deprecated by PyMySQL but remains supported
+    for compatibility with existing SQLSpec configs.
+    """
+
+    ca: NotRequired[str]
+    capath: NotRequired[str]
+    cert: NotRequired[str]
+    key: NotRequired[str]
+    password: NotRequired[str]
+    cipher: NotRequired[str]
+    check_hostname: NotRequired[bool]
+    verify_mode: NotRequired[bool | int | str]
+
+
+PyMysqlSslConfig = ssl.SSLContext | PyMysqlSslParams | Mapping[str, Any]
 
 
 class PyMysqlConnectionParams(TypedDict):
@@ -32,15 +65,35 @@ class PyMysqlConnectionParams(TypedDict):
     port: NotRequired[int]
     unix_socket: NotRequired[str]
     charset: NotRequired[str]
-    connect_timeout: NotRequired[int]
-    read_timeout: NotRequired[int]
-    write_timeout: NotRequired[int]
-    autocommit: NotRequired[bool]
-    ssl: NotRequired["dict[str, Any]"]
-    client_flag: NotRequired[int]
-    cursorclass: NotRequired[type]
-    init_command: NotRequired[str]
+    collation: NotRequired[str]
     sql_mode: NotRequired[str]
+    read_default_file: NotRequired[str]
+    read_default_group: NotRequired[str]
+    conv: NotRequired[PyMysqlConverter]
+    use_unicode: NotRequired[bool]
+    client_flag: NotRequired[int]
+    cursorclass: NotRequired[type[PyMysqlRawCursor]]
+    init_command: NotRequired[str]
+    connect_timeout: NotRequired[PyMysqlTimeout]
+    read_timeout: NotRequired[PyMysqlTimeout]
+    write_timeout: NotRequired[PyMysqlTimeout]
+    autocommit: NotRequired[bool]
+    local_infile: NotRequired[bool]
+    max_allowed_packet: NotRequired[int]
+    defer_connect: NotRequired[bool]
+    auth_plugin_map: NotRequired[Mapping[str, type[Any]]]
+    bind_address: NotRequired[str]
+    binary_prefix: NotRequired[bool]
+    program_name: NotRequired[str]
+    server_public_key: NotRequired[str | bytes]
+    ssl: NotRequired[PyMysqlSslConfig]
+    ssl_ca: NotRequired[str]
+    ssl_cert: NotRequired[str]
+    ssl_disabled: NotRequired[bool]
+    ssl_key: NotRequired[str]
+    ssl_key_password: NotRequired[str]
+    ssl_verify_cert: NotRequired[bool]
+    ssl_verify_identity: NotRequired[bool]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -113,6 +166,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         connection_config = normalize_connection_config(connection_config)
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
+        connection_config.setdefault("local_infile", False)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
