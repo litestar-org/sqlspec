@@ -5,7 +5,8 @@ from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
-from litestar.params import Dependency
+from litestar.di import NamedDependency
+from litestar.params import SkipValidation
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
@@ -25,8 +26,6 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol, DriverT
     from sqlspec.typing import ConnectionT, PoolT
 
-SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
-
 __all__ = (
     "SESSION_TERMINUS_ASGI_EVENTS",
     "autocommit_handler_maker",
@@ -36,6 +35,8 @@ __all__ = (
     "pool_provider_maker",
     "session_provider_maker",
 )
+
+SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 
 
 def manual_handler_maker(
@@ -280,6 +281,9 @@ def session_provider_maker(
         The session provider function.
     """
 
+    # This provider intentionally stays out of mypyc: it combines *args/**kwargs
+    # with yield in async def, participates in Litestar's @contextlib.asynccontextmanager
+    # dependency wrapping, and mutates __signature__/__annotations__ at runtime.
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
         connection_obj = args[0] if args else kwargs.get(connection_dependency_key)
         yield cast(
@@ -292,12 +296,12 @@ def session_provider_maker(
         )  # pyright: ignore
 
     conn_type_annotation = config.connection_type
+    injected_conn_annotation = SkipValidation[NamedDependency[conn_type_annotation]]  # type: ignore[valid-type]
 
     db_conn_param = inspect.Parameter(
         name=connection_dependency_key,
         kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        annotation=conn_type_annotation,
-        default=Dependency(skip_validation=True),
+        annotation=injected_conn_annotation,
     )
 
     provider_signature = inspect.Signature(
@@ -310,7 +314,7 @@ def session_provider_maker(
     if provide_session.__annotations__ is None:
         provide_session.__annotations__ = {}
 
-    provide_session.__annotations__[connection_dependency_key] = conn_type_annotation
+    provide_session.__annotations__[connection_dependency_key] = injected_conn_annotation
     provide_session.__annotations__["return"] = AsyncGenerator[config.driver_type, None]  # type: ignore[name-defined]
 
     return provide_session

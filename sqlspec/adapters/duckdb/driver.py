@@ -17,10 +17,9 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
-from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
-from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
@@ -37,8 +36,6 @@ if TYPE_CHECKING:
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
 logger = get_logger("sqlspec.adapters.duckdb")
-
-_type_converter = DuckDBOutputConverter()
 
 
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
@@ -85,8 +82,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config.replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-
-        statement_config = apply_driver_features(statement_config, driver_features)
+            statement_config = apply_driver_features(statement_config, driver_features)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: DuckDBDataDictionary | None = None
@@ -275,11 +271,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         Returns:
             ArrowResult with native Arrow data
-        Example:
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM users WHERE age > ?", 18
-            ... )
-            >>> df = result.to_pandas()  # Fast zero-copy conversion
         """
         ensure_pyarrow()
 
@@ -292,10 +283,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         # Execute query and get native Arrow
         with self.with_cursor(self.connection) as cursor, exc_handler:
-            if cursor is None:
-                msg = "Failed to create cursor"
-                raise DatabaseConnectionError(msg)
-
             # Get compiled SQL and parameters
             sql, driver_params = self._get_compiled_sql(prepared_statement, config)
 
@@ -303,8 +290,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             cursor.execute(sql, driver_params or ())
 
             # DuckDB native Arrow (zero-copy!)
-            arrow_reader = cursor.arrow()
-            arrow_table = arrow_reader.read_all()
+            arrow_table = cursor.to_arrow_table()
 
             arrow_result = build_arrow_result_from_table(
                 prepared_statement,
@@ -433,6 +419,3 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
 
 register_driver_profile("duckdb", driver_profile)
-
-
-MODIFYING_OPERATIONS: "tuple[str, ...]" = ("INSERT", "UPDATE", "DELETE")

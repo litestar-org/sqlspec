@@ -23,6 +23,8 @@ if not TYPE_CHECKING:
     PyMysqlConnection = pymysql.connections.Connection
     PyMysqlRawCursor = pymysql.cursors.Cursor
 
+__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")
+
 
 class PyMysqlCursor:
     """Context manager for PyMySQL cursor operations."""
@@ -87,6 +89,3 @@ class PyMysqlSessionContext:
             self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")

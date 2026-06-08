@@ -38,16 +38,12 @@ if TYPE_CHECKING:
     OracleAsyncConnectionPool: TypeAlias = AsyncConnectionPool
     OracleSyncRawCursor: TypeAlias = Cursor
     OracleAsyncRawCursor: TypeAlias = AsyncCursor
-    OracleVectorType: TypeAlias = int
 
 if not TYPE_CHECKING:
     try:
         from oracledb import DB_TYPE_VECTOR
-
-        OracleVectorType = int
     except ImportError:
         DB_TYPE_VECTOR = None
-        OracleVectorType = int
 
     OracleSyncConnection = Connection
     OracleAsyncConnection = AsyncConnection
@@ -55,6 +51,30 @@ if not TYPE_CHECKING:
     OracleAsyncConnectionPool = AsyncConnectionPool
     OracleSyncRawCursor = Cursor
     OracleAsyncRawCursor = AsyncCursor
+
+__all__ = (
+    "AQMSG_INVISIBLE",
+    "AQMSG_PAYLOAD_TYPE_JSON",
+    "AQMSG_VISIBLE",
+    "DB_TYPE_BLOB",
+    "DB_TYPE_CLOB",
+    "DB_TYPE_JSON",
+    "DB_TYPE_RAW",
+    "DB_TYPE_VECTOR",
+    "AQDequeueOptions",
+    "DatabaseError",
+    "OracleAsyncConnection",
+    "OracleAsyncConnectionPool",
+    "OracleAsyncCursor",
+    "OracleAsyncRawCursor",
+    "OracleAsyncSessionContext",
+    "OraclePipelineDriver",
+    "OracleSyncConnection",
+    "OracleSyncConnectionPool",
+    "OracleSyncCursor",
+    "OracleSyncRawCursor",
+    "OracleSyncSessionContext",
+)
 
 AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
 AQMSG_VISIBLE: int | None = getattr(_oracledb, "AQMSG_VISIBLE", None)
@@ -93,14 +113,9 @@ class OracleAsyncCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+    async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
-                # Oracle async cursors have a synchronous close method
-                # but we need to ensure proper cleanup in the event loop context
                 self.cursor.close()
 
 
@@ -230,29 +245,3 @@ class OracleAsyncSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "AQMSG_INVISIBLE",
-    "AQMSG_PAYLOAD_TYPE_JSON",
-    "AQMSG_VISIBLE",
-    "DB_TYPE_BLOB",
-    "DB_TYPE_CLOB",
-    "DB_TYPE_JSON",
-    "DB_TYPE_RAW",
-    "DB_TYPE_VECTOR",
-    "AQDequeueOptions",
-    "DatabaseError",
-    "OracleAsyncConnection",
-    "OracleAsyncConnectionPool",
-    "OracleAsyncCursor",
-    "OracleAsyncRawCursor",
-    "OracleAsyncSessionContext",
-    "OraclePipelineDriver",
-    "OracleSyncConnection",
-    "OracleSyncConnectionPool",
-    "OracleSyncCursor",
-    "OracleSyncRawCursor",
-    "OracleSyncSessionContext",
-    "OracleVectorType",
-)

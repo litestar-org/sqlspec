@@ -211,6 +211,30 @@ async def test_async_driver_dispatch_statement_execution_many(aiosqlite_async_dr
     assert result.rows_affected == 2
 
 
+async def test_async_dispatch_no_dead_processed_state_cast(aiosqlite_async_driver: AiosqliteDriver) -> None:
+    """Async dispatch should not contain the removed get_processed_state cast."""
+    import inspect
+
+    from sqlspec.driver import _async as async_module
+
+    source = inspect.getsource(async_module.AsyncDriverAdapterBase.dispatch_statement_execution)
+    assert "get_processed_state" not in source
+
+    statement = SQL("SELECT * FROM users", statement_config=aiosqlite_async_driver.statement_config)
+    result = await aiosqlite_async_driver.dispatch_statement_execution(statement, aiosqlite_async_driver.connection)
+
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SELECT"
+
+
+def test_async_import_structure() -> None:
+    """ProcessedState and Statement are not runtime names in _async.py."""
+    from sqlspec.driver import _async as async_module
+
+    assert not hasattr(async_module, "ProcessedState")
+    assert not hasattr(async_module, "Statement")
+
+
 async def test_async_driver_releases_pooled_statement(aiosqlite_async_driver: AiosqliteDriver) -> None:
     """Pooled statements should be reset after dispatch execution."""
     seed = "SELECT * FROM users WHERE id = ?"

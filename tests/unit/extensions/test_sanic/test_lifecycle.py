@@ -13,6 +13,8 @@ from sanic import Sanic
 from sqlspec.extensions.sanic import SQLSpecPlugin
 from sqlspec.extensions.sanic._utils import has_context_value
 
+pytestmark = pytest.mark.anyio
+
 
 async def test_startup_creates_pool_on_app_context() -> None:
     """before_server_start should create configured pools on app.ctx."""

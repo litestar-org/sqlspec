@@ -15,18 +15,6 @@ class AzureLogFormatter:
     - operation_ParentId for span tracking
     - properties dict for custom fields
 
-    Example:
-        ```python
-        formatter = AzureLogFormatter()
-        entry = formatter.format(
-            "INFO",
-            "Query executed",
-            correlation_id="abc-123",
-            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
-            duration_ms=15.5,
-        )
-        ```
-
     Reference:
         https://docs.microsoft.com/en-us/azure/azure-monitor/app/data-model
     """

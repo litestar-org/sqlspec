@@ -1,19 +1,19 @@
 """Oracle event queue stores with auto-detected JSON storage.
 
 JSON storage is automatically detected based on Oracle version:
-- json: Native JSON type (Oracle 21c+ with COMPATIBLE >= 20)
-- blob_json: BLOB with IS JSON constraint (Oracle 12c+, recommended)
-- blob: Plain BLOB without constraint (Oracle 11g and earlier)
+    - json: Native JSON type (Oracle 21c+ with COMPATIBLE >= 20)
+    - blob_json: BLOB with IS JSON constraint (Oracle 12c+, recommended)
+    - blob: Plain BLOB without constraint (Oracle 11g and earlier)
 
 Note: CLOB should be avoided for JSON storage in Oracle. Oracle recommends
 BLOB over CLOB for JSON data as BLOB performs significantly better.
 
 Configuration (optional override):
     extension_config={
-        "events": {
-            "json_storage": "blob_json",  # Override auto-detection
-            "in_memory": False  # Enable INMEMORY PRIORITY HIGH
-        }
+    "events": {
+    "json_storage": "blob_json", # Override auto-detection
+    "in_memory": False # Enable INMEMORY PRIORITY HIGH
+    }
     }
 """
 
@@ -204,20 +204,6 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
 
     Args:
         config: OracleSyncConfig with extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-        - json_storage: Override auto-detection ("json", "blob_json", "blob")
-        - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
-
-    Example:
-        from sqlspec.adapters.oracledb import OracleSyncConfig
-        from sqlspec.adapters.oracledb.events import OracleSyncEventQueueStore
-
-        config = OracleSyncConfig(connection_config={"dsn": "oracle://..."})
-        store = OracleSyncEventQueueStore(config)
-        store.create_table()  # Auto-detects version and creates table
     """
 
     __slots__ = ("_in_memory", "_json_storage", "_oracle_version_info")
@@ -317,20 +303,6 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
 
     Args:
         config: OracleAsyncConfig with extension_config["events"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["events"]:
-        - queue_table: Table name (default: "sqlspec_event_queue")
-        - json_storage: Override auto-detection ("json", "blob_json", "blob")
-        - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
-
-    Example:
-        from sqlspec.adapters.oracledb import OracleAsyncConfig
-        from sqlspec.adapters.oracledb.events import OracleAsyncEventQueueStore
-
-        config = OracleAsyncConfig(connection_config={"dsn": "oracle://..."})
-        store = OracleAsyncEventQueueStore(config)
-        await store.create_table()  # Auto-detects version and creates table
     """
 
     __slots__ = ("_in_memory", "_json_storage", "_oracle_version_info")

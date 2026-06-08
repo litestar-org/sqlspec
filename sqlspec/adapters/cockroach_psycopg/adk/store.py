@@ -28,39 +28,6 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.cockroach_psycopg.adk.store")
 
 
-def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":
-    return (
-        entry["id"],
-        entry["session_id"],
-        entry["app_name"],
-        entry["user_id"],
-        entry["event_id"],
-        entry["author"],
-        entry["timestamp"],
-        Jsonb(entry["content_json"]),
-        entry["content_text"],
-        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-        entry["inserted_at"],
-    )
-
-
-def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: "object | None") -> "tuple[object, ...]":
-    return (
-        entry["id"],
-        entry["session_id"],
-        entry["app_name"],
-        entry["user_id"],
-        entry["event_id"],
-        entry["author"],
-        owner_id,
-        entry["timestamp"],
-        Jsonb(entry["content_json"]),
-        entry["content_text"],
-        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-        entry["inserted_at"],
-    )
-
-
 class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConfig"]):
     """CockroachDB ADK store using psycopg async driver.
 
@@ -70,10 +37,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
-    - No FILLFACTOR (CockroachDB uses different storage engine)
-    - SQL strings require ``.encode()`` for cockroach-psycopg driver
-    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
-    - Native tsvector/tsquery FTS with GIN is supported (v23.1+)
+        - No FILLFACTOR (CockroachDB uses different storage engine)
+        - SQL strings require ``.encode()`` for cockroach-psycopg driver
+        - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
+        - Native tsvector/tsquery FTS with GIN is supported (v23.1+)
     """
 
     __slots__ = ()
@@ -362,9 +329,9 @@ class CockroachPsycopgSyncADKStore(BaseAsyncADKStore["CockroachPsycopgSyncConfig
     indexed scalar columns for efficient querying.
 
     CockroachDB-specific differences from native PostgreSQL:
-    - No FILLFACTOR (CockroachDB uses different storage engine)
-    - SQL strings require ``.encode()`` for cockroach-psycopg driver
-    - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
+        - No FILLFACTOR (CockroachDB uses different storage engine)
+        - SQL strings require ``.encode()`` for cockroach-psycopg driver
+        - GIN/Inverted indexes on JSONB are fully supported (v23.1+)
     """
 
     __slots__ = ()
@@ -1037,3 +1004,36 @@ class CockroachPsycopgSyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyco
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         return await async_(self._delete_entries_older_than)(days)
+
+
+def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":
+    return (
+        entry["id"],
+        entry["session_id"],
+        entry["app_name"],
+        entry["user_id"],
+        entry["event_id"],
+        entry["author"],
+        entry["timestamp"],
+        Jsonb(entry["content_json"]),
+        entry["content_text"],
+        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+        entry["inserted_at"],
+    )
+
+
+def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: "object | None") -> "tuple[object, ...]":
+    return (
+        entry["id"],
+        entry["session_id"],
+        entry["app_name"],
+        entry["user_id"],
+        entry["event_id"],
+        entry["author"],
+        owner_id,
+        entry["timestamp"],
+        Jsonb(entry["content_json"]),
+        entry["content_text"],
+        Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+        entry["inserted_at"],
+    )

@@ -25,19 +25,6 @@ __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 logger = get_logger("sqlspec.migrations.tracker")
 
 
-def _extract_column_name(metadata: Any) -> "str | None":
-    """Extract column name from a metadata entry."""
-    if isinstance(metadata, Mapping):
-        value = metadata.get("column_name")
-        if value is None:
-            value = metadata.get("COLUMN_NAME")
-        return str(value).lower() if value is not None else None
-    value = getattr(metadata, "column_name", None)
-    if value is not None:
-        return str(value).lower()
-    return None
-
-
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Synchronous migration version tracker."""
 
@@ -380,21 +367,14 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Returns:
             True if any replaced version exists (squash already applied), False otherwise.
         """
-        result = driver.execute(self._get_applied_migrations_sql())
-        applied_versions = {row["version_num"] for row in result.get_data()} if result.data else set()
-
-        # Check if any replaced version exists in applied migrations
-        return any(version in applied_versions for version in replaced_versions)
+        result = driver.execute(self._get_check_versions_exist_sql(replaced_versions))
+        return bool(result.data)
 
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
         Args:
             driver: The database driver to use.
-
-        Raises:
-            Exception: Re-raises non-autocommit related exceptions to prevent
-                silent failures (e.g., SQLite isolation errors).
         """
         if driver.driver_features.get("autocommit", False):
             return
@@ -418,6 +398,19 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             else:
                 # Re-raise non-autocommit exceptions to prevent silent failures
                 raise
+
+
+def _extract_column_name(metadata: Any) -> "str | None":
+    """Extract column name from a metadata entry."""
+    if isinstance(metadata, Mapping):
+        value = metadata.get("column_name")
+        if value is None:
+            value = metadata.get("COLUMN_NAME")
+        return str(value).lower() if value is not None else None
+    value = getattr(metadata, "column_name", None)
+    if value is not None:
+        return str(value).lower()
+    return None
 
 
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
@@ -762,21 +755,14 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Returns:
             True if any replaced version exists (squash already applied), False otherwise.
         """
-        result = await driver.execute(self._get_applied_migrations_sql())
-        applied_versions = {row["version_num"] for row in result.get_data()} if result.data else set()
-
-        # Check if any replaced version exists in applied migrations
-        return any(version in applied_versions for version in replaced_versions)
+        result = await driver.execute(self._get_check_versions_exist_sql(replaced_versions))
+        return bool(result.data)
 
     async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
         Args:
             driver: The database driver to use.
-
-        Raises:
-            Exception: Re-raises non-autocommit related exceptions to prevent
-                silent failures (e.g., SQLite isolation errors).
         """
         if driver.driver_features.get("autocommit", False):
             return

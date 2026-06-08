@@ -114,10 +114,6 @@ _MYSQL_CONNECTION_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
 }
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
@@ -184,6 +180,10 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
 driver_profile = build_profile()
 
 
@@ -238,10 +238,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     exception class import paths differ.
 
     Mapping priority:
-    1. Specific error codes (most reliable for MySQL)
-    2. SQLSTATE codes (where available)
-    3. Generic error code ranges
-    4. Default SQLSpecError fallback
+        1. Specific error codes (most reliable for MySQL)
+        2. SQLSTATE codes (where available)
+        3. Generic error code ranges
+        4. Default SQLSpecError fallback
 
     Args:
         error: The aiomysql/pymysql exception to map
@@ -354,6 +354,7 @@ def detect_json_columns(
     return detect_json_columns_from_description(description, json_type_codes)
 
 
+# Keep private helpers in sync with sqlspec.adapters.asyncmy.core.
 def _deserialize_json_dict_rows(
     column_names: "list[str]",
     rows: "list[dict[str, Any]]",

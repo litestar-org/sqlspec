@@ -77,3 +77,5 @@ tools/scripts/profiles/*.prof
 .beads-credential-key
 .codex
 .mypy_worker*
+data/
+.antigravitycli/

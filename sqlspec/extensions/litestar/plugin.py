@@ -20,7 +20,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.core._pagination import OffsetPagination
+from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.extensions.litestar._utils import (
@@ -36,7 +36,7 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     session_provider_maker,
 )
-from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT
+from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
@@ -56,6 +56,22 @@ if TYPE_CHECKING:
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
+
+__all__ = (
+    "CORRELATION_STATE_KEY",
+    "DEFAULT_COMMIT_MODE",
+    "DEFAULT_CONNECTION_KEY",
+    "DEFAULT_CORRELATION_HEADER",
+    "DEFAULT_POOL_KEY",
+    "DEFAULT_SESSION_KEY",
+    "TRACE_CONTEXT_FALLBACK_HEADERS",
+    "CommitMode",
+    "CorrelationMiddleware",
+    "PluginConfigState",
+    "SQLSpecPlugin",
+    "_OffsetPaginationSchemaPlugin",
+    "not_found_error_handler",
+)
 
 logger = get_logger("sqlspec.extensions.litestar")
 
@@ -78,22 +94,6 @@ TRACE_CONTEXT_FALLBACK_HEADERS: tuple[str, ...] = (
 CORRELATION_STATE_KEY = "sqlspec_correlation_id"
 _LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
 
-__all__ = (
-    "CORRELATION_STATE_KEY",
-    "DEFAULT_COMMIT_MODE",
-    "DEFAULT_CONNECTION_KEY",
-    "DEFAULT_CORRELATION_HEADER",
-    "DEFAULT_POOL_KEY",
-    "DEFAULT_SESSION_KEY",
-    "TRACE_CONTEXT_FALLBACK_HEADERS",
-    "CommitMode",
-    "CorrelationMiddleware",
-    "PluginConfigState",
-    "SQLSpecPlugin",
-    "_OffsetPaginationSchemaPlugin",
-    "not_found_error_handler",
-)
-
 
 def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundError) -> NoReturn:
     """Translate :class:`sqlspec.exceptions.NotFoundError` into Litestar's HTTP 404.
@@ -107,29 +107,30 @@ def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundErr
 
 
 class CorrelationMiddleware:
-    __slots__ = ("_app", "_headers")
+    __slots__ = ("_app", "_extractor", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
         self._app = app
         self._headers = headers
+        self._extractor = (
+            CorrelationExtractor(
+                primary_header=headers[0],
+                additional_headers=headers[1:] if len(headers) > 1 else None,
+                auto_trace_headers=False,
+            )
+            if headers
+            else None
+        )
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         scope_type = scope.get("type")
-        if str(scope_type) != "http" or not self._headers:
+        if str(scope_type) != "http" or self._extractor is None:
             await self._app(scope, receive, send)
             return
 
-        header_value: str | None = None
         raw_headers = scope.get("headers") or []
-        for header in self._headers:
-            for name, value in raw_headers:
-                if name.decode().lower() == header:
-                    header_value = value.decode()
-                    break
-            if header_value:
-                break
-        if not header_value:
-            header_value = CorrelationContext.generate()
+        header_dict = {name.decode().lower(): value.decode() for name, value in raw_headers}
+        header_value = self._extractor.extract(lambda header: header_dict.get(header))
 
         previous_correlation_id = CorrelationContext.get()
         CorrelationContext.set(header_value)
@@ -177,26 +178,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         The Litestar extension includes migrations for creating session storage tables.
         To include these migrations in your database migration workflow, add 'litestar'
         to the include_extensions list in your migration configuration.
-
-    Example:
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/db"},
-            extension_config={
-                "litestar": {
-                    "session_table": "custom_sessions"  # Optional custom table name
-                }
-            },
-            migration_config={
-                "script_location": "migrations",
-                "include_extensions": ["litestar"],  # Simple string list only
-            }
-        )
-
-        The session table migration will automatically use the appropriate column types
-        for your database dialect (JSONB for PostgreSQL, JSON for MySQL, TEXT for SQLite).
-
-        Extension migrations use the ext_litestar_ prefix (e.g., ext_litestar_0001) to
-        prevent version conflicts with application migrations.
     """
 
     __slots__ = ("_correlation_headers", "_enable_sqlcommenter_middleware", "_plugin_configs", "_sqlspec")
@@ -417,17 +398,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if sqlspec_decoders:
             app_config.type_decoders = [*(app_config.type_decoders or []), *sqlspec_decoders]
 
+        new_middlewares: list[DefineMiddleware] = []
         if self._correlation_headers:
-            middleware = DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers)
-            existing_middleware = list(app_config.middleware or [])
-            existing_middleware.append(middleware)
-            app_config.middleware = existing_middleware
-
+            new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
         if self._enable_sqlcommenter_middleware:
-            sc_middleware = DefineMiddleware(SQLCommenterMiddleware)
-            existing_middleware = list(app_config.middleware or [])
-            existing_middleware.append(sc_middleware)
-            app_config.middleware = existing_middleware
+            new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
+        if new_middlewares:
+            app_config.middleware = [*(app_config.middleware or []), *new_middlewares]
 
         log_with_context(
             logger,
@@ -600,7 +577,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Provide a database session for the specified configuration key from request scope.
 
-        This method requires the connection to already exist in scope (e.g., from DI injection).
+        This method requires the connection to already exist in scope.
         For on-demand connection creation, use ``provide_request_session_sync`` or
         ``provide_request_session_async`` instead.
 
@@ -735,7 +712,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> Any:
         """Provide a database connection for the specified configuration key from request scope.
 
-        This method requires the connection to already exist in scope (e.g., from DI injection).
+        This method requires the connection to already exist in scope.
         For on-demand connection creation, use ``provide_request_connection_sync`` or
         ``provide_request_connection_async`` instead.
 
@@ -853,7 +830,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 return state
 
         self._raise_config_not_found(key)
-        return None
+        msg = "unreachable"
+        raise AssertionError(msg)
 
     def _get_available_keys(self) -> "list[str]":
         """Get a list of all available configuration keys for error messages."""
@@ -873,7 +851,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if len(set(pool_keys)) != len(pool_keys):
             self._raise_duplicate_pool_keys()
 
-    def _raise_missing_connection(self, connection_key: str) -> None:
+    def _raise_missing_connection(self, connection_key: str) -> NoReturn:
         """Raise error when connection is not found in scope."""
         msg = f"No database connection found in scope for key '{connection_key}'. "
         msg += "Ensure the connection dependency is properly configured and available."
@@ -1059,8 +1037,7 @@ def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callab
     decoders: list[tuple[Callable[[Any], bool], Callable[[type, Any], Any]]] = []
     if NUMPY_INSTALLED:
         decoders.append((_litestar_numpy_array_predicate, _litestar_numpy_array_dec_hook))
-    with suppress(ImportError):
-        import uuid_utils  # pyright: ignore[reportMissingImports]
-
-        decoders.append((lambda t: t is uuid_utils.UUID, lambda t, v: t(str(v))))
+    uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+    if uuid_utils_uuid is not None:
+        decoders.append((lambda t: t is uuid_utils_uuid, lambda t, v: t(str(v))))
     return decoders

@@ -42,7 +42,18 @@ class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
 class ArrowOdbcDriver(SyncDriverAdapterBase):
     """Sync driver for generic ODBC connections with Arrow-native transfer."""
 
-    __slots__ = ("_data_dictionary", "_dbms_name", "_dialect", "_statement_dialect", "dialect")
+    __slots__ = (
+        "_chunk_size_val",
+        "_data_dictionary",
+        "_dbms_name",
+        "_dialect",
+        "_max_batch_bytes",
+        "_max_binary_size_val",
+        "_max_text_size_val",
+        "_query_timeout_sec_val",
+        "_use_concurrent_fetch",
+        "dialect",
+    )
 
     def __init__(
         self,
@@ -53,16 +64,22 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         features = dict(driver_features or {})
         self._dbms_name = self._resolve_dbms_name(connection, features)
         self._dialect = resolve_dialect_from_dbms_name(self._dbms_name)
-        self._statement_dialect = _statement_dialect_for(self._dialect)
+        statement_dialect = _statement_dialect_for(self._dialect)
         if statement_config is None:
-            statement_config = build_statement_config(dialect=self._statement_dialect).replace(
+            statement_config = build_statement_config(dialect=statement_dialect).replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
         else:
-            statement_config = statement_config.replace(dialect=self._statement_dialect)
+            statement_config = statement_config.replace(dialect=statement_dialect)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
-        self.dialect = self._statement_dialect
+        self._chunk_size_val: int = int(features.get("chunk_size") or 65_536)
+        self._max_batch_bytes: int | None = features.get("max_bytes_per_batch")
+        self._max_binary_size_val: int | None = features.get("max_binary_size")
+        self._max_text_size_val: int | None = features.get("max_text_size")
+        self._query_timeout_sec_val: int | None = features.get("query_timeout_sec")
+        self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
+        self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
 
     @property
@@ -171,6 +188,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        prepared_statement.compile()
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
         resolved_batch_size = batch_size or self._chunk_size()
         table: Any | None = None
@@ -220,18 +238,17 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             "query": sql,
             "batch_size": batch_size,
             "parameters": parameters,
-            "max_bytes_per_batch": self.driver_features.get("max_bytes_per_batch"),
-            "max_text_size": self.driver_features.get("max_text_size"),
-            "max_binary_size": self.driver_features.get("max_binary_size"),
-            "fetch_concurrently": self.driver_features.get("fetch_concurrently", True),
+            "max_bytes_per_batch": self._max_batch_bytes,
+            "max_text_size": self._max_text_size_val,
+            "max_binary_size": self._max_binary_size_val,
+            "fetch_concurrently": self._use_concurrent_fetch,
         }
-        query_timeout_sec = self.driver_features.get("query_timeout_sec")
-        if query_timeout_sec is not None:
-            kwargs["query_timeout_sec"] = query_timeout_sec
+        if self._query_timeout_sec_val is not None:
+            kwargs["query_timeout_sec"] = self._query_timeout_sec_val
         return self.connection.read_arrow_batches(**kwargs)
 
     def _chunk_size(self) -> int:
-        return int(self.driver_features.get("chunk_size") or 65_536)
+        return self._chunk_size_val
 
     @staticmethod
     def _resolve_dbms_name(connection: "ArrowOdbcConnection", features: "dict[str, Any]") -> str | None:

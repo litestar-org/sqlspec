@@ -19,33 +19,33 @@ Example (async):
     from sqlspec.adapters.asyncpg.adk import AsyncpgADKMemoryStore
     from sqlspec.extensions.adk.memory import SQLSpecMemoryService
 
-    config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://..."},
-        extension_config={
-            "adk": {
-                "memory_table": "adk_memory_entries",
-                "memory_use_fts": True,
-                "memory_max_results": 50,
-            }
-        }
-    )
+ config = AsyncpgConfig(
+ connection_config={"dsn": "postgresql://..."},
+ extension_config={
+ "adk": {
+ "memory_table": "adk_memory_entries",
+ "memory_use_fts": True,
+ "memory_max_results": 50,
+ }
+ }
+ )
 
-    store = AsyncpgADKMemoryStore(config)
-    await store.ensure_tables()
+ store = AsyncpgADKMemoryStore(config)
+ await store.ensure_tables()
 
-    service = SQLSpecMemoryService(store)
+ service = SQLSpecMemoryService(store)
 
-    # Store completed session as memories
-    await service.add_session_to_memory(completed_session)
+ # Store completed session as memories
+ await service.add_session_to_memory(completed_session)
 
-    # Search memories
-    response = await service.search_memory(
-        app_name="my_app",
-        user_id="user123",
-        query="previous discussion about Python"
-    )
-    for entry in response.memories:
-        print(entry.content)
+ # Search memories
+ response = await service.search_memory(
+ app_name="my_app",
+ user_id="user123",
+ query="previous discussion about Python"
+ )
+ for entry in response.memories:
+ print(entry.content)
 """
 
 from sqlspec.extensions.adk.memory._types import MemoryRecord

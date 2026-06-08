@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
 from pathlib import Path, PurePath
-from typing import Any, Final, Literal, Protocol, overload
+from typing import Any, Final, Literal, Protocol, cast, overload
 
 from sqlspec.typing import (
     MSGSPEC_INSTALLED,
@@ -21,8 +21,8 @@ from sqlspec.typing import (
     attrs_asdict,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
-from sqlspec.utils.uuids import UUID_UTILS_INSTALLED, _load_uuid_utils
 
 __all__ = (
     "DEFAULT_TYPE_ENCODERS",
@@ -45,12 +45,7 @@ StructuralEncoder = Callable[[Any], Any]
 
 
 def _get_uuid_utils_type() -> "type[Any] | None":
-    if not UUID_UTILS_INSTALLED:
-        return None
-    module = _load_uuid_utils()
-    if module is None:
-        return None
-    return module.UUID  # type: ignore[no-any-return]
+    return cast("type[Any] | None", import_optional_attr("uuid_utils", "UUID"))
 
 
 _UUID_UTILS_TYPE: "type[Any] | None" = _get_uuid_utils_type()
@@ -393,7 +388,9 @@ def get_default_serializer() -> JSONSerializer:
         if _default_serializer is None:
             _default_serializer = StandardLibSerializer()
 
-    assert _default_serializer is not None
+    if _default_serializer is None:
+        msg = "No JSON serializer available; this should be unreachable"
+        raise RuntimeError(msg)
     return _default_serializer
 
 

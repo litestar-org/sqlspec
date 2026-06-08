@@ -19,24 +19,6 @@ __all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQL
 PROJECT_ROOT_MARKERS: Final[list[str]] = ["pyproject.toml", ".git", "setup.cfg", "setup.py"]
 
 
-def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., Any] | None":
-    """Get a callable attribute from a module if it exists.
-
-    Args:
-        module: The module to check.
-        name: The attribute name to look for.
-
-    Returns:
-        The callable if it exists and is callable, None otherwise.
-    """
-    attr = module.__dict__.get(name)
-    if attr is None:
-        return None
-    if callable(attr):
-        return cast("Callable[..., Any]", attr)
-    return None
-
-
 class MigrationLoadError(Exception):
     """Exception raised when migration loading fails."""
 
@@ -128,7 +110,7 @@ class SQLFileLoader(BaseMigrationLoader):
             raise MigrationLoadError(msg)
 
         sql_obj = self.sql_loader.get_sql(up_query)
-        return [sql_obj.sql]
+        return [sql_obj.raw_sql]
 
     async def get_down_sql(self, path: Path) -> list[str]:
         """Extract the 'down' SQL from a SQL migration file.
@@ -150,7 +132,7 @@ class SQLFileLoader(BaseMigrationLoader):
             return []
 
         sql_obj = self.sql_loader.get_sql(down_query)
-        return [sql_obj.sql]
+        return [sql_obj.raw_sql]
 
     def validate_migration_file(self, path: Path) -> None:
         """Validate SQL migration file has required up query.
@@ -441,3 +423,21 @@ def get_migration_loader(
         return SQLFileLoader(sql_loader)
     msg = f"Unsupported migration file type: {suffix}"
     raise MigrationLoadError(msg)
+
+
+def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., Any] | None":
+    """Get a callable attribute from a module if it exists.
+
+    Args:
+        module: The module to check.
+        name: The attribute name to look for.
+
+    Returns:
+        The callable if it exists and is callable, None otherwise.
+    """
+    attr = module.__dict__.get(name)
+    if attr is None:
+        return None
+    if callable(attr):
+        return cast("Callable[..., Any]", attr)
+    return None

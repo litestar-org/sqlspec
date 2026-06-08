@@ -4,7 +4,6 @@ from collections.abc import Callable, Collection, Generator, Iterable, Mapping, 
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
-from functools import singledispatch
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias
 
@@ -41,19 +40,21 @@ ParameterPayload: TypeAlias = "ParameterMapping | ParameterSequence | object | N
 """Type alias for parameter payloads accepted by the processing pipeline."""
 
 
-ConvertedParameters: TypeAlias = "dict[str, Any] | list[Any] | tuple[Any, ...] | None"
-"""Type alias for parameters after conversion to driver-consumable format.
+ConvertedParameters: TypeAlias = "dict[str, Any] | list[Any] | tuple[Any, ...] | object | None"
+"""
+Type alias for parameters after conversion to driver-consumable format.
 
 This type represents the concrete output of parameter conversion functions.
 Unlike :data:`ParameterPayload` (which represents inputs and can include abstract
-Mapping/Sequence types), :data:`ConvertedParameters` only includes concrete types
-that database drivers can directly consume.
+Mapping/Sequence types), :data:`ConvertedParameters` includes concrete container
+types and scalar objects that database drivers can directly consume.
 
 The union includes:
 
-- ``dict[str, Any]``: Named parameters (e.g., ``{"name": "Alice", "age": 30}``)
-- ``list[Any]``: Positional parameters as list (e.g., ``["Alice", 30]``)
-- ``tuple[Any, ...]``: Positional parameters as tuple (e.g., ``("Alice", 30)``)
+- ``dict[str, Any]``: Named parameters
+- ``list[Any]``: Positional parameters as list
+- ``tuple[Any, ...]``: Positional parameters as tuple
+- ``object``: Scalar parameter payloads after type coercion
 - ``None``: When parameters are statically embedded in SQL string
 """
 
@@ -141,6 +142,22 @@ class ParameterStyle(str, Enum):
     POSITIONAL_PYFORMAT = "pyformat_positional"
 
 
+_NAMED_STYLES: frozenset["ParameterStyle"] = frozenset({
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.NAMED_AT,
+    ParameterStyle.NAMED_DOLLAR,
+    ParameterStyle.NAMED_PYFORMAT,
+})
+_POSITIONAL_STYLES: frozenset["ParameterStyle"] = frozenset({
+    ParameterStyle.QMARK,
+    ParameterStyle.NUMERIC,
+    ParameterStyle.POSITIONAL_COLON,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+})
+_NAMED_STYLE_VALUES: frozenset[str] = frozenset(style.value for style in _NAMED_STYLES)
+_POSITIONAL_STYLE_VALUES: frozenset[str] = frozenset(style.value for style in _POSITIONAL_STYLES)
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class TypedParameter:
     """Wrapper that preserves original parameter type information."""
@@ -190,39 +207,20 @@ class _TupleAdapter:
         return self._serializer(value)
 
 
-@singledispatch
 def _wrap_parameter_by_type(value: Any, semantic_name: "str | None" = None) -> Any:
+    if isinstance(value, bool):
+        return TypedParameter(value, bool, semantic_name)
+    if isinstance(value, Decimal):
+        return TypedParameter(value, Decimal, semantic_name)
+    if isinstance(value, datetime):
+        return TypedParameter(value, datetime, semantic_name)
+    if isinstance(value, date):
+        return TypedParameter(value, date, semantic_name)
+    if isinstance(value, time):
+        return TypedParameter(value, time, semantic_name)
+    if isinstance(value, bytes):
+        return TypedParameter(value, bytes, semantic_name)
     return value
-
-
-@_wrap_parameter_by_type.register
-def _(value: bool, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, bool, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: Decimal, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, Decimal, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: datetime, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, datetime, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: date, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, date, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: time, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, time, semantic_name)
-
-
-@_wrap_parameter_by_type.register
-def _(value: bytes, semantic_name: "str | None" = None) -> "TypedParameter":
-    return TypedParameter(value, bytes, semantic_name)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -272,7 +270,7 @@ class ParameterStyleConfig:
         preserve_parameter_format: bool = True,
         preserve_original_params_for_many: bool = False,
         output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
-        ast_transformer: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]] | None" = None,
+        ast_transformer: "Callable[[Any, Any, ParameterProfile, bool], tuple[Any, Any]] | None" = None,
         json_serializer: "Callable[[Any], str] | None" = None,
         json_deserializer: "Callable[[str], Any] | None" = None,
         strict_named_parameters: bool = True,
@@ -310,26 +308,17 @@ class ParameterStyleConfig:
                 tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
                 self.has_native_list_expansion,
                 self.preserve_original_params_for_many,
-                bool(self.output_transformer),
+                id(self.output_transformer) if self.output_transformer else None,
                 self.needs_static_script_compilation,
                 self.allow_mixed_parameter_styles,
                 self.preserve_parameter_format,
                 self.strict_named_parameters,
-                bool(self.ast_transformer),
+                id(self.ast_transformer) if self.ast_transformer else None,
                 self.json_serializer,
                 self.json_deserializer,
             )
             self._hash_cache = hash(hash_components)
         return self._hash_cache
-
-    def hash(self) -> int:
-        """Return the hash value for caching compatibility.
-
-        Returns:
-            Hash value matching :func:`hash` output for this config.
-        """
-
-        return hash(self)
 
     def __reduce__(self) -> "tuple[Any, ...]":
         """Reconstruct via the public ctor so copy/pickle work on mypyc native classes."""
@@ -433,7 +422,7 @@ class DriverParameterProfile:
         json_serializer_strategy: "Literal['driver', 'helper', 'none']",
         custom_type_coercions: "Mapping[type, Callable[[Any], Any]] | None" = None,
         default_output_transformer: "Callable[[str, Any], tuple[str, Any]] | None" = None,
-        default_ast_transformer: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]] | None" = None,
+        default_ast_transformer: "Callable[[Any, Any, ParameterProfile, bool], tuple[Any, Any]] | None" = None,
         extras: "Mapping[str, object] | None" = None,
         default_dialect: "str | None" = None,
         statement_kwargs: "Mapping[str, object] | None" = None,

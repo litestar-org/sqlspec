@@ -14,6 +14,7 @@ def test_warn_deprecation_basic() -> None:
     """Test basic deprecation warning."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
         warn_deprecation(version="1.0.0", deprecated_name="test_func", kind="function")
 
         assert len(warning_list) == 1
@@ -28,6 +29,7 @@ def test_warn_deprecation_all_parameters() -> None:
     """Test deprecation warning with all parameters."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
         warn_deprecation(
             version="1.0.0",
             deprecated_name="old_func",
@@ -49,6 +51,7 @@ def test_warn_deprecation_pending() -> None:
     """Test pending deprecation warning."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
         warn_deprecation(version="1.0.0", deprecated_name="future_func", kind="function", pending=True)
 
         assert len(warning_list) == 1
@@ -58,7 +61,7 @@ def test_warn_deprecation_pending() -> None:
 
 
 @pytest.mark.parametrize(
-    "kind,expected_prefix",
+    ("kind", "expected_prefix"),
     [
         ("function", "Call to"),
         ("method", "Call to"),
@@ -74,6 +77,7 @@ def test_warn_deprecation_kinds(kind: str, expected_prefix: str) -> None:
     """Test different deprecation kinds produce correct message prefixes."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
         warn_deprecation(version="1.0.0", deprecated_name="test_item", kind=kind)  # type: ignore[arg-type]
 
         assert len(warning_list) == 1
@@ -90,6 +94,7 @@ def test_deprecated_decorator_basic() -> None:
 
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
         result = test_function()
 
         assert result == "result"
@@ -125,6 +130,7 @@ def test_deprecated_decorator_with_exception() -> None:
 
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
 
         with pytest.raises(ValueError, match="Test error"):
             failing_function()
@@ -137,6 +143,7 @@ def test_deprecation_warning_stacklevel() -> None:
     """Test that deprecation warnings have correct stack level."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
 
         def wrapper_function() -> None:
             warn_deprecation(version="1.0.0", deprecated_name="test", kind="function")

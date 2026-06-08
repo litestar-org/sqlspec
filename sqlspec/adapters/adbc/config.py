@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.adbc._typing import AdbcConnection
+from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
@@ -17,7 +17,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler, AdbcSessionContext
+from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
@@ -78,20 +78,20 @@ class AdbcDriverFeatures(TypedDict):
     Attributes:
         json_serializer: JSON serialization function to use.
             Callable that takes Any and returns str (JSON string).
-            Default: sqlspec.utils.serializers.to_json
+        Default: sqlspec.utils.serializers.to_json
         enable_cast_detection: Enable cast-aware parameter processing.
-            When True, detects SQL casts (e.g., ::JSONB) and applies appropriate
+            When True, detects SQL casts and applies appropriate
             serialization. Currently used for PostgreSQL JSONB handling.
-            Default: True
+        Default: True
         enable_strict_type_coercion: Enforce strict type coercion rules.
             When True, raises errors for unsupported type conversions.
             When False, attempts best-effort conversion.
-            Default: False
+        Default: False
         strict_type_coercion: Alias for enable_strict_type_coercion.
         enable_arrow_extension_types: Enable PyArrow extension type support.
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
-            Default: True
+        Default: True
         arrow_extension_types: Alias for enable_arrow_extension_types.
         enable_pgvector: Enable automatic pgvector extension detection.
             When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
@@ -106,7 +106,7 @@ class AdbcDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             ADBC does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
     """
@@ -171,14 +171,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
     Supports multiple database backends including PostgreSQL, SQLite, DuckDB,
     BigQuery, and Snowflake with automatic driver detection and loading.
-
-    Example::
-
-        config = AdbcConfig(
-            connection_config=AdbcConnectionParams(
-                uri="postgresql://user:pass@localhost/db"
-            )
-        )
     """
 
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
@@ -193,6 +185,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     _session_factory_class: "ClassVar[type[_AdbcSessionConnectionHandler]]" = _AdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[AdbcSessionContext]]" = AdbcSessionContext
     _default_statement_config = StatementConfig()
+    __slots__ = ("_default_session_config", "_paradedb_available", "_pgvector_available", "_resolved_dialect")
 
     def __init__(
         self,
@@ -216,7 +209,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config: Default SQL statement configuration
             driver_features: Driver feature configuration (AdbcDriverFeatures)
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
@@ -224,12 +217,13 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
 
-        dialect = resolve_dialect_from_config(self.connection_config)
+        self._resolved_dialect = resolve_dialect_from_config(self.connection_config)
 
         if statement_config is None:
-            statement_config = get_statement_config(dialect)
+            statement_config = get_statement_config(self._resolved_dialect)
 
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+        self._default_session_config = get_statement_config(self._resolved_dialect)
 
         super().__init__(
             connection_config=self.connection_config,
@@ -246,7 +240,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     @property
     def supports_migration_schemas(self) -> bool:  # type: ignore[override]
         """Migration schema support is only available for PostgreSQL-backed ADBC drivers."""
-        return is_postgres_dialect(resolve_dialect_from_config(self.connection_config))
+        return is_postgres_dialect(self._resolved_dialect)
 
     def create_connection(self) -> AdbcConnection:
         """Create and return a new connection using the specified driver.
@@ -346,9 +340,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """
         self._detect_extensions_if_needed()
         statement_config = resolve_runtime_statement_config(
-            statement_config,
-            self.statement_config,
-            get_statement_config(resolve_dialect_from_config(self.connection_config)),
+            statement_config, self.statement_config, self._default_session_config
         )
         handler = _AdbcSessionConnectionHandler(self)
 

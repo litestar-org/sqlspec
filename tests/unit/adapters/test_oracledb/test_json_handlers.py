@@ -1,10 +1,13 @@
 """Unit tests for Oracle native JSON type handlers."""
 
+import inspect
 from unittest.mock import Mock
 
 import pytest
 
 from sqlspec.adapters.oracledb._json_handlers import (
+    chain_input_handler,
+    chain_output_handler,
     json_converter_in_blob,
     json_converter_in_clob,
     json_converter_out_blob,
@@ -427,3 +430,37 @@ def test_input_handler_dispatch_table(major: int) -> None:
 
     assert result is cursor_var
     assert cursor.var.call_count == 1
+
+
+def test_generic_chained_input_handler_fallback() -> None:
+    fallback = Mock(return_value="fallback")
+    inner = Mock(return_value=None)
+    handler = chain_input_handler(inner, fallback)
+
+    assert handler(Mock(), "value", 1) == "fallback"
+    inner.assert_called_once()
+    fallback.assert_called_once()
+
+
+def test_generic_chained_output_handler_claim() -> None:
+    fallback = Mock()
+    inner = Mock(return_value="claimed")
+    handler = chain_output_handler(inner, fallback)
+
+    assert handler(Mock(), Mock()) == "claimed"
+    fallback.assert_not_called()
+
+
+def test_chained_handlers_are_signature_introspectable() -> None:
+    """python-oracledb selects its calling convention via ``inspect.signature(handler)``.
+
+    A compiled ``__call__`` object raises ``ValueError`` there, forcing the legacy
+    6-argument call and breaking every fetch. The chained handlers must therefore be
+    ``inspect.signature``-introspectable with the exact parameter counts oracledb keys on
+    (2 -> new ``(cursor, metadata)`` output convention; non-2 -> input convention).
+    """
+    output_handler = chain_output_handler(Mock(return_value=None), None)
+    assert len(inspect.signature(output_handler).parameters) == 2
+
+    input_handler = chain_input_handler(Mock(return_value=None), None)
+    assert len(inspect.signature(input_handler).parameters) == 3

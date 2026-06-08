@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import TableMetadata, VersionInfo, get_dialect_config
 from sqlspec.data_dictionary.dialects.oracle import (
     extract_oracle_version_value,
     list_oracle_available_features,
@@ -18,7 +18,6 @@ from sqlspec.data_dictionary.dialects.oracle import (
     resolve_oracle_feature_flag,
     resolve_oracle_json_type,
 )
-from sqlspec.typing import TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver

@@ -119,6 +119,13 @@ class _MergeAssignmentMixin:
         placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_leaf)
         return exp.EQ(this=column_identifier, expression=placeholder)
 
+    def _append_when(self, current_expr: exp.Merge, when_node: exp.When) -> None:
+        whens = current_expr.args.get("whens")
+        if not isinstance(whens, exp.Whens):
+            whens = exp.Whens(expressions=[])
+            current_expr.set("whens", whens)
+        whens.append("expressions", when_node)
+
 
 @trait
 class MergeIntoClauseMixin:
@@ -135,7 +142,7 @@ class MergeIntoClauseMixin:
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
 
         table_expr: exp.Expr
         if isinstance(table, str):
@@ -171,9 +178,9 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         """Create USING clause expression from dict or list of dicts.
 
         Uses JSON-based approach for type-safe bulk operations:
-        - PostgreSQL: json_populate_recordset(NULL::table_name, $1::jsonb)
-        - Oracle: JSON_TABLE(:payload, '$[*]' COLUMNS (...))
-        - Others: Fall back to SELECT with parameterized values
+            - PostgreSQL: json_populate_recordset(NULL::table_name, $1::jsonb)
+            - Oracle: JSON_TABLE(:payload, '$[*]' COLUMNS (...))
+            - Others: Fall back to SELECT with parameterized values
 
         Args:
             source: Dict or list of dicts for USING clause
@@ -347,7 +354,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
         source_expr: exp.Expr
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
@@ -408,7 +415,7 @@ class MergeOnClauseMixin:
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
         if isinstance(condition, str):
             builder = cast("QueryBuilder", self)
             parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
@@ -443,7 +450,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
         combined_assignments: dict[str, Any] = {}
         if set_values:
             combined_assignments.update(set_values)
@@ -472,18 +479,9 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
 
-            builder = cast("QueryBuilder", self)
-            dialect_name = builder.dialect_name
-            if dialect_name == "oracle":
-                update_expression.set("where", exp.Where(this=condition_expr))
-            else:
-                when_kwargs["condition"] = condition_expr
+            when_kwargs["condition"] = condition_expr
 
-        whens = current_expr.args.get("whens")
-        if not isinstance(whens, exp.Whens):
-            whens = exp.Whens(expressions=[])
-            current_expr.set("whens", whens)
-        whens.append("expressions", exp.When(**when_kwargs))
+        self._append_when(current_expr, exp.When(**when_kwargs))
         return self
 
     def when_matched_then_delete(self, condition: str | exp.Expr | None = None) -> Self:
@@ -492,7 +490,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
         when_kwargs: dict[str, Any] = {"matched": True, "then": exp.Var(this="DELETE")}
         if condition is not None:
             if isinstance(condition, str):
@@ -508,11 +506,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
                 msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
 
-        whens = current_expr.args.get("whens")
-        if not isinstance(whens, exp.Whens):
-            whens = exp.Whens(expressions=[])
-            current_expr.set("whens", whens)
-        whens.append("expressions", exp.When(**when_kwargs))
+        self._append_when(current_expr, exp.When(**when_kwargs))
         return self
 
 
@@ -536,7 +530,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
         insert_expr = exp.Insert()
         column_names: list[str]
         column_values: list[Any]
@@ -597,11 +591,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
 
         insert_expr.set("this", exp.Tuple(expressions=insert_columns))
         insert_expr.set("expression", exp.Tuple(expressions=insert_values))
-        whens = current_expr.args.get("whens")
-        if not isinstance(whens, exp.Whens):
-            whens = exp.Whens(expressions=[])
-            current_expr.set("whens", whens)
-        whens.append("expressions", exp.When(matched=False, then=insert_expr))
+        self._append_when(current_expr, exp.When(matched=False, then=insert_expr))
         return self
 
 
@@ -622,7 +612,7 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
+        assert isinstance(current_expr, exp.Merge)
         combined_assignments: dict[str, Any] = {}
         if set_values:
             combined_assignments.update(set_values)
@@ -633,31 +623,9 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
             msg = "No update values provided. Use set_values or keyword arguments."
             raise SQLBuilderError(msg)
 
-        set_expressions: list[exp.Expr] = []
-        for column_name, value in combined_assignments.items():
-            column_identifier = exp.column(column_name)
-            if has_expression_and_sql(value):
-                value_expr = extract_sql_object_expression(value, builder=self)
-            elif isinstance(value, exp.Expr):
-                value_expr = value
-            elif isinstance(value, str) and self._is_column_reference(value):
-                builder = cast("QueryBuilder", self)
-                parsed_value: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
-                if parsed_value is None:
-                    msg = f"Could not parse assignment expression: {value}"
-                    raise SQLBuilderError(msg)
-                value_expr = parsed_value
-            else:
-                placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name)
-                value_expr = placeholder
-            set_expressions.append(exp.EQ(this=column_identifier, expression=value_expr))
-
+        set_expressions = list(starmap(self._process_assignment, combined_assignments.items()))
         update_expr = exp.Update(expressions=set_expressions)
-        whens = current_expr.args.get("whens")
-        if not isinstance(whens, exp.Whens):
-            whens = exp.Whens(expressions=[])
-            current_expr.set("whens", whens)
-        whens.append("expressions", exp.When(matched=False, source=True, then=update_expr))
+        self._append_when(current_expr, exp.When(matched=False, source=True, then=update_expr))
         return self
 
     def when_not_matched_by_source_then_delete(self) -> Self:
@@ -666,12 +634,8 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
             self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
             current_expr = self.get_expression()
 
-        assert current_expr is not None
-        whens = current_expr.args.get("whens")
-        if not isinstance(whens, exp.Whens):
-            whens = exp.Whens(expressions=[])
-            current_expr.set("whens", whens)
-        whens.append("expressions", exp.When(matched=False, source=True, then=exp.Delete()))
+        assert isinstance(current_expr, exp.Merge)
+        self._append_when(current_expr, exp.When(matched=False, source=True, then=exp.Delete()))
         return self
 
 
@@ -741,11 +705,7 @@ class Merge(
         return exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
     def _validate_dialect_support(self) -> None:
-        """Validate that the current dialect supports MERGE statements.
-
-        Raises:
-            DialectNotSupportedError: If the dialect does not support MERGE.
-        """
+        """Validate that the current dialect supports MERGE statements."""
         dialect = self.dialect_name
         if dialect and dialect in MERGE_UNSUPPORTED_DIALECTS:
             self._raise_dialect_not_supported(dialect)
@@ -796,7 +756,7 @@ class Merge(
         return super().build(dialect=dialect)
 
     def _normalize_merge_conditions_for_dialect(self, dialect_name: str | None) -> None:
-        """Normalize WHEN clause conditions for dialect quirks (e.g., Oracle).
+        """Normalize WHEN clause conditions for dialect quirks.
 
         Oracle requires conditional logic on UPDATE/DELETE branches to live in the
         clause-specific WHERE, not on the WHEN predicate. Move the condition down

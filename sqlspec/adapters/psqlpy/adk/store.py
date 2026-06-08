@@ -33,13 +33,13 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     indexed scalar columns for efficient querying.
 
     Provides:
-    - Session state management with JSONB storage
-    - Full-fidelity event storage via ``event_json`` JSONB column
-    - Atomic ``append_event_and_update_state`` for durable session mutations
-    - Microsecond-precision timestamps with TIMESTAMPTZ
-    - Foreign key constraints with cascade delete
-    - GIN indexes for JSONB queries
-    - HOT updates with FILLFACTOR 80
+        - Session state management with JSONB storage
+        - Full-fidelity event storage via ``event_json`` JSONB column
+        - Atomic ``append_event_and_update_state`` for durable session mutations
+        - Microsecond-precision timestamps with TIMESTAMPTZ
+        - Foreign key constraints with cascade delete
+        - GIN indexes for JSONB queries
+        - HOT updates with FILLFACTOR 80
 
     Args:
         config: PsqlpyConfig with extension_config["adk"] settings.
@@ -456,7 +456,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit)
-                except Exception as exc:  # pragma: no cover - defensive fallback
+                except Exception as exc:  # pragma: no cover
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
         except psqlpy.exceptions.DatabaseError as e:

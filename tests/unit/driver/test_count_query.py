@@ -414,6 +414,61 @@ def test_create_count_query_preserves_named_params_with_group_by(mock_driver: "M
     assert count_sql.named_parameters == {"role": "admin"}
 
 
+def test_create_count_query_expands_repeated_named_parameters_plain_select(sqlite_driver: "SqliteDriver") -> None:
+    """Repeated named params should compile for expression-backed direct count queries."""
+    sql = SQL("SELECT id FROM t WHERE a = :wid OR b = :wid", statement_config=sqlite_driver.statement_config, wid="W")
+
+    count_sql = sqlite_driver._create_count_query(sql)
+    compiled_sql, parameters = count_sql.compile()
+
+    assert "COUNT(*)" in compiled_sql.upper()
+    assert compiled_sql.count("?") == 2
+    assert list(parameters) == ["W", "W"]
+
+
+def test_create_count_query_expands_repeated_named_parameters_join_branch(sqlite_driver: "SqliteDriver") -> None:
+    """Repeated named params should compile when joins force count subquery wrapping."""
+    sql = SQL(
+        "SELECT t.id FROM t JOIN u ON u.t_id = t.id WHERE t.a = :wid OR u.b = :wid",
+        statement_config=sqlite_driver.statement_config,
+        wid="W",
+    )
+
+    count_sql = sqlite_driver._create_count_query(sql)
+    compiled_sql, parameters = count_sql.compile()
+
+    assert "COUNT(*)" in compiled_sql.upper()
+    assert compiled_sql.count("?") == 2
+    assert list(parameters) == ["W", "W"]
+
+
+def test_create_count_query_expands_repeated_named_parameters_cte_branch(sqlite_driver: "SqliteDriver") -> None:
+    """Repeated named params should compile when CTEs force count subquery wrapping."""
+    sql = SQL(
+        "WITH filtered AS (SELECT id FROM t WHERE a = :wid OR b = :wid) SELECT id FROM filtered",
+        statement_config=sqlite_driver.statement_config,
+        wid="W",
+    )
+
+    count_sql = sqlite_driver._create_count_query(sql)
+    compiled_sql, parameters = count_sql.compile()
+
+    assert "WITH" in compiled_sql.upper()
+    assert compiled_sql.count("?") == 2
+    assert list(parameters) == ["W", "W"]
+
+
+def test_create_count_query_single_named_parameter_control(sqlite_driver: "SqliteDriver") -> None:
+    """Single-occurrence named params should keep one execution value."""
+    sql = SQL("SELECT id FROM t WHERE a = :wid", statement_config=sqlite_driver.statement_config, wid="W")
+
+    count_sql = sqlite_driver._create_count_query(sql)
+    compiled_sql, parameters = count_sql.compile()
+
+    assert compiled_sql.count("?") == 1
+    assert list(parameters) == ["W"]
+
+
 # =============================================================================
 # COUNT(*) OVER() Window Function Tests
 # =============================================================================
@@ -444,6 +499,22 @@ def test_add_count_over_column_preserves_named_parameters(mock_driver: "MockSync
     modified_sql = mock_driver._add_count_over_column(sql)
 
     assert modified_sql.named_parameters == {"status": "active"}
+
+
+def test_add_count_over_column_expands_repeated_named_parameters(sqlite_driver: "SqliteDriver") -> None:
+    """Repeated named params should compile for expression-backed window count queries."""
+    sql = SQL(
+        "SELECT id FROM users WHERE status = :status OR backup_status = :status",
+        statement_config=sqlite_driver.statement_config,
+        status="active",
+    )
+
+    modified_sql = sqlite_driver._add_count_over_column(sql)
+    compiled_sql, parameters = modified_sql.compile()
+
+    assert "COUNT(*) OVER" in compiled_sql.upper()
+    assert compiled_sql.count("?") == 2
+    assert list(parameters) == ["active", "active"]
 
 
 def test_add_count_over_column_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
@@ -528,6 +599,61 @@ def test_add_count_over_column_fails_on_non_select(mock_driver: "MockSyncDriver"
 
     with pytest.raises(ImproperConfigurationError, match="SELECT"):
         mock_driver._add_count_over_column(sql)
+
+
+def test_select_with_total_handles_repeated_named_parameters(sqlite_driver: "SqliteDriver") -> None:
+    """select_with_total should execute count queries with repeated same-named binds."""
+    sqlite_driver.connection.executescript("""
+        CREATE TABLE repeated_bind_items (
+            id INTEGER PRIMARY KEY,
+            workspace TEXT,
+            fallback_workspace TEXT
+        );
+        INSERT INTO repeated_bind_items (id, workspace, fallback_workspace) VALUES (1, 'W', NULL);
+        INSERT INTO repeated_bind_items (id, workspace, fallback_workspace) VALUES (2, 'other', 'W');
+        INSERT INTO repeated_bind_items (id, workspace, fallback_workspace) VALUES (3, 'other', 'other');
+    """)
+
+    rows, total = sqlite_driver.select_with_total(
+        """
+        SELECT id
+        FROM repeated_bind_items
+        WHERE workspace = :wid OR fallback_workspace = :wid
+        ORDER BY id
+        """,
+        wid="W",
+    )
+
+    assert total == 2
+    assert [row["id"] for row in rows] == [1, 2]
+
+
+def test_select_with_total_window_count_handles_repeated_named_parameters(sqlite_driver: "SqliteDriver") -> None:
+    """select_with_total(count_with_window=True) should execute repeated same-named binds."""
+    sqlite_driver.connection.executescript("""
+        CREATE TABLE repeated_bind_window_items (
+            id INTEGER PRIMARY KEY,
+            workspace TEXT,
+            fallback_workspace TEXT
+        );
+        INSERT INTO repeated_bind_window_items (id, workspace, fallback_workspace) VALUES (1, 'W', NULL);
+        INSERT INTO repeated_bind_window_items (id, workspace, fallback_workspace) VALUES (2, 'other', 'W');
+        INSERT INTO repeated_bind_window_items (id, workspace, fallback_workspace) VALUES (3, 'other', 'other');
+    """)
+
+    rows, total = sqlite_driver.select_with_total(
+        """
+        SELECT id
+        FROM repeated_bind_window_items
+        WHERE workspace = :wid OR fallback_workspace = :wid
+        ORDER BY id
+        """,
+        count_with_window=True,
+        wid="W",
+    )
+
+    assert total == 2
+    assert [row["id"] for row in rows] == [1, 2]
 
 
 # =============================================================================

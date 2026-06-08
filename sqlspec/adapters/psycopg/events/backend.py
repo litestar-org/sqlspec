@@ -23,8 +23,6 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
-logger = get_logger("sqlspec.events.psycopg")
-
 __all__ = (
     "PsycopgAsyncEventsBackend",
     "PsycopgAsyncHybridEventsBackend",
@@ -33,15 +31,7 @@ __all__ = (
     "create_event_backend",
 )
 
-
-def _extract_event_id(payload: "str | None") -> "str | None":
-    if not payload:
-        return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        event_id = raw.get("event_id")
-        return event_id if isinstance(event_id, str) else None
-    return None
+logger = get_logger("sqlspec.events.psycopg")
 
 
 class PsycopgSyncEventsBackend:
@@ -365,7 +355,7 @@ def create_event_backend(
     | PsycopgAsyncHybridEventsBackend
     | None
 ):
-    """Factory used by EventChannel to create the native psycopg backend."""
+    """EventChannel factory for the native psycopg backend."""
     is_async = config.is_async
     match (backend_name, is_async):
         case ("listen_notify", False):
@@ -396,3 +386,13 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _extract_event_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None

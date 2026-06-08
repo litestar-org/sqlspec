@@ -10,16 +10,6 @@ from sqlspec.utils.module_loader import ensure_opentelemetry
 __all__ = ("enable_tracing",)
 
 
-def _wrap_provider(provider: Any | None) -> Callable[[], Any] | None:
-    if provider is None:
-        return None
-
-    def _factory() -> Any:
-        return provider
-
-    return _factory
-
-
 def enable_tracing(
     *,
     base_config: ObservabilityConfig | None = None,
@@ -56,3 +46,13 @@ def enable_tracing(
     config = base_config.copy() if base_config else ObservabilityConfig()
     config.telemetry = telemetry
     return config
+
+
+def _wrap_provider(provider: Any | None) -> Callable[[], Any] | None:
+    if provider is None:
+        return None
+
+    def _factory() -> Any:
+        return provider
+
+    return _factory

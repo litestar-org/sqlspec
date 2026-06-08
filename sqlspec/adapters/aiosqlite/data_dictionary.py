@@ -5,10 +5,16 @@ from typing import TYPE_CHECKING, ClassVar
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.aiosqlite.core import format_identifier
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
+    get_dialect_config,
+)
 from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_features, resolve_sqlite_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
@@ -48,7 +54,6 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
 
         Returns:
             SQLite version information or None if detection fails.
-
         """
         driver_id = id(driver)
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
@@ -81,7 +86,6 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         version_info = await self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
@@ -95,7 +99,6 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
 
         Returns:
             SQLite-specific type name.
-
         """
         config = self.get_dialect_config()
         version_info = await self.get_version(driver)
@@ -124,7 +127,6 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
             return await driver.select(query_text, schema_type=ColumnMetadata)
 
-        assert table is not None
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
@@ -146,7 +148,6 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
                 indexes.extend(await self.get_indexes(driver, table=table_name, schema=schema_name))
             return indexes
 
-        assert table is not None
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name

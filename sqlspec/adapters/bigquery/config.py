@@ -12,7 +12,6 @@ from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import Empty
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -25,6 +24,9 @@ if TYPE_CHECKING:
     from google.auth.credentials import Credentials
 
     from sqlspec.core import StatementConfig
+    from sqlspec.observability import ObservabilityConfig
+
+__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
 
 
 class BigQueryConnectionParams(TypedDict):
@@ -84,9 +86,14 @@ class BigQueryDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             BigQuery does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
+        job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
+        job_result_timeout: Per-request HTTP transport timeout (seconds) for starting query jobs and
+            polling ``QueryJob.result()``. Bounds each call before falling back to retry, so a stalled
+            server response raises instead of blocking indefinitely. Defaults to the client polling
+            default (waits indefinitely for the job using the API's per-call default timeouts).
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -97,6 +104,8 @@ class BigQueryDriverFeatures(TypedDict):
     enable_uuid_conversion: NotRequired[bool]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    job_retry_deadline: NotRequired[float]
+    job_result_timeout: NotRequired[float]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):
@@ -118,19 +127,6 @@ class BigQueryConnectionContext(SyncPoolConnectionContext):
         return None
 
 
-class _BigQueryConnectionHook:
-    __slots__ = ("_hook",)
-
-    def __init__(self, hook: "Callable[[BigQueryConnection], None]") -> None:
-        self._hook = hook
-
-    def __call__(self, context: "dict[str, Any]") -> None:
-        connection = context.get("connection")
-        if connection is None:
-            return
-        self._hook(connection)
-
-
 class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
@@ -144,21 +140,10 @@ class _BigQuerySessionConnectionHandler(SyncPoolSessionFactory):
         return None
 
 
-__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
-
-
 class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     """BigQuery configuration.
 
     Configuration for Google Cloud BigQuery connections.
-
-    Example::
-
-        config = BigQueryConfig(
-            connection_config=BigQueryConnectionParams(
-                project="my-gcp-project"
-            )
-        )
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
@@ -196,7 +181,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             statement_config: Statement configuration override
             driver_features: BigQuery-specific driver features
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
@@ -215,12 +200,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         statement_config = statement_config or build_statement_config(json_serializer=serializer)
 
-        local_observability = observability_config
-        if user_connection_hook is not None:
-            lifecycle_override = ObservabilityConfig(
-                lifecycle={"on_connection_create": [_BigQueryConnectionHook(user_connection_hook)]}
-            )
-            local_observability = ObservabilityConfig.merge(local_observability, lifecycle_override)
+        # Fired directly in create_connection (the client-construction path) like every other adapter,
+        # rather than bridged through the observability lifecycle dispatcher (which only runs under the
+        # SQLSpec registry wrapper, not bare config.provide_session()).
+        self._user_connection_hook = user_connection_hook
 
         super().__init__(
             connection_config=self.connection_config,
@@ -230,7 +213,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             driver_features=driver_features,
             bind_key=bind_key,
             extension_config=extension_config,
-            observability_config=local_observability,
+            observability_config=observability_config,
             **kwargs,
         )
 
@@ -238,9 +221,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration."""
-
-        if self.connection_config.get("default_query_job_config") is not None:
-            return
 
         job_config = QueryJobConfig()
 
@@ -263,6 +243,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if query_timeout_ms is not None:
             job_config.job_timeout_ms = query_timeout_ms
 
+        # job_timeout_ms intentionally wins when both timeout aliases are configured.
         job_timeout_ms = self.connection_config.get("job_timeout_ms")
         if job_timeout_ms is not None:
             job_config.job_timeout_ms = job_timeout_ms
@@ -298,6 +279,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             default_load_job_config = self.connection_config.get("default_load_job_config")
             if default_load_job_config is not None:
                 self.driver_features["default_load_job_config"] = default_load_job_config
+
+            if self._user_connection_hook is not None:
+                self._user_connection_hook(connection)
 
             self._connection_instance = connection
         except Exception as e:

@@ -1,3 +1,4 @@
+# Keep in sync with sqlspec/adapters/aiosqlite/type_converter.py
 """SQLite custom type handlers for optional JSON and type conversion support.
 
 Provides registration functions for SQLite's adapter/converter system to enable
@@ -94,8 +95,8 @@ def register_type_handlers(
     called once during application initialization if custom type handling is needed.
 
     Args:
-        json_serializer: Optional custom JSON serializer (e.g., orjson.dumps).
-        json_deserializer: Optional custom JSON deserializer (e.g., orjson.loads).
+        json_serializer: Optional custom JSON serializer.
+        json_deserializer: Optional custom JSON deserializer.
     """
     dict_adapter = _make_json_adapter(json_serializer)
     list_adapter = _make_json_adapter(json_serializer)

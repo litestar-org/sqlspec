@@ -1,5 +1,8 @@
 """Tests for migration validation and out-of-order detection."""
 
+import copy
+import dataclasses
+import pickle
 from typing import Any
 
 import pytest
@@ -22,6 +25,32 @@ def test_detect_out_of_order_no_applied() -> None:
     gaps = detect_out_of_order_migrations(pending, applied)
 
     assert gaps == []
+
+
+def test_migration_gap_is_frozen_slots_dataclass() -> None:
+    """MigrationGap should use dataclass immutability without the old sentinel field."""
+    version = parse_version("20251011130000")
+    applied_after = [parse_version("20251012120000")]
+    gap = MigrationGap(missing_version=version, applied_after=applied_after)
+
+    assert dataclasses.is_dataclass(gap)
+    assert {field.name for field in dataclasses.fields(gap)} == {"missing_version", "applied_after"}
+    assert not hasattr(gap, "__dict__")
+    assert not hasattr(gap, "_initialized")
+    assert gap.applied_after is not applied_after
+    assert gap.applied_after == applied_after
+
+    with pytest.raises(AttributeError):
+        gap.missing_version = parse_version("20251013120000")  # type: ignore[misc]
+
+
+def test_migration_gap_copy_pickle_and_hash() -> None:
+    """MigrationGap should remain hashable and serializable after the dataclass change."""
+    gap = MigrationGap(missing_version=parse_version("20251011130000"), applied_after=[parse_version("20251012120000")])
+
+    assert copy.deepcopy(gap) == gap
+    assert pickle.loads(pickle.dumps(gap)) == gap
+    assert {gap: "value"}[gap] == "value"
 
 
 def test_detect_out_of_order_no_pending() -> None:

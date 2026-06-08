@@ -4,7 +4,14 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
+    get_dialect_config,
+)
 from sqlspec.data_dictionary.dialects.oracle import (
     extract_oracle_version_value,
     list_oracle_available_features,
@@ -18,16 +25,15 @@ from sqlspec.data_dictionary.dialects.oracle import (
     resolve_oracle_json_type,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.data_dictionary._types import DialectConfig
 
-logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
-
 __all__ = ("OracleVersionInfo", "OracledbAsyncDataDictionary", "OracledbSyncDataDictionary")
+
+logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
 
 
 class OracleVersionInfo(VersionInfo):
@@ -39,7 +45,7 @@ class OracleVersionInfo(VersionInfo):
         """Initialize Oracle version info.
 
         Args:
-            major: Major version number (e.g., 19, 21, 23).
+            major: Major version number.
             minor: Minor version number.
             patch: Patch version number.
             compatible: Compatible parameter value.

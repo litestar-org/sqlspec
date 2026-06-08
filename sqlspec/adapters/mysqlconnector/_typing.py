@@ -43,6 +43,17 @@ if not TYPE_CHECKING:
     MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
     MysqlConnectorAsyncRawCursor = _MysqlConnectorAsyncRawCursor
 
+__all__ = (
+    "MysqlConnectorAsyncConnection",
+    "MysqlConnectorAsyncCursor",
+    "MysqlConnectorAsyncRawCursor",
+    "MysqlConnectorAsyncSessionContext",
+    "MysqlConnectorSyncConnection",
+    "MysqlConnectorSyncCursor",
+    "MysqlConnectorSyncRawCursor",
+    "MysqlConnectorSyncSessionContext",
+)
+
 
 class MysqlConnectorSyncCursor:
     """Context manager for mysql-connector sync cursor operations."""
@@ -172,15 +183,3 @@ class MysqlConnectorAsyncSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "MysqlConnectorAsyncConnection",
-    "MysqlConnectorAsyncCursor",
-    "MysqlConnectorAsyncRawCursor",
-    "MysqlConnectorAsyncSessionContext",
-    "MysqlConnectorSyncConnection",
-    "MysqlConnectorSyncCursor",
-    "MysqlConnectorSyncRawCursor",
-    "MysqlConnectorSyncSessionContext",
-)

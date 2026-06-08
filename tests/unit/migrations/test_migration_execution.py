@@ -10,6 +10,7 @@ Tests migration execution including:
 - Migration file processing
 """
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -17,7 +18,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from sqlspec.driver import ExecutionResult
-from sqlspec.migrations.base import BaseMigrationRunner, BaseMigrationTracker
+from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.runner import SyncMigrationRunner
 
 
 @pytest.fixture
@@ -66,7 +68,7 @@ class MockMigrationTracker(BaseMigrationTracker):
             del self._applied_migrations[version]
 
 
-class MockMigrationRunner(BaseMigrationRunner):
+class MockMigrationRunner(SyncMigrationRunner):
     """Mock migration runner for testing."""
 
     def __init__(self, migrations_path: Path) -> None:
@@ -75,22 +77,38 @@ class MockMigrationRunner(BaseMigrationRunner):
 
     def get_migration_files(self) -> list[tuple[str, Path]]:
         """Mock get migration files."""
-        return self._get_migration_files_sync()
+        return super().get_migration_files()
 
-    def load_migration(self, file_path: Path) -> dict[str, Any]:
+    def load_migration(self, file_path: Path, version: str | None = None) -> dict[str, Any]:
         """Mock load migration."""
-        return self._load_migration_metadata(file_path)
+        return super().load_migration(file_path, version)
 
-    def execute_upgrade(self, driver: Any, migration: dict[str, Any]) -> Any:
+    def execute_upgrade(
+        self,
+        driver: Any,
+        migration: dict[str, Any],
+        *,
+        use_transaction: bool | None = None,
+        on_success: Callable[[int], None] | None = None,
+    ) -> Any:
         """Mock execute upgrade."""
+        _ = driver, use_transaction, on_success
         sql = self._get_migration_sql(migration, "up")
         if sql:
             self._executed_migrations.append({"version": migration["version"], "direction": "up", "sql": sql})
             return Mock(spec=ExecutionResult)
         raise ValueError(f"No upgrade SQL for migration {migration['version']}")
 
-    def execute_downgrade(self, driver: Any, migration: dict[str, Any]) -> Any:
+    def execute_downgrade(
+        self,
+        driver: Any,
+        migration: dict[str, Any],
+        *,
+        use_transaction: bool | None = None,
+        on_success: Callable[[int], None] | None = None,
+    ) -> Any:
         """Mock execute downgrade."""
+        _ = driver, use_transaction, on_success
         sql = self._get_migration_sql(migration, "down")
         if sql:
             self._executed_migrations.append({"version": migration["version"], "direction": "down", "sql": sql})
@@ -114,14 +132,14 @@ def test_tracking_table_sql_generation() -> None:
 
     assert hasattr(create_sql, "to_statement")
     stmt = create_sql.to_statement()
-    assert "CREATE TABLE" in stmt.sql.upper()
-    assert "test_migrations" in stmt.sql
-    assert "version_num" in stmt.sql
-    assert "description" in stmt.sql
-    assert "applied_at" in stmt.sql
-    assert "execution_time_ms" in stmt.sql
-    assert "checksum" in stmt.sql
-    assert "applied_by" in stmt.sql
+    assert "CREATE TABLE" in stmt.raw_sql.upper()
+    assert "test_migrations" in stmt.raw_sql
+    assert "version_num" in stmt.raw_sql
+    assert "description" in stmt.raw_sql
+    assert "applied_at" in stmt.raw_sql
+    assert "execution_time_ms" in stmt.raw_sql
+    assert "checksum" in stmt.raw_sql
+    assert "applied_by" in stmt.raw_sql
 
 
 def test_current_version_sql_generation() -> None:
@@ -132,11 +150,11 @@ def test_current_version_sql_generation() -> None:
 
     assert hasattr(version_sql, "to_statement")
     stmt = version_sql.to_statement()
-    assert "SELECT" in stmt.sql.upper()
-    assert "version_num" in stmt.sql
-    assert "test_migrations" in stmt.sql
-    assert "ORDER BY" in stmt.sql.upper()
-    assert "LIMIT" in stmt.sql.upper()
+    assert "SELECT" in stmt.raw_sql.upper()
+    assert "version_num" in stmt.raw_sql
+    assert "test_migrations" in stmt.raw_sql
+    assert "ORDER BY" in stmt.raw_sql.upper()
+    assert "LIMIT" in stmt.raw_sql.upper()
 
 
 def test_applied_migrations_sql_generation() -> None:
@@ -147,11 +165,11 @@ def test_applied_migrations_sql_generation() -> None:
 
     assert hasattr(applied_sql, "to_statement")
     stmt = applied_sql.to_statement()
-    assert "SELECT" in stmt.sql.upper()
-    assert "*" in stmt.sql
-    assert "test_migrations" in stmt.sql.lower()
-    assert "ORDER BY" in stmt.sql.upper()
-    assert "execution_sequence" in stmt.sql.lower()
+    assert "SELECT" in stmt.raw_sql.upper()
+    assert "*" in stmt.raw_sql
+    assert "test_migrations" in stmt.raw_sql.lower()
+    assert "ORDER BY" in stmt.raw_sql.upper()
+    assert "execution_sequence" in stmt.raw_sql.lower()
 
 
 def test_record_migration_sql_generation() -> None:
@@ -170,13 +188,13 @@ def test_record_migration_sql_generation() -> None:
 
     assert hasattr(record_sql, "to_statement")
     stmt = record_sql.to_statement()
-    assert "INSERT INTO" in stmt.sql.upper()
-    assert "test_migrations" in stmt.sql
-    assert "VALUES" in stmt.sql.upper()
+    assert "INSERT INTO" in stmt.raw_sql.upper()
+    assert "test_migrations" in stmt.raw_sql
+    assert "VALUES" in stmt.raw_sql.upper()
 
     params = stmt.parameters
-    assert "0001" in str(params) or "0001" in stmt.sql
-    assert "test migration" in str(params) or "test migration" in stmt.sql
+    assert "0001" in str(params) or "0001" in stmt.raw_sql
+    assert "test migration" in str(params) or "test migration" in stmt.raw_sql
 
 
 def test_remove_migration_sql_generation() -> None:
@@ -187,10 +205,10 @@ def test_remove_migration_sql_generation() -> None:
 
     assert hasattr(remove_sql, "to_statement")
     stmt = remove_sql.to_statement()
-    assert "DELETE" in stmt.sql.upper()
-    assert "test_migrations" in stmt.sql
-    assert "WHERE" in stmt.sql.upper()
-    assert "version_num" in stmt.sql
+    assert "DELETE" in stmt.raw_sql.upper()
+    assert "test_migrations" in stmt.raw_sql
+    assert "WHERE" in stmt.raw_sql.upper()
+    assert "version_num" in stmt.raw_sql
 
 
 def test_single_migration_upgrade_execution(temp_workspace_with_migrations: Path) -> None:
@@ -216,7 +234,7 @@ DROP TABLE users;
     mock_driver = Mock()
 
     with (
-        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
         patch.object(type(runner.loader), "clear_cache"),
         patch.object(type(runner.loader), "load_sql"),
         patch.object(type(runner.loader), "has_query", return_value=True),
@@ -268,7 +286,7 @@ DROP TABLE users;
     mock_driver = Mock()
 
     with (
-        patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+        patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
         patch.object(type(runner.loader), "clear_cache"),
         patch.object(type(runner.loader), "load_sql"),
         patch.object(type(runner.loader), "has_query", return_value=True),
@@ -334,7 +352,7 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
     assert migration_files[1][0] == "0002"
     assert migration_files[2][0] == "0003"
 
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
@@ -383,7 +401,7 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
@@ -408,7 +426,7 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
 
     with (
         patch.object(migration["loader"], "get_down_sql", new_callable=AsyncMock) as mock_get_down_sql,
-        patch("sqlspec.migrations.base.logger"),
+        patch("sqlspec.migrations.runner.logger"),
     ):
         mock_get_down_sql.return_value = []
         result = runner.execute_downgrade(mock_driver, migration)
@@ -516,7 +534,7 @@ DROP TABLE IF EXISTS nonexistent_table;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
@@ -529,13 +547,10 @@ DROP TABLE IF EXISTS nonexistent_table;
         ):
             migration = runner.load_migration(migration_file)
 
-    with patch.object(migration["loader"], "get_up_sql") as mock_get_up_sql:
+    async def mock_get_up_error(_file_path: Path) -> None:
+        raise Exception("SQL syntax error")
 
-        async def mock_get_up_error() -> None:
-            raise Exception("SQL syntax error")
-
-        mock_get_up_sql.return_value = mock_get_up_error()
-
+    with patch.object(migration["loader"], "get_up_sql", new=mock_get_up_error):
         with pytest.raises(ValueError) as exc_info:
             runner.execute_upgrade(mock_driver, migration)
 
@@ -556,7 +571,7 @@ DROP TABLE legacy_table;
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
 
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_get_loader.return_value = mock_loader
@@ -592,7 +607,7 @@ SELECT * FROM
 
     runner = MockMigrationRunner(migrations_dir)
 
-    with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
+    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file.side_effect = Exception("File validation failed")
         mock_get_loader.return_value = mock_loader

@@ -8,11 +8,11 @@ from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 
+__all__ = ("AiosqliteStore",)
+
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
-
-__all__ = ("AiosqliteStore",)
 
 
 class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
@@ -27,14 +27,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     Args:
         config: AiosqliteConfig instance.
-
-    Example:
-        from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
-
-        config = AiosqliteConfig(database=":memory:")
-        store = AiosqliteStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -44,9 +36,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
         Args:
             config: AiosqliteConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -55,13 +44,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses REAL type for expires_at (stores Julian Day number)
-            - Julian Day enables direct comparison with julianday('now')
-            - Partial index WHERE expires_at IS NOT NULL reduces index size
-            - This approach ensures the index is actually used by query optimizer
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -89,10 +71,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
         Returns:
             Julian Day number as REAL, or None if dt is None.
-
-        Notes:
-            Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
-            This enables direct comparison with julianday('now') in SQL queries.
         """
         if dt is None:
             return None
@@ -170,9 +148,6 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Stores expires_at as Julian Day number (REAL) for optimal index usage.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)

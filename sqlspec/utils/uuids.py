@@ -19,14 +19,16 @@ When fastnanoid is NOT installed:
     - nanoid() falls back to uuid4().hex with a warning (different format)
 """
 
+import uuid as _uuid_mod
 import warnings
-from collections.abc import Callable
-from importlib import import_module
 from typing import Any, cast
 from uuid import NAMESPACE_DNS, NAMESPACE_OID, NAMESPACE_URL, NAMESPACE_X500, UUID
 from uuid import uuid3 as _stdlib_uuid3
 from uuid import uuid4 as _stdlib_uuid4
 from uuid import uuid5 as _stdlib_uuid5
+
+from sqlspec.typing import NANOID_INSTALLED, UUID_UTILS_INSTALLED
+from sqlspec.utils.module_loader import import_optional
 
 __all__ = (
     "NAMESPACE_DNS",
@@ -44,52 +46,8 @@ __all__ = (
 )
 
 
-class _Availability:
-    """Lazy availability flag for optional dependencies."""
-
-    __slots__ = ("_loader",)
-
-    def __init__(self, loader: Callable[[], "Any | None"]) -> None:
-        self._loader = loader
-
-    def __bool__(self) -> bool:
-        return self._loader() is not None
-
-
-def _load_uuid_utils() -> "Any | None":
-    """Load uuid-utils when available."""
-    try:
-        module = import_module("uuid_utils")
-    except Exception:
-        return None
-    return module
-
-
-def _load_nanoid() -> "Any | None":
-    """Load fastnanoid when available."""
-    try:
-        module = import_module("fastnanoid")
-    except Exception:
-        return None
-    return module
-
-
-def _convert_namespace(namespace: "Any", module: "Any | None") -> "Any":
-    """Convert namespace to uuid-utils UUID when available."""
-    if module is None:
-        return namespace
-    uuid_cls = module.UUID
-    if isinstance(namespace, uuid_cls):
-        return namespace
-    return uuid_cls(str(namespace))
-
-
-def _nanoid_impl() -> str:
-    return _stdlib_uuid4().hex
-
-
-UUID_UTILS_INSTALLED = _Availability(_load_uuid_utils)
-NANOID_INSTALLED = _Availability(_load_nanoid)
+_uuid_utils_mod: Any | None = import_optional("uuid_utils")
+_fastnanoid_mod: Any | None = import_optional("fastnanoid")
 
 
 def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":
@@ -105,7 +63,7 @@ def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":
     Returns:
         A deterministic UUID based on namespace and name.
     """
-    module = _load_uuid_utils()
+    module = _uuid_utils_mod
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid3(namespace_value, name)
@@ -123,7 +81,7 @@ def uuid4() -> "UUID":
     Returns:
         A randomly generated UUID.
     """
-    module = _load_uuid_utils()
+    module = _uuid_utils_mod
     if module is None:
         return _stdlib_uuid4()
     return cast("UUID", module.uuid4())
@@ -142,7 +100,7 @@ def uuid5(name: str, namespace: "UUID | None" = None) -> "UUID":
     Returns:
         A deterministic UUID based on namespace and name.
     """
-    module = _load_uuid_utils()
+    module = _uuid_utils_mod
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid5(namespace_value, name)
@@ -162,12 +120,9 @@ def uuid6() -> "UUID":
     Returns:
         A time-ordered UUID, or a random UUID if time-ordered generation unavailable.
     """
-    module = _load_uuid_utils()
+    module = _uuid_utils_mod
     if module is not None:
         return cast("UUID", module.uuid6())
-
-    # Try Python 3.14+ native support
-    import uuid as _uuid_mod
 
     native_uuid6 = getattr(_uuid_mod, "uuid6", None)
     if native_uuid6 is not None:
@@ -195,12 +150,9 @@ def uuid7() -> "UUID":
     Returns:
         A time-ordered UUID, or a random UUID if time-ordered generation unavailable.
     """
-    module = _load_uuid_utils()
+    module = _uuid_utils_mod
     if module is not None:
         return cast("UUID", module.uuid7())
-
-    # Try Python 3.14+ native support
-    import uuid as _uuid_mod
 
     native_uuid7 = getattr(_uuid_mod, "uuid7", None)
     if native_uuid7 is not None:
@@ -229,7 +181,7 @@ def nanoid() -> str:
         A 21-character Nano ID string, or 32-character UUID hex if
         fastnanoid unavailable.
     """
-    module = _load_nanoid()
+    module = _fastnanoid_mod
     if module is None:
         warnings.warn(
             "fastnanoid not installed, falling back to uuid4.hex for Nano ID generation. "
@@ -239,3 +191,17 @@ def nanoid() -> str:
         )
         return _nanoid_impl()
     return cast("str", module.generate())
+
+
+def _convert_namespace(namespace: "Any", module: "Any | None") -> "Any":
+    """Convert namespace to uuid-utils UUID when available."""
+    if module is None:
+        return namespace
+    uuid_cls = module.UUID
+    if isinstance(namespace, uuid_cls):
+        return namespace
+    return uuid_cls(str(namespace))
+
+
+def _nanoid_impl() -> str:
+    return _stdlib_uuid4().hex

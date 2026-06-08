@@ -24,6 +24,8 @@ if not TYPE_CHECKING:
     BigQueryConnection = Client
     BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
 
+__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryParam", "BigQuerySessionContext")
+
 
 class BigQueryCursor:
     """BigQuery cursor with resource management."""
@@ -103,6 +105,3 @@ class BigQuerySessionContext:
             self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryParam", "BigQuerySessionContext")

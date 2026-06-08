@@ -31,6 +31,16 @@ if not TYPE_CHECKING:
     CockroachSyncCursor = Cursor
     CockroachAsyncCursor = AsyncCursor
 
+__all__ = (
+    "CockroachAsyncConnection",
+    "CockroachAsyncCursor",
+    "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgSyncSessionContext",
+    "CockroachSyncConnection",
+    "CockroachSyncCursor",
+    "PsycopgDictRow",
+)
+
 
 class CockroachPsycopgSyncSessionContext:
     """Sync context manager for CockroachDB psycopg sessions."""
@@ -124,14 +134,3 @@ class CockroachPsycopgAsyncSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "CockroachAsyncConnection",
-    "CockroachAsyncCursor",
-    "CockroachPsycopgAsyncSessionContext",
-    "CockroachPsycopgSyncSessionContext",
-    "CockroachSyncConnection",
-    "CockroachSyncCursor",
-    "PsycopgDictRow",
-)

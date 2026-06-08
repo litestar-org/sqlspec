@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec.typing import VersionInfo
+from sqlspec.data_dictionary import VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy import PsqlpyDriver

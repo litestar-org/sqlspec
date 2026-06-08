@@ -6,6 +6,7 @@ staging and production environments.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -33,6 +34,7 @@ console = Console()
 logger = get_logger("sqlspec.migrations.validation")
 
 
+@dataclass(frozen=True, slots=True)
 class MigrationGap:
     """Represents a migration that is out of order.
 
@@ -43,21 +45,13 @@ class MigrationGap:
     Attributes:
         missing_version: The out-of-order migration version.
         applied_after: List of already-applied migrations with later timestamps.
-
     """
 
-    __slots__ = ("_initialized", "applied_after", "missing_version")
-    applied_after: "list[MigrationVersion]"
     missing_version: "MigrationVersion"
-    _initialized: bool
+    applied_after: "list[MigrationVersion]"
 
-    def __init__(self, missing_version: "MigrationVersion", applied_after: "list[MigrationVersion]") -> None:
-        object.__setattr__(self, "missing_version", missing_version)
-        object.__setattr__(self, "applied_after", list(applied_after))
-        object.__setattr__(self, "_initialized", True)
-
-    def __repr__(self) -> str:
-        return f"MigrationGap(missing_version={self.missing_version!r}, applied_after={self.applied_after!r})"
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "applied_after", list(self.applied_after))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MigrationGap):
@@ -66,19 +60,6 @@ class MigrationGap:
 
     def __hash__(self) -> int:
         return hash((self.missing_version, tuple(self.applied_after)))
-
-    def __setattr__(self, name: str, value: object) -> None:
-        if name == "_initialized":
-            object.__setattr__(self, name, value)
-            return
-        try:
-            initialized = self._initialized
-        except AttributeError:
-            initialized = False
-        if initialized:
-            msg = "MigrationGap is immutable"
-            raise AttributeError(msg)
-        object.__setattr__(self, name, value)
 
 
 def detect_out_of_order_migrations(
@@ -99,7 +80,6 @@ def detect_out_of_order_migrations(
 
     Returns:
         List of migration gaps where pending versions are older than applied.
-
     """
     if not applied_versions or not pending_versions:
         return []
@@ -144,16 +124,6 @@ def format_out_of_order_warning(gaps: "list[MigrationGap]") -> str:
 
     Returns:
         Formatted warning message string.
-
-    Example:
-        >>> gaps = [MigrationGap(version1, [version2, version3])]
-        >>> print(format_out_of_order_warning(gaps))
-        Out-of-order migrations detected:
-
-        - 20251011130000 created before:
-          - 20251012140000
-          - 20251013090000
-
     """
     if not gaps:
         return ""
@@ -202,15 +172,6 @@ def validate_migration_order(
     Raises:
         OutOfOrderMigrationError: If out-of-order migrations detected and
             strict_ordering is True.
-
-    Example:
-        >>> validate_migration_order(
-        ...     ["20251011130000"],
-        ...     ["20251012140000"],
-        ...     strict_ordering=True,
-        ... )
-        OutOfOrderMigrationError: Out-of-order migrations detected...
-
     """
     gaps = detect_out_of_order_migrations(pending_versions, applied_versions)
 
@@ -252,7 +213,6 @@ def validate_squash_range(
 
     Raises:
         SquashValidationError: If validation fails (invalid range, missing versions, gaps).
-
     """
     if int(start_version) > int(end_version):
         msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
@@ -306,7 +266,6 @@ def validate_extension_consistency(migrations: "list[tuple[str, Path]]") -> None
 
     Raises:
         SquashValidationError: If migrations mix core and extension, or different extensions.
-
     """
     if not migrations:
         return
@@ -340,8 +299,7 @@ def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path")
 
     Returns:
         Status string: "ready" (can squash), "already_squashed" (already done),
-        or "partial" (inconsistent state - target exists but some sources remain).
-
+            or "partial" (inconsistent state - target exists but some sources remain).
     """
     target_exists = target_file.exists()
     sources_exist = [f.exists() for f in source_files]

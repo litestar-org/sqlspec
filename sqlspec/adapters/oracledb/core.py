@@ -58,7 +58,6 @@ __all__ = (
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
-    "requires_session_callback",
     "resolve_row_metadata",
     "resolve_rowcount",
 )
@@ -183,6 +182,8 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
     if not parameters:
         msg = "execute_many requires parameters"
         raise ValueError(msg)
+    if isinstance(parameters, tuple):
+        return list(parameters)
     return parameters
 
 
@@ -239,7 +240,7 @@ def coerce_large_parameters_sync(
 
     Routing order:
         1. ``OracleClob`` / ``OracleBlob`` / ``OracleJson`` wrappers — explicit user
-           intent, length-thresholds bypassed.
+            intent, length-thresholds bypassed.
         2. Plain ``str`` whose UTF-8 encoding exceeds ``varchar2_byte_limit`` → CLOB.
         3. Plain ``bytes``/``bytearray`` longer than ``raw_byte_limit`` → BLOB.
 
@@ -460,20 +461,9 @@ def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[
     return features
 
 
-def requires_session_callback(driver_features: "dict[str, Any]") -> bool:
-    """Return True when the session callback should be installed.
-
-    The JSON input/output handlers are always-on (no driver-feature flag), so
-    the session callback is always required for an Oracle pool to bind ``dict``
-    / ``list`` parameters via the native ``DB_TYPE_JSON`` / OSON-encoded BLOB /
-    JSON-string CLOB paths and to cache ``connection._sqlspec_oracle_major``.
-    """
-    del driver_features  # always-on; preserved for signature compatibility
-    return True
-
-
 def _description_requires_lob_coercion(description: "list[Any]") -> bool:
     """Return True when cursor metadata indicates LOB-compatible columns."""
+    # Keep in sync with resolve_row_metadata's inlined cache-miss LOB detection.
     for column in description:
         try:
             type_code = column[1]
@@ -517,9 +507,36 @@ def resolve_row_metadata(
     if cached is not None and cached[0] is description:
         return cached[1], cached[2]
 
-    column_names = [col[0] for col in description]
+    column_names: list[str] = []
+    requires_lob_coercion = False
+    for column in description:
+        try:
+            column_names.append(column[0])
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            column_name = getattr(column, "name", None)
+            if isinstance(column_name, str):
+                column_names.append(column_name)
+            type_code = getattr(column, "type_code", None)
+            if type_code is None:
+                requires_lob_coercion = True
+                continue
+
+        if requires_lob_coercion:
+            continue
+
+        type_name = getattr(type_code, "name", None)
+        if isinstance(type_name, str):
+            upper_name = type_name.upper()
+            if any(marker in upper_name for marker in _LOB_TYPE_NAME_MARKERS):
+                requires_lob_coercion = True
+            continue
+
+        type_text = str(type_code).upper()
+        if any(marker in type_text for marker in _LOB_TYPE_NAME_MARKERS):
+            requires_lob_coercion = True
+
     normalized_column_names = normalize_column_names(column_names, driver_features)
-    requires_lob_coercion = _description_requires_lob_coercion(description)
 
     if len(cache) >= ROW_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
@@ -549,7 +566,6 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
 
     Returns:
         Tuple of coerced values with LOBs read to strings/bytes.
-
     """
     coerced_values: list[Any] | None = None
     for index, value in enumerate(row):
@@ -595,7 +611,6 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
 
     Returns:
         Tuple of coerced values with LOBs read to strings/bytes.
-
     """
     coerced_values: list[Any] | None = None
     for index, value in enumerate(row):

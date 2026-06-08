@@ -7,6 +7,7 @@ via connection type handlers. Uses stdlib uuid (no external dependencies).
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
 from sqlspec.utils.logging import get_logger
 
@@ -114,7 +115,7 @@ def uuid_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> A
 def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register UUID type handlers with chaining support.
 
-    Chains to existing type handlers (e.g., NumPy vectors) to avoid conflicts.
+    Chains to existing type handlers to avoid conflicts.
     Works for both sync and async connections.
 
     Args:
@@ -129,35 +130,5 @@ def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
     except AttributeError:
         existing_output = None
 
-    connection.inputtypehandler = _UuidInputHandler(existing_input)
-    connection.outputtypehandler = _UuidOutputHandler(existing_output)
-
-
-class _UuidInputHandler:
-    __slots__ = ("_fallback",)
-
-    def __init__(self, fallback: "Any | None") -> None:
-        self._fallback = fallback
-
-    def __call__(self, cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-        result = _input_type_handler(cursor, value, arraysize)
-        if result is not None:
-            return result
-        if self._fallback is not None:
-            return self._fallback(cursor, value, arraysize)
-        return None
-
-
-class _UuidOutputHandler:
-    __slots__ = ("_fallback",)
-
-    def __init__(self, fallback: "Any | None") -> None:
-        self._fallback = fallback
-
-    def __call__(self, cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-        result = _output_type_handler(cursor, metadata)
-        if result is not None:
-            return result
-        if self._fallback is not None:
-            return self._fallback(cursor, metadata)
-        return None
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)

@@ -16,7 +16,6 @@ from sqlspec.adapters.psqlpy.core import (
     resolve_runtime_statement_config,
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
-from sqlspec.adapters.psqlpy.type_converter import register_pgvector
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
@@ -27,6 +26,8 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
+
+__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 
 class PsqlpyConnectionParams(TypedDict):
@@ -86,29 +87,29 @@ class PsqlpyDriverFeatures(TypedDict):
     """Psqlpy driver feature flags.
 
     enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
-        Requires pgvector-python package installed.
-        Defaults to True when pgvector is installed.
-        Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
+     Requires pgvector-python package installed.
+     Defaults to True when pgvector is installed.
+     Provides automatic conversion between NumPy arrays and PostgreSQL vector types.
     enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-        When enabled and the pg_search extension is detected, the SQL dialect
-        switches to "paradedb" which supports search operators (@@@, &&&, etc.)
-        and inherits all pgvector distance operators.
-        Defaults to True. Independent of enable_pgvector.
+     When enabled and the pg_search extension is detected, the SQL dialect
+     switches to "paradedb" which supports search operators (@@@, &&&, etc.)
+     and inherits all pgvector distance operators.
+     Defaults to True. Independent of enable_pgvector.
     json_serializer: Custom JSON serializer applied to the statement configuration.
     json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
     on_connection_create: Async callback executed when a connection is acquired from pool.
-        Receives the raw psqlpy connection for low-level driver configuration.
-        Called exactly once per physical connection using WeakSet tracking.
+     Receives the raw psqlpy connection for low-level driver configuration.
+     Called exactly once per physical connection using WeakSet tracking.
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
-        Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-        Requires extension_config["events"] for migration setup when using table_queue backend.
+     Defaults to True when extension_config["events"] is configured.
+     Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
+     Requires extension_config["events"] for migration setup when using table_queue backend.
     events_backend: Event channel backend selection.
-        Options: "listen_notify", "table_queue", "listen_notify_durable"
-        - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
-        - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
-        - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
-        Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
+     Options: "listen_notify", "table_queue", "listen_notify_durable"
+     - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
+     - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
+     - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
+     Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
     """
 
     enable_pgvector: NotRequired[bool]
@@ -144,9 +145,6 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
             self._ctx = None
 
 
-__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
-
-
 class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Psqlpy connections."""
 
@@ -177,16 +175,7 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
-    """Configuration for Psqlpy asynchronous database connections.
-
-    Example::
-
-        config = PsqlpyConfig(
-            connection_config=PsqlpyPoolParams(
-                dsn="postgresql://user:pass@localhost/db"
-            )
-        )
-    """
+    """Configuration for Psqlpy asynchronous database connections."""
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
@@ -222,7 +211,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             statement_config: SQL statement configuration.
             driver_features: Driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
+            extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
         connection_config = normalize_connection_config(connection_config)
@@ -274,7 +263,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         if conn_id in self._initialized_connection_ids:
             return
         if self._pgvector_available:
-            register_pgvector(connection)
+            pass
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
         self._initialized_connection_ids.add(conn_id)
@@ -282,20 +271,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
         return ConnectionPool(**build_connection_config(self.connection_config))
-
-    def _update_dialect_for_extensions(self) -> None:
-        """Update statement_config dialect based on detected extensions.
-
-        Priority: paradedb > pgvector > postgres (default).
-        """
-        current_dialect = getattr(self.statement_config, "dialect", "postgres")
-        if current_dialect != "postgres":
-            return
-
-        if self._paradedb_available:
-            self.statement_config = self.statement_config.replace(dialect="paradedb")
-        elif self._pgvector_available:
-            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

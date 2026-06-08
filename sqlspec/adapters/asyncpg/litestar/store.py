@@ -24,17 +24,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
 
     Args:
         config: AsyncpgConfig instance with extension_config["litestar"] settings.
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://..."},
-            extension_config={"litestar": {"session_table": "my_sessions"}}
-        )
-        store = AsyncpgStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -44,9 +33,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
 
         Args:
             config: AsyncpgConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -55,13 +41,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMPTZ for timezone-aware expiration timestamps
-            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
-            - FILLFACTOR 80 leaves space for HOT updates, reducing table bloat
-            - Audit columns (created_at, updated_at) help with debugging
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -105,10 +84,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
 
         Returns:
             Session data as bytes if found and not expired, None otherwise.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP instead of NOW() for SQL standard compliance.
-            The query planner can use the partial index for expires_at > CURRENT_TIMESTAMP.
         """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -141,10 +116,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Uses EXCLUDED to reference the proposed insert values in ON CONFLICT.
-            Updates updated_at timestamp on every write for audit trail.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -189,9 +160,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
 
         Returns:
             True if the session exists and is not expired.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for consistency with get() method.
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -235,11 +203,6 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
 
         Returns:
             Number of sessions deleted.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for consistency.
-            For very large tables (10M+ rows), consider batching deletes
-            to avoid holding locks too long.
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 

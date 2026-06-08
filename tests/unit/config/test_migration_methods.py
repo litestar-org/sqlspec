@@ -19,12 +19,41 @@ Tests cover all 4 base config classes:
 from pathlib import Path
 from unittest.mock import patch
 
+import sqlspec.config as config_module
+import sqlspec.typing as typing_module
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.config import (
+    AsyncDatabaseConfig,
+    ConnectionT,
+    DriverT,
+    NoPoolAsyncConfig,
+    NoPoolSyncConfig,
+    PoolT,
+    SyncDatabaseConfig,
+)
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+
+
+def test_config_reexports_shared_type_variables() -> None:
+    """Test that config exposes the canonical shared type variables."""
+    assert ConnectionT is typing_module.ConnectionT
+    assert PoolT is typing_module.PoolT
+    assert DriverT is config_module.DriverT
+
+
+def test_migration_methods_are_inherited_from_mixins() -> None:
+    """Test that base configs inherit shared migration implementations."""
+    assert config_module._SyncMigrationMixin in NoPoolSyncConfig.__mro__
+    assert config_module._SyncMigrationMixin in SyncDatabaseConfig.__mro__
+    assert config_module._AsyncMigrationMixin in NoPoolAsyncConfig.__mro__
+    assert config_module._AsyncMigrationMixin in AsyncDatabaseConfig.__mro__
+    assert "migrate_up" not in NoPoolSyncConfig.__dict__
+    assert "migrate_up" not in SyncDatabaseConfig.__dict__
+    assert "migrate_up" not in NoPoolAsyncConfig.__dict__
+    assert "migrate_up" not in AsyncDatabaseConfig.__dict__
 
 
 def test_sync_config_has_migration_methods() -> None:

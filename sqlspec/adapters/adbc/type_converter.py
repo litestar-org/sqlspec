@@ -58,20 +58,8 @@ class ADBCOutputConverter(CachedOutputConverter):
             Converted value according to dialect requirements.
         """
         try:
-            if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb"}:
-                if detected_type in {"uuid", "interval"}:
-                    return self.convert_value(value, detected_type)
-            elif self.dialect == "duckdb":
-                if detected_type == "uuid":
-                    return self.convert_value(value, detected_type)
-            elif self.dialect == "sqlite":
-                if detected_type == "uuid":
-                    return str(value)
-            elif self.dialect == "bigquery":
-                if detected_type == "uuid":
-                    return self.convert_value(value, detected_type)
-            elif self.dialect in {"mysql", "snowflake"} and detected_type in {"uuid", "json"}:
-                return self.convert_value(value, detected_type)
+            if self.dialect == "sqlite" and detected_type == "uuid":
+                return str(value)
             return self.convert_value(value, detected_type)
         except Exception:
             return value
@@ -93,7 +81,7 @@ class ADBCOutputConverter(CachedOutputConverter):
         """Check if dialect supports native handling of a type.
 
         Args:
-            type_name: Type name to check (e.g., 'uuid', 'json')
+            type_name: Type name to check
 
         Returns:
             True if dialect supports native handling, False otherwise.
@@ -110,22 +98,10 @@ class ADBCOutputConverter(CachedOutputConverter):
         Returns:
             Converted value according to dialect requirements.
         """
-        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb"}:
-            if target_type in {"uuid", "json", "interval"}:
-                return self.convert_value(value, target_type)
-        elif self.dialect == "duckdb":
-            if target_type in {"uuid", "json"}:
-                return self.convert_value(value, target_type)
-        elif self.dialect == "sqlite":
-            if target_type == "uuid":
-                return str(value)
-            if target_type == "json":
-                return self.convert_value(value, target_type)
-        elif self.dialect == "bigquery":
-            if target_type == "uuid":
-                return str(self.convert_value(value, target_type))
-            if target_type == "json":
-                return self.convert_value(value, target_type)
+        if self.dialect == "sqlite" and target_type == "uuid":
+            return str(value)
+        if self.dialect == "bigquery" and target_type == "uuid":
+            return str(self.convert_value(value, target_type))
         return self.convert_value(value, target_type)
 
 

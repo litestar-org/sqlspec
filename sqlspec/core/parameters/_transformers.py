@@ -4,8 +4,10 @@ import bisect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp as _exp
 
+import sqlspec.exceptions
 from sqlspec.core.parameters._alignment import (
     collect_null_parameter_ordinals,
     looks_like_execute_many,
@@ -13,13 +15,13 @@ from sqlspec.core.parameters._alignment import (
     validate_parameter_alignment,
 )
 from sqlspec.core.parameters._types import (
+    _NAMED_STYLES,
+    _POSITIONAL_STYLES,
     ConvertedParameters,
     ParameterMapping,
     ParameterPayload,
     ParameterProfile,
-    ParameterStyle,
 )
-from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.type_guards import get_value_attribute
 
 __all__ = (
@@ -29,28 +31,30 @@ __all__ = (
     "replace_placeholders_with_literals",
 )
 
-_AST_TRANSFORMER_VALIDATOR: "ParameterValidator" = ParameterValidator()
+
+_MISSING_PARAMETER = object()
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPruningTransform:
-    __slots__ = ("_dialect", "_validator")
+    __slots__ = ("_dialect",)
 
-    def __init__(self, dialect: str, validator: "ParameterValidator | None") -> None:
+    def __init__(self, dialect: str) -> None:
         self._dialect = dialect
-        self._validator = validator
 
     def __call__(
-        self, expression: Any, parameters: "ParameterPayload", parameter_profile: "ParameterProfile"
+        self,
+        expression: Any,
+        parameters: "ParameterPayload",
+        parameter_profile: "ParameterProfile",
+        is_many: bool = False,
     ) -> "tuple[Any, ConvertedParameters]":
         return replace_null_parameters_with_literals(
-            expression,
-            parameters,
-            dialect=self._dialect,
-            validator=self._validator,
-            parameter_profile=parameter_profile,
+            expression, parameters, dialect=self._dialect, parameter_profile=parameter_profile, is_many=is_many
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LiteralInliningTransform:
     __slots__ = ("_json_serializer",)
 
@@ -66,6 +70,7 @@ class _LiteralInliningTransform:
         return literal_expression, parameters
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPlaceholderTransformer:
     __slots__ = ("_null_names", "_null_positions", "_qmark_position", "_sorted_null_positions")
 
@@ -112,6 +117,7 @@ class _NullPlaceholderTransformer:
         return node
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _PlaceholderLiteralTransformer:
     __slots__ = ("_json_serializer", "_parameters", "_placeholder_index")
 
@@ -120,7 +126,7 @@ class _PlaceholderLiteralTransformer:
         self._json_serializer = json_serializer
         self._placeholder_index = 0
 
-    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object | None:
+    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object:
         candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
         for candidate in candidate_names:
             if candidate in payload:
@@ -128,7 +134,7 @@ class _PlaceholderLiteralTransformer:
         normalized = param_name.lstrip("@:$")
         if normalized in payload:
             return cast("object", get_value_attribute(payload[normalized]))
-        return None
+        return _MISSING_PARAMETER
 
     def __call__(self, node: Any) -> Any:
         if (
@@ -148,7 +154,7 @@ class _PlaceholderLiteralTransformer:
 
             if isinstance(self._parameters, Mapping):
                 resolved_value = self._resolve_mapping_value(param_name, self._parameters)
-                if resolved_value is not None:
+                if resolved_value is not _MISSING_PARAMETER:
                     return _create_literal_expression(resolved_value, self._json_serializer)
                 return node
 
@@ -173,10 +179,10 @@ class _PlaceholderLiteralTransformer:
 
 
 def build_null_pruning_transform(
-    *, dialect: str = "postgres", validator: "ParameterValidator | None" = None
-) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, ConvertedParameters]]":
+    *, dialect: str = "postgres"
+) -> "Callable[[Any, ParameterPayload, ParameterProfile, bool], tuple[Any, ConvertedParameters]]":
     """Return a callable that prunes NULL placeholders from an expression."""
-    return _NullPruningTransform(dialect, validator)
+    return _NullPruningTransform(dialect)
 
 
 def build_literal_inlining_transform(
@@ -191,8 +197,8 @@ def replace_null_parameters_with_literals(
     parameters: "ParameterPayload",
     *,
     dialect: str = "postgres",
-    validator: "ParameterValidator | None" = None,
     parameter_profile: "ParameterProfile | None" = None,
+    is_many: bool = False,
 ) -> "tuple[Any, ConvertedParameters]":
     """Rewrite placeholders representing ``NULL`` values and prune parameters.
 
@@ -200,8 +206,8 @@ def replace_null_parameters_with_literals(
         expression: SQLGlot expression tree to transform.
         parameters: Parameter payload provided by the caller.
         dialect: SQLGlot dialect for serializing the expression.
-        validator: Optional validator instance for parameter extraction.
-        parameter_profile: Optional parameter profile to reuse for validation.
+        parameter_profile: Parameter profile to reuse for validation.
+        is_many: Whether the payload is a batch of parameter sets.
 
     Returns:
         Tuple containing the transformed expression and updated parameters.
@@ -215,7 +221,7 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
         return expression, None
 
-    if looks_like_execute_many(parameters):
+    if is_many or looks_like_execute_many(parameters):
         # For execute_many, convert to concrete type
         if isinstance(parameters, dict):
             return expression, parameters
@@ -223,14 +229,12 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
         return expression, None
 
-    validator_instance = validator or _AST_TRANSFORMER_VALIDATOR
-    profile = parameter_profile
-    if profile is None:
-        parameter_info = validator_instance.extract_parameters(expression.sql(dialect=dialect))
-        profile = ParameterProfile(parameter_info)
-    validate_parameter_alignment(profile, parameters)
+    if parameter_profile is None:
+        msg = "replace_null_parameters_with_literals() requires parameter_profile for non-empty parameters"
+        raise sqlspec.exceptions.SQLSpecError(msg)
+    validate_parameter_alignment(parameter_profile, parameters)
 
-    null_positions = collect_null_parameter_ordinals(parameters, profile)
+    null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
     if not null_positions:
         # Convert to concrete type for return
         if isinstance(parameters, dict):
@@ -243,26 +247,14 @@ def replace_null_parameters_with_literals(
             return expression, list(parameters)
         return expression, None
 
-    named_styles = {
-        ParameterStyle.NAMED_COLON,
-        ParameterStyle.NAMED_AT,
-        ParameterStyle.NAMED_DOLLAR,
-        ParameterStyle.NAMED_PYFORMAT,
-    }
-    positional_styles = {
-        ParameterStyle.QMARK,
-        ParameterStyle.POSITIONAL_PYFORMAT,
-        ParameterStyle.POSITIONAL_COLON,
-        ParameterStyle.NUMERIC,
-    }
     null_names: set[str] = set()
     positional_null_positions: set[int] = set()
-    for parameter in profile.parameters:
+    for parameter in parameter_profile.parameters:
         if parameter.ordinal not in null_positions:
             continue
-        if parameter.style in named_styles and parameter.name:
+        if parameter.style in _NAMED_STYLES and parameter.name:
             null_names.add(parameter.name)
-        if parameter.style in positional_styles:
+        if parameter.style in _POSITIONAL_STYLES:
             positional_null_positions.add(parameter.ordinal)
 
     sorted_null_positions = sorted(positional_null_positions)

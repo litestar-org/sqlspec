@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, cast, overload
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core.result._io import rows_to_pandas, rows_to_polars
 from sqlspec.core.statement import SQL
 from sqlspec.storage import (
     AsyncStoragePipeline,
@@ -37,6 +36,7 @@ from sqlspec.utils.arrow_helpers import (
     convert_dict_to_arrow,
     ensure_arrow_table,
 )
+from sqlspec.utils.module_loader import ensure_pandas, ensure_polars
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
@@ -319,7 +319,7 @@ class SQLResult(StatementResult):
         Returns:
             True if operation was successful, False otherwise.
         """
-        op_type = self.operation_type.upper()
+        op_type = self.operation_type
 
         if op_type == "SCRIPT" or self.statement_results:
             return not self.errors and self.total_statements == self.successful_statements
@@ -352,7 +352,7 @@ class SQLResult(StatementResult):
         Returns:
             List of result rows (optionally transformed to schema_type) or script summary.
         """
-        op_type_upper = self.operation_type.upper()
+        op_type_upper = self.operation_type
         if op_type_upper == "SCRIPT":
             failed_statements = self.total_statements - self.successful_statements
             return [
@@ -384,11 +384,6 @@ class SQLResult(StatementResult):
         return converted_rows
 
     def _get_schema_row(self, schema_type: "type[SchemaT]", row: "dict[str, Any]") -> "SchemaT":
-        rows_cache = self._schema_rows_cache
-        if rows_cache is not None:
-            cached_rows = rows_cache.get(schema_type)
-            if cached_rows:
-                return cast("SchemaT", cached_rows[0])
         row_cache = self._schema_row_cache
         if row_cache is not None:
             cached_row = row_cache.get(schema_type)
@@ -469,7 +464,7 @@ class SQLResult(StatementResult):
         return row
 
     def get_count(self) -> int:
-        """Get the number of rows in the current result set (e.g., a page of data).
+        """Get the number of rows in the current result set.
 
         Returns:
             Number of rows in current result set.
@@ -498,7 +493,7 @@ class SQLResult(StatementResult):
         Returns:
             True if INSERT operation.
         """
-        return self.operation_type.upper() == "INSERT"
+        return self.operation_type == "INSERT"
 
     def was_updated(self) -> bool:
         """Check if this was an UPDATE operation.
@@ -506,7 +501,7 @@ class SQLResult(StatementResult):
         Returns:
             True if UPDATE operation.
         """
-        return self.operation_type.upper() == "UPDATE"
+        return self.operation_type == "UPDATE"
 
     def was_deleted(self) -> bool:
         """Check if this was a DELETE operation.
@@ -514,7 +509,7 @@ class SQLResult(StatementResult):
         Returns:
             True if DELETE operation.
         """
-        return self.operation_type.upper() == "DELETE"
+        return self.operation_type == "DELETE"
 
     def __len__(self) -> int:
         """Get the number of rows in the result set.
@@ -593,9 +588,6 @@ class SQLResult(StatementResult):
             raise ValueError(msg)
 
         data_len = len(rows)
-        if data_len == 0:
-            msg = "No result found, exactly one row expected"
-            raise ValueError(msg)
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), exactly one row expected"
             raise ValueError(msg)
@@ -629,8 +621,6 @@ class SQLResult(StatementResult):
             return None
 
         data_len = len(rows)
-        if data_len == 0:
-            return None
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), at most one row expected"
             raise ValueError(msg)
@@ -669,12 +659,6 @@ class SQLResult(StatementResult):
 
         Raises:
             ValueError: If no data available.
-
-        Examples:
-            >>> result = session.select("SELECT * FROM users")
-            >>> table = result.to_arrow()
-            >>> print(table.num_rows)
-            3
         """
         if self.data is None:
             msg = "No data available"
@@ -690,17 +674,15 @@ class SQLResult(StatementResult):
 
         Raises:
             ValueError: If no data available.
-
-        Examples:
-            >>> result = session.select("SELECT * FROM users")
-            >>> df = result.to_pandas()
-            >>> print(df.head())
         """
         if self.data is None:
             msg = "No data available"
             raise ValueError(msg)
 
-        return rows_to_pandas(self._get_rows())
+        ensure_pandas()
+        import pandas as pd
+
+        return pd.DataFrame(self._get_rows())
 
     def to_polars(self) -> "PolarsDataFrame":
         """Convert result data to Polars DataFrame.
@@ -710,17 +692,15 @@ class SQLResult(StatementResult):
 
         Raises:
             ValueError: If no data available.
-
-        Examples:
-            >>> result = session.select("SELECT * FROM users")
-            >>> df = result.to_polars()
-            >>> print(df.head())
         """
         if self.data is None:
             msg = "No data available"
             raise ValueError(msg)
 
-        return rows_to_polars(self._get_rows())
+        ensure_polars()
+        import polars as pl
+
+        return pl.DataFrame(self._get_rows())
 
     def write_to_storage_sync(
         self,
@@ -831,10 +811,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             List of column names.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-            TypeError: If data is not an Arrow Table.
         """
         return arrow_table_column_names(self._as_table())
 
@@ -844,10 +820,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             Number of rows.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-            TypeError: If data is not an Arrow Table.
         """
         return arrow_table_num_rows(self._as_table())
 
@@ -857,10 +829,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             Number of columns.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-            TypeError: If data is not an Arrow Table.
         """
         return arrow_table_num_columns(self._as_table())
 
@@ -869,14 +837,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             pandas DataFrame containing the result data.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-
-        Examples:
-            >>> result = session.select_to_arrow("SELECT * FROM users")
-            >>> df = result.to_pandas()
-            >>> print(df.head())
         """
         return arrow_table_to_pandas(self._as_table())
 
@@ -885,14 +845,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             Polars DataFrame containing the result data.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-
-        Examples:
-            >>> result = session.select_to_arrow("SELECT * FROM users")
-            >>> df = result.to_polars()
-            >>> print(df.head())
         """
         return arrow_table_to_polars(self._as_table())
 
@@ -901,18 +853,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             List of dictionaries, one per row.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-            TypeError: If data is not an Arrow Table.
-
-        Examples:
-            >>> result = session.select_to_arrow(
-            ...     "SELECT id, name FROM users"
-            ... )
-            >>> rows = result.to_dict()
-            >>> print(rows[0])
-            {'id': 1, 'name': 'Alice'}
         """
         return arrow_table_to_pylist(self._as_table())
 
@@ -951,15 +891,6 @@ class ArrowResult(StatementResult):
 
         Returns:
             Number of rows.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-            TypeError: If data is not an Arrow Table.
-
-        Examples:
-            >>> result = session.select_to_arrow("SELECT * FROM users")
-            >>> print(len(result))
-            100
         """
         return arrow_table_num_rows(self._as_table())
 
@@ -968,16 +899,6 @@ class ArrowResult(StatementResult):
 
         Yields:
             Dictionary for each row.
-
-        Raises:
-            ValueError: If no Arrow table is available.
-
-        Examples:
-            >>> result = session.select_to_arrow(
-            ...     "SELECT id, name FROM users"
-            ... )
-            >>> for row in result:
-            ...     print(row["name"])
         """
         yield from arrow_table_to_pylist(self._as_table())
 
@@ -1053,6 +974,7 @@ class DMLResult(SQLResult):
         self.metadata[key] = value
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StackResult:
     """Wrapper for per-operation stack results that surfaces driver results directly."""
 
@@ -1093,7 +1015,7 @@ class StackResult:
         if isinstance(self.result, ArrowResult):
             return "ARROW"
         if isinstance(self.result, SQLResult):
-            return self.result.operation_type.upper()
+            return self.result.operation_type
         return type(self.result).__name__.upper()
 
     def is_sql_result(self) -> bool:
@@ -1126,7 +1048,7 @@ class StackResult:
     def from_sql_result(cls, result: "SQLResult") -> "StackResult":
         """Convert a standard SQLResult into a stack-friendly representation."""
 
-        metadata = dict(result.metadata) if result.metadata else None
+        metadata = result.metadata or None
         warning = metadata.get("warning") if metadata else None
         return cls(result=result, rows_affected=result.rows_affected, warning=warning, metadata=metadata)
 
@@ -1134,7 +1056,7 @@ class StackResult:
     def from_arrow_result(cls, result: "ArrowResult") -> "StackResult":
         """Create a stack result from an ArrowResult instance."""
 
-        metadata = dict(result.metadata) if result.metadata else None
+        metadata = result.metadata or None
         return cls(result=result, rows_affected=result.rows_affected, metadata=metadata)
 
     @classmethod
@@ -1151,7 +1073,19 @@ def create_sql_result(
     last_inserted_id: int | str | None = None,
     execution_time: float | None = None,
     metadata: "dict[str, Any] | None" = None,
-    **kwargs: Any,
+    error: Exception | None = None,
+    operation_type: "OperationType" = "SELECT",
+    operation_index: int | None = None,
+    parameters: Any | None = None,
+    column_names: "list[str] | None" = None,
+    total_count: int | None = None,
+    has_more: bool = False,
+    inserted_ids: "list[int | str] | None" = None,
+    statement_results: "list[SQLResult] | None" = None,
+    errors: "list[str] | None" = None,
+    total_statements: int = 0,
+    successful_statements: int = 0,
+    row_format: str = "dict",
 ) -> SQLResult:
     """Create SQLResult instance.
 
@@ -1162,7 +1096,19 @@ def create_sql_result(
         last_inserted_id: Last inserted ID (for INSERT operations).
         execution_time: Execution time in seconds.
         metadata: Additional metadata about the result.
-        **kwargs: Additional arguments for SQLResult initialization.
+        error: Exception that occurred during execution.
+        operation_type: Type of SQL operation performed.
+        operation_index: Index of operation in a script.
+        parameters: Parameters used for the query.
+        column_names: Names of columns in the result set.
+        total_count: Total number of rows in the complete result set.
+        has_more: Whether there are additional result pages available.
+        inserted_ids: List of IDs from INSERT operations.
+        statement_results: Results from individual statements in a script.
+        errors: List of error messages for script execution.
+        total_statements: Total number of statements in a script.
+        successful_statements: Count of successful statements in a script.
+        row_format: Format of raw rows - "tuple", "dict", or "record".
 
     Returns:
         SQLResult instance.
@@ -1174,7 +1120,19 @@ def create_sql_result(
         last_inserted_id=last_inserted_id,
         execution_time=execution_time,
         metadata=metadata,
-        **kwargs,
+        error=error,
+        operation_type=operation_type,
+        operation_index=operation_index,
+        parameters=parameters,
+        column_names=column_names,
+        total_count=total_count,
+        has_more=has_more,
+        inserted_ids=inserted_ids,
+        statement_results=statement_results,
+        errors=errors,
+        total_statements=total_statements,
+        successful_statements=successful_statements,
+        row_format=row_format,
     )
 
 

@@ -209,7 +209,7 @@ def test_hash_filters_no_filters() -> None:
 def test_hash_filters_with_filters() -> None:
     """Test hash_filters with test filter objects."""
 
-    class TestFilter1(StatementFilter):
+    class StubFilter1(StatementFilter):
         def __init__(self) -> None:
             self.attr1 = "value1"
             self.attr2 = 42
@@ -223,7 +223,7 @@ def test_hash_filters_with_filters() -> None:
         def get_cache_key(self) -> tuple[Any, ...]:
             return ("test_filter1",)
 
-    class TestFilter2(StatementFilter):
+    class StubFilter2(StatementFilter):
         def __init__(self) -> None:
             self.attr3 = "value3"
 
@@ -236,7 +236,7 @@ def test_hash_filters_with_filters() -> None:
         def get_cache_key(self) -> tuple[Any, ...]:
             return ("test_filter2",)
 
-    filters = [TestFilter1(), TestFilter2()]
+    filters = [StubFilter1(), StubFilter2()]
     result = hash_filters(filters)
     assert isinstance(result, int)
 

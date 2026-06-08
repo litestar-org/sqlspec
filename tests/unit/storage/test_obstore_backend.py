@@ -2,15 +2,167 @@
 """Unit tests for ObStoreBackend."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
+from sqlspec.storage.backends.obstore import _SIGNABLE_PROTOCOLS, ObStoreBackend
 from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
 
-if OBSTORE_INSTALLED:
-    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+class _FakeBytes:
+    def to_bytes(self) -> bytes:
+        return b"parquet"
+
+
+class _FakeGetResult:
+    def bytes(self) -> _FakeBytes:
+        return _FakeBytes()
+
+    async def bytes_async(self) -> _FakeBytes:
+        return _FakeBytes()
+
+
+class _FakeStore:
+    def __init__(self) -> None:
+        self.get_paths: list[str] = []
+        self.put_paths: list[str] = []
+
+    def get(self, path: str) -> _FakeGetResult:
+        self.get_paths.append(path)
+        return _FakeGetResult()
+
+    def put(self, path: str, data: bytes) -> None:
+        self.put_paths.append(path)
+
+    async def get_async(self, path: str) -> _FakeGetResult:
+        self.get_paths.append(path)
+        return _FakeGetResult()
+
+    async def put_async(self, path: str, data: bytes) -> None:
+        self.put_paths.append(path)
+
+
+def _new_obstore_for_signing(protocol: str = "s3", base_path: str = "prefix") -> "ObStoreBackend":
+    store = ObStoreBackend.__new__(ObStoreBackend)
+    store.protocol = protocol
+    store.base_path = base_path
+    store.store = _FakeStore()
+    return store
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_signable_protocols_exported_constant() -> None:
+    assert _SIGNABLE_PROTOCOLS == frozenset({"s3", "gs", "gcs", "az", "azure"})
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_rejects_unsupported_protocol() -> None:
+    store = _new_obstore_for_signing(protocol="file")
+
+    with pytest.raises(NotImplementedError, match="URL signing is not supported"):
+        store._prepare_sign_request("object.txt", 3600, False)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_rejects_excessive_expiration() -> None:
+    store = _new_obstore_for_signing()
+
+    with pytest.raises(ValueError, match="expires_in cannot exceed 604800"):
+        store._prepare_sign_request("object.txt", 604801, False)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_resolves_single_download_path() -> None:
+    store = _new_obstore_for_signing(base_path="tenant")
+
+    method, expires_delta, resolved_paths, is_single = store._prepare_sign_request("object.txt", 60, False)
+
+    assert method == "GET"
+    assert expires_delta.total_seconds() == 60
+    assert resolved_paths == ["tenant/object.txt"]
+    assert is_single is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_prepare_sign_request_resolves_list_upload_paths() -> None:
+    store = _new_obstore_for_signing(base_path="tenant")
+
+    method, expires_delta, resolved_paths, is_single = store._prepare_sign_request(["a.txt", "b.txt"], 120, True)
+
+    assert method == "PUT"
+    assert expires_delta.total_seconds() == 120
+    assert resolved_paths == ["tenant/a.txt", "tenant/b.txt"]
+    assert is_single is False
+
+
+class _FakeListingStore:
+    def __init__(self) -> None:
+        self.list_paths: list[str] = []
+        self.list_with_delimiter_paths: list[str] = []
+
+    def list(self, path: str) -> Any:
+        self.list_paths.append(path)
+        return iter([
+            [{"path": "file1.txt", "size": 5, "last_modified": None, "e_tag": None, "version": None}],
+            [
+                {"path": "subdir/file2.txt", "size": 8, "last_modified": None, "e_tag": None, "version": None},
+                {"path": "subdir/file3.txt", "size": 12, "last_modified": None, "e_tag": None, "version": None},
+            ],
+        ])
+
+    def list_with_delimiter(self, path: str) -> dict[str, Any]:
+        self.list_with_delimiter_paths.append(path)
+        return {
+            "objects": [
+                {"path": "dir/file_a.txt", "size": 10, "last_modified": None, "e_tag": None, "version": None},
+                {"path": "dir/file_b.txt", "size": 20, "last_modified": None, "e_tag": None, "version": None},
+            ],
+            "common_prefixes": ["dir/subdir/"],
+        }
+
+
+class _FakeHeadStore:
+    def __init__(self, metadata: dict[str, object] | None = None, *, missing: bool = False) -> None:
+        self.head_paths: list[str] = []
+        self.head_async_paths: list[str] = []
+        self.metadata = metadata or {
+            "path": "object.txt",
+            "size": 12,
+            "last_modified": None,
+            "e_tag": "etag",
+            "version": "1",
+            "metadata": {"owner": "sqlspec"},
+        }
+        self.missing = missing
+
+    def head(self, path: str) -> dict[str, object]:
+        self.head_paths.append(path)
+        if self.missing:
+            raise FileNotFoundError(path)
+        return self.metadata
+
+    async def head_async(self, path: str) -> dict[str, object]:
+        self.head_async_paths.append(path)
+        if self.missing:
+            raise FileNotFoundError(path)
+        return self.metadata
+
+
+class _FakeParquet:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    def read_table(self, source: Any, **kwargs: Any) -> Any:
+        return self.result
+
+    def write_table(self, table: Any, sink: Any, **kwargs: Any) -> None:
+        sink.write(b"parquet")
+
+
+class _FakeArrowTable:
+    schema: tuple[Any, ...] = ()
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -45,6 +197,19 @@ def test_write_and_read_bytes(tmp_path: Path) -> None:
     result = store.read_bytes_sync("test_file.bin")
 
     assert result == test_data
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_write_to_nonexistent_file_uri(tmp_path: Path) -> None:
+    """A file:// URI naming a not-yet-created file roots the store at its parent directory."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    destination = tmp_path / "exports" / "out.parquet"
+    store = ObStoreBackend(f"file://{destination}")
+    store.write_bytes_sync(str(destination), b"payload")
+
+    assert destination.read_bytes() == b"payload"
+    assert store.read_bytes_sync(str(destination)) == b"payload"
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -139,6 +304,38 @@ def test_list_objects(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_list_objects_sync_non_recursive_uses_list_with_delimiter(tmp_path: Path) -> None:
+    """Non-recursive list results are ListResult dicts, not ListStream batches."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    fake_store = _FakeListingStore()
+    store.store = fake_store
+
+    result = store.list_objects_sync(recursive=False)
+
+    assert fake_store.list_with_delimiter_paths == [""]
+    assert fake_store.list_paths == []
+    assert result == ["dir/file_a.txt", "dir/file_b.txt"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_list_objects_sync_recursive_uses_list_stream(tmp_path: Path) -> None:
+    """Recursive lists still consume the ListStream batch iterator."""
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    fake_store = _FakeListingStore()
+    store.store = fake_store
+
+    result = store.list_objects_sync(recursive=True)
+
+    assert fake_store.list_paths == [""]
+    assert fake_store.list_with_delimiter_paths == []
+    assert result == ["file1.txt", "subdir/file2.txt", "subdir/file3.txt"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 def test_glob(tmp_path: Path) -> None:
     """Test glob pattern matching."""
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -170,6 +367,53 @@ def test_get_metadata(tmp_path: Path) -> None:
 
     assert "exists" in metadata
     assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_get_metadata_sync_uses_local_store_path_resolution(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}", base_path="data")
+    fake_store = _FakeHeadStore()
+    store.store = fake_store
+
+    metadata = store.get_metadata_sync("nested/object.txt")
+
+    assert fake_store.head_paths == ["nested/object.txt"]
+    assert metadata["path"] == "nested/object.txt"
+    assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_get_metadata_sync_returns_typed_dict_keys(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore()
+
+    metadata = store.get_metadata_sync("object.txt")
+
+    assert metadata == {
+        "path": "object.txt",
+        "exists": True,
+        "size": 12,
+        "last_modified": None,
+        "e_tag": "etag",
+        "version": "1",
+        "custom_metadata": {"owner": "sqlspec"},
+    }
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_get_metadata_sync_returns_absent_result_for_missing_object(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore(missing=True)
+
+    metadata = store.get_metadata_sync("missing.txt")
+
+    assert metadata == {"path": "missing.txt", "exists": False}
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -206,6 +450,39 @@ def test_write_and_read_arrow(tmp_path: Path) -> None:
     result = store.read_arrow_sync("test_data.parquet")
 
     assert result.equals(table)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_read_arrow_sync_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    expected_table = object()
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(expected_table))
+
+    result = store.read_arrow_sync("key")
+
+    assert result is expected_table
+    assert fake_store.get_paths == ["mybase/key"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_write_arrow_sync_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow", lambda: object())
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(object()))
+
+    store.write_arrow_sync("key", cast("Any", _FakeArrowTable()))
+
+    assert fake_store.put_paths == ["mybase/key"]
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
@@ -380,6 +657,67 @@ async def test_async_get_metadata(tmp_path: Path) -> None:
     assert metadata["exists"] is True
 
 
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_async_uses_local_store_path_resolution(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}", base_path="data")
+    fake_store = _FakeHeadStore()
+    store.store = fake_store
+
+    metadata = await store.get_metadata_async("nested/object.txt")
+
+    assert fake_store.head_async_paths == ["nested/object.txt"]
+    assert metadata["path"] == "nested/object.txt"
+    assert metadata["exists"] is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_async_returns_typed_dict_keys(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore()
+
+    metadata = await store.get_metadata_async("object.txt")
+
+    assert metadata == {
+        "path": "object.txt",
+        "exists": True,
+        "size": 12,
+        "last_modified": None,
+        "e_tag": "etag",
+        "version": "1",
+        "custom_metadata": {"owner": "sqlspec"},
+    }
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_async_returns_absent_result_for_missing_object(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore(missing=True)
+
+    metadata = await store.get_metadata_async("missing.txt")
+
+    assert metadata == {"path": "missing.txt", "exists": False}
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_get_metadata_sync_and_async_result_keys_match(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    metadata = {"path": "object.txt", "size": 42, "last_modified": None, "e_tag": "same", "version": "7"}
+    store = ObStoreBackend(f"file://{tmp_path}")
+    store.store = _FakeHeadStore(metadata)
+
+    sync_metadata = store.get_metadata_sync("object.txt")
+    async_metadata = await store.get_metadata_async("object.txt")
+
+    assert sync_metadata == async_metadata
+
+
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
 async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     """Test async write and read Arrow table operations."""
@@ -401,6 +739,38 @@ async def test_async_write_and_read_arrow(tmp_path: Path) -> None:
     result = await store.read_arrow_async("async_test_data.parquet")
 
     assert result.equals(table)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_read_arrow_async_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    expected_table = object()
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(expected_table))
+
+    result = await store.read_arrow_async("key")
+
+    assert result is expected_table
+    assert fake_store.get_paths == ["mybase/key"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_write_arrow_async_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend("memory://", base_path="mybase")
+    fake_store = _FakeStore()
+    store.store = fake_store
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FakeParquet(object()))
+
+    await store.write_arrow_async("key", cast("Any", _FakeArrowTable()))
+
+    assert fake_store.put_paths == ["mybase/key"]
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")

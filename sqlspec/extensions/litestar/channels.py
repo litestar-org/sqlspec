@@ -26,11 +26,6 @@ class SQLSpecChannelsBackend(ChannelsBackend):
     This backend allows Litestar's ChannelsPlugin to use a SQLSpec database as the
     broker. Under the hood it relies on SQLSpec's events extension, which can be
     configured to use a durable table queue or native adapter backends.
-
-    Notes:
-        Litestar channels may use arbitrary string names. SQLSpec event channel
-        names must be valid identifiers. This backend maps Litestar channel names
-        to deterministic database channel identifiers via hashing.
     """
 
     def __init__(
@@ -149,7 +144,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
                 await self._event_channel.ack(message.event_id)
         except asyncio.CancelledError:
             raise
-        except Exception as error:  # pragma: no cover - defensive
+        except Exception as error:  # pragma: no cover
             logger.warning("litestar channel %s stream worker error: %s", channel, error)
 
     @staticmethod

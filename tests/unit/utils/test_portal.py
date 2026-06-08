@@ -1,6 +1,7 @@
 """Unit tests for portal provider and portal manager."""
 
 import asyncio
+import queue
 from collections.abc import Callable, Coroutine, Generator
 from typing import Any
 
@@ -10,16 +11,19 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.portal import Portal, PortalManager, PortalProvider, get_global_portal
 
 
-@pytest.fixture(autouse=True)
-def _cleanup_portal_manager() -> Generator[None, None, None]:
-    """Clean up the portal manager after each test."""
-    yield
+def _reset_portal_manager() -> None:
     manager = PortalManager()
     if manager.is_running:
         manager.stop()
-
-    # Reset singleton instance
     PortalManager._instance = None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_portal_manager() -> Generator[None, None, None]:
+    """Reset the portal manager singleton before and after each test."""
+    _reset_portal_manager()
+    yield
+    _reset_portal_manager()
 
 
 @pytest.fixture()
@@ -128,6 +132,25 @@ def test_portal_provider_call_not_started() -> None:
 
     with pytest.raises(ImproperConfigurationError, match="Portal provider not running"):
         provider.call(dummy)
+
+
+def test_process_request_returns_cleanly_when_queue_empty() -> None:
+    class RaceEmptyQueue:
+        def empty(self) -> bool:
+            return False
+
+        def get(self) -> object:
+            msg = "queue.get() should not be used after an empty() pre-check"
+            raise AssertionError(msg)
+
+        def get_nowait(self) -> object:
+            raise queue.Empty
+
+    provider = PortalProvider()
+    provider._loop = object()  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
+    provider._request_queue = RaceEmptyQueue()  # type: ignore[assignment]  # pyright: ignore[reportPrivateUsage]
+
+    provider._process_request()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_portal_provider_call_exception() -> None:

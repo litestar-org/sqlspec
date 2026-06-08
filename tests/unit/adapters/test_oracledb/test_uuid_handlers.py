@@ -1,5 +1,6 @@
 """Unit tests for Oracle UUID type handlers."""
 
+import inspect
 import uuid
 from unittest.mock import Mock, patch
 
@@ -238,3 +239,17 @@ def test_output_handler_chain_prioritizes_raw16() -> None:
     fallback.assert_not_called()
     assert result is cursor_var
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=32, outconverter=uuid_converter_out)
+
+
+def test_uuid_handlers_use_generic_chained_wrappers() -> None:
+    connection = Mock()
+    connection.inputtypehandler = None
+    connection.outputtypehandler = None
+
+    register_uuid_handlers(connection)
+
+    assert callable(connection.inputtypehandler)
+    assert callable(connection.outputtypehandler)
+    # oracledb keys its calling convention on inspect.signature parameter count.
+    assert len(inspect.signature(connection.outputtypehandler).parameters) == 2
+    assert len(inspect.signature(connection.inputtypehandler).parameters) == 3

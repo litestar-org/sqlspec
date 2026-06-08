@@ -9,9 +9,10 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 
+__all__ = ("AsyncmyStore",)
+
 logger = get_logger("sqlspec.adapters.asyncmy.litestar.store")
 
-__all__ = ("AsyncmyStore",)
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
@@ -29,18 +30,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     Args:
         config: AsyncmyConfig instance.
-
-    Example:
-        from sqlspec.adapters.asyncmy import AsyncmyConfig
-        from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
-
-        config = AsyncmyConfig(connection_config={"host": "localhost", ...})
-        store = AsyncmyStore(config)
-        await store.create_table()
-
-    Notes:
-        MySQL DATETIME is timezone-naive, so UTC datetimes are stored without
-        timezone info and timezone conversion is handled in Python layer.
     """
 
     __slots__ = ()
@@ -50,9 +39,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         Args:
             config: AsyncmyConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -61,16 +47,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses DATETIME(6) for microsecond precision timestamps
-            - MySQL doesn't have TIMESTAMPTZ, so we store UTC as timezone-naive
-            - LONGBLOB for large session data support (up to 4GB)
-            - InnoDB engine for ACID compliance and proper transaction support
-            - UTF8MB4 for full Unicode support (including emoji)
-            - Index on expires_at for efficient cleanup queries
-            - Auto-update of updated_at timestamp on row modification
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -110,10 +86,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         Returns:
             Session data as bytes if found and not expired, None otherwise.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for microsecond precision current time in MySQL.
-            Compares expires_at as UTC datetime (timezone-naive in MySQL).
         """
         import asyncmy
 
@@ -158,11 +130,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Uses INSERT ... ON DUPLICATE KEY UPDATE for efficient UPSERT.
-            Stores UTC datetime as timezone-naive DATETIME in MySQL.
-            Uses alias syntax (AS new) instead of deprecated VALUES() function.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -218,9 +185,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         Returns:
             True if the session exists and is not expired.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for microsecond precision current time comparison.
         """
         import asyncmy
 
@@ -248,10 +212,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
-
-        Notes:
-            MySQL DATETIME is timezone-naive, but we treat it as UTC.
-            Compare against UTC now in Python layer for accuracy.
         """
         sql = f"""
         SELECT expires_at FROM {self._table_name}
@@ -280,10 +240,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
         Returns:
             Number of sessions deleted.
-
-        Notes:
-            Uses UTC_TIMESTAMP(6) for microsecond precision current time comparison.
-            ROW_COUNT() returns the number of affected rows.
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 

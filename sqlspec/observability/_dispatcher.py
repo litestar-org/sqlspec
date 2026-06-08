@@ -1,6 +1,6 @@
-"""Lifecycle dispatcher used by drivers and registry hooks."""
+"""Lifecycle dispatcher for drivers and registry hooks."""
 
-import asyncio
+import inspect
 from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
@@ -38,7 +38,6 @@ EVENT_ATTRS: tuple[LifecycleEvent, ...] = (
     "on_query_complete",
     "on_error",
 )
-GUARD_ATTRS = tuple(f"has_{name[3:]}" for name in EVENT_ATTRS)
 
 
 class LifecycleDispatcher:
@@ -73,10 +72,11 @@ class LifecycleDispatcher:
         self.has_error = False
 
         normalized: dict[LifecycleEvent, list[LifecycleHook]] = {}
-        for event_name, guard_attr in zip(EVENT_ATTRS, GUARD_ATTRS, strict=False):
+        for event_name in EVENT_ATTRS:
             callables = hooks.get(event_name) if hooks else None
             normalized[event_name] = list(callables) if callables else []
-            setattr(self, guard_attr, bool(normalized[event_name]))
+            if normalized[event_name]:
+                self._enable_event_guard(event_name)
         self._hooks: dict[LifecycleEvent, list[LifecycleHook]] = normalized
         self._counters: dict[LifecycleEvent, int] = dict.fromkeys(EVENT_ATTRS, 0)
         self._is_enabled = any(self._hooks.values())
@@ -87,91 +87,163 @@ class LifecycleDispatcher:
 
         return self._is_enabled
 
-    def emit_pool_create(self, context: "LifecycleContext") -> None:
-        """Fire pool creation hooks."""
+    def emit_pool_create_sync(self, context: LifecycleContext) -> None:
+        """Fire pool creation hooks synchronously."""
 
-        self._emit("on_pool_create", context)
+        self._emit_sync("on_pool_create", context)
 
-    def emit_pool_destroying_sync(self, context: "LifecycleContext") -> None:
-        """Fire pre-destruction hooks synchronously (sync close path).
+    async def emit_pool_create_async(self, context: LifecycleContext) -> None:
+        """Fire pool creation hooks, awaiting any awaitable return values."""
 
-        Returned awaitables are discarded; callers in the async path must use
-        ``emit_pool_destroying_async`` to await async teardown work.
-        """
+        await self._emit_async("on_pool_create", context)
 
-        self._emit("on_pool_destroying", context)
+    def emit_pool_create(self, context: LifecycleContext) -> None:
+        """Fire pool creation hooks synchronously."""
 
-    async def emit_pool_destroying_async(self, context: "LifecycleContext") -> None:
+        self.emit_pool_create_sync(context)
+
+    def emit_pool_destroying_sync(self, context: LifecycleContext) -> None:
+        """Fire pre-destruction hooks synchronously."""
+
+        self._emit_sync("on_pool_destroying", context)
+
+    async def emit_pool_destroying_async(self, context: LifecycleContext) -> None:
         """Fire pre-destruction hooks, awaiting any awaitable return values."""
 
-        callbacks = self._hooks.get("on_pool_destroying")
-        if not callbacks:
-            return
-        self._counters["on_pool_destroying"] += 1
-        for callback in list(callbacks):
-            try:
-                result = callback(context)
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.warning("Lifecycle hook failed: event=on_pool_destroying error=%s", exc)
-                continue
-            if asyncio.iscoroutine(result):
-                try:
-                    await result
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.warning("Lifecycle hook failed: event=on_pool_destroying error=%s", exc)
+        await self._emit_async("on_pool_destroying", context)
+
+    def emit_pool_destroying(self, context: LifecycleContext) -> None:
+        """Fire pre-destruction hooks synchronously."""
+
+        self.emit_pool_destroying_sync(context)
+
+    def emit_pool_destroy_sync(self, context: LifecycleContext) -> None:
+        """Fire pool destruction hooks synchronously."""
+
+        self._emit_sync("on_pool_destroy", context)
+
+    async def emit_pool_destroy_async(self, context: LifecycleContext) -> None:
+        """Fire pool destruction hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_pool_destroy", context)
+
+    def emit_pool_destroy(self, context: LifecycleContext) -> None:
+        """Fire pool destruction hooks synchronously."""
+
+        self.emit_pool_destroy_sync(context)
+
+    def emit_connection_create_sync(self, context: LifecycleContext) -> None:
+        """Fire connection creation hooks synchronously."""
+
+        self._emit_sync("on_connection_create", context)
+
+    async def emit_connection_create_async(self, context: LifecycleContext) -> None:
+        """Fire connection creation hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_connection_create", context)
+
+    def emit_connection_create(self, context: LifecycleContext) -> None:
+        """Fire connection creation hooks synchronously."""
+
+        self.emit_connection_create_sync(context)
+
+    def emit_connection_destroy_sync(self, context: LifecycleContext) -> None:
+        """Fire connection teardown hooks synchronously."""
+
+        self._emit_sync("on_connection_destroy", context)
+
+    async def emit_connection_destroy_async(self, context: LifecycleContext) -> None:
+        """Fire connection teardown hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_connection_destroy", context)
+
+    def emit_connection_destroy(self, context: LifecycleContext) -> None:
+        """Fire connection teardown hooks synchronously."""
+
+        self.emit_connection_destroy_sync(context)
+
+    def emit_session_start_sync(self, context: LifecycleContext) -> None:
+        """Fire session start hooks synchronously."""
+
+        self._emit_sync("on_session_start", context)
+
+    async def emit_session_start_async(self, context: LifecycleContext) -> None:
+        """Fire session start hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_session_start", context)
+
+    def emit_session_start(self, context: LifecycleContext) -> None:
+        """Fire session start hooks synchronously."""
+
+        self.emit_session_start_sync(context)
+
+    def emit_session_end_sync(self, context: LifecycleContext) -> None:
+        """Fire session end hooks synchronously."""
+
+        self._emit_sync("on_session_end", context)
+
+    async def emit_session_end_async(self, context: LifecycleContext) -> None:
+        """Fire session end hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_session_end", context)
+
+    def emit_session_end(self, context: LifecycleContext) -> None:
+        """Fire session end hooks synchronously."""
+
+        self.emit_session_end_sync(context)
+
+    def emit_query_start_sync(self, context: LifecycleContext) -> None:
+        """Fire query start hooks synchronously."""
+
+        self._emit_sync("on_query_start", context)
+
+    async def emit_query_start_async(self, context: LifecycleContext) -> None:
+        """Fire query start hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_query_start", context)
+
+    def emit_query_start(self, context: LifecycleContext) -> None:
+        """Fire query start hooks synchronously."""
+
+        self.emit_query_start_sync(context)
+
+    def emit_query_complete_sync(self, context: LifecycleContext) -> None:
+        """Fire query completion hooks synchronously."""
+
+        self._emit_sync("on_query_complete", context)
+
+    async def emit_query_complete_async(self, context: LifecycleContext) -> None:
+        """Fire query completion hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_query_complete", context)
+
+    def emit_query_complete(self, context: LifecycleContext) -> None:
+        """Fire query completion hooks synchronously."""
+
+        self.emit_query_complete_sync(context)
+
+    def emit_error_sync(self, context: LifecycleContext) -> None:
+        """Fire error hooks synchronously."""
+
+        self._emit_sync("on_error", context)
+
+    async def emit_error_async(self, context: LifecycleContext) -> None:
+        """Fire error hooks, awaiting any awaitable return values."""
+
+        await self._emit_async("on_error", context)
+
+    def emit_error(self, context: LifecycleContext) -> None:
+        """Fire error hooks synchronously."""
+
+        self.emit_error_sync(context)
 
     def register_hook(self, event: LifecycleEvent, callback: LifecycleHook) -> None:
-        """Append a hook at runtime.
-
-        Used by components (e.g., persistent event listener hubs) that must register
-        teardown work after the config has already been constructed.
-        """
+        """Append a hook at runtime."""
 
         callbacks = self._hooks.setdefault(event, [])
         callbacks.append(callback)
-        guard_attr = f"has_{event[3:]}"
-        setattr(self, guard_attr, True)
+        self._enable_event_guard(event)
         self._is_enabled = True
-
-    def emit_pool_destroy(self, context: "LifecycleContext") -> None:
-        """Fire pool destruction hooks."""
-
-        self._emit("on_pool_destroy", context)
-
-    def emit_connection_create(self, context: "LifecycleContext") -> None:
-        """Fire connection creation hooks."""
-
-        self._emit("on_connection_create", context)
-
-    def emit_connection_destroy(self, context: "LifecycleContext") -> None:
-        """Fire connection teardown hooks."""
-
-        self._emit("on_connection_destroy", context)
-
-    def emit_session_start(self, context: "LifecycleContext") -> None:
-        """Fire session start hooks."""
-
-        self._emit("on_session_start", context)
-
-    def emit_session_end(self, context: "LifecycleContext") -> None:
-        """Fire session end hooks."""
-
-        self._emit("on_session_end", context)
-
-    def emit_query_start(self, context: "LifecycleContext") -> None:
-        """Fire query start hooks."""
-
-        self._emit("on_query_start", context)
-
-    def emit_query_complete(self, context: "LifecycleContext") -> None:
-        """Fire query completion hooks."""
-
-        self._emit("on_query_complete", context)
-
-    def emit_error(self, context: "LifecycleContext") -> None:
-        """Fire error hooks with failure context."""
-
-        self._emit("on_error", context)
 
     def snapshot(self, *, prefix: str | None = None) -> "dict[str, int]":
         """Return counter snapshot keyed for diagnostics export."""
@@ -184,7 +256,30 @@ class LifecycleDispatcher:
             metrics[key] = count
         return metrics
 
-    def _emit(self, event: LifecycleEvent, context: "LifecycleContext") -> None:
+    def _enable_event_guard(self, event: LifecycleEvent) -> None:
+        match event:
+            case "on_pool_create":
+                self.has_pool_create = True
+            case "on_pool_destroying":
+                self.has_pool_destroying = True
+            case "on_pool_destroy":
+                self.has_pool_destroy = True
+            case "on_connection_create":
+                self.has_connection_create = True
+            case "on_connection_destroy":
+                self.has_connection_destroy = True
+            case "on_session_start":
+                self.has_session_start = True
+            case "on_session_end":
+                self.has_session_end = True
+            case "on_query_start":
+                self.has_query_start = True
+            case "on_query_complete":
+                self.has_query_complete = True
+            case "on_error":
+                self.has_error = True
+
+    def _emit_sync(self, event: LifecycleEvent, context: LifecycleContext) -> None:
         callbacks = self._hooks.get(event)
         if not callbacks:
             return
@@ -192,9 +287,26 @@ class LifecycleDispatcher:
         for callback in callbacks:
             self._invoke_callback(callback, context, event)
 
+    async def _emit_async(self, event: LifecycleEvent, context: LifecycleContext) -> None:
+        callbacks = self._hooks.get(event)
+        if not callbacks:
+            return
+        self._counters[event] += 1
+        for callback in callbacks:
+            try:
+                result = callback(context)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Lifecycle hook failed: event=%s error=%s", event, exc)
+                continue
+            if inspect.isawaitable(result):
+                try:
+                    await result
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Lifecycle hook failed: event=%s error=%s", event, exc)
+
     @staticmethod
-    def _invoke_callback(callback: LifecycleHook, context: "LifecycleContext", event: LifecycleEvent) -> None:
+    def _invoke_callback(callback: LifecycleHook, context: LifecycleContext, event: LifecycleEvent) -> None:
         try:
             callback(context)
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except Exception as exc:  # pragma: no cover
             logger.warning("Lifecycle hook failed: event=%s error=%s", event, exc)

@@ -6,7 +6,6 @@ and local file storage.
 
 import fnmatch
 import io
-import logging
 import re
 from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
@@ -18,55 +17,19 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError
-from sqlspec.storage._paths import resolve_storage_path
-from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
+from sqlspec.storage._paths import is_file_destination, resolve_storage_path
+from sqlspec.storage._utils import _log_storage_event, import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
-from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
 
-__all__ = ("ObStoreBackend",)
-
-logger = get_logger(__name__)
-
-
 DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
+_MAX_SIGN_EXPIRES_SECONDS: Final[int] = 604800
+_SIGNABLE_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az", "azure"})
 
-
-def _log_storage_event(
-    event: str,
-    *,
-    backend_type: str,
-    protocol: str,
-    operation: str | None = None,
-    mode: str | None = "sync",
-    path: str | None = None,
-    source_path: str | None = None,
-    destination_path: str | None = None,
-    count: int | None = None,
-    exists: bool | None = None,
-) -> None:
-    fields: dict[str, Any] = {
-        "backend_type": backend_type,
-        "protocol": protocol,
-        "mode": mode,
-        "path": path,
-        "source_path": source_path,
-        "destination_path": destination_path,
-        "count": count,
-        "exists": exists,
-    }
-    if operation is not None:
-        fields["operation"] = operation
-    log_with_context(logger, logging.DEBUG, event, **fields)
-
-
-def _read_obstore_bytes(store: Any, resolved_path: str) -> bytes:
-    """Read bytes via obstore."""
-    result = store.get(resolved_path)
-    return cast("bytes", result.bytes().to_bytes())
+__all__ = ("ObStoreBackend",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -80,16 +43,7 @@ class ObStoreBackend:
     All synchronous methods use the *_sync suffix for consistency with async methods.
     """
 
-    __slots__ = (
-        "_is_local_store",
-        "_local_store_root",
-        "_path_cache",
-        "base_path",
-        "protocol",
-        "store",
-        "store_options",
-        "store_uri",
-    )
+    __slots__ = ("_is_local_store", "_local_store_root", "base_path", "protocol", "store", "store_options", "store_uri")
 
     backend_type: ClassVar[str] = "obstore"
 
@@ -98,19 +52,18 @@ class ObStoreBackend:
 
         Args:
             uri: Storage URI. Supported formats:
-                - file:///absolute/path - Local filesystem
-                - s3://bucket/prefix - AWS S3
-                - gs://bucket/prefix - Google Cloud Storage
-                - az://container/prefix - Azure Blob Storage
-                - memory:// - In-memory storage (for testing)
+            - file:///absolute/path - Local filesystem
+            - s3://bucket/prefix - AWS S3
+            - gs://bucket/prefix - Google Cloud Storage
+            - az://container/prefix - Azure Blob Storage
+            - memory:// - In-memory storage (for testing)
             **kwargs: Additional options:
-                - base_path (str): For local files (file://), this is combined with
-                  the URI path to form the storage root. For example:
-                  uri="file:///data" + base_path="uploads" → /data/uploads
-                  If base_path is absolute, it overrides the URI path (backward compat).
-                  For cloud storage, base_path is used as an object key prefix.
-                - Other obstore configuration options (timeouts, credentials, etc.)
-
+            - base_path (str): For local files (file://), this is combined with
+            the URI path to form the storage root. For example:
+            uri="file:///data" + base_path="uploads" → /data/uploads
+                If base_path is absolute, it overrides the URI path (backward compat).
+                For cloud storage, base_path is used as an object key prefix.
+            - Other obstore configuration options (timeouts, credentials, etc.)
         """
         ensure_obstore()
         base_path = kwargs.pop("base_path", "")
@@ -119,7 +72,6 @@ class ObStoreBackend:
         self.base_path = base_path.rstrip("/") if base_path else ""
         self.store_options = kwargs
         self.store: Any
-        self._path_cache: dict[str, str] = {}
         self._is_local_store = False
         self._local_store_root = ""
         self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
@@ -137,7 +89,7 @@ class ObStoreBackend:
                     path_str = f"{path_str}#{parsed.fragment}"
                 path_obj = Path(path_str)
 
-                if path_obj.is_file():
+                if is_file_destination(path_obj):
                     path_str = str(path_obj.parent)
 
                 # Combine URI path with base_path for correct storage location
@@ -159,6 +111,7 @@ class ObStoreBackend:
                 backend_type=self.backend_type,
                 protocol=self.protocol,
                 operation="init",
+                mode="sync",
                 path=uri,
             )
 
@@ -203,10 +156,7 @@ class ObStoreBackend:
 
         return str(path)
 
-    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
-        """Read bytes using obstore synchronously."""
-        resolved_path = self._resolve_path(path)
-
+    def _read_bytes_resolved_sync(self, resolved_path: str) -> bytes:
         result = execute_sync_storage_operation(
             partial(_read_obstore_bytes, self.store, resolved_path),
             backend=self.backend_type,
@@ -218,14 +168,17 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="read_bytes",
+            mode="sync",
             path=resolved_path,
         )
         return result
 
-    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Write bytes using obstore synchronously."""
+    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+        """Read bytes using obstore synchronously."""
         resolved_path = self._resolve_path(path)
+        return self._read_bytes_resolved_sync(resolved_path)
 
+    def _write_bytes_resolved_sync(self, resolved_path: str, data: bytes) -> None:
         execute_sync_storage_operation(
             partial(self.store.put, resolved_path, data),
             backend=self.backend_type,
@@ -237,8 +190,14 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="write_bytes",
+            mode="sync",
             path=resolved_path,
         )
+
+    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Write bytes using obstore synchronously."""
+        resolved_path = self._resolve_path(path)
+        self._write_bytes_resolved_sync(resolved_path, data)
 
     def read_text_sync(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore synchronously."""
@@ -258,13 +217,17 @@ class ObStoreBackend:
             resolved_prefix = ""
         else:
             resolved_prefix = self.base_path or ""
-        items = self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
-        paths = sorted(item["path"] for batch in items for item in batch)
+        if not recursive:
+            result = self.store.list_with_delimiter(resolved_prefix)
+            paths = sorted(item["path"] for item in result["objects"])
+        else:
+            paths = sorted(item["path"] for batch in self.store.list(resolved_prefix) for item in batch)
         _log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="list_objects",
+            mode="sync",
             path=resolved_prefix,
             count=len(paths),
         )
@@ -281,6 +244,7 @@ class ObStoreBackend:
                 backend_type=self.backend_type,
                 protocol=self.protocol,
                 operation="exists",
+                mode="sync",
                 path=str(path),
                 exists=False,
             )
@@ -290,6 +254,7 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="exists",
+            mode="sync",
             path=resolved_path,
             exists=True,
         )
@@ -306,6 +271,7 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="delete",
+            mode="sync",
             path=resolved_path,
         )
 
@@ -324,6 +290,7 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="copy",
+            mode="sync",
             source_path=source_path,
             destination_path=dest_path,
         )
@@ -343,6 +310,7 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="move",
+            mode="sync",
             source_path=source_path,
             destination_path=dest_path,
         )
@@ -379,6 +347,7 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="glob",
+            mode="sync",
             path=resolved_pattern,
             count=len(results),
         )
@@ -386,38 +355,24 @@ class ObStoreBackend:
 
     def get_metadata_sync(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore synchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
+        # Keep in sync with get_metadata_async.
         try:
             metadata = self.store.head(resolved_path)
         except Exception:
             return {"path": resolved_path, "exists": False}
         else:
-            if isinstance(metadata, dict):
-                result = {
-                    "path": resolved_path,
-                    "exists": True,
-                    "size": metadata.get("size"),
-                    "last_modified": metadata.get("last_modified"),
-                    "e_tag": metadata.get("e_tag"),
-                    "version": metadata.get("version"),
-                }
-                if metadata.get("metadata"):
-                    result["custom_metadata"] = metadata["metadata"]
-                return result
-
             result = {
                 "path": resolved_path,
                 "exists": True,
-                "size": metadata.size,
-                "last_modified": metadata.last_modified,
-                "e_tag": metadata.e_tag,
-                "version": metadata.version,
+                "size": metadata.get("size"),
+                "last_modified": metadata.get("last_modified"),
+                "e_tag": metadata.get("e_tag"),
+                "version": metadata.get("version"),
             }
-
-            if metadata.metadata:
-                result["custom_metadata"] = metadata.metadata
-
+            if metadata.get("metadata"):
+                result["custom_metadata"] = metadata["metadata"]
             return result
 
     def is_object_sync(self, path: "str | Path") -> bool:
@@ -441,8 +396,8 @@ class ObStoreBackend:
     def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
         """Read Arrow table using obstore synchronously."""
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        data = self.read_bytes_sync(resolved_path)
+        resolved_path = self._resolve_path(path)
+        data = self._read_bytes_resolved_sync(resolved_path)
         result = cast(
             "ArrowTable",
             execute_sync_storage_operation(
@@ -457,6 +412,7 @@ class ObStoreBackend:
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="read_arrow",
+            mode="sync",
             path=resolved_path,
         )
         return result
@@ -465,7 +421,7 @@ class ObStoreBackend:
         """Write Arrow table using obstore synchronously."""
         pa = import_pyarrow()
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
         schema = table.schema
         if any(str(f.type).startswith("decimal64") for f in schema):
@@ -490,12 +446,13 @@ class ObStoreBackend:
             path=resolved_path,
         )
         buffer.seek(0)
-        self.write_bytes_sync(resolved_path, buffer.read())
+        self._write_bytes_resolved_sync(resolved_path, buffer.read())
         _log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
             protocol=self.protocol,
             operation="write_arrow",
+            mode="sync",
             path=resolved_path,
         )
 
@@ -562,8 +519,35 @@ class ObStoreBackend:
         Returns:
             True if the protocol supports signing, False otherwise.
         """
-        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
-        return self.protocol in signable_protocols
+        return self.protocol in _SIGNABLE_PROTOCOLS
+
+    def _prepare_sign_request(
+        self, paths: "str | list[str]", expires_in: int, for_upload: bool
+    ) -> "tuple[str, timedelta, list[str], bool]":
+        if self.protocol not in _SIGNABLE_PROTOCOLS:
+            msg = (
+                f"URL signing is not supported for protocol '{self.protocol}'. "
+                f"Only S3, GCS, and Azure backends support pre-signed URLs."
+            )
+            raise NotImplementedError(msg)
+
+        if expires_in > _MAX_SIGN_EXPIRES_SECONDS:
+            msg = f"expires_in cannot exceed {_MAX_SIGN_EXPIRES_SECONDS} seconds (7 days), got {expires_in}"
+            raise ValueError(msg)
+
+        method = "PUT" if for_upload else "GET"
+        expires_delta = timedelta(seconds=expires_in)
+        if isinstance(paths, str):
+            path_list = [paths]
+            is_single = True
+        else:
+            path_list = list(paths)
+            is_single = False
+
+        resolved_paths = [
+            resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True) for path in path_list
+        ]
+        return method, expires_delta, resolved_paths, is_single
 
     @overload
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
@@ -584,39 +568,10 @@ class ObStoreBackend:
         Returns:
             Single signed URL string if paths is a string, or list of signed URLs
             if paths is a list. Preserves input type for convenience.
-
-        Raises:
-            NotImplementedError: If the backend protocol does not support signing.
-            ValueError: If expires_in exceeds maximum (604800 seconds).
         """
         import obstore as obs
 
-        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
-        if self.protocol not in signable_protocols:
-            msg = (
-                f"URL signing is not supported for protocol '{self.protocol}'. "
-                f"Only S3, GCS, and Azure backends support pre-signed URLs."
-            )
-            raise NotImplementedError(msg)
-
-        max_expires = 604800  # 7 days max per obstore/object_store limits
-        if expires_in > max_expires:
-            msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
-            raise ValueError(msg)
-
-        method = "PUT" if for_upload else "GET"
-        expires_delta = timedelta(seconds=expires_in)
-
-        if isinstance(paths, str):
-            path_list = [paths]
-            is_single = True
-        else:
-            path_list = list(paths)
-            is_single = False
-
-        resolved_paths = [
-            resolve_storage_path(p, self.base_path, self.protocol, strip_file_scheme=True) for p in path_list
-        ]
+        method, expires_delta, resolved_paths, is_single = self._prepare_sign_request(paths, expires_in, for_upload)
 
         try:
             signed_urls: list[str] = obs.sign(self.store, method, resolved_paths, expires_delta)  # type: ignore[call-overload]
@@ -625,13 +580,7 @@ class ObStoreBackend:
             msg = f"Failed to generate signed URL(s) for {resolved_paths}"
             raise StorageOperationFailedError(msg) from exc
 
-    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
-        """Read bytes from storage asynchronously."""
-        if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
-        else:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-
+    async def _read_bytes_resolved_async(self, resolved_path: str) -> bytes:
         result = await self.store.get_async(resolved_path)
         bytes_obj = await result.bytes_async()  # pyright: ignore[reportAttributeAccessIssue]
         data = cast("bytes", bytes_obj.to_bytes())
@@ -645,13 +594,12 @@ class ObStoreBackend:
         )
         return data
 
-    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Write bytes to storage asynchronously."""
-        if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
-        else:
-            resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+        """Read bytes from storage asynchronously."""
+        resolved_path = self._resolve_path(path)
+        return await self._read_bytes_resolved_async(resolved_path)
 
+    async def _write_bytes_resolved_async(self, resolved_path: str, data: bytes) -> None:
         await self.store.put_async(resolved_path, data)
         _log_storage_event(
             "storage.write",
@@ -661,6 +609,11 @@ class ObStoreBackend:
             mode="async",
             path=resolved_path,
         )
+
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        """Write bytes to storage asynchronously."""
+        resolved_path = self._resolve_path(path)
+        await self._write_bytes_resolved_async(resolved_path, data)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
@@ -815,6 +768,7 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result: dict[str, object] = {}
+        # Keep in sync with get_metadata_sync.
         try:
             metadata = await self.store.head_async(resolved_path)
             result.update({
@@ -839,8 +793,8 @@ class ObStoreBackend:
         Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
         """
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
-        data = await self.read_bytes_async(resolved_path)
+        resolved_path = self._resolve_path(path)
+        data = await self._read_bytes_resolved_async(resolved_path)
 
         # Offload PyArrow parsing to thread pool
         result = await async_(pq.read_table)(io.BytesIO(data), **kwargs)
@@ -862,7 +816,7 @@ class ObStoreBackend:
         to thread pool, preventing event loop blocking.
         """
         pq = import_pyarrow_parquet()
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_path = self._resolve_path(path)
 
         def _serialize() -> bytes:
             buffer = io.BytesIO()
@@ -871,7 +825,7 @@ class ObStoreBackend:
             return buffer.read()
 
         data = await async_(_serialize)()
-        await self.write_bytes_async(resolved_path, data)
+        await self._write_bytes_resolved_async(resolved_path, data)
 
         _log_storage_event(
             "storage.write",
@@ -914,39 +868,10 @@ class ObStoreBackend:
         Returns:
             Single signed URL string if paths is a string, or list of signed URLs
             if paths is a list. Preserves input type for convenience.
-
-        Raises:
-            NotImplementedError: If the backend protocol does not support signing.
-            ValueError: If expires_in exceeds maximum (604800 seconds).
         """
         import obstore as obs
 
-        signable_protocols = {"s3", "gs", "gcs", "az", "azure"}
-        if self.protocol not in signable_protocols:
-            msg = (
-                f"URL signing is not supported for protocol '{self.protocol}'. "
-                f"Only S3, GCS, and Azure backends support pre-signed URLs."
-            )
-            raise NotImplementedError(msg)
-
-        max_expires = 604800  # 7 days max per obstore/object_store limits
-        if expires_in > max_expires:
-            msg = f"expires_in cannot exceed {max_expires} seconds (7 days), got {expires_in}"
-            raise ValueError(msg)
-
-        method = "PUT" if for_upload else "GET"
-        expires_delta = timedelta(seconds=expires_in)
-
-        if isinstance(paths, str):
-            path_list = [paths]
-            is_single = True
-        else:
-            path_list = list(paths)
-            is_single = False
-
-        resolved_paths = [
-            resolve_storage_path(p, self.base_path, self.protocol, strip_file_scheme=True) for p in path_list
-        ]
+        method, expires_delta, resolved_paths, is_single = self._prepare_sign_request(paths, expires_in, for_upload)
 
         try:
             signed_urls: list[str] = await obs.sign_async(self.store, method, resolved_paths, expires_delta)  # type: ignore[call-overload]
@@ -954,3 +879,9 @@ class ObStoreBackend:
         except Exception as exc:
             msg = f"Failed to generate signed URL(s) for {resolved_paths}"
             raise StorageOperationFailedError(msg) from exc
+
+
+def _read_obstore_bytes(store: Any, resolved_path: str) -> bytes:
+    """Read bytes via obstore."""
+    result = store.get(resolved_path)
+    return cast("bytes", result.bytes().to_bytes())

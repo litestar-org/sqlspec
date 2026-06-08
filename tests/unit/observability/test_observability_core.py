@@ -1,5 +1,6 @@
 """Unit tests for observability helpers."""
 
+import asyncio
 import builtins
 import hashlib
 import sys
@@ -8,13 +9,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, cast
+from unittest.mock import patch
 
+import pytest
 from typing_extensions import Self
 
 from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, SQLSpec, StatementObserver
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.observability import LifecycleDispatcher, compute_sql_hash, get_trace_context, resolve_db_system
 from sqlspec.storage import StorageTelemetry
@@ -23,9 +27,21 @@ from sqlspec.storage.pipeline import (
     reset_storage_bridge_events,
     reset_storage_bridge_metrics,
 )
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.utils.correlation import CorrelationContext
 from tests.conftest import requires_interpreted
+
+_LIFECYCLE_EVENTS = (
+    "on_pool_create",
+    "on_pool_destroying",
+    "on_pool_destroy",
+    "on_connection_create",
+    "on_connection_destroy",
+    "on_session_start",
+    "on_session_end",
+    "on_query_start",
+    "on_query_complete",
+    "on_error",
+)
 
 
 class _NoOpExceptionHandler:
@@ -297,13 +313,12 @@ def test_lifecycle_dispatcher_register_hook_flips_guard_and_runs() -> None:
 
 def test_lifecycle_dispatcher_async_emit_awaits_coroutines() -> None:
     """emit_pool_destroying_async awaits coroutine returns from hooks."""
-    import asyncio as _asyncio
 
     dispatcher = LifecycleDispatcher(None)
     seen: list[str] = []
 
     async def _async_hook(ctx: dict[str, Any]) -> None:
-        await _asyncio.sleep(0)
+        await asyncio.sleep(0)
         seen.append(cast(str, ctx.get("pool")))
 
     def _sync_hook(ctx: dict[str, Any]) -> None:
@@ -312,8 +327,76 @@ def test_lifecycle_dispatcher_async_emit_awaits_coroutines() -> None:
     dispatcher.register_hook("on_pool_destroying", _async_hook)
     dispatcher.register_hook("on_pool_destroying", _sync_hook)
 
-    _asyncio.run(dispatcher.emit_pool_destroying_async({"pool": "p"}))
+    asyncio.run(dispatcher.emit_pool_destroying_async({"pool": "p"}))
     assert seen == ["p", "sync:p"]
+
+
+@pytest.mark.parametrize("event_name", _LIFECYCLE_EVENTS)
+def test_lifecycle_dispatcher_async_emit_awaits_all_events(event_name: str) -> None:
+    dispatcher = LifecycleDispatcher(None)
+    seen: list[str] = []
+
+    async def _hook(ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        seen.append(cast(str, ctx["event"]))
+
+    dispatcher.register_hook(cast(Any, event_name), _hook)
+    method = getattr(dispatcher, f"emit_{event_name.removeprefix('on_')}_async")
+    asyncio.run(method({"event": event_name}))
+
+    assert seen == [event_name]
+
+
+@pytest.mark.parametrize("event_name", _LIFECYCLE_EVENTS)
+def test_lifecycle_dispatcher_legacy_emit_aliases_stay_sync(event_name: str) -> None:
+    dispatcher = LifecycleDispatcher(None)
+    seen: list[str] = []
+
+    def _hook(ctx: dict[str, Any]) -> None:
+        seen.append(cast(str, ctx["event"]))
+
+    dispatcher.register_hook(cast(Any, event_name), _hook)
+    method = getattr(dispatcher, f"emit_{event_name.removeprefix('on_')}")
+    method({"event": event_name})
+
+    assert seen == [event_name]
+
+
+@pytest.mark.parametrize("event_name", _LIFECYCLE_EVENTS)
+def test_observability_runtime_async_emit_awaits_all_events(event_name: str) -> None:
+    runtime = ObservabilityRuntime(config_name="test")
+    seen: list[str] = []
+
+    async def _hook(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        seen.append(event_name)
+
+    runtime.register_lifecycle_hook(event_name, _hook)
+    method = getattr(runtime, f"emit_{event_name.removeprefix('on_')}_async")
+    if event_name == "on_error":
+        asyncio.run(method(RuntimeError("boom")))
+    elif event_name.startswith("on_query_"):
+        asyncio.run(method(sql="SELECT 1"))
+    else:
+        asyncio.run(method(object()))
+
+    assert seen == [event_name]
+
+
+def test_observability_runtime_async_lifecycle_span_closes_after_hook() -> None:
+    runtime = ObservabilityRuntime(config_name="test")
+    span_manager = _FakeSpanManager()
+    runtime.span_manager = span_manager
+    states: list[bool] = []
+
+    async def _hook(_ctx: dict[str, Any]) -> None:
+        states.append(bool(span_manager.finished))
+
+    runtime.register_lifecycle_hook("on_connection_create", _hook)
+    asyncio.run(runtime.emit_connection_create_async(object()))
+
+    assert states == [False]
+    assert len(span_manager.finished) == 1
 
 
 def test_lifecycle_dispatcher_counts_events() -> None:
@@ -422,6 +505,31 @@ def test_driver_dispatch_records_query_span() -> None:
     assert span_manager.started[0].attributes["adapter"] == "DummyAdapter"
     assert span_manager.started[0].attributes["sqlspec.correlation_id"] == "query-correlation"
     assert span_manager.finished[0].closed is True
+
+
+@requires_interpreted
+def test_driver_dispatch_computes_single_sql_hash_for_span_and_observer() -> None:
+    observed: list[dict[str, Any]] = []
+
+    def observer(event: Any) -> None:
+        observed.append(event.as_dict())
+
+    span_manager = _FakeSpanManager()
+    runtime = ObservabilityRuntime(
+        ObservabilityConfig(print_sql=True, statement_observers=(cast(StatementObserver, observer),)),
+        config_name="DummyAdapter",
+    )
+    runtime.span_manager = cast(Any, span_manager)
+    statement_config = StatementConfig()
+    driver = _DummyDriver(connection=object(), statement_config=statement_config, observability=runtime)
+    statement = SQL("SELECT 1", statement_config=statement_config)
+
+    with patch("sqlspec.observability._runtime.compute_sql_hash", return_value="precomputed") as hash_mock:
+        driver.dispatch_statement_execution(statement, driver.connection)
+
+    assert hash_mock.call_count == 1
+    assert span_manager.started[0].attributes["connection_info"]["sqlspec.statement.hash"] == "precomputed"
+    assert observed[0]["sql_hash"] == "precomputed"
 
 
 def test_runtime_query_span_omits_sql_unless_print_sql_enabled() -> None:
@@ -601,10 +709,29 @@ def test_resolve_db_system_unknown() -> None:
     assert resolve_db_system("UnknownDriver") == "other_sql"
 
 
+def test_resolve_db_system_is_lru_cached() -> None:
+    resolve_db_system.cache_clear()
+
+    assert resolve_db_system("AsyncpgDriver") == "postgresql"
+    assert resolve_db_system("AsyncpgDriver") == "postgresql"
+
+    assert resolve_db_system.cache_info().hits == 1
+
+
 def test_compute_sql_hash() -> None:
     sql = "SELECT 1"
-    expected = hashlib.sha256(sql.encode("utf-8")).hexdigest()[:16]
+    expected = hashlib.sha256(sql.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     assert compute_sql_hash(sql) == expected
+
+
+def test_compute_sql_hash_returns_16_char_hex_string() -> None:
+    first_hash = compute_sql_hash("SELECT 1")
+    second_hash = compute_sql_hash("SELECT 2")
+
+    assert len(first_hash) == 16
+    assert first_hash != second_hash
+    assert first_hash.islower()
+    assert all(character in "0123456789abcdef" for character in first_hash)
 
 
 def test_get_trace_context_without_otel(monkeypatch) -> None:

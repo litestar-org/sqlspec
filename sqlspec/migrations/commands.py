@@ -22,7 +22,7 @@ from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.squash import MigrationSquasher
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
-from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version, parse_version
+from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -209,7 +209,7 @@ def _with_command_span(
                 try:
                     async_func = cast("Callable[P, Awaitable[R]]", func)
                     return await async_func(*args, **kwargs)
-                except Exception as exc:  # pragma: no cover - passthrough
+                except Exception as exc:  # pragma: no cover
                     error = exc
                     if runtime is not None:
                         runtime.increment_metric(f"{metric_prefix}.errors")
@@ -229,7 +229,7 @@ def _with_command_span(
             error_recorded = False
             try:
                 return func(*args, **kwargs)
-            except Exception as exc:  # pragma: no cover - passthrough
+            except Exception as exc:  # pragma: no cover
                 error = exc
                 if runtime is not None:
                     runtime.increment_metric(f"{metric_prefix}.errors")
@@ -406,31 +406,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    def _collect_pending_migrations(
-        self, all_migrations: "list[tuple[str, Path]]", applied_set: set[str], revision: str
-    ) -> "list[tuple[str, Path]]":
-        """Collect pending migrations that need to be applied.
-
-        Args:
-            all_migrations: List of all (version, file_path) tuples.
-            applied_set: Set of already applied version strings.
-            revision: Target revision ("head" or specific version).
-
-        Returns:
-            List of (version, file_path) tuples for pending migrations.
-        """
-        pending = []
-        for version, file_path in all_migrations:
-            if version not in applied_set:
-                if revision == "head":
-                    pending.append((version, file_path))
-                else:
-                    parsed_version = parse_version(version)
-                    parsed_revision = parse_version(revision)
-                    if parsed_version <= parsed_revision:
-                        pending.append((version, file_path))
-        return pending
-
+    # Keep in sync with AsyncMigrationCommands._report_no_pending_migrations.
     def _report_no_pending_migrations(
         self, use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool
     ) -> None:
@@ -508,28 +484,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 rich_message=f"[green]✓ Applied in {execution_time}ms[/]",
             )
             return execution_time
-
-    def _collect_revert_migrations(self, applied: "list[dict[str, Any]]", revision: str) -> "list[dict[str, Any]]":
-        """Collect migrations to revert based on target revision.
-
-        Args:
-            applied: List of applied migration records.
-            revision: Target revision ("-1", "base", or specific version).
-
-        Returns:
-            List of migration records to revert.
-        """
-        if revision == "-1":
-            return [applied[-1]]
-        if revision == "base":
-            return list(reversed(applied))
-        parsed_revision = parse_version(revision)
-        to_revert = []
-        for migration in reversed(applied):
-            parsed_migration_version = parse_version(migration["version_num"])
-            if parsed_migration_version > parsed_revision:
-                to_revert.append(migration)
-        return to_revert
 
     def _revert_single_migration(
         self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
@@ -722,6 +676,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
 
+                # config auto_sync=False cannot be overridden by the call-site flag.
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
                     self._synchronize_version_records(
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -784,7 +739,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         return
                     applied_count += 1
 
-        except Exception as exc:  # pragma: no cover - passthrough
+        except Exception as exc:  # pragma: no cover
             error = exc
             raise
         finally:
@@ -919,7 +874,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         return
                     reverted_count += 1
 
-        except Exception as exc:  # pragma: no cover - passthrough
+        except Exception as exc:  # pragma: no cover
             error = exc
             raise
         finally:
@@ -1027,9 +982,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             yes: Skip confirmation prompt.
             allow_gaps: Allow gaps in version sequence.
             output_format: Output format ("sql" or "py").
-
-        Raises:
-            SquashValidationError: If validation fails (invalid range, gaps, etc.).
         """
         squasher = MigrationSquasher(self.migrations_path, self.runner, self._template_settings)
 
@@ -1119,11 +1071,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             dry_run: Preview changes without applying.
             update_database: Update migration records in database.
             yes: Skip confirmation prompt.
-
-        Examples:
-            >>> commands.fix(dry_run=True)  # Preview only
-            >>> commands.fix(yes=True)  # Auto-approve
-            >>> commands.fix(update_database=False)  # Files only
         """
         all_migrations = self.runner.get_migration_files()
 
@@ -1345,31 +1292,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    def _collect_pending_migrations(
-        self, all_migrations: "list[tuple[str, Path]]", applied_set: set[str], revision: str
-    ) -> "list[tuple[str, Path]]":
-        """Collect pending migrations that need to be applied.
-
-        Args:
-            all_migrations: List of all (version, file_path) tuples.
-            applied_set: Set of already applied version strings.
-            revision: Target revision ("head" or specific version).
-
-        Returns:
-            List of (version, file_path) tuples for pending migrations.
-        """
-        pending = []
-        for version, file_path in all_migrations:
-            if version not in applied_set:
-                if revision == "head":
-                    pending.append((version, file_path))
-                else:
-                    parsed_version = parse_version(version)
-                    parsed_revision = parse_version(revision)
-                    if parsed_version <= parsed_revision:
-                        pending.append((version, file_path))
-        return pending
-
+    # Keep in sync with SyncMigrationCommands._report_no_pending_migrations.
     def _report_no_pending_migrations(
         self, use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool
     ) -> None:
@@ -1447,28 +1370,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 rich_message=f"[green]✓ Applied in {execution_time}ms[/]",
             )
             return execution_time
-
-    def _collect_revert_migrations(self, applied: "list[dict[str, Any]]", revision: str) -> "list[dict[str, Any]]":
-        """Collect migrations to revert based on target revision.
-
-        Args:
-            applied: List of applied migration records.
-            revision: Target revision ("-1", "base", or specific version).
-
-        Returns:
-            List of migration records to revert.
-        """
-        if revision == "-1":
-            return [applied[-1]]
-        if revision == "base":
-            return list(reversed(applied))
-        parsed_revision = parse_version(revision)
-        to_revert = []
-        for migration in reversed(applied):
-            parsed_migration_version = parse_version(migration["version_num"])
-            if parsed_migration_version > parsed_revision:
-                to_revert.append(migration)
-        return to_revert
 
     async def _revert_single_migration(
         self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
@@ -1661,6 +1562,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
+                # config auto_sync=False cannot be overridden by the call-site flag.
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
                     await self._synchronize_version_records(
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -1725,7 +1627,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         return
                     applied_count += 1
 
-        except Exception as exc:  # pragma: no cover - passthrough
+        except Exception as exc:  # pragma: no cover
             error = exc
             raise
         finally:
@@ -1863,7 +1765,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         return
                     reverted_count += 1
 
-        except Exception as exc:  # pragma: no cover - passthrough
+        except Exception as exc:  # pragma: no cover
             error = exc
             raise
         finally:
@@ -1973,9 +1875,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             yes: Skip confirmation prompt.
             allow_gaps: Allow gaps in version sequence.
             output_format: Output format ("sql" or "py").
-
-        Raises:
-            SquashValidationError: If validation fails (invalid range, gaps, etc.).
         """
         sync_runner = SyncMigrationRunner(
             self.migrations_path,
@@ -2083,11 +1982,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             dry_run: Preview changes without applying.
             update_database: Update migration records in database.
             yes: Skip confirmation prompt.
-
-        Examples:
-            >>> await commands.fix(dry_run=True)  # Preview only
-            >>> await commands.fix(yes=True)  # Auto-approve
-            >>> await commands.fix(update_database=False)  # Files only
         """
         all_migrations = await self.runner.get_migration_files()
 

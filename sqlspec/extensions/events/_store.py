@@ -1,37 +1,16 @@
 """Base classes for adapter-specific event queue stores."""
 
-import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
 
-ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
-
 __all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
 
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def normalize_queue_table_name(name: str) -> str:
-    """Validate schema-qualified identifiers and return normalized name."""
-    segments = name.split(".")
-    for segment in segments:
-        if not _IDENTIFIER_PATTERN.match(segment):
-            msg = f"Invalid events table name: {name}"
-            raise EventChannelError(msg)
-    return name
-
-
-def normalize_event_channel_name(name: str) -> str:
-    """Validate event channel identifiers and return normalized name."""
-    if not _IDENTIFIER_PATTERN.match(name):
-        msg = f"Invalid events channel name: {name}"
-        raise EventChannelError(msg)
-    return name
+ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 
 class BaseEventQueueStore(ABC, Generic[ConfigT]):
@@ -91,7 +70,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
             length: Maximum string length.
 
         Returns:
-            String type declaration (e.g., VARCHAR(64), STRING(64)).
+            String type declaration.
         """
         return f"VARCHAR({length})"
 
@@ -101,7 +80,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         Override for dialects with different integer type syntax.
 
         Returns:
-            Integer type declaration (e.g., INTEGER, INT64).
+            Integer type declaration.
         """
         return "INTEGER"
 
@@ -111,7 +90,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         Override for dialects requiring different default syntax.
 
         Returns:
-            Default timestamp expression (e.g., CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(6)).
+            Default timestamp expression.
         """
         return "CURRENT_TIMESTAMP"
 
@@ -119,7 +98,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         """Return inline PRIMARY KEY clause for table definition.
 
         Override for dialects that require PRIMARY KEY at the end of CREATE TABLE
-        instead of on the column definition (e.g., Spanner).
+        instead of on the column definition.
 
         Returns:
             Empty string for column-level PK, or " PRIMARY KEY (event_id)" for table-level.
@@ -134,7 +113,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         for dialect-specific variations.
 
         Only override this method for complex dialects that require entirely
-        different DDL structure (e.g., Oracle PL/SQL blocks, BigQuery CLUSTER BY).
+        different DDL structure.
         """
         payload_type, metadata_type, timestamp_type = self._column_types()
         string_64 = self._string_type(64)
@@ -170,8 +149,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def _table_clause(self) -> str:
         """Return additional table options clause.
 
-        Override for dialects that need options after the column definitions
-        (e.g., BigQuery CLUSTER BY, Oracle INMEMORY).
+        Override for dialects that need options after the column definitions.
         """
         return ""
 
@@ -182,7 +160,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
         """Wrap CREATE statement with IF NOT EXISTS.
 
-        Override for dialects that don't support IF NOT EXISTS (e.g., Spanner).
+        Override for dialects that don't support IF NOT EXISTS.
         """
         if object_type == "table":
             return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
@@ -193,7 +171,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def _wrap_drop_statement(self, statement: str) -> str:
         """Wrap DROP statement with IF EXISTS.
 
-        Override for dialects that don't support IF EXISTS (e.g., Spanner).
+        Override for dialects that don't support IF EXISTS.
         """
         return statement.replace("DROP TABLE", "DROP TABLE IF EXISTS", 1)
 

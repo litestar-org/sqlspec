@@ -21,14 +21,26 @@ _INTERLEAVE_NAME = "INTERLEAVE_IN_PARENT"
 # Capture originals before any patching
 _original_bq_property_sql = BigQueryGenerator.property_sql
 _original_bq_properties_sql = BigQueryGenerator.properties_sql
-_original_bq_locate_properties = BigQueryGenerator.locate_properties
 _original_pg_property_sql = PostgresGenerator.property_sql
+
+
+def _normalize_interval_expression(expression: exp.Expr) -> exp.Expr:
+    if isinstance(expression, exp.Alias):
+        alias = expression.args.get("alias")
+        if isinstance(alias, exp.Identifier) and isinstance(expression.this, exp.Expr):
+            return exp.Interval(this=expression.this.copy(), unit=alias.copy())
+    return expression
 
 
 def _is_post_schema_spanner_property(expression: exp.Expr) -> bool:
     if not isinstance(expression, exp.Property) or not isinstance(expression.this, exp.Literal):
         return False
     return expression.this.name.upper() in {_INTERLEAVE_NAME, _ROW_DELETION_NAME, "TTL"}
+
+
+def _get_dialect_name(generator: Any) -> "str | None":
+    dialect_class = getattr(generator.dialect, "__class__", None)
+    return dialect_class.__name__ if dialect_class else None
 
 
 def _render_interval_sql(generator: Any, expression: exp.Expr) -> str:
@@ -136,8 +148,7 @@ _original_bq_create_transform = BigQueryGenerator.TRANSFORMS.get(exp.Create)
 
 
 def _bq_property_transform(self: Any, expression: exp.Property) -> str:
-    dialect_class = getattr(self.dialect, "__class__", None)
-    dialect_name = dialect_class.__name__ if dialect_class else None
+    dialect_name = _get_dialect_name(self)
     if dialect_name == "Spanner":
         return _spanner_property_sql(self, expression)
     if _original_bq_property_transform is not None:
@@ -146,8 +157,7 @@ def _bq_property_transform(self: Any, expression: exp.Property) -> str:
 
 
 def _bq_properties_transform(self: Any, expression: exp.Properties) -> str:
-    dialect_class = getattr(self.dialect, "__class__", None)
-    dialect_name = dialect_class.__name__ if dialect_class else None
+    dialect_name = _get_dialect_name(self)
     if dialect_name == "Spanner":
         return _spanner_properties_sql(self, expression)
     if _original_bq_properties_transform is not None:
@@ -156,20 +166,13 @@ def _bq_properties_transform(self: Any, expression: exp.Properties) -> str:
 
 
 def _bq_create_transform(self: Any, expression: exp.Create) -> str:
-    dialect_class = getattr(self.dialect, "__class__", None)
-    dialect_name = dialect_class.__name__ if dialect_class else None
+    dialect_name = _get_dialect_name(self)
     if dialect_name == "Spanner" and expression.this and expression.kind == "TABLE":
         properties = expression.args.get("properties")
         if properties:
-            # Re-order properties so Spanner ones stay at the schema boundary
-            new_expressions = []
-            for p in properties.expressions:
-                if _is_post_schema_spanner_property(p):
-                    # Force to POST_SCHEMA if it's a Spanner property
-                    new_expressions.append(p)
-                else:
-                    new_expressions.append(p)
-            properties.set("expressions", new_expressions)
+            spanner_props = [p for p in properties.expressions if _is_post_schema_spanner_property(p)]
+            other_props = [p for p in properties.expressions if not _is_post_schema_spanner_property(p)]
+            properties.set("expressions", other_props + spanner_props)
 
     if _original_bq_create_transform is not None:
         return str(_original_bq_create_transform(self, expression))
@@ -190,8 +193,7 @@ _original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
 
 
 def _pg_property_transform(self: Any, expression: exp.Property) -> str:
-    dialect_class = getattr(self.dialect, "__class__", None)
-    dialect_name = dialect_class.__name__ if dialect_class else None
+    dialect_name = _get_dialect_name(self)
     if dialect_name == "Spangres":
         return _spangres_property_sql(self, expression)
     if _original_pg_property_transform is not None:

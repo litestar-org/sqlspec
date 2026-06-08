@@ -25,14 +25,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
     Args:
         config: PsqlpyConfig instance.
-
-    Example:
-        from sqlspec.adapters.psqlpy import PsqlpyConfig
-        from sqlspec.adapters.psqlpy.litestar.store import PsqlpyStore
-
-        config = PsqlpyConfig(connection_config={"dsn": "postgresql://..."})
-        store = PsqlpyStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -42,9 +34,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         Args:
             config: PsqlpyConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -53,13 +42,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMPTZ for timezone-aware expiration timestamps
-            - Partial index WHERE expires_at IS NOT NULL reduces index size/maintenance
-            - FILLFACTOR 80 leaves space for HOT updates, reducing table bloat
-            - Audit columns (created_at, updated_at) help with debugging
-            - Table name is internally controlled, not user input (S608 suppressed)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -103,10 +85,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         Returns:
             Session data as bytes if found and not expired, None otherwise.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP instead of NOW() for SQL standard compliance.
-            The query planner can use the partial index for expires_at > CURRENT_TIMESTAMP.
         """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -142,10 +120,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             key: Session ID.
             value: Session data.
             expires_in: Time until expiration.
-
-        Notes:
-            Uses EXCLUDED to reference the proposed insert values in ON CONFLICT.
-            Updates updated_at timestamp on every write for audit trail.
         """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -190,10 +164,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         Returns:
             True if the session exists and is not expired.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for consistency with get() method.
-            Uses fetch() instead of fetch_val() to handle zero-row case.
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -214,9 +184,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
-
-        Notes:
-            Uses fetch() to handle the case where the key doesn't exist.
         """
         sql = f"""
         SELECT expires_at FROM {self._table_name}
@@ -247,13 +214,6 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
         Returns:
             Number of sessions deleted.
-
-        Notes:
-            Uses CURRENT_TIMESTAMP for consistency.
-            Uses RETURNING to get deleted row count since psqlpy QueryResult
-            doesn't expose command tags.
-            For very large tables (10M+ rows), consider batching deletes
-            to avoid holding locks too long.
         """
         sql = f"""
         DELETE FROM {self._table_name}

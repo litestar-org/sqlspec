@@ -27,6 +27,8 @@ if not TYPE_CHECKING:
     AiosqliteConnection = _AiosqliteConnection
     AiosqliteRawCursor = aiosqlite.Cursor
 
+__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteRawCursor", "AiosqliteSessionContext")
+
 
 class AiosqliteCursor:
     """Async context manager for AIOSQLite cursors."""
@@ -44,8 +46,6 @@ class AiosqliteCursor:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
-        if exc_type is not None:
-            return
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 await self.cursor.close()
@@ -104,6 +104,3 @@ class AiosqliteSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteRawCursor", "AiosqliteSessionContext")

@@ -7,27 +7,28 @@ Routing matrix (input):
 
 * Oracle 21c+ native ``JSON``: bind via ``DB_TYPE_JSON`` (binary OSON).
 * Oracle 19c-20c with ``BLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_BLOB`` with
-  UTF-8 JSON bytes.
+ UTF-8 JSON bytes.
 * Oracle 12c-18c with ``CLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_CLOB`` with
-  serialized JSON string.
+ serialized JSON string.
 * Server major version is read from ``connection._sqlspec_oracle_major`` (set in
-  ``OracleSyncConfig._init_connection`` / ``OracleAsyncConfig._init_connection``).
-  When unknown, default to 21c+ behavior.
+ ``OracleSyncConfig._init_connection`` / ``OracleAsyncConfig._init_connection``).
+ When unknown, default to 21c+ behavior.
 
 Routing matrix (output):
 
 * ``DB_TYPE_JSON``: passthrough (python-oracledb already returns ``dict``).
 * ``DB_TYPE_BLOB`` with ``JSON`` in column ``type_name``: parse via
-  ``json_converter_out_blob``.
+ ``json_converter_out_blob``.
 * ``DB_TYPE_CLOB`` with ``JSON`` in column ``type_name``: parse via
-  ``json_converter_out_clob``.
+ ``json_converter_out_clob``.
 
 Handlers chain to any pre-existing ``inputtypehandler`` / ``outputtypehandler``
-registered on the connection (e.g. NumPy vector, UUID), so registration order
+registered on the connection, so registration order
 matters: register JSON after numpy, before UUID is also safe because each
 handler returns ``None`` for values it does not own.
 """
 
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 __all__ = (
+    "chain_input_handler",
+    "chain_output_handler",
     "json_converter_in_blob",
     "json_converter_in_clob",
     "json_converter_out_blob",
@@ -146,8 +149,8 @@ def json_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> A
 def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register JSON type handlers on an Oracle connection.
 
-    Chains to any existing handlers via ``_JsonInputHandler`` / ``_JsonOutputHandler``
-    wrapper classes so vector / UUID handlers continue to fire for non-JSON values.
+    Chains to any existing handlers via ``chain_input_handler`` / ``chain_output_handler``
+    so vector / UUID handlers continue to fire for non-JSON values.
     """
     try:
         existing_input = connection.inputtypehandler
@@ -158,39 +161,47 @@ def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
     except AttributeError:
         existing_output = None
 
-    connection.inputtypehandler = _JsonInputHandler(existing_input)
-    connection.outputtypehandler = _JsonOutputHandler(existing_output)
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
 
 
-class _JsonInputHandler:
-    """Chaining wrapper that claims dict/list/tuple values, falling back otherwise."""
-
-    __slots__ = ("_fallback",)
-
-    def __init__(self, fallback: "Any | None") -> None:
-        self._fallback = fallback
-
-    def __call__(self, cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-        result = _input_type_handler(cursor, value, arraysize)
-        if result is not None:
-            return result
-        if self._fallback is not None:
-            return self._fallback(cursor, value, arraysize)
-        return None
+def _chained_input_handler(
+    inner: Any, fallback: "Any | None", cursor: "Cursor | AsyncCursor", value: Any, arraysize: int
+) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
 
 
-class _JsonOutputHandler:
-    """Chaining wrapper that claims JSON-bearing columns, falling back otherwise."""
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None
 
-    __slots__ = ("_fallback",)
 
-    def __init__(self, fallback: "Any | None") -> None:
-        self._fallback = fallback
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``.
 
-    def __call__(self, cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-        result = _output_type_handler(cursor, metadata)
-        if result is not None:
-            return result
-        if self._fallback is not None:
-            return self._fallback(cursor, metadata)
-        return None
+    Returns a ``functools.partial`` of a module-level function rather than a class
+    instance: python-oracledb selects its calling convention via
+    ``inspect.signature(handler)``, which succeeds for a partial of a (compiled)
+    function but raises ``ValueError`` for a compiled ``__call__`` object -- the
+    latter forces the legacy 6-argument call and breaks fetches.
+    """
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``.
+
+    See :func:`chain_input_handler` for why this returns a partial, not an instance.
+    """
+    return partial(_chained_output_handler, inner, fallback)

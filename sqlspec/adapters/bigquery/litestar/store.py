@@ -21,29 +21,15 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
     compatible with the Store protocol.
 
     Provides efficient session management with:
-    - Sync operations wrapped for async compatibility
-    - MERGE for UPSERT functionality
-    - Native TIMESTAMP type support
-    - Automatic expiration handling
-    - Efficient cleanup of expired sessions
-    - Table clustering on session_id for optimized lookups
-
-    Note:
-        BigQuery is designed for analytical (OLAP) workloads and scales to petabytes.
-        For typical session store workloads, clustering by session_id provides good
-        performance. Consider partitioning by created_at if session volume exceeds
-        millions of rows per day.
+        - Sync operations wrapped for async compatibility
+        - MERGE for UPSERT functionality
+        - Native TIMESTAMP type support
+        - Automatic expiration handling
+        - Efficient cleanup of expired sessions
+        - Table clustering on session_id for optimized lookups
 
     Args:
         config: BigQueryConfig instance.
-
-    Example:
-        from sqlspec.adapters.bigquery import BigQueryConfig
-        from sqlspec.adapters.bigquery.litestar.store import BigQueryStore
-
-        config = BigQueryConfig(connection_config={"project": "my-project"})
-        store = BigQueryStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -53,9 +39,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
         Args:
             config: BigQueryConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -64,13 +47,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
         Returns:
             SQL statement to create the sessions table with clustering.
-
-        Notes:
-            - Uses TIMESTAMP for timezone-aware expiration timestamps
-            - BYTES for binary session data storage
-            - Clustered by session_id for efficient lookups
-            - No indexes needed - BigQuery uses columnar storage
-            - Table name is internally controlled, not user input
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -87,9 +63,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
         Returns:
             List containing DROP TABLE statement.
-
-        Notes:
-            BigQuery doesn't have separate indexes to drop.
         """
         return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
@@ -101,10 +74,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
         Returns:
             UTC datetime object, or None if dt is None.
-
-        Notes:
-            BigQuery TIMESTAMP type expects UTC datetime objects.
-            The BigQuery client library handles the conversion.
         """
         if dt is None:
             return None
@@ -181,12 +150,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         return await async_(self._get)(key, renew_for)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Synchronous implementation of set.
-
-        Notes:
-            Uses MERGE for UPSERT functionality in BigQuery.
-            BigQuery requires source data to come from a table or inline VALUES.
-        """
+        """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         expires_at_ts = self._datetime_to_timestamp(expires_at)

@@ -2,20 +2,63 @@
 
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
-from tests.integration.adapters._postgres_migration_schema import (
-    create_schema_sql,
-    drop_schema_sql,
-    sync_table_exists,
-    unique_identifier,
-    write_unqualified_table_migration,
-)
+from sqlspec.utils.text import quote_identifier
 from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
+
+
+def unique_identifier(prefix: str) -> str:
+    """Return a short PostgreSQL-safe identifier for integration tests."""
+    return f"{prefix}_{uuid4().hex[:10]}"
+
+
+def create_schema_sql(schema: str) -> str:
+    """Return PostgreSQL CREATE SCHEMA SQL for a trusted test identifier."""
+    return f"CREATE SCHEMA {quote_identifier(schema)}"
+
+
+def drop_schema_sql(schema: str) -> str:
+    """Return PostgreSQL DROP SCHEMA SQL for a trusted test identifier."""
+    return f"DROP SCHEMA IF EXISTS {quote_identifier(schema)} CASCADE"
+
+
+def sync_table_exists(driver: Any, schema: str, table_name: str, *, style: str = "numeric") -> bool:
+    """Return whether the table exists using a sync SQLSpec driver."""
+    placeholders = "%s AND table_name = %s" if style == "pyformat" else "$1 AND table_name = $2"
+    result = driver.execute(
+        f"SELECT 1 FROM information_schema.tables WHERE table_schema = {placeholders}", (schema, table_name)
+    )
+    return bool(result.data)
+
+
+def write_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+    """Write a Python migration that creates an unqualified table."""
+    (migration_dir / "0001_create_unqualified_table.py").write_text(
+        f'''"""Create an unqualified table."""
+
+
+def up():
+    """Create an unqualified table."""
+    return ["""
+        CREATE TABLE {table_name} (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL
+        )
+    """]
+
+
+def down():
+    """Drop the unqualified table."""
+    return ["DROP TABLE IF EXISTS {table_name}"]
+'''
+    )
+
 
 # xdist_group is assigned per test based on database backend to enable parallel execution
 

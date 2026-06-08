@@ -28,6 +28,7 @@ from sqlspec.adapters.mssql_python.driver import (
     MssqlPythonExceptionHandler,
 )
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonAsyncMigrationTracker, MssqlPythonSyncMigrationTracker
+from sqlspec.adapters.mssql_python.type_converter import MssqlPythonTypeConverter, mssql_type_to_arrow
 
 __all__ = (
     "MssqlPythonAsyncConfig",
@@ -49,7 +50,9 @@ __all__ = (
     "MssqlPythonSessionContext",
     "MssqlPythonSyncDataDictionary",
     "MssqlPythonSyncMigrationTracker",
+    "MssqlPythonTypeConverter",
     "MssqlVersionInfo",
     "default_statement_config",
     "driver_profile",
+    "mssql_type_to_arrow",
 )

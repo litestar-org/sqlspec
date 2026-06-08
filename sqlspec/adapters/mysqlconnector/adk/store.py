@@ -27,72 +27,15 @@ __all__ = (
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
-def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
-    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
-    if not references_match:
-        return (column_ddl.strip(), "")
-
-    col_def = column_ddl[: references_match.start()].strip()
-    fk_clause = references_match.group(1).strip()
-    col_name = col_def.split()[0]
-    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
-    return (col_def, fk_constraint)
-
-
-def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -> str:
-    """Generate shared MySQL sessions CREATE TABLE DDL."""
-    owner_id_col = ""
-    fk_constraint = ""
-
-    if owner_id_column_ddl:
-        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
-        owner_id_col = f"{col_def},"
-        if fk_def:
-            fk_constraint = f",\n            {fk_def}"
-
-    return f"""
-    CREATE TABLE IF NOT EXISTS {session_table} (
-        id VARCHAR(128) PRIMARY KEY,
-        app_name VARCHAR(128) NOT NULL,
-        user_id VARCHAR(128) NOT NULL,
-        {owner_id_col}
-        state JSON NOT NULL,
-        create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-        INDEX idx_{session_table}_app_user (app_name, user_id),
-        INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    """
-
-
-def _mysql_events_ddl(events_table: str, session_table: str) -> str:
-    """Generate shared MySQL events CREATE TABLE DDL (post clean-break, 5 columns)."""
-    return f"""
-    CREATE TABLE IF NOT EXISTS {events_table} (
-        session_id VARCHAR(128) NOT NULL,
-        invocation_id VARCHAR(256) NOT NULL,
-        author VARCHAR(128) NOT NULL,
-        timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        event_json JSON NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
-        INDEX idx_{events_table}_session (session_id, timestamp ASC)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    """
-
-
 class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector async driver.
 
     Provides:
-    - Session state management with JSON storage
-    - Full-event JSON storage (single ``event_json`` column)
-    - Atomic event-append + state-update in one transaction
-    - Microsecond-precision timestamps
-    - Foreign key constraints with cascade delete
-
-    Notes:
-        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
-        - Configuration is read from config.extension_config["adk"]
+        - Session state management with JSON storage
+        - Full-event JSON storage (single ``event_json`` column)
+        - Atomic event-append + state-update in one transaction
+        - Microsecond-precision timestamps
+        - Foreign key constraints with cascade delete
     """
 
     __slots__ = ()
@@ -413,15 +356,11 @@ class MysqlConnectorSyncADKStore(BaseAsyncADKStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector sync driver.
 
     Provides:
-    - Session state management with JSON storage
-    - Full-event JSON storage (single ``event_json`` column)
-    - Atomic event-create + state-update in one transaction
-    - Microsecond-precision timestamps
-    - Foreign key constraints with cascade delete
-
-    Notes:
-        - Uses ``cast()`` extensively because mysql-connector returns ``Any`` types
-        - Configuration is read from config.extension_config["adk"]
+        - Session state management with JSON storage
+        - Full-event JSON storage (single ``event_json`` column)
+        - Atomic event-create + state-update in one transaction
+        - Microsecond-precision timestamps
+        - Foreign key constraints with cascade delete
     """
 
     __slots__ = ()
@@ -1181,3 +1120,56 @@ class MysqlConnectorSyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorSy
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         return await async_(self._delete_entries_older_than)(days)
+
+
+def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
+    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
+    if not references_match:
+        return (column_ddl.strip(), "")
+
+    col_def = column_ddl[: references_match.start()].strip()
+    fk_clause = references_match.group(1).strip()
+    col_name = col_def.split()[0]
+    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
+    return (col_def, fk_constraint)
+
+
+def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -> str:
+    """Generate shared MySQL sessions CREATE TABLE DDL."""
+    owner_id_col = ""
+    fk_constraint = ""
+
+    if owner_id_column_ddl:
+        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
+        owner_id_col = f"{col_def},"
+        if fk_def:
+            fk_constraint = f",\n            {fk_def}"
+
+    return f"""
+    CREATE TABLE IF NOT EXISTS {session_table} (
+        id VARCHAR(128) PRIMARY KEY,
+        app_name VARCHAR(128) NOT NULL,
+        user_id VARCHAR(128) NOT NULL,
+        {owner_id_col}
+        state JSON NOT NULL,
+        create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+        INDEX idx_{session_table}_app_user (app_name, user_id),
+        INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """
+
+
+def _mysql_events_ddl(events_table: str, session_table: str) -> str:
+    """Generate shared MySQL events CREATE TABLE DDL (post clean-break, 5 columns)."""
+    return f"""
+    CREATE TABLE IF NOT EXISTS {events_table} (
+        session_id VARCHAR(128) NOT NULL,
+        invocation_id VARCHAR(256) NOT NULL,
+        author VARCHAR(128) NOT NULL,
+        timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        event_json JSON NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
+        INDEX idx_{events_table}_session (session_id, timestamp ASC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """

@@ -8,56 +8,12 @@ from uuid import uuid4
 import pytest
 
 from sqlspec import ObservabilityConfig, SQLSpec
-from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.core import build_connection_config
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQLResult
 
 pytestmark = pytest.mark.xdist_group("sqlite")
-
-
-async def test_basic_connection(aiosqlite_config: AiosqliteConfig) -> None:
-    """Test basic connection establishment."""
-    async with aiosqlite_config.provide_session() as driver:
-        assert isinstance(driver, AiosqliteDriver)
-        assert driver.connection is not None
-
-        result = await driver.execute("SELECT 1 as test_value")
-        assert isinstance(result, SQLResult)
-        assert result.data is not None
-        assert len(result.data) == 1
-        assert result.get_data()[0]["test_value"] == 1
-
-
-async def test_connection_reuse(aiosqlite_config: AiosqliteConfig) -> None:
-    """Test connection reuse in pool."""
-
-    async with aiosqlite_config.provide_session() as driver1:
-        await driver1.execute("CREATE TABLE IF NOT EXISTS reuse_test (id INTEGER, data TEXT)")
-        await driver1.execute("INSERT INTO reuse_test VALUES (1, 'test_data')")
-        await driver1.commit()
-
-    async with aiosqlite_config.provide_session() as driver2:
-        result = await driver2.execute("SELECT data FROM reuse_test WHERE id = 1")
-        assert isinstance(result, SQLResult)
-        assert result.data is not None
-        assert len(result.data) == 1
-        assert result.get_data()[0]["data"] == "test_data"
-
-        await driver2.execute("DROP TABLE IF EXISTS reuse_test")
-        await driver2.commit()
-
-
-async def test_connection_error_handling(aiosqlite_config: AiosqliteConfig) -> None:
-    """Test connection error handling."""
-    async with aiosqlite_config.provide_session() as driver:
-        with pytest.raises(Exception):
-            await driver.execute("INVALID SQL SYNTAX")
-
-        result = await driver.execute("SELECT 'still_working' as status")
-        assert isinstance(result, SQLResult)
-        assert result.data is not None
-        assert result.get_data()[0]["status"] == "still_working"
 
 
 async def test_connection_with_transactions(aiosqlite_config: AiosqliteConfig) -> None:
@@ -286,26 +242,5 @@ async def test_config_parameter_preservation(tmp_path: Path) -> None:
             await driver.execute("DROP TABLE parameter_test")
             await driver.commit()
 
-    finally:
-        await config.close_pool()
-
-
-async def test_aiosqlite_on_connection_create_hook() -> None:
-    """Test on_connection_create callback is invoked for each connection."""
-    hook_call_count = 0
-
-    async def connection_hook(conn: Any) -> None:
-        nonlocal hook_call_count
-        hook_call_count += 1
-
-    config = AiosqliteConfig(
-        connection_config={"database": f"file:memory_{uuid4().hex}?mode=memory&cache=private", "uri": True},
-        driver_features={"on_connection_create": connection_hook},
-    )
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute("SELECT 1")
-        assert hook_call_count >= 1, "Hook should be called at least once"
     finally:
         await config.close_pool()

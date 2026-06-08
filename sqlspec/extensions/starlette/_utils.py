@@ -17,14 +17,6 @@ __all__ = (
 _MISSING = object()
 
 
-def _get_state_dict(state: Any) -> dict[str, Any]:
-    """Return the underlying state dictionary."""
-    try:
-        return cast("dict[str, Any]", object.__getattribute__(state, "_state"))
-    except AttributeError:
-        return cast("dict[str, Any]", state.__dict__)
-
-
 def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
     """Get a value from a Starlette state object."""
     data = _get_state_dict(state)
@@ -94,3 +86,11 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
 
     set_state_value(request.state, session_instance_key, session)
     return session
+
+
+def _get_state_dict(state: Any) -> dict[str, Any]:
+    """Return the underlying state dictionary."""
+    try:
+        return cast("dict[str, Any]", object.__getattribute__(state, "_state"))
+    except AttributeError:
+        return cast("dict[str, Any]", state.__dict__)

@@ -19,9 +19,10 @@ if TYPE_CHECKING:
 
     from sqlspec.config import ADKConfig
     from sqlspec.extensions.adk import MemoryRecord
-SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 
 __all__ = ("SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
+
+SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 
 
 class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):

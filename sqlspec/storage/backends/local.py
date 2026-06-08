@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
+from sqlspec.storage._paths import strip_windows_drive_prefix
 from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
@@ -23,39 +24,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("LocalStore",)
-
-
-def _write_local_bytes(resolved: "Path", data: bytes) -> None:
-    """Write bytes to a local file, ensuring parent directories exist."""
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_bytes(data)
-
-
-def _delete_local_path(resolved: "Path") -> None:
-    """Delete a local file or directory."""
-    if resolved.is_dir():
-        shutil.rmtree(resolved)
-    elif resolved.exists():
-        resolved.unlink()
-
-
-def _copy_local_path(src: "Path", dst: "Path") -> None:
-    """Copy a local file or directory."""
-    if src.is_dir():
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-    else:
-        shutil.copy2(src, dst)
-
-
-def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
-    """Write an Arrow table to a local path."""
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, str(resolved), **options)  # pyright: ignore
-
-
-def _open_file_for_read(path: Path) -> Any:
-    """Open a file for binary reading."""
-    return path.open("rb")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -76,21 +44,19 @@ class LocalStore:
         """Initialize local storage backend.
 
         Args:
-            uri: File URI or path (e.g., "file:///path" or "/path")
+            uri: File URI or path
             **kwargs: Additional options including:
-                - base_path: Subdirectory relative to URI path. If relative, it's combined
-                  with the URI path. If absolute, it takes precedence (backward compatible).
+            - base_path: Subdirectory relative to URI path. If relative, it's combined
+                with the URI path. If absolute, it takes precedence (backward compatible).
 
-        The URI may be a file:// path (Windows style like file:///C:/path is supported).
-        When both URI and base_path are provided, they are combined:
-        - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
-        - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
+            The URI may be a file:// path (Windows style like file:///C:/path is supported).
+            When both URI and base_path are provided, they are combined:
+                - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
+                - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
         """
         if uri.startswith("file://"):
             parsed = urlparse(uri)
-            path = unquote(parsed.path)
-            if path and len(path) > 2 and path[2] == ":":  # noqa: PLR2004
-                path = path[1:]
+            path = strip_windows_drive_prefix(unquote(parsed.path))
             self.base_path = Path(path).resolve()
         elif uri:
             self.base_path = Path(uri).resolve()
@@ -178,8 +144,8 @@ class LocalStore:
             recursive: Whether to walk subdirectories.
             **kwargs: Additional backend-specific options (currently unused).
 
-        When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
-        Paths outside base_path are returned with their absolute names.
+            When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
+            Paths outside base_path are returned with their absolute names.
         """
         if prefix and (prefix.endswith("/") or "/" in prefix):
             search_path = self._resolve_path(prefix)
@@ -362,7 +328,7 @@ class LocalStore:
 
         Raises:
             NotImplementedError: Local file storage does not require URL signing.
-                Local files are accessed directly via file:// URIs.
+            Local files are accessed directly via file:// URIs.
         """
         msg = "URL signing is not applicable to local file storage. Use file:// URIs directly."
         raise NotImplementedError(msg)
@@ -466,3 +432,36 @@ class LocalStore:
     ) -> "str | list[str]":
         """Generate signed URL(s) asynchronously."""
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]
+
+
+def _write_local_bytes(resolved: "Path", data: bytes) -> None:
+    """Write bytes to a local file, ensuring parent directories exist."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_bytes(data)
+
+
+def _delete_local_path(resolved: "Path") -> None:
+    """Delete a local file or directory."""
+    if resolved.is_dir():
+        shutil.rmtree(resolved)
+    elif resolved.exists():
+        resolved.unlink()
+
+
+def _copy_local_path(src: "Path", dst: "Path") -> None:
+    """Copy a local file or directory."""
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+
+
+def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
+    """Write an Arrow table to a local path."""
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(resolved), **options)  # pyright: ignore
+
+
+def _open_file_for_read(path: Path) -> Any:
+    """Open a file for binary reading."""
+    return path.open("rb")

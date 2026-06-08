@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Unit tests for Oracle typed parameter wrappers.
 
 Covers the contract for :class:`OracleBlob`, :class:`OracleClob`, and
@@ -11,6 +12,8 @@ the T2 routing site).
 """
 
 import pytest
+
+from sqlspec.adapters.oracledb import OracleOutputConverter
 
 
 def test_oracle_clob_class_is_importable_from_param_types_module() -> None:
@@ -118,7 +121,7 @@ def test_oracle_clob_rejects_extra_attribute_assignment() -> None:
 
     instance = OracleClob("v")
     with pytest.raises(AttributeError):
-        instance.extra = "boom"  # type: ignore[attr-defined]
+        instance.extra = "boom"
 
 
 def test_oracle_blob_rejects_extra_attribute_assignment() -> None:
@@ -126,7 +129,7 @@ def test_oracle_blob_rejects_extra_attribute_assignment() -> None:
 
     instance = OracleBlob(b"v")
     with pytest.raises(AttributeError):
-        instance.extra = "boom"  # type: ignore[attr-defined]
+        instance.extra = "boom"
 
 
 def test_oracle_json_rejects_extra_attribute_assignment() -> None:
@@ -134,7 +137,7 @@ def test_oracle_json_rejects_extra_attribute_assignment() -> None:
 
     instance = OracleJson({"a": 1})
     with pytest.raises(AttributeError):
-        instance.extra = "boom"  # type: ignore[attr-defined]
+        instance.extra = "boom"
 
 
 def test_oracle_clob_value_is_mutable_via_assignment() -> None:
@@ -144,3 +147,16 @@ def test_oracle_clob_value_is_mutable_via_assignment() -> None:
     instance = OracleClob("first")
     instance.value = "second"
     assert instance.value == "second"
+
+
+def test_oracle_output_converter_dead_methods_oracle_output_converter_dead_methods_removed() -> None:
+    removed = {"convert_oracle_value", "detect_json_storage_type", "format_datetime_for_oracle", "handle_large_lob"}
+    for method_name in removed:
+        assert not hasattr(OracleOutputConverter, method_name)
+
+
+def test_oracle_output_converter_dead_methods_oracle_output_converter_reexported_from_adapter_package() -> None:
+    import sqlspec.adapters.oracledb as oracledb_adapter
+
+    assert oracledb_adapter.OracleOutputConverter is OracleOutputConverter
+    assert "OracleOutputConverter" in oracledb_adapter.__all__

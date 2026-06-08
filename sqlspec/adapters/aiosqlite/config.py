@@ -14,7 +14,7 @@ from sqlspec.adapters.aiosqlite.pool import (
     AiosqlitePoolConnection,
     AiosqlitePoolConnectionContext,
 )
-from sqlspec.adapters.sqlite.type_converter import register_type_handlers
+from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -60,23 +60,23 @@ class AiosqliteDriverFeatures(TypedDict):
     Controls optional type handling and serialization features for SQLite connections.
 
     enable_custom_adapters: Enable custom type adapters for JSON/UUID/datetime conversion.
-        Defaults to True for enhanced Python type support.
-        Set to False only if you need pure SQLite behavior without type conversions.
+     Defaults to True for enhanced Python type support.
+     Set to False only if you need pure SQLite behavior without type conversions.
     json_serializer: Custom JSON serializer function.
-        Defaults to sqlspec.utils.serializers.to_json.
+     Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
-        Defaults to sqlspec.utils.serializers.from_json.
+     Defaults to sqlspec.utils.serializers.from_json.
     on_connection_create: Async callback executed when a connection is created.
-        Receives the raw aiosqlite connection for low-level driver configuration.
-        Runs after internal setup (PRAGMA optimizations).
+     Receives the raw aiosqlite connection for low-level driver configuration.
+     Runs after internal setup (PRAGMA optimizations).
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
-        Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
-        Requires extension_config["events"] for migration setup.
+     Defaults to True when extension_config["events"] is configured.
+     Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
+     Requires extension_config["events"] for migration setup.
     events_backend: Event channel backend selection.
-        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
-        SQLite does not have native pub/sub, so table_queue is the only backend.
-        Defaults to "table_queue".
+     Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+     SQLite does not have native pub/sub, so table_queue is the only backend.
+     Defaults to "table_queue".
     """
 
     enable_custom_adapters: NotRequired[bool]
@@ -137,14 +137,7 @@ class AiosqliteConnectionContext(AsyncPoolConnectionContext):
 
 @mypyc_attr(native_class=False)
 class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnectionPool, AiosqliteDriver]):
-    """Database configuration for AioSQLite engine.
-
-    Example::
-
-        config = AiosqliteConfig(
-            connection_config=AiosqlitePoolParams(database="app.db")
-        )
-    """
+    """Database configuration for AioSQLite engine."""
 
     driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
     connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
@@ -180,10 +173,9 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             statement_config: Optional statement configuration.
             driver_features: Optional driver feature configuration.
             bind_key: Optional unique identifier for this configuration.
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
-
         """
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
 
@@ -228,13 +220,11 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             AiosqliteConnectionPool: The connection pool instance.
-
         """
-        config = {k: v for k, v in self.connection_config.items() if v is not None}
-        pool_size = config.pop("pool_size", 5)
-        connect_timeout = config.pop("connect_timeout", 30.0)
-        idle_timeout = config.pop("idle_timeout", 24 * 60 * 60)
-        operation_timeout = config.pop("operation_timeout", 10.0)
+        pool_size = self.connection_config.get("pool_size") or 5
+        connect_timeout = self.connection_config.get("connect_timeout") or 30.0
+        idle_timeout = self.connection_config.get("idle_timeout") or 24 * 60 * 60
+        operation_timeout = self.connection_config.get("operation_timeout") or 10.0
 
         pool = AiosqliteConnectionPool(
             connection_parameters=build_connection_config(self.connection_config),
@@ -256,11 +246,10 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Called once during pool creation if enable_custom_adapters is True.
         Registers JSON serialization handlers if configured.
         """
-        if self.driver_features.get("enable_custom_adapters", False):
-            register_type_handlers(
-                json_serializer=self.driver_features.get("json_serializer"),
-                json_deserializer=self.driver_features.get("json_deserializer"),
-            )
+        register_type_handlers(
+            json_serializer=self.driver_features.get("json_serializer"),
+            json_deserializer=self.driver_features.get("json_deserializer"),
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AiosqliteConfig types.
@@ -288,7 +277,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             An aiosqlite connection instance.
-
         """
         pool = self.connection_instance
         if pool is None:
@@ -302,7 +290,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         Returns:
             The async connection pool.
-
         """
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()

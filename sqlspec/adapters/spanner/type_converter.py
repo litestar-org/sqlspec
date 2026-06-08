@@ -5,15 +5,15 @@ Combines output conversion (database results → Python) and input conversion
 compilation with no nested functions.
 
 Output conversion handles:
-- UUID detection and conversion from strings/bytes
-- JSON detection and deserialization
+    - UUID detection and conversion from strings/bytes
+    - JSON detection and deserialization
 
 Input conversion handles:
-- UUID → base64-encoded bytes
-- bytes → base64-encoded bytes
-- datetime timezone awareness
-- dict/list → JsonObject wrapping
-- param_types inference
+    - UUID → base64-encoded bytes
+    - bytes → base64-encoded bytes
+    - datetime timezone awareness
+    - dict/list → JsonObject wrapping
+    - param_types inference
 """
 
 import base64
@@ -21,19 +21,17 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
-from sqlspec._typing import UUID_UTILS_INSTALLED
+from typing_extensions import final
+
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 
 _UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
-if UUID_UTILS_INSTALLED:
-    try:
-        import uuid_utils as _uuid_utils  # pyright: ignore[reportMissingImports]
-
-        _UUID_TYPES = (UUID, _uuid_utils.UUID)
-    except ImportError:
-        pass
+_uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+if _uuid_utils_uuid is not None:
+    _UUID_TYPES = (UUID, _uuid_utils_uuid)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -76,6 +74,7 @@ def _get_json_object_type() -> "type[Any]":
     return _JSON_OBJECT_TYPE
 
 
+@final
 class SpannerOutputConverter(CachedOutputConverter):
     """Spanner-specific output conversion with UUID and JSON support.
 
@@ -250,11 +249,11 @@ def coerce_params_for_spanner(
     """Coerce Python types to Spanner-compatible formats.
 
     Handles:
-    - UUID → base64-encoded bytes
-    - bytes → base64-encoded bytes
-    - datetime timezone awareness
-    - dict → JsonObject for JSON columns
-    - nested sequences → JsonObject for JSON arrays
+        - UUID → base64-encoded bytes
+        - bytes → base64-encoded bytes
+        - datetime timezone awareness
+        - dict → JsonObject for JSON columns
+        - nested sequences → JsonObject for JSON arrays
 
     Args:
         params: Parameter dictionary or None.

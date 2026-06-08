@@ -13,60 +13,16 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.memory._types import MemoryRecord
 
+__all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
+
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.memory.store")
 
-__all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 MAX_TABLE_NAME_LENGTH: Final = 63
-
-
-def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
-    """Extract column name from owner ID column DDL definition.
-
-    Args:
-        owner_id_column_ddl: Full column DDL string.
-
-    Returns:
-        Column name only (first word).
-
-    Raises:
-        ValueError: If DDL format is invalid.
-    """
-    match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
-    if not match:
-        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
-        raise ValueError(msg)
-
-    return match.group(1)
-
-
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)
 
 
 class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
@@ -83,18 +39,10 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
+    in each adapter directory.
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - memory_table: Memory table name (default: "adk_memory_entries")
-        - memory_use_fts: Enable full-text search when supported (default: False)
-        - memory_max_results: Max search results (default: 20)
-        - owner_id_column: Optional owner FK column DDL (default: None)
-        - enable_memory: Whether memory is enabled (default: True)
     """
 
     __slots__ = (
@@ -112,14 +60,6 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads configuration from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         self._config = config
         store_config = self._get_store_config_from_extension()
@@ -297,6 +237,51 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
 
+def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
+    """Extract column name from owner ID column DDL definition.
+
+    Args:
+        owner_id_column_ddl: Full column DDL string.
+
+    Returns:
+        Column name only (first word).
+
+    Raises:
+        ValueError: If DDL format is invalid.
+    """
+    match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
+    if not match:
+        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
+        raise ValueError(msg)
+
+    return match.group(1)
+
+
+def _validate_table_name(table_name: str) -> None:
+    """Validate table name for SQL safety.
+
+    Args:
+        table_name: Table name to validate.
+
+    Raises:
+        ValueError: If table name is invalid.
+    """
+    if not table_name:
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+
+    if len(table_name) > MAX_TABLE_NAME_LENGTH:
+        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
+        raise ValueError(msg)
+
+    if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        msg = (
+            f"Invalid table name: {table_name!r}. "
+            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
+        )
+        raise ValueError(msg)
+
+
 class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
     """Base class for sync SQLSpec-backed ADK memory stores.
 
@@ -311,18 +296,10 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
     - Text search with optional full-text search support
 
     Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/sqlite/adk/store.py).
+    in each adapter directory.
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - memory_table: Memory table name (default: "adk_memory_entries")
-        - memory_use_fts: Enable full-text search when supported (default: False)
-        - memory_max_results: Max search results (default: 20)
-        - owner_id_column: Optional owner FK column DDL (default: None)
-        - enable_memory: Whether memory is enabled (default: True)
     """
 
     __slots__ = (
@@ -340,14 +317,6 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
 
         Args:
             config: SQLSpec database configuration.
-
-        Notes:
-            Reads configuration from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         self._config = config
         store_config = self._get_store_config_from_extension()

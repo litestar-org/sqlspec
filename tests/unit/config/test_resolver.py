@@ -1,16 +1,15 @@
 """Tests for configuration resolver functionality."""
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, NonCallableMock, patch
 
 import pytest
 
+from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import ConfigResolverError
-from sqlspec.utils.config_tools import (
-    _is_valid_config,  # pyright: ignore[reportPrivateUsage]
-    resolve_config_async,
-    resolve_config_sync,
-)
+from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.utils.config_tools import _is_valid_config, resolve_config_async, resolve_config_sync
 
 
 def _create_mock_config(
@@ -33,7 +32,6 @@ def _create_mock_config(
 async def test_resolve_direct_config_instance() -> None:
     """Test resolving a direct config instance."""
     mock_config = _create_mock_config()
-
     with patch("sqlspec.utils.config_tools.import_string", return_value=mock_config):
         result = await resolve_config_async("myapp.config.database_config")
         assert hasattr(result, "database_url")
@@ -46,7 +44,6 @@ async def test_resolve_config_list() -> None:
     mock_config1 = _create_mock_config(database_url="sqlite:///test1.db", bind_key="test1")
     mock_config2 = _create_mock_config(database_url="sqlite:///test2.db", bind_key="test2")
     config_list = [mock_config1, mock_config2]
-
     with patch("sqlspec.utils.config_tools.import_string", return_value=config_list):
         result = await resolve_config_async("myapp.config.database_configs")
         assert result == config_list
@@ -187,7 +184,6 @@ async def test_config_class_rejected() -> None:
 
     assert isinstance(MockConfigClass, type), "Should be a class"
     assert not _is_valid_config(MockConfigClass), "Classes should be rejected"
-
     instance = MockConfigClass()
     assert not isinstance(instance, type), "Should be an instance"
     assert _is_valid_config(instance), "Instances should be accepted"
@@ -227,7 +223,6 @@ async def test_config_instance_accepted() -> None:
             self.migration_config: dict[str, Any] = {}
 
     mock_instance = MockConfigClass()
-
     with patch("sqlspec.utils.config_tools.import_string", return_value=mock_instance):
         result = await resolve_config_async("myapp.config.config_instance")
         assert hasattr(result, "database_url")
@@ -238,7 +233,6 @@ async def test_config_instance_accepted() -> None:
 def test_resolve_config_sync_wrapper() -> None:
     """Test that the sync wrapper works correctly."""
     mock_config = _create_mock_config()
-
     with patch("sqlspec.utils.config_tools.import_string", return_value=mock_config):
         result = resolve_config_sync("myapp.config.database_config")
         assert hasattr(result, "database_url")
@@ -256,3 +250,38 @@ def test_resolve_config_sync_callable() -> None:
     with patch("sqlspec.utils.config_tools.import_string", return_value=get_config):
         result = resolve_config_sync("myapp.config.get_database_config")
         assert result is mock_config
+
+
+def test_assert_guards_get_observability_runtime_raises_runtime_error_not_assertion_error() -> None:
+    """A broken attach_observability implementation should hit RuntimeError guard."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config._observability_runtime = None
+    with (
+        patch.object(config, "attach_observability", return_value=None),
+        pytest.raises(RuntimeError, match="ObservabilityRuntime was not set"),
+    ):
+        config.get_observability_runtime()
+
+
+def test_assert_guards_no_pool_sync_config_init_migrations_uses_default_directory(tmp_path: Path) -> None:
+    """init_migrations derives directory from migration_config when argument is None."""
+    migration_dir = tmp_path / "migrations"
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")},
+        migration_config={"script_location": str(migration_dir)},
+    )
+    with patch.object(SyncMigrationCommands, "init", return_value=None) as init:
+        config.init_migrations()
+    init.assert_called_once_with(str(migration_dir), True)
+
+
+def test_assert_guards_default_serializer_raises_runtime_error_if_fallback_does_not_set_serializer(monkeypatch) -> None:
+    """get_default_serializer should use RuntimeError instead of assert."""
+    import sqlspec.utils.serializers._json as json_module
+
+    monkeypatch.setattr(json_module, "_default_serializer", None)
+    monkeypatch.setattr(json_module, "MSGSPEC_INSTALLED", False)
+    monkeypatch.setattr(json_module, "ORJSON_INSTALLED", False)
+    monkeypatch.setattr(json_module, "StandardLibSerializer", lambda: None)
+    with pytest.raises(RuntimeError, match="No JSON serializer available"):
+        json_module.get_default_serializer()

@@ -1,0 +1,48 @@
+# Codecov configuration.
+#
+# CI uploads coverage in two tiers (see .github/workflows/ci.yml):
+#   - unit:        tests/unit, no Docker
+#   - integration: tests/integration + docs/examples, postgres + mysql only
+#
+# Optional/cloud adapters (oracle, spanner, bigquery, cockroach, adbc, mssql,
+# arrow_odbc) have no CI service container, so their source is uncovered by
+# construction. covdefaults also pins fail_under=100, which each per-tier run
+# overrides to 0 (--cov-fail-under=0); Codecov merges the tiers server-side and
+# the combined report is the source of truth.
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    wait_for_ci: true
+
+coverage:
+  status:
+    # Project status stays a real gate: it catches overall regressions against
+    # the merged base.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: false
+    # Patch status is informational only. A PR diff routinely touches code that
+    # only the absent cloud adapters exercise, so a blocking patch gate is
+    # structurally unsatisfiable in CI. It is still reported for visibility.
+    patch:
+      default:
+        informational: true
+
+# Both tiers measure sqlspec/ and are carried forward so a tier that did not
+# run on a given commit does not drop the merged coverage.
+flags:
+  unit:
+    paths:
+      - sqlspec/
+    carryforward: true
+  integration:
+    paths:
+      - sqlspec/
+    carryforward: true
+
+comment:
+  layout: "header, diff, flags, files"
+  require_changes: true

@@ -218,6 +218,28 @@ def test_event_channel_load_native_backend_none_returns_none(tmp_path) -> None:
     assert result is None
 
 
+def test_load_native_backend_uses_pre_resolved_adapter_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller-provided adapter name avoids module-path parsing."""
+    from sqlspec.extensions.events import load_native_backend
+
+    imported_modules: list[str] = []
+
+    def fake_import_module(module_name: str) -> Any:
+        imported_modules.append(module_name)
+        raise ModuleNotFoundError(module_name)
+
+    class CustomConfig:
+        pass
+
+    CustomConfig.__module__ = "myapp.database.config"
+    monkeypatch.setattr("sqlspec.extensions.events._channel.importlib.import_module", fake_import_module)
+
+    result = load_native_backend(CustomConfig(), "listen_notify", {}, adapter_name="sqlite")
+
+    assert result is None
+    assert imported_modules == ["sqlspec.adapters.sqlite.events.backend"]
+
+
 def test_event_channel_custom_queue_table_via_extension(tmp_path) -> None:
     """Custom queue table name is passed to backend."""
     config = SqliteConfig(

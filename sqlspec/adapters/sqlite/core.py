@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter, build_uuid_coercions
+from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_sqlite_error
 
 if TYPE_CHECKING:
@@ -59,12 +59,8 @@ SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
 
 
-_TIME_TO_ISO = build_time_iso_converter()
+_TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 def format_identifier(identifier: str) -> str:
@@ -203,10 +199,10 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. SQLite extended error codes (most reliable)
-    2. SQLite error names
-    3. Error message patterns
-    4. Default SQLSpecError fallback
+        1. SQLite extended error codes (most reliable)
+        2. SQLite error names
+        3. Error message patterns
+        4. Default SQLSpecError fallback
 
     Args:
         error: The SQLite exception to map
@@ -312,6 +308,10 @@ def build_profile() -> "DriverParameterProfile":
         },
         default_dialect="sqlite",
     )
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
 
 
 driver_profile = build_profile()

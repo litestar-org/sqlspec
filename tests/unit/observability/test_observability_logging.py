@@ -155,8 +155,12 @@ def test_default_statement_observer_info_excludes_parameters(caplog) -> None:
     record = caplog.records[-1]
     assert record.getMessage() == "SELECT"
     assert record.__dict__["db.statement"] == "SELECT 1"
-    assert record.sql_truncated is False
-    assert record.sql_length == len("SELECT 1")
+    assert record.__dict__["db.statement.truncated"] is False
+    assert record.__dict__["db.statement.length"] == len("SELECT 1")
+    assert record.__dict__["db.statement.preview_length"] == len("SELECT 1")
+    assert "sql_truncated" not in record.__dict__
+    assert "sql_length" not in record.__dict__
+    assert "sql_preview_length" not in record.__dict__
     assert record.parameters_type == "dict"
     assert record.parameters_size == 1
     assert "parameters" not in record.__dict__
@@ -188,9 +192,13 @@ def test_default_statement_observer_debug_includes_parameters_and_truncates(capl
 
     record = caplog.records[-1]
     assert record.getMessage() == "SELECT"
-    assert record.sql_truncated is True
+    assert record.__dict__["db.statement.truncated"] is True
     assert len(record.__dict__["db.statement"]) == 2000
-    assert record.sql_length == len(long_sql)
+    assert record.__dict__["db.statement.length"] == len(long_sql)
+    assert record.__dict__["db.statement.preview_length"] == 2000
+    assert "sql_truncated" not in record.__dict__
+    assert "sql_length" not in record.__dict__
+    assert "sql_preview_length" not in record.__dict__
     assert record.parameters_truncated is True
     assert isinstance(record.parameters, list)
     assert len(record.parameters) == 100

@@ -14,21 +14,23 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
+__all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
+
 _ORACLEDB_AVAILABLE = False
 
-try:  # pragma: no cover - optional dependency path
+try:  # pragma: no cover
     from sqlspec.adapters.oracledb._typing import AQMSG_INVISIBLE as _AQMSG_INVISIBLE
     from sqlspec.adapters.oracledb._typing import AQMSG_PAYLOAD_TYPE_JSON as _AQMSG_PAYLOAD_TYPE_JSON
     from sqlspec.adapters.oracledb._typing import AQMSG_VISIBLE as _AQMSG_VISIBLE
     from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
     from sqlspec.adapters.oracledb._typing import AQDequeueOptions as _AQDequeueOptions
-except ImportError:  # pragma: no cover - optional dependency path
+except ImportError:  # pragma: no cover
     _AQDequeueOptions = None
     _AQMSG_INVISIBLE = None
     _AQMSG_PAYLOAD_TYPE_JSON = None
     _AQMSG_VISIBLE = None
     _DB_TYPE_JSON = None
-else:  # pragma: no cover - optional dependency path
+else:  # pragma: no cover
     _ORACLEDB_AVAILABLE = True
 
 AQDequeueOptions: Any = _AQDequeueOptions
@@ -39,7 +41,6 @@ DB_TYPE_JSON: Any = _DB_TYPE_JSON
 
 logger = get_logger("sqlspec.events.oracle")
 
-__all__ = ("OracleAsyncAQEventBackend", "OracleSyncAQEventBackend", "create_event_backend")
 
 _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
 _DEFAULT_VISIBILITY: "int | None"
@@ -283,7 +284,7 @@ def _parse_message(channel: str, payload: Any) -> EventMessage:
 def create_event_backend(
     config: "OracleAsyncConfig | OracleSyncConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> "OracleSyncAQEventBackend | OracleAsyncAQEventBackend | None":
-    """Factory used by EventChannel to create the Oracle AQ backend."""
+    """EventChannel factory for the Oracle AQ backend."""
     is_async = config.is_async
     match (backend_name, is_async):
         case ("advanced_queue", False):

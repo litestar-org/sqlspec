@@ -5,7 +5,7 @@ from time import time
 from typing import Any
 
 from sqlspec.observability._config import LoggingConfig, StatementObserver
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import SQL_LOGGER_NAME, get_logger
 
 __all__ = (
     "SQL_LOGGER_NAME",
@@ -18,9 +18,6 @@ __all__ = (
 
 
 logger = get_logger("sqlspec.observability")
-
-SQL_LOGGER_NAME = "sqlspec.sql"
-"""Logger name for SQL execution logs. Use this to configure SQL log levels independently."""
 
 sql_logger = get_logger(SQL_LOGGER_NAME)
 
@@ -107,7 +104,7 @@ class StatementEvent:
         self.span_id = span_id
         self.sampled = sampled
 
-    def __hash__(self) -> int:  # pragma: no cover - explicit to mirror dataclass behavior
+    def __hash__(self) -> int:  # pragma: no cover
         msg = "StatementEvent objects are mutable and unhashable"
         raise TypeError(msg)
 
@@ -234,9 +231,6 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
         "db.statement.truncated": sql_truncated,
         "db.statement.length": sql_length,
         "db.statement.preview_length": len(sql_preview),
-        "sql_truncated": sql_truncated,
-        "sql_length": sql_length,
-        "sql_preview_length": len(sql_preview),
     }
 
     if event.trace_id:
@@ -247,7 +241,6 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
         extra["correlation_id"] = event.correlation_id
     if event.sql_hash:
         extra["db.statement.hash"] = event.sql_hash
-        extra["sql_hash"] = event.sql_hash
 
     if logging_config.include_driver_name:
         extra["sqlspec.driver"] = event.driver
@@ -332,7 +325,7 @@ def create_event(
     span_id: "str | None" = None,
     sampled: bool = True,
 ) -> StatementEvent:
-    """Factory helper used by runtime to build statement events."""
+    """Factory helper for runtime statement events."""
 
     return StatementEvent(
         sql=sql,

@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING, Final, NoReturn
 
 from sqlglot import exp, parse_one
 
-from sqlspec.core import SQL, Statement
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLConversionError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.core import Statement
 
 
 __all__ = (
@@ -38,7 +40,6 @@ def parse_statement_safely(statement: "Statement", dialect: "DialectType | None"
 
     Returns:
         Parsed expression.
-
     """
     try:
         sql_string = str(statement)
@@ -57,7 +58,6 @@ def generate_sql_safely(expression: "exp.Expr", dialect: "DialectType | None", p
 
     Returns:
         Generated SQL string.
-
     """
     try:
         return expression.sql(dialect=dialect, pretty=pretty)
@@ -81,14 +81,14 @@ def convert_to_dialect(
 
     Returns:
         SQL string in target dialect.
-
     """
-    parsed_expression: exp.Expr | None = None
+    parsed_expression: exp.Expr
 
     if statement is not None and isinstance(statement, SQL):
-        if statement.expression is None:
+        expr = statement.expression
+        if expr is None:
             raise_statement_parse_error()
-        parsed_expression = statement.expression
+        parsed_expression = expr
     elif isinstance(statement, exp.Expr):
         parsed_expression = statement
     else:
@@ -104,7 +104,6 @@ def raise_statement_parse_error() -> "NoReturn":
 
     Raises:
         SQLConversionError: Always raised.
-
     """
     msg = "Statement could not be parsed"
     raise SQLConversionError(msg)
@@ -118,7 +117,6 @@ def raise_parse_error(e: Exception) -> "NoReturn":
 
     Raises:
         SQLConversionError: Always raised.
-
     """
     error_msg = f"Failed to parse SQL statement: {e!s}"
     raise SQLConversionError(error_msg) from e
@@ -133,7 +131,6 @@ def raise_conversion_error(dialect: "DialectType | None", e: Exception) -> "NoRe
 
     Raises:
         SQLConversionError: Always raised.
-
     """
     error_msg = f"Failed to convert SQL expression to {dialect}: {e!s}"
     raise SQLConversionError(error_msg) from e

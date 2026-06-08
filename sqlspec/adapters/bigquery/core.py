@@ -5,6 +5,7 @@ import importlib
 import io
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse
 
 import sqlglot
 from google.api_core.retry import Retry
@@ -72,20 +73,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _tuple_to_list(value: Any) -> Any:
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
-def _return_none(_: Any) -> None:
-    return None
+LOCAL_BIGQUERY_ENDPOINT_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
 
 
 def storage_api_available() -> bool:
@@ -111,6 +99,35 @@ _BQ_TYPE_MAP: "dict[type, tuple[str, str | None]]" = {
 }
 
 
+def _has_synthetic_positional_keys(parameters: "list[dict[str, Any]]") -> bool:
+    """Return True when the first parameter mapping is keyed only by synthetic positional names.
+
+    Synthetic names are ``param_<int>`` or bare digit strings produced by qmark/positional
+    parameter expansion. They do not correspond to the target table's columns, so a Parquet
+    column-load cannot be built from them.
+    """
+    if not parameters:
+        return False
+    first = parameters[0]
+    if not isinstance(first, dict) or not first:
+        return False
+    return all(
+        isinstance(key, str) and (key.isdigit() or (key.startswith("param_") and key[6:].isdigit())) for key in first
+    )
+
+
+def _uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
+    """Return True when a BigQuery client points at a local emulator endpoint."""
+    api_base_url = getattr(getattr(connection, "_connection", None), "API_BASE_URL", None)
+    if not isinstance(api_base_url, str):
+        return False
+    try:
+        hostname = urlparse(api_base_url).hostname
+    except ValueError:
+        return False
+    return hostname in LOCAL_BIGQUERY_ENDPOINT_HOSTS
+
+
 def try_bulk_insert(
     connection: "BigQueryConnection",
     sql: str,
@@ -131,8 +148,14 @@ def try_bulk_insert(
     Returns:
         Inserted row count if bulk insert succeeds, otherwise None.
     """
+    if _uses_local_bigquery_endpoint(connection):
+        return None
+
     table_name = extract_insert_table(sql, expression, allow_parse=allow_parse)
     if not table_name:
+        return None
+
+    if _has_synthetic_positional_keys(parameters):
         return None
 
     try:
@@ -316,7 +339,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
                 raise SQLSpecError(msg)
 
     elif isinstance(parameters, (list, tuple)):
-        msg = "BigQuery driver requires named parameters (e.g., @name); positional parameters are not supported"
+        msg = "BigQuery driver requires named parameters; positional parameters are not supported"
         raise SQLSpecError(msg)
 
     return bq_parameters
@@ -363,28 +386,49 @@ def build_retry(deadline: float) -> "Retry":
     return Retry(predicate=_should_retry_bigquery_job, deadline=deadline)
 
 
-def _should_copy_job_attribute(attr: str, source_config: QueryJobConfig) -> bool:
-    if attr.startswith("_"):
-        return False
-
-    try:
-        value = source_config.__getattribute__(attr)
-        return value is not None and not callable(value)
-    except (AttributeError, TypeError):
-        return False
+_COPY_JOB_FIELDS: tuple[str, ...] = (
+    "allow_large_results",
+    "clustering_fields",
+    "connection_properties",
+    "create_disposition",
+    "create_session",
+    "default_dataset",
+    "destination",
+    "destination_encryption_configuration",
+    "dry_run",
+    "flatten_results",
+    "job_timeout_ms",
+    "labels",
+    "max_slots",
+    "maximum_billing_tier",
+    "maximum_bytes_billed",
+    "priority",
+    "range_partitioning",
+    "reservation",
+    "schema_update_options",
+    "script_options",
+    "time_partitioning",
+    "udf_resources",
+    "use_legacy_sql",
+    "use_query_cache",
+    "write_disposition",
+    "write_incremental_results",
+)
 
 
 def copy_job_config(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
-    """Copy non-private attributes from source config to target config."""
-    for attr in dir(source_config):
-        if not _should_copy_job_attribute(attr, source_config):
-            continue
+    """Copy known job config fields from source to target."""
+    for attr in _COPY_JOB_FIELDS:
+        _copy_job_config_field(source_config, target_config, attr)
 
-        try:
-            value = source_config.__getattribute__(attr)
-            setattr(target_config, attr, value)
-        except (AttributeError, TypeError):
-            continue
+
+def _copy_job_config_field(source_config: QueryJobConfig, target_config: QueryJobConfig, attr: str) -> None:
+    try:
+        value = getattr(source_config, attr)
+    except (AttributeError, TypeError):
+        return
+    if value is not None:
+        setattr(target_config, attr, value)
 
 
 def run_query_job(
@@ -395,6 +439,9 @@ def run_query_job(
     default_job_config: QueryJobConfig | None,
     job_config: QueryJobConfig | None,
     json_serializer: "Callable[[Any], str]",
+    retry: Retry | None = None,
+    timeout: float | None = None,
+    job_retry: Retry | None = None,
 ) -> QueryJob:
     """Execute a BigQuery query job with merged configuration.
 
@@ -405,6 +452,9 @@ def run_query_job(
         default_job_config: Default job configuration to merge.
         job_config: Optional job configuration override.
         json_serializer: JSON serializer for parameter values.
+        retry: Retry policy for the API request that starts the query job.
+        timeout: Per-request HTTP timeout for the API request that starts the query job.
+        job_retry: Retry policy attached to the returned query job.
 
     Returns:
         QueryJob object representing the executed job.
@@ -415,7 +465,15 @@ def run_query_job(
     if job_config:
         copy_job_config(job_config, final_job_config)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
-    return connection.query(sql, job_config=final_job_config)
+
+    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
+    if retry is not None:
+        query_kwargs["retry"] = retry
+    if timeout is not None:
+        query_kwargs["timeout"] = timeout
+    if job_retry is not None:
+        query_kwargs["job_retry"] = job_retry
+    return connection.query(sql, **query_kwargs)
 
 
 def build_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "LoadJobConfig":
@@ -597,7 +655,7 @@ def build_profile() -> "DriverParameterProfile":
     return DriverParameterProfile(
         name="BigQuery",
         default_style=ParameterStyle.NAMED_AT,
-        supported_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK},
+        supported_styles={ParameterStyle.NAMED_AT},
         default_execution_style=ParameterStyle.NAMED_AT,
         supported_execution_styles={ParameterStyle.NAMED_AT},
         has_native_list_expansion=True,
@@ -625,6 +683,20 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _tuple_to_list(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _return_none(_: Any) -> None:
+    return None
+
+
 driver_profile = build_profile()
 
 
@@ -640,10 +712,10 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
 default_statement_config = build_statement_config()
 
 
-def _normalize_bigquery_driver_features(
+def apply_driver_features(
     driver_features: "Mapping[str, Any] | None",
 ) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
-    """Normalize driver feature defaults and extract core options."""
+    """Apply BigQuery driver feature defaults and extract core options."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     user_connection_hook = features.pop("on_connection_create", None)
     features.setdefault("enable_uuid_conversion", True)
@@ -658,13 +730,6 @@ def _normalize_bigquery_driver_features(
         cast("Callable[[Any], None] | None", user_connection_hook),
         connection_instance,
     )
-
-
-def apply_driver_features(
-    driver_features: "Mapping[str, Any] | None",
-) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
-    """Apply BigQuery driver feature defaults and extract core options."""
-    return _normalize_bigquery_driver_features(driver_features)
 
 
 def _create_bigquery_error(
@@ -696,9 +761,9 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. HTTP status codes from BigQuery API
-    2. Message pattern matching for specific errors
-    3. Default SQLSpecError fallback
+        1. HTTP status codes from BigQuery API
+        2. Message pattern matching for specific errors
+        3. Default SQLSpecError fallback
 
     Args:
         error: The BigQuery exception to map

@@ -18,6 +18,7 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncDriver,
     OracleSyncExceptionHandler,
 )
+from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 
 __all__ = (
     "OracleAsyncConfig",
@@ -28,6 +29,7 @@ __all__ = (
     "OracleConnectionParams",
     "OracleDriverFeatures",
     "OracleJson",
+    "OracleOutputConverter",
     "OraclePoolParams",
     "OracleSyncConfig",
     "OracleSyncDriver",

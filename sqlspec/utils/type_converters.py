@@ -3,7 +3,10 @@
 import decimal
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import final
+
 from sqlspec.utils.dispatch import TypeDispatcher
+from sqlspec.utils.module_loader import import_optional_attr
 
 if TYPE_CHECKING:
     import datetime
@@ -15,9 +18,9 @@ __all__ = (
     "build_json_list_converter",
     "build_json_tuple_converter",
     "build_nested_decimal_normalizer",
-    "build_time_iso_converter",
     "build_uuid_coercions",
     "should_json_encode_sequence",
+    "time_iso_convert",
 )
 
 JSON_NESTED_TYPES: "tuple[type[Any], ...]" = (dict, list, tuple)
@@ -37,6 +40,7 @@ def _decimal_to_float(value: "decimal.Decimal") -> float:
     return float(value)
 
 
+@final
 class _JsonListConverter:
     __slots__ = ("_preserve_arrays", "_serializer")
 
@@ -52,6 +56,7 @@ class _JsonListConverter:
         return self._serializer(value)
 
 
+@final
 class _JsonTupleConverter:
     __slots__ = ("_list_converter",)
 
@@ -64,6 +69,7 @@ class _JsonTupleConverter:
         return self._list_converter(list(value))
 
 
+@final
 class _DecimalNormalizer:
     __slots__ = ("_decimal_converter",)
 
@@ -126,7 +132,7 @@ _DECIMAL_NORMALIZER_DISPATCHER.register(tuple, _normalize_decimal_tuple)
 _DECIMAL_NORMALIZER_DISPATCHER.register(dict, _normalize_decimal_dict)
 
 
-def _time_iso_convert(value: "datetime.date | datetime.datetime | datetime.time") -> str:
+def time_iso_convert(value: "datetime.date | datetime.datetime | datetime.time") -> str:
     return value.isoformat()
 
 
@@ -171,11 +177,6 @@ def build_nested_decimal_normalizer(*, mode: str = DEFAULT_DECIMAL_MODE) -> "Cal
     return _DecimalNormalizer(decimal_converter)
 
 
-def build_time_iso_converter() -> "Callable[[datetime.date | datetime.datetime | datetime.time], str]":
-    """Return a converter that formats temporal values using ISO 8601."""
-    return _time_iso_convert
-
-
 def _uuid_to_string(value: Any) -> str:
     return str(value)
 
@@ -196,7 +197,7 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
         native: When ``True``, convert ``uuid_utils.UUID`` → ``uuid.UUID``
             (via ``.bytes``, for drivers that bind ``uuid.UUID`` natively).
             When ``False`` (default), convert to ``str`` (for drivers that
-            need a plain string, e.g. DuckDB/SQLite).
+            need a plain string.
     """
     import uuid as _uuid_mod
 
@@ -205,12 +206,8 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
     if not native:
         coercions[_uuid_mod.UUID] = _uuid_to_string
 
-    try:
-        import uuid_utils as _uuid_utils_mod  # pyright: ignore[reportMissingImports]
-
-        converter = _uuid_utils_to_stdlib if native else _uuid_to_string
-        coercions[_uuid_utils_mod.UUID] = converter
-    except ImportError:
-        pass
+    uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+    if uuid_utils_uuid is not None:
+        coercions[uuid_utils_uuid] = _uuid_utils_to_stdlib if native else _uuid_to_string
 
     return coercions

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from sqlspec.storage import StorageTelemetry
 
-__all__ = ("ObservabilityRuntime",)
+__all__ = ("ObservabilityRuntime", "compute_sql_hash")
 
 
 _LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
@@ -161,13 +161,24 @@ class ObservabilityRuntime:
             span.set_attribute("sqlspec.migration.duration_ms", duration_ms)
         self.span_manager.end_span(span, error=error)
 
-    def emit_pool_create(self, pool: Any) -> None:
+    def emit_pool_create_sync(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.create", subject=pool)
         try:
             if self.lifecycle.has_pool_create:
-                self.lifecycle.emit_pool_create(self._build_context(pool=pool))
+                self.lifecycle.emit_pool_create_sync(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
+
+    async def emit_pool_create_async(self, pool: Any) -> None:
+        span = self._start_lifecycle_span("pool.create", subject=pool)
+        try:
+            if self.lifecycle.has_pool_create:
+                await self.lifecycle.emit_pool_create_async(self._build_context(pool=pool))
+        finally:
+            self.span_manager.end_span(span)
+
+    def emit_pool_create(self, pool: Any) -> None:
+        self.emit_pool_create_sync(pool)
 
     def emit_pool_destroying_sync(self, pool: Any) -> None:
         """Fire pre-destruction lifecycle hooks synchronously."""
@@ -181,70 +192,161 @@ class ObservabilityRuntime:
             return
         await self.lifecycle.emit_pool_destroying_async(self._build_context(pool=pool))
 
-    def emit_pool_destroy(self, pool: Any) -> None:
+    def emit_pool_destroying(self, pool: Any) -> None:
+        self.emit_pool_destroying_sync(pool)
+
+    def emit_pool_destroy_sync(self, pool: Any) -> None:
         span = self._start_lifecycle_span("pool.destroy", subject=pool)
         try:
             if self.lifecycle.has_pool_destroy:
-                self.lifecycle.emit_pool_destroy(self._build_context(pool=pool))
+                self.lifecycle.emit_pool_destroy_sync(self._build_context(pool=pool))
         finally:
             self.span_manager.end_span(span)
+
+    async def emit_pool_destroy_async(self, pool: Any) -> None:
+        span = self._start_lifecycle_span("pool.destroy", subject=pool)
+        try:
+            if self.lifecycle.has_pool_destroy:
+                await self.lifecycle.emit_pool_destroy_async(self._build_context(pool=pool))
+        finally:
+            self.span_manager.end_span(span)
+
+    def emit_pool_destroy(self, pool: Any) -> None:
+        self.emit_pool_destroy_sync(pool)
 
     def register_lifecycle_hook(self, event: str, callback: "LifecycleHook") -> None:
         """Append a lifecycle hook at runtime.
 
-        Intended for components that acquire long-lived resources after config
-        construction (e.g., persistent LISTEN/NOTIFY hubs) and need to plug into
-        teardown. Currently used with ``on_pool_destroying``; other events accept
-        registrations too but most lifecycle hooks are wired declaratively.
+        Async SQLSpec paths await awaitable callback return values through the
+        matching ``emit_*_async`` methods. Sync paths call hooks through
+        ``emit_*_sync`` methods and preserve the unsuffixed ``emit_*`` aliases
+        for existing integrations.
+
+        Supported events are ``on_pool_create``, ``on_pool_destroying``,
+        ``on_pool_destroy``, ``on_connection_create``,
+        ``on_connection_destroy``, ``on_session_start``, ``on_session_end``,
+        ``on_query_start``, ``on_query_complete``, and ``on_error``.
+
+        Args:
+            event: Lifecycle event name.
+            callback: Callable receiving the lifecycle context.
         """
         self.lifecycle.register_hook(event, callback)  # type: ignore[arg-type]
 
-    def emit_connection_create(self, connection: Any) -> None:
+    def emit_connection_create_sync(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)
         try:
             if self.lifecycle.has_connection_create:
-                self.lifecycle.emit_connection_create(self._build_context(connection=connection))
+                self.lifecycle.emit_connection_create_sync(self._build_context(connection=connection))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_connection_create_async(self, connection: Any) -> None:
+        span = self._start_lifecycle_span("connection.create", subject=connection)
+        try:
+            if self.lifecycle.has_connection_create:
+                await self.lifecycle.emit_connection_create_async(self._build_context(connection=connection))
+        finally:
+            self.span_manager.end_span(span)
+
+    def emit_connection_create(self, connection: Any) -> None:
+        self.emit_connection_create_sync(connection)
+
+    def emit_connection_destroy_sync(self, connection: Any) -> None:
+        span = self._start_lifecycle_span("connection.destroy", subject=connection)
+        try:
+            if self.lifecycle.has_connection_destroy:
+                self.lifecycle.emit_connection_destroy_sync(self._build_context(connection=connection))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_connection_destroy_async(self, connection: Any) -> None:
+        span = self._start_lifecycle_span("connection.destroy", subject=connection)
+        try:
+            if self.lifecycle.has_connection_destroy:
+                await self.lifecycle.emit_connection_destroy_async(self._build_context(connection=connection))
         finally:
             self.span_manager.end_span(span)
 
     def emit_connection_destroy(self, connection: Any) -> None:
-        span = self._start_lifecycle_span("connection.destroy", subject=connection)
+        self.emit_connection_destroy_sync(connection)
+
+    def emit_session_start_sync(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.start", subject=session)
         try:
-            if self.lifecycle.has_connection_destroy:
-                self.lifecycle.emit_connection_destroy(self._build_context(connection=connection))
+            if self.lifecycle.has_session_start:
+                self.lifecycle.emit_session_start_sync(self._build_context(session=session))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_session_start_async(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.start", subject=session)
+        try:
+            if self.lifecycle.has_session_start:
+                await self.lifecycle.emit_session_start_async(self._build_context(session=session))
         finally:
             self.span_manager.end_span(span)
 
     def emit_session_start(self, session: Any) -> None:
-        span = self._start_lifecycle_span("session.start", subject=session)
+        self.emit_session_start_sync(session)
+
+    def emit_session_end_sync(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.end", subject=session)
         try:
-            if self.lifecycle.has_session_start:
-                self.lifecycle.emit_session_start(self._build_context(session=session))
+            if self.lifecycle.has_session_end:
+                self.lifecycle.emit_session_end_sync(self._build_context(session=session))
+        finally:
+            self.span_manager.end_span(span)
+
+    async def emit_session_end_async(self, session: Any) -> None:
+        span = self._start_lifecycle_span("session.end", subject=session)
+        try:
+            if self.lifecycle.has_session_end:
+                await self.lifecycle.emit_session_end_async(self._build_context(session=session))
         finally:
             self.span_manager.end_span(span)
 
     def emit_session_end(self, session: Any) -> None:
-        span = self._start_lifecycle_span("session.end", subject=session)
-        try:
-            if self.lifecycle.has_session_end:
-                self.lifecycle.emit_session_end(self._build_context(session=session))
-        finally:
-            self.span_manager.end_span(span)
+        self.emit_session_end_sync(session)
+
+    def emit_query_start_sync(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_start:
+            self.lifecycle.emit_query_start_sync(self._build_context(**extras))
+
+    async def emit_query_start_async(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_start:
+            await self.lifecycle.emit_query_start_async(self._build_context(**extras))
 
     def emit_query_start(self, **extras: Any) -> None:
-        if self.lifecycle.has_query_start:
-            self.lifecycle.emit_query_start(self._build_context(**extras))
+        self.emit_query_start_sync(**extras)
+
+    def emit_query_complete_sync(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_complete:
+            self.lifecycle.emit_query_complete_sync(self._build_context(**extras))
+
+    async def emit_query_complete_async(self, **extras: Any) -> None:
+        if self.lifecycle.has_query_complete:
+            await self.lifecycle.emit_query_complete_async(self._build_context(**extras))
 
     def emit_query_complete(self, **extras: Any) -> None:
-        if self.lifecycle.has_query_complete:
-            self.lifecycle.emit_query_complete(self._build_context(**extras))
+        self.emit_query_complete_sync(**extras)
 
-    def emit_error(self, exception: Exception, **extras: Any) -> None:
+    def emit_error_sync(self, exception: Exception, **extras: Any) -> None:
         if self.lifecycle.has_error:
             payload = self._build_context(exception=exception)
             payload.update({key: value for key, value in extras.items() if value is not None})
-            self.lifecycle.emit_error(payload)
+            self.lifecycle.emit_error_sync(payload)
         self.increment_metric("errors", 1.0)
+
+    async def emit_error_async(self, exception: Exception, **extras: Any) -> None:
+        if self.lifecycle.has_error:
+            payload = self._build_context(exception=exception)
+            payload.update({key: value for key, value in extras.items() if value is not None})
+            await self.lifecycle.emit_error_async(payload)
+        self.increment_metric("errors", 1.0)
+
+    def emit_error(self, exception: Exception, **extras: Any) -> None:
+        self.emit_error_sync(exception, **extras)
 
     def emit_statement_event(
         self,
@@ -260,19 +362,25 @@ class ObservabilityRuntime:
         duration_s: float,
         storage_backend: str | None,
         started_at: float | None = None,
+        precomputed_sql_hash: str | None = None,
     ) -> None:
         """Emit a statement event to all registered observers."""
 
         if not self._statement_observers:
             return
+        correlation_id = CorrelationContext.get()
+        sampled = True
+        if self.config.sampling is not None:
+            sampled = self.config.sampling.should_sample(correlation_id=correlation_id, duration_ms=duration_s * 1000)
+            if not sampled:
+                return
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
-        correlation_id = CorrelationContext.get()
         logging_config = self.config.logging
         db_system = resolve_db_system(self.config_name)
         sql_hash = None
         if logging_config and logging_config.include_sql_hash:
-            sql_hash = compute_sql_hash(sanitized_sql)
+            sql_hash = precomputed_sql_hash if precomputed_sql_hash is not None else compute_sql_hash(sanitized_sql)
         sql_truncation_length = logging_config.sql_truncation_length if logging_config else 2000
         sql_original_length = len(sanitized_sql)
         sql_truncated = sql_original_length > sql_truncation_length
@@ -301,17 +409,19 @@ class ObservabilityRuntime:
             sql_original_length=sql_original_length,
             trace_id=trace_id,
             span_id=span_id,
+            sampled=sampled,
         )
         for observer in self._statement_observers:
             observer(event)
 
-    def start_query_span(self, sql: str, operation: str, driver: str) -> Any:
+    def start_query_span(self, sql: str, operation: str, driver: str, *, sql_hash: str | None = None) -> Any:
         """Start a query span with runtime metadata."""
 
         if not self.span_manager.is_enabled:
             return None
 
-        sql_hash = compute_sql_hash(sql)
+        if sql_hash is None:
+            sql_hash = compute_sql_hash(sql)
         connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
         sql_payload = ""
         if self.config.print_sql:
@@ -455,6 +565,7 @@ def _mask_parameters(value: Any, allow_list: set[str]) -> Any:
     return "***"
 
 
+# Keep in sync with sqlspec.observability._observer._truncate_text.
 def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(value) <= max_chars:
         return value, False

@@ -2,7 +2,6 @@
 
 import shutil
 import sys
-import threading
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,6 @@ from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import PANDAS_INSTALLED, POLARS_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils import module_loader as dependencies
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow, import_string, module_to_os_path
-from sqlspec.utils.singleton import SingletonMeta
 
 
 def test_ensure_pyarrow_succeeds_when_installed() -> None:
@@ -112,6 +110,94 @@ def test_dependency_flag_handles_module_removal(tmp_path, monkeypatch) -> None:
     assert bool(flag) is False
 
 
+def test_facade_re_exports_import_optional() -> None:
+    """sqlspec.typing exposes import_optional/import_optional_attr identically."""
+    from sqlspec import typing as public_typing
+
+    assert public_typing.import_optional is dependencies.import_optional
+    assert public_typing.import_optional_attr is dependencies.import_optional_attr
+    assert "import_optional" in public_typing.__all__
+    assert "import_optional_attr" in public_typing.__all__
+
+
+def test_import_optional_returns_module_when_available() -> None:
+    """import_optional returns the imported module object when present."""
+    import json
+
+    assert dependencies.import_optional("json") is json
+
+
+def test_import_optional_returns_none_when_missing() -> None:
+    """import_optional returns None (silent) when the module is absent."""
+    module_name = "sqlspec_optional_import_missing_pkg"
+    dependencies.reset_dependency_cache(module_name)
+    monkeypatch_free_delete(module_name)
+
+    assert dependencies.import_optional(module_name) is None
+
+
+def monkeypatch_free_delete(module_name: str) -> None:
+    """Drop a module from sys.modules if present (helper for cache tests)."""
+    sys.modules.pop(module_name, None)
+
+
+@pytest.mark.usefixtures("monkeypatch")
+def test_import_optional_recomputes_after_cache_reset(tmp_path, monkeypatch) -> None:
+    """import_optional reflects environment changes once its cache is reset."""
+    module_name = "sqlspec_optional_import_dummy_pkg"
+    dependencies.reset_dependency_cache(module_name)
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    assert dependencies.import_optional(module_name) is None
+
+    _write_dummy_package(tmp_path, module_name)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    dependencies.reset_dependency_cache(module_name)
+    resolved = dependencies.import_optional(module_name)
+    assert resolved is not None
+    assert resolved.__name__ == module_name
+
+
+@pytest.mark.usefixtures("monkeypatch")
+def test_import_optional_caches_resolved_module(tmp_path, monkeypatch) -> None:
+    """import_optional caches the resolved module until the cache is cleared."""
+    module_name = "sqlspec_optional_import_cached_pkg"
+    dependencies.reset_dependency_cache(module_name)
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    _write_dummy_package(tmp_path, module_name)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    dependencies.reset_dependency_cache(module_name)
+    first = dependencies.import_optional(module_name)
+    assert first is not None
+
+    # Removing the package from disk must NOT change the cached result.
+    shutil.rmtree(tmp_path / module_name, ignore_errors=True)
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    assert dependencies.import_optional(module_name) is first
+
+    # After an explicit reset, detection flips back to None.
+    dependencies.reset_dependency_cache(module_name)
+    assert dependencies.import_optional(module_name) is None
+
+
+def test_import_optional_attr_returns_attribute_when_present() -> None:
+    """import_optional_attr returns the attribute from an available module."""
+    assert dependencies.import_optional_attr("json", "dumps") is __import__("json").dumps
+
+
+def test_import_optional_attr_returns_none_when_module_missing() -> None:
+    """import_optional_attr returns None when the module is absent."""
+    module_name = "sqlspec_optional_attr_missing_pkg"
+    dependencies.reset_dependency_cache(module_name)
+    monkeypatch_free_delete(module_name)
+    assert dependencies.import_optional_attr(module_name, "anything") is None
+
+
+def test_import_optional_attr_returns_none_when_attr_missing() -> None:
+    """import_optional_attr returns None when the attribute is absent."""
+    assert dependencies.import_optional_attr("json", "definitely_not_an_attr") is None
+
+
 def test_import_string_basic_module() -> None:
     """Test import_string with basic module import."""
     sys_module = import_string("sys")
@@ -192,109 +278,3 @@ def test_complex_module_import_scenarios() -> None:
 
     path_instance = path_class("/tmp")
     assert isinstance(path_instance, Path)
-
-
-def test_singleton_single_instance() -> None:
-    """Test singleton pattern creates only one instance."""
-
-    class SingletonTestClass(metaclass=SingletonMeta):
-        """Test singleton class."""
-
-        def __init__(self, value: str = "default") -> None:
-            self.value = value
-
-    instance1 = SingletonTestClass("test1")
-    instance2 = SingletonTestClass("test2")
-
-    assert instance1 is instance2
-    assert instance1.value == "test1"
-    assert instance2.value == "test1"
-
-
-def test_singleton_different_classes() -> None:
-    """Test different singleton classes have separate instances."""
-
-    class SingletonTestClass(metaclass=SingletonMeta):
-        """Test singleton class."""
-
-        def __init__(self, value: str = "default") -> None:
-            self.value = value
-
-    class AnotherSingletonClass(metaclass=SingletonMeta):
-        """Another test singleton class."""
-
-        def __init__(self, data: int = 42) -> None:
-            self.data = data
-
-    singleton1 = SingletonTestClass("test")
-    singleton2 = AnotherSingletonClass(100)
-
-    assert singleton1 is not singleton2  # type: ignore[comparison-overlap]  # pyright: ignore[reportUnnecessaryComparison]
-    assert isinstance(singleton1, SingletonTestClass)
-    assert isinstance(singleton2, AnotherSingletonClass)
-
-
-def test_singleton_thread_safety() -> None:
-    """Test singleton pattern is thread-safe."""
-
-    class ThreadSafeSingleton(metaclass=SingletonMeta):
-        """Thread-safe singleton class."""
-
-        def __init__(self, value: str = "default") -> None:
-            self.value = value
-
-    instances = []
-
-    def create_instance() -> None:
-        instance = ThreadSafeSingleton("thread_test")
-        instances.append(instance)
-
-    threads = [threading.Thread(target=create_instance) for _ in range(10)]
-
-    for thread in threads:
-        thread.start()
-
-    for thread in threads:
-        thread.join()
-
-    assert len({id(instance) for instance in instances}) == 1
-    assert all(instance is instances[0] for instance in instances)
-
-
-def test_singleton_with_args() -> None:
-    """Test singleton pattern with constructor arguments."""
-
-    class SingletonWithArgs(metaclass=SingletonMeta):
-        """Singleton class for argument handling."""
-
-        def __init__(self, value: str = "default") -> None:
-            self.value = value
-
-    instance1 = SingletonWithArgs("first")
-    instance2 = SingletonWithArgs("second")
-
-    assert instance1 is instance2
-    assert instance1.value == "first"
-
-
-def test_singleton_metaclass_edge_cases() -> None:
-    """Test singleton metaclass with edge cases."""
-
-    class SingletonOne(metaclass=SingletonMeta):
-        """Singleton class instance one."""
-
-        def __init__(self, value: str = "default") -> None:
-            self.value = value
-
-    class SingletonTwo(metaclass=SingletonMeta):
-        """Singleton class instance two."""
-
-        def __init__(self, value: str = "default") -> None:
-            self.value = value
-
-    instance1 = SingletonOne("first")
-    instance2 = SingletonTwo("second")
-
-    assert type(instance1) is not type(instance2)  # type: ignore[comparison-overlap,unused-ignore]
-    assert instance1.value == "first"
-    assert instance2.value == "second"

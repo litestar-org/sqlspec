@@ -1,23 +1,24 @@
 """Shared data models for the events subsystem."""
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import Any
 
-if TYPE_CHECKING:
-    from datetime import datetime
+from typing_extensions import final
 
 __all__ = ("EventMessage",)
 
 
+@final
 @dataclass(slots=True)
 class EventMessage:
     """Structured payload delivered to event handlers."""
 
     event_id: str
     channel: str
-    payload: "dict[str, Any]"
-    metadata: "dict[str, Any] | None"
+    payload: dict[str, Any]
+    metadata: dict[str, Any] | None
     attempts: int
-    available_at: "datetime"
-    lease_expires_at: "datetime | None"
-    created_at: "datetime"
+    available_at: datetime
+    lease_expires_at: datetime | None
+    created_at: datetime

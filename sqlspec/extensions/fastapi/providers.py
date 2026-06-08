@@ -6,8 +6,11 @@ automatic parsing of query parameters into SQLSpec filter objects.
 
 import datetime
 import inspect
+import typing
 from collections.abc import Callable, Mapping
+from enum import Enum
 from functools import partial
+from inspect import isclass
 from types import GenericAlias
 from typing import Annotated, Any, Literal, NamedTuple, cast
 from uuid import UUID
@@ -18,6 +21,8 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core import (
     BeforeAfterFilter,
+    BooleanFilter,
+    ChoicesFilter,
     FilterTypes,
     InCollectionFilter,
     LimitOffsetFilter,
@@ -32,6 +37,7 @@ from sqlspec.utils.text import camelize
 __all__ = (
     "DEPENDENCY_DEFAULTS",
     "BooleanOrNone",
+    "ChoiceField",
     "DTorNone",
     "DependencyDefaults",
     "FieldNameType",
@@ -45,6 +51,7 @@ __all__ = (
     "StringOrNone",
     "UuidOrNone",
     "dep_cache",
+    "normalize_choice_field_types",
     "provide_filters",
 )
 
@@ -69,6 +76,8 @@ _FILTER_CONFIG_KEYS = frozenset({
     "in_fields",
     "null_fields",
     "not_null_fields",
+    "boolean_fields",
+    "choice_fields",
 })
 
 
@@ -96,6 +105,23 @@ class FieldNameType(NamedTuple):
     """Type of the filter value. Defaults to str."""
 
 
+class ChoiceField:
+    """Type for choice field name and allowed choices for filter configuration."""
+
+    __slots__ = ("choices", "name")
+
+    def __init__(self, name: str, choices: list[Any] | tuple[Any, ...] | type[Enum]) -> None:
+        self.name = name
+        self.choices = choices
+
+
+def normalize_choice_field_types(choices: list[Any] | tuple[Any, ...] | type[Enum]) -> Any:
+    """Normalize choices into a generic type hint (Literal or Enum)."""
+    if isclass(choices) and issubclass(choices, Enum):
+        return choices
+    return cast("Any", typing.Literal).__getitem__(tuple(choices))
+
+
 class _SortFieldResolution(NamedTuple):
     default_field: str
     default_query_value: str
@@ -110,6 +136,7 @@ class _SortFieldResolution(NamedTuple):
         return self.inbound_aliases.get(value)
 
 
+# Keep FilterConfig field unions and provider signatures in sync with sqlspec.extensions.litestar.providers.
 class FilterConfig(TypedDict):
     """Configuration for generated FastAPI filter dependencies.
 
@@ -134,7 +161,7 @@ class FilterConfig(TypedDict):
     """Pagination strategy to enable. Currently supports ``"limit_offset"``."""
     pagination_size: NotRequired[int]
     """Default page size for limit/offset pagination."""
-    search: NotRequired[str | set[str]]
+    search: NotRequired[str | set[str] | list[str]]
     """SQL-facing field or fields to search. Strings may be comma-separated."""
     search_ignore_case: NotRequired[bool]
     """Whether search filtering is case-insensitive. Defaults to ``False``."""
@@ -146,10 +173,14 @@ class FilterConfig(TypedDict):
     """Field or fields that support ``NOT IN`` collection filtering."""
     in_fields: NotRequired[FieldNameType | set[FieldNameType] | list[str | FieldNameType]]
     """Field or fields that support ``IN`` collection filtering."""
-    null_fields: NotRequired[str | set[str]]
+    null_fields: NotRequired[str | set[str] | list[str]]
     """Field or fields that support ``IS NULL`` filtering."""
-    not_null_fields: NotRequired[str | set[str]]
+    not_null_fields: NotRequired[str | set[str] | list[str]]
     """Field or fields that support ``IS NOT NULL`` filtering."""
+    boolean_fields: NotRequired[str | set[str] | list[str]]
+    """Field or fields that support boolean filtering."""
+    choice_fields: NotRequired[ChoiceField | set[ChoiceField] | list[str | ChoiceField]]
+    """Field or fields that support choices filtering."""
 
 
 class DependencyCache:
@@ -196,29 +227,6 @@ def provide_filters(
 
     Returns:
         A FastAPI dependency callable that returns list of filters.
-
-    Example:
-        from fastapi import Depends, FastAPI
-        from sqlspec.extensions.fastapi import SQLSpecPlugin, FilterConfig
-
-        app = FastAPI()
-        db_ext = SQLSpecPlugin(sql, app)
-
-        @app.get("/users")
-        async def list_users(
-            filters = Depends(
-                db_ext.provide_filters({
-                    "id_filter": UUID,
-                    "search": "name,email",
-                    "pagination_type": "limit_offset",
-                })
-            ),
-        ):
-            stmt = sql("SELECT * FROM users")
-            for filter in filters:
-                stmt = filter.append_to_statement(stmt)
-            result = await db.execute(stmt)
-            return result.all()
     """
     if not _has_filter_config(config):
         return _empty_filter_list
@@ -323,6 +331,21 @@ def _create_filter_aggregate_function(
         for field_name in not_null_fields:
             param_name = f"{field_name}_not_null_filter"
             _add_dependency(params, annotations, param_name, _NullFilterProvider(field_name, negated=True))
+
+    if boolean_fields := config.get("boolean_fields"):
+        boolean_fields = {boolean_fields} if isinstance(boolean_fields, str) else boolean_fields
+        for field_name in boolean_fields:
+            param_name = f"{field_name}_boolean_filter"
+            _add_dependency(params, annotations, param_name, _BooleanFilterProvider(field_name))
+
+    if choice_fields := config.get("choice_fields"):
+        choice_fields = {choice_fields} if isinstance(choice_fields, ChoiceField) else choice_fields
+        for choice_def in choice_fields:
+            resolved_choice = ChoiceField(name=choice_def, choices=[]) if isinstance(choice_def, str) else choice_def
+            param_name = f"{resolved_choice.name}_choices_filter"
+            _add_dependency(
+                params, annotations, param_name, _ChoicesFilterProvider(resolved_choice.name, resolved_choice.choices)
+            )
 
     return _make_aggregate_filter_provider(params, annotations)
 
@@ -517,7 +540,7 @@ class _LimitOffsetFilterProvider:
 
 
 class _SearchFilterProvider:
-    def __init__(self, search_fields: str | set[str], ignore_case_default: bool) -> None:
+    def __init__(self, search_fields: str | set[str] | list[str], ignore_case_default: bool) -> None:
         self.search_fields = search_fields
         self.ignore_case_default = ignore_case_default
         self.return_annotation = SearchFilter | None
@@ -704,6 +727,61 @@ class _NullFilterProvider:
 
     def __call__(self, **kwargs: Any) -> Any:
         return self.filter_cls(field_name=self.field_name) if kwargs.get(self.param_name) else None
+
+
+class _BooleanFilterProvider:
+    __slots__ = ("__signature__", "field_name", "param_name", "return_annotation")
+
+    def __init__(self, field_name: str) -> None:
+        self.field_name = field_name
+        self.param_name = f"{field_name}_boolean"
+        self.return_annotation = BooleanFilter | None
+        annotation = _query_parameter_annotation(
+            bool | None, Query(alias=camelize(self.param_name), description=f"Filter by boolean field {field_name}")
+        )
+        self.__signature__ = inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation
+                )
+            ],
+            return_annotation=self.return_annotation,
+        )
+
+    def __call__(self, **kwargs: Any) -> BooleanFilter | None:
+        val = kwargs.get(self.param_name)
+        if val is None:
+            return None
+        return BooleanFilter(field_name=self.field_name, value=val)
+
+
+class _ChoicesFilterProvider:
+    __slots__ = ("__signature__", "choices", "field_name", "param_name", "return_annotation")
+
+    def __init__(self, field_name: str, choices: list[Any] | tuple[Any, ...] | type[Enum]) -> None:
+        self.field_name = field_name
+        self.choices = choices
+        self.param_name = f"{field_name}_choices"
+        choices_type = normalize_choice_field_types(choices)
+        self.return_annotation = ChoicesFilter[Any] | None
+        parameter_annotation = _query_parameter_annotation(
+            _collection_value_annotation(list, choices_type),
+            Query(alias=camelize(self.param_name), description=f"Filter {field_name} by choices"),
+        )
+        self.__signature__ = inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=parameter_annotation
+                )
+            ],
+            return_annotation=self.return_annotation,
+        )
+
+    def __call__(self, **kwargs: Any) -> Any:
+        values = kwargs.get(self.param_name)
+        if not values:
+            return None
+        return ChoicesFilter[Any](field_name=self.field_name, values=values)
 
 
 def _add_dependency(params: list[inspect.Parameter], annotations: dict[str, Any], name: str, provider: Any) -> None:

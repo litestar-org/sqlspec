@@ -215,29 +215,28 @@ class SqliteDriver(SyncDriverAdapterBase):
             except sqlite3.Error as exc:
                 raise create_mapped_exception(exc) from exc
 
-            if returns_rows:
-                fetched_data = cursor.fetchall()
-                column_names = cached.column_names
-                if column_names is None:
-                    description = cursor.description
-                    column_names = [col[0] for col in description] if description else []
-                execution_result = self.create_execution_result(
-                    cursor,
-                    selected_data=fetched_data,
-                    column_names=column_names,
-                    data_row_count=len(fetched_data),
-                    is_select_result=True,
-                    row_format="tuple",
-                )
-                direct_statement = self._stmt_cache_build_direct(
-                    sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                )
-                return self.build_statement_result(direct_statement, execution_result)
+            fetched_data = cursor.fetchall()
+            column_names = cached.column_names
+            if column_names is None:
+                description = cursor.description
+                column_names = [col[0] for col in description] if description else []
+            execution_result = self.create_execution_result(
+                cursor,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+                row_format="tuple",
+            )
+            direct_statement = self._stmt_cache_build_direct(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return self.build_statement_result(direct_statement, execution_result)
         finally:
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
         msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover - all paths return or raise
+        raise AssertionError(msg)  # pragma: no cover
 
     def _can_use_execute_many_thin_path(
         self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"

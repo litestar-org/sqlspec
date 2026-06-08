@@ -70,8 +70,6 @@ Module-Level Functions
 
 .. autofunction:: log_cache_stats
 
-.. autofunction:: reset_cache_stats
-
 .. autofunction:: clear_all_caches
 
 .. autofunction:: create_cache_key

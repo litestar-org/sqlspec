@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlspec.exceptions import SquashValidationError
+from sqlspec.migrations.validation import validate_squash_range
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import await_
 from sqlspec.utils.text import slugify
@@ -45,7 +45,7 @@ def parse_version_range(range_str: str) -> tuple[str, str]:
             start = parts[0].strip().zfill(4)
             end = parts[1].strip().zfill(4)
             return start, end
-    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END (e.g., 1:7)"
+    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END"
     raise ValueError(msg)
 
 
@@ -62,7 +62,6 @@ def group_migrations_by_type(migrations: list[tuple[str, Path]]) -> list[tuple[s
     Returns:
         List of (type, migrations) tuples where type is "sql" or "py"
         and migrations is the list of (version, path) for that group.
-
     """
     if not migrations:
         return []
@@ -158,48 +157,10 @@ class MigrationSquasher:
 
         Returns:
             List of SquashPlan objects with details of planned operations.
-
-        Raises:
-            SquashValidationError: If validation fails (invalid range, gaps, etc.).
         """
-        # Validate range direction
-        if int(start_version) > int(end_version):
-            msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
-            raise SquashValidationError(msg)
-
         # Get all migrations from runner
         all_migrations = self.runner.get_migration_files()
-        version_map = dict(all_migrations)
-
-        # Validate versions exist
-        if start_version not in version_map:
-            msg = f"Start version {start_version} not found in migrations"
-            raise SquashValidationError(msg)
-        if end_version not in version_map:
-            msg = f"End version {end_version} not found in migrations"
-            raise SquashValidationError(msg)
-
-        # Filter migrations in range
-        start_int = int(start_version)
-        end_int = int(end_version)
-        source_migrations: list[tuple[str, Path]] = []
-
-        for version, path in all_migrations:
-            try:
-                version_int = int(version)
-            except ValueError:
-                continue  # Skip non-sequential versions (ext_*, timestamps)
-
-            if start_int <= version_int <= end_int:
-                source_migrations.append((version, path))
-
-        # Validate no gaps in sequence (unless allow_gaps is True)
-        if not allow_gaps and len(source_migrations) > 1:
-            source_versions_int = sorted(int(v) for v, _ in source_migrations)
-            for i in range(1, len(source_versions_int)):
-                if source_versions_int[i] - source_versions_int[i - 1] != 1:
-                    msg = f"Gap detected in version sequence between {source_versions_int[i - 1]:04d} and {source_versions_int[i]:04d}"
-                    raise SquashValidationError(msg)
+        source_migrations = validate_squash_range(all_migrations, start_version, end_version, allow_gaps=allow_gaps)
 
         # Slugify description for safe filenames
         safe_description = slugify(description, separator="_")[:50] or "migration"
@@ -328,10 +289,7 @@ class MigrationSquasher:
             "",
             f"-- name: migrate-{plan.target_version}-up",
         ))
-        for statement in up_sql:
-            lines.append(statement.rstrip())
-            if not statement.rstrip().endswith(";"):
-                pass  # Don't add extra semicolons
+        lines.extend(statement.rstrip() for statement in up_sql)
         lines.append("")
 
         # DOWN section (only if there are statements)
@@ -441,6 +399,8 @@ class MigrationSquasher:
     def _create_backup(self) -> Path:
         """Create timestamped backup directory with all migration files.
 
+        Keep in sync with MigrationFixer.create_backup.
+
         Returns:
             Path to created backup directory.
         """
@@ -458,7 +418,10 @@ class MigrationSquasher:
         return backup_dir
 
     def _cleanup_backup(self) -> None:
-        """Remove backup directory after successful operation."""
+        """Remove backup directory after successful operation.
+
+        Keep in sync with MigrationFixer.cleanup.
+        """
         if not self.backup_path or not self.backup_path.exists():
             return
 
@@ -467,7 +430,10 @@ class MigrationSquasher:
         self.backup_path = None
 
     def _rollback_backup(self) -> None:
-        """Restore migration files from backup on error."""
+        """Restore migration files from backup on error.
+
+        Keep in sync with MigrationFixer.rollback.
+        """
         if not self.backup_path or not self.backup_path.exists():
             return
 

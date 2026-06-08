@@ -5,20 +5,25 @@ This module contains functions to create dependency providers for services and f
 
 import datetime
 import inspect
+import typing
 from collections.abc import Callable, Mapping
+from enum import Enum
 from functools import partial
+from inspect import isclass
 from types import GenericAlias
 from typing import Annotated, Any, Literal, NamedTuple, TypedDict, cast
 from uuid import UUID
 
-from litestar.di import Provide
+from litestar.di import NamedDependency, Provide
 from litestar.exceptions import ValidationException
-from litestar.params import Dependency, QueryParameter
+from litestar.params import QueryParameter, SkipValidation
 from litestar.utils.signature import ParsedSignature
 from typing_extensions import NotRequired
 
 from sqlspec.core import (
     BeforeAfterFilter,
+    BooleanFilter,
+    ChoicesFilter,
     FilterTypes,
     InCollectionFilter,
     LimitOffsetFilter,
@@ -33,6 +38,7 @@ from sqlspec.utils.text import camelize
 __all__ = (
     "DEPENDENCY_DEFAULTS",
     "BooleanOrNone",
+    "ChoiceField",
     "DTorNone",
     "DependencyDefaults",
     "FieldNameType",
@@ -47,6 +53,7 @@ __all__ = (
     "UuidOrNone",
     "create_filter_dependencies",
     "dep_cache",
+    "normalize_choice_field_types",
 )
 
 DTorNone = datetime.datetime | None
@@ -82,6 +89,23 @@ class FieldNameType(NamedTuple):
     type_hint: type[Any] = str
 
 
+class ChoiceField:
+    """Type for choice field name and allowed choices for filter configuration."""
+
+    __slots__ = ("choices", "name")
+
+    def __init__(self, name: str, choices: list[Any] | tuple[Any, ...] | type[Enum]) -> None:
+        self.name = name
+        self.choices = choices
+
+
+def normalize_choice_field_types(choices: list[Any] | tuple[Any, ...] | type[Enum]) -> Any:
+    """Normalize choices into a generic type hint (Literal or Enum)."""
+    if isclass(choices) and issubclass(choices, Enum):
+        return choices
+    return cast("Any", typing.Literal).__getitem__(tuple(choices))
+
+
 class _SortFieldResolution(NamedTuple):
     default_field: str
     default_query_value: str
@@ -96,6 +120,7 @@ class _SortFieldResolution(NamedTuple):
         return self.inbound_aliases.get(value)
 
 
+# Keep FilterConfig field unions and provider signatures in sync with sqlspec.extensions.fastapi.providers.
 class FilterConfig(TypedDict):
     """Configuration for generated Litestar filter dependencies.
 
@@ -136,6 +161,10 @@ class FilterConfig(TypedDict):
     """Field or fields that support ``IS NULL`` filtering."""
     not_null_fields: NotRequired[str | set[str] | list[str]]
     """Field or fields that support ``IS NOT NULL`` filtering."""
+    boolean_fields: NotRequired[str | set[str] | list[str]]
+    """Field or fields that support boolean filtering."""
+    choice_fields: NotRequired[ChoiceField | set[ChoiceField] | list[str | ChoiceField]]
+    """Field or fields that support choices filtering."""
 
 
 class DependencyCache:
@@ -253,6 +282,23 @@ def _create_statement_filters(
         for field_name in not_null_fields:
             filters[f"{field_name}_not_null_filter"] = _create_provide(_build_null_provider(field_name, negated=True))
 
+    if boolean_fields := config.get("boolean_fields"):
+        boolean_fields = {boolean_fields} if isinstance(boolean_fields, str) else set(boolean_fields)
+        for field_name in boolean_fields:
+            filters[f"{field_name}_boolean_filter"] = _create_provide(
+                _bind_provider(_BooleanFilterProvider(field_name), _provide_boolean_filter)
+            )
+
+    if choice_fields := config.get("choice_fields"):
+        choice_fields = {choice_fields} if isinstance(choice_fields, ChoiceField) else choice_fields
+        for choice_def in choice_fields:
+            resolved_choice = ChoiceField(name=choice_def, choices=[]) if isinstance(choice_def, str) else choice_def
+            filters[f"{resolved_choice.name}_choices_filter"] = _create_provide(
+                _bind_provider(
+                    _ChoicesFilterProvider(resolved_choice.name, resolved_choice.choices), _provide_choices_filter
+                )
+            )
+
     if filters:
         filters[dep_defaults.FILTERS_DEPENDENCY_KEY] = _create_provide(_create_filter_aggregate_function(config))
 
@@ -271,104 +317,110 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
 
     parameters: dict[str, inspect.Parameter] = {}
     annotations: dict[str, Any] = {}
+    annotation: Any
 
     if cls := config.get("id_filter"):
+        annotation = NamedDependency[SkipValidation[InCollectionFilter[cls]]]  # type: ignore[valid-type]
         parameters["id_filter"] = inspect.Parameter(
-            name="id_filter",
-            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Dependency(skip_validation=True),
-            annotation=InCollectionFilter[cls],  # type: ignore[valid-type]
+            name="id_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
         )
-        annotations["id_filter"] = InCollectionFilter[cls]  # type: ignore[valid-type]
+        annotations["id_filter"] = annotation
 
     if config.get("created_at"):
+        annotation = NamedDependency[SkipValidation[BeforeAfterFilter]]
         parameters["created_filter"] = inspect.Parameter(
-            name="created_filter",
-            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Dependency(skip_validation=True),
-            annotation=BeforeAfterFilter,
+            name="created_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
         )
-        annotations["created_filter"] = BeforeAfterFilter
+        annotations["created_filter"] = annotation
 
     if config.get("updated_at"):
+        annotation = NamedDependency[SkipValidation[BeforeAfterFilter]]
         parameters["updated_filter"] = inspect.Parameter(
-            name="updated_filter",
-            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Dependency(skip_validation=True),
-            annotation=BeforeAfterFilter,
+            name="updated_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
         )
-        annotations["updated_filter"] = BeforeAfterFilter
+        annotations["updated_filter"] = annotation
 
     if config.get("search"):
+        annotation = NamedDependency[SkipValidation[SearchFilter]]
         parameters["search_filter"] = inspect.Parameter(
-            name="search_filter",
-            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Dependency(skip_validation=True),
-            annotation=SearchFilter,
+            name="search_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
         )
-        annotations["search_filter"] = SearchFilter
+        annotations["search_filter"] = annotation
 
     if config.get("pagination_type") == "limit_offset":
+        annotation = NamedDependency[SkipValidation[LimitOffsetFilter]]
         parameters["limit_offset_filter"] = inspect.Parameter(
-            name="limit_offset_filter",
-            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Dependency(skip_validation=True),
-            annotation=LimitOffsetFilter,
+            name="limit_offset_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
         )
-        annotations["limit_offset_filter"] = LimitOffsetFilter
+        annotations["limit_offset_filter"] = annotation
 
     if config.get("sort_field"):
+        annotation = NamedDependency[SkipValidation[OrderByFilter]]
         parameters["order_by_filter"] = inspect.Parameter(
-            name="order_by_filter",
-            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Dependency(skip_validation=True),
-            annotation=OrderByFilter,
+            name="order_by_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
         )
-        annotations["order_by_filter"] = OrderByFilter
+        annotations["order_by_filter"] = annotation
 
     if not_in_fields := config.get("not_in_fields"):
         for field_def in not_in_fields:
             field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
+            annotation = NamedDependency[SkipValidation[NotInCollectionFilter[Any]]]
             parameters[f"{field_def.name}_not_in_filter"] = inspect.Parameter(
                 name=f"{field_def.name}_not_in_filter",
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=Dependency(skip_validation=True),
-                annotation=NotInCollectionFilter[Any],
+                annotation=annotation,
             )
-            annotations[f"{field_def.name}_not_in_filter"] = NotInCollectionFilter[Any]
+            annotations[f"{field_def.name}_not_in_filter"] = annotation
 
     if in_fields := config.get("in_fields"):
         for field_def in in_fields:
             field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
+            annotation = NamedDependency[SkipValidation[InCollectionFilter[Any]]]
             parameters[f"{field_def.name}_in_filter"] = inspect.Parameter(
-                name=f"{field_def.name}_in_filter",
-                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=Dependency(skip_validation=True),
-                annotation=InCollectionFilter[Any],
+                name=f"{field_def.name}_in_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
             )
-            annotations[f"{field_def.name}_in_filter"] = InCollectionFilter[Any]
+            annotations[f"{field_def.name}_in_filter"] = annotation
 
     if null_fields := config.get("null_fields"):
         null_fields = {null_fields} if isinstance(null_fields, str) else set(null_fields)
         for field_name in null_fields:
+            annotation = NamedDependency[SkipValidation[NullFilter]] | None
             parameters[f"{field_name}_null_filter"] = inspect.Parameter(
-                name=f"{field_name}_null_filter",
-                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=Dependency(skip_validation=True),
-                annotation=NullFilter | None,
+                name=f"{field_name}_null_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
             )
-            annotations[f"{field_name}_null_filter"] = NullFilter | None
+            annotations[f"{field_name}_null_filter"] = annotation
 
     if not_null_fields := config.get("not_null_fields"):
         not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else set(not_null_fields)
         for field_name in not_null_fields:
+            annotation = NamedDependency[SkipValidation[NotNullFilter]] | None
             parameters[f"{field_name}_not_null_filter"] = inspect.Parameter(
                 name=f"{field_name}_not_null_filter",
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=Dependency(skip_validation=True),
-                annotation=NotNullFilter | None,
+                annotation=annotation,
             )
-            annotations[f"{field_name}_not_null_filter"] = NotNullFilter | None
+            annotations[f"{field_name}_not_null_filter"] = annotation
+
+    if boolean_fields := config.get("boolean_fields"):
+        boolean_fields = {boolean_fields} if isinstance(boolean_fields, str) else set(boolean_fields)
+        for field_name in boolean_fields:
+            annotation = NamedDependency[SkipValidation[BooleanFilter]] | None
+            parameters[f"{field_name}_boolean_filter"] = inspect.Parameter(
+                name=f"{field_name}_boolean_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
+            )
+            annotations[f"{field_name}_boolean_filter"] = annotation
+
+    if choice_fields := config.get("choice_fields"):
+        choice_fields = {choice_fields} if isinstance(choice_fields, ChoiceField) else choice_fields
+        for choice_def in choice_fields:
+            resolved_choice = ChoiceField(name=choice_def, choices=[]) if isinstance(choice_def, str) else choice_def
+            annotation = NamedDependency[SkipValidation[ChoicesFilter[Any]]] | None
+            parameters[f"{resolved_choice.name}_choices_filter"] = inspect.Parameter(
+                name=f"{resolved_choice.name}_choices_filter",
+                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=annotation,
+            )
+            annotations[f"{resolved_choice.name}_choices_filter"] = annotation
 
     return _make_aggregate_filter_provider(list(parameters.values()), annotations)
 
@@ -790,3 +842,62 @@ def _build_before_after_provider(field_name: str, before_alias: str, after_alias
     return _bind_provider(
         _BeforeAfterFilterProvider(field_name, before_alias, after_alias), _provide_before_after_filter
     )
+
+
+class _BooleanFilterProvider:
+    __slots__ = ("annotations", "field_name", "param_name", "return_annotation", "signature")
+
+    def __init__(self, field_name: str) -> None:
+        self.field_name = field_name
+        self.param_name = f"{field_name}_boolean"
+        self.return_annotation = BooleanFilter | None
+        annotation = _query_parameter_annotation(
+            bool | None, QueryParameter(name=camelize(self.param_name), required=False)
+        )
+        self.signature = inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation
+                )
+            ],
+            return_annotation=self.return_annotation,
+        )
+        self.annotations = {self.param_name: annotation, "return": self.return_annotation}
+
+
+class _ChoicesFilterProvider:
+    __slots__ = ("annotations", "choices", "field_name", "param_name", "return_annotation", "signature")
+
+    def __init__(self, field_name: str, choices: list[Any] | tuple[Any, ...] | type[Enum]) -> None:
+        self.field_name = field_name
+        self.choices = choices
+        self.param_name = f"{field_name}_choices"
+        choices_type = normalize_choice_field_types(choices)
+        self.return_annotation = ChoicesFilter[Any] | None
+        annotation = _query_parameter_annotation(
+            _collection_value_annotation(list, choices_type),
+            QueryParameter(name=camelize(self.param_name), required=False),
+        )
+        self.signature = inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    self.param_name, kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation
+                )
+            ],
+            return_annotation=self.return_annotation,
+        )
+        self.annotations = {self.param_name: annotation, "return": self.return_annotation}
+
+
+def _provide_boolean_filter(context: _BooleanFilterProvider, **kwargs: Any) -> BooleanFilter | None:
+    val = kwargs.get(context.param_name)
+    if val is None:
+        return None
+    return BooleanFilter(field_name=context.field_name, value=val)
+
+
+def _provide_choices_filter(context: _ChoicesFilterProvider, **kwargs: Any) -> Any:
+    values = kwargs.get(context.param_name)
+    if not values:
+        return None
+    return ChoicesFilter[Any](field_name=context.field_name, values=values)

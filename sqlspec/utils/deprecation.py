@@ -4,9 +4,10 @@ Provides decorators and warning functions for marking deprecated functionality.
 Used to communicate API changes and migration paths to users.
 """
 
+import functools
 import inspect
+import types
 from collections.abc import Callable
-from functools import wraps
 from typing import Generic, Literal, cast
 from warnings import warn
 
@@ -113,6 +114,48 @@ def _infer_deprecated_kind(func: Callable[P, T]) -> DeprecatedKind:
     return "function"
 
 
+class _DeprecatedWrapper(Generic[P, T]):
+    """Callable class replacing the nested wrapper closure in _DeprecatedFactory.__call__."""
+
+    __slots__ = ("__dict__", "_alternative", "_func", "_info", "_kind", "_pending", "_removal_in", "_version")
+
+    def __init__(
+        self,
+        func: "Callable[P, T]",
+        version: str,
+        removal_in: "str | None",
+        alternative: "str | None",
+        info: "str | None",
+        pending: bool,
+        kind: DeprecatedKind,
+    ) -> None:
+        self._func = func
+        self._version = version
+        self._removal_in = removal_in
+        self._alternative = alternative
+        self._info = info
+        self._pending = pending
+        self._kind: DeprecatedKind = kind
+        functools.update_wrapper(self, func)
+
+    def __call__(self, *args: "P.args", **kwargs: "P.kwargs") -> T:
+        warn_deprecation(
+            version=self._version,
+            deprecated_name=self._func.__name__,
+            info=self._info,
+            alternative=self._alternative,
+            pending=self._pending,
+            removal_in=self._removal_in,
+            kind=self._kind,
+        )
+        return self._func(*args, **kwargs)
+
+    def __get__(self, obj: object, _objtype: "type | None" = None) -> "Callable[P, T]":
+        if obj is None:
+            return self
+        return types.MethodType(self, obj)
+
+
 class _DeprecatedFactory(Generic[P, T]):
     __slots__ = ("_alternative", "_info", "_kind", "_pending", "_removal_in", "_version")
 
@@ -133,25 +176,8 @@ class _DeprecatedFactory(Generic[P, T]):
         self._pending = pending
         self._kind: Literal["function", "method", "classmethod", "property"] | None = kind
 
-    def __call__(self, func: Callable[P, T]) -> Callable[P, T]:
-        version = self._version
-        removal_in = self._removal_in
-        alternative = self._alternative
-        info = self._info
-        pending = self._pending
+    def __call__(self, func: "Callable[P, T]") -> "Callable[P, T]":
         kind: DeprecatedKind = self._kind or _infer_deprecated_kind(func)
-
-        @wraps(func)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            warn_deprecation(
-                version=version,
-                deprecated_name=func.__name__,
-                info=info,
-                alternative=alternative,
-                pending=pending,
-                removal_in=removal_in,
-                kind=kind,
-            )
-            return func(*args, **kwargs)
-
-        return wrapper
+        return _DeprecatedWrapper(
+            func, self._version, self._removal_in, self._alternative, self._info, self._pending, kind
+        )

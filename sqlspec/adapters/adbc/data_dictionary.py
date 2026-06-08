@@ -6,6 +6,11 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.sqlite.core import format_identifier
 from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
     get_data_dictionary_loader,
     get_dialect_config,
     list_registered_dialects,
@@ -21,13 +26,12 @@ from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-
-__all__ = ("AdbcDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import SQL
+
+__all__ = ("AdbcDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -247,7 +251,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                     indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
                 return indexes
 
-            assert table is not None
             table_name = table
             table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
             index_list_sql = self._get_query_text(dialect, "indexes_by_table").format(

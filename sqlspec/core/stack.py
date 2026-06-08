@@ -4,6 +4,8 @@ from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
+
 if TYPE_CHECKING:  # pragma: no cover
     from sqlspec.builder import QueryBuilder
     from sqlspec.core.filters import StatementFilter
@@ -15,6 +17,7 @@ __all__ = ("StackOperation", "StatementStack")
 ALLOWED_METHODS: "tuple[str, ...]" = ("execute", "execute_many", "execute_script", "execute_arrow")
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StackOperation:
     """Single SQL operation captured inside a statement stack."""
 
@@ -36,6 +39,7 @@ class StackOperation:
         self.keyword_arguments = keyword_arguments
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementStack:
     """Immutable builder that preserves ordered SQL operations."""
 
@@ -47,10 +51,10 @@ class StatementStack:
     def __iter__(self) -> "Iterator[StackOperation]":
         return iter(self._operations)
 
-    def __len__(self) -> int:  # pragma: no cover - trivial
+    def __len__(self) -> int:  # pragma: no cover
         return len(self._operations)
 
-    def __bool__(self) -> bool:  # pragma: no cover - trivial
+    def __bool__(self) -> bool:  # pragma: no cover
         return bool(self._operations)
 
     def __repr__(self) -> str:

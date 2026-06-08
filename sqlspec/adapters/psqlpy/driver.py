@@ -23,7 +23,6 @@ from sqlspec.adapters.psqlpy.core import (
     format_execute_many_parameters,
     format_table_identifier,
     get_parameter_casts,
-    normalize_scalar_parameter,
     prepare_parameters_with_casts,
     split_schema_and_table,
 )
@@ -170,22 +169,23 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         Returns:
             ExecutionResult with script execution metadata
-
-        Notes:
-            Uses execute() with empty parameters for each statement instead of execute_batch().
-            execute_batch() uses simple query protocol which can break subsequent queries
-            that rely on extended protocol (e.g., information_schema queries with name type).
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        if len(statements) > 1 and prepared_parameters:
+            msg = (
+                "Parameterized multi-statement scripts are not supported; use execute_many or individual execute calls"
+            )
+            raise SQLSpecError(msg)
 
         successful_count = 0
         last_result = None
+        params = prepared_parameters or []
 
         for stmt in statements:
-            last_result = await cursor.execute(stmt, prepared_parameters or [])
+            last_result = await cursor.execute(stmt, params)
             successful_count += 1
 
         return self.create_execution_result(
@@ -391,9 +391,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         if not is_many and isinstance(prepared, list):
             prepared = tuple(prepared)
-
-        if not is_many and isinstance(prepared, tuple):
-            return tuple(normalize_scalar_parameter(item) for item in prepared)
 
         return prepared
 

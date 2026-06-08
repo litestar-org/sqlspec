@@ -50,6 +50,78 @@ def test_named_statement_no_dialect() -> None:
     assert stmt.start_line == 0
 
 
+def test_compute_checksum_matches_sqlfile_checksum() -> None:
+    """_compute_checksum must produce the same hash that SQLFile stores."""
+    content = "SELECT 1;"
+
+    assert SQLFileLoader._compute_checksum(content) == SQLFile(content=content, path="test.sql").checksum
+
+
+def test_is_file_content_unchanged_matching() -> None:
+    """_is_file_content_unchanged returns True when content matches cached checksum."""
+    content = "SELECT * FROM users;"
+    cached = SQLFileCacheEntry(sql_file=SQLFile(content=content, path="test.sql"), parsed_statements={})
+
+    assert SQLFileLoader()._is_file_content_unchanged(content, cached) is True
+
+
+def test_load_file_without_cache_accepts_pre_read_content(monkeypatch, tmp_path: Path) -> None:
+    """_load_file_without_cache uses pre-read content without reading the file again."""
+    sql_file = tmp_path / "test.sql"
+    sql_file.write_text("-- name: from_disk\nSELECT 0;")
+    loader = SQLFileLoader()
+
+    def fail_read(self: SQLFileLoader, path: object) -> str:
+        msg = f"unexpected read: {path}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(SQLFileLoader, "_read_file_content", fail_read)
+
+    loader._load_file_without_cache(sql_file, None, content="-- name: from_memory\nSELECT 1;")
+
+    assert loader.has_query("from_memory")
+
+
+def test_load_single_file_reads_once_on_stale_cache(monkeypatch, tmp_path: Path) -> None:
+    """A stale cache entry should not cause a checksum read and a parse read."""
+    sql_file = tmp_path / "queries.sql"
+    original = "-- name: get_user\nSELECT id FROM users WHERE id = :id;"
+    updated = "-- name: get_user\nSELECT id, name FROM users WHERE id = :id;"
+    sql_file.write_text(updated)
+    cached = SQLFileCacheEntry(
+        sql_file=SQLFile(content=original, path=str(sql_file)),
+        parsed_statements={"get_user": NamedStatement("get_user", "SELECT id FROM users WHERE id = :id;")},
+    )
+
+    class Cache:
+        def get_file(self, key: str) -> SQLFileCacheEntry:
+            return cached
+
+        def put_file(self, key: str, value: object) -> None:
+            return None
+
+    monkeypatch.setattr("sqlspec.loader.get_cache", Cache)
+    monkeypatch.setattr(
+        "sqlspec.loader.get_cache_config", lambda: type("Config", (), {"compiled_cache_enabled": True})()
+    )
+
+    loader = SQLFileLoader()
+    read_count = 0
+    original_read = SQLFileLoader._read_file_content
+
+    def counting_read(self: SQLFileLoader, path: str | Path) -> str:
+        nonlocal read_count
+        read_count += 1
+        return original_read(self, path)
+
+    monkeypatch.setattr(SQLFileLoader, "_read_file_content", counting_read)
+
+    loader._load_single_file(sql_file, None)
+
+    assert read_count == 1
+    assert loader.get_query_text("get_user") == "SELECT id, name FROM users WHERE id = :id;"
+
+
 @requires_interpreted
 def test_named_statement_slots() -> None:
     """Test that NamedStatement uses __slots__."""
@@ -573,7 +645,7 @@ def test_get_sql_basic() -> None:
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    assert "SELECT * FROM users WHERE id = ?" in sql.sql
+    assert "SELECT * FROM users WHERE id = ?" in sql.raw_sql
 
 
 def test_get_sql_simplified() -> None:
@@ -584,7 +656,7 @@ def test_get_sql_simplified() -> None:
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    assert "SELECT * FROM users WHERE id = :user_id" in sql.sql
+    assert "SELECT * FROM users WHERE id = :user_id" in sql.raw_sql
 
     assert sql.parameters == []
 
@@ -656,10 +728,10 @@ left join users on users.id = inserted_data.user_id;
     sql = loader.get_sql("asset_maintenance_alert")
 
     assert isinstance(sql, SQL)
-    assert "inserted_data" in sql.sql
-    assert ":date_start" in sql.sql
-    assert ":date_end" in sql.sql
-    assert "alert_users" in sql.sql
+    assert "inserted_data" in sql.raw_sql
+    assert ":date_start" in sql.raw_sql
+    assert ":date_end" in sql.raw_sql
+    assert "alert_users" in sql.raw_sql
 
     assert sql.parameters == []
 
@@ -692,7 +764,7 @@ def test_parameter_style_detection_simplified() -> None:
 
     assert isinstance(sql, SQL)
 
-    assert "SELECT * FROM users WHERE id = ? AND active = ?" in sql.sql
+    assert "SELECT * FROM users WHERE id = ? AND active = ?" in sql.raw_sql
 
 
 def test_dialect_normalization() -> None:
@@ -1028,7 +1100,7 @@ def test_load_and_execute_fixture_queries(fixture_integration_path: Path) -> Non
     for query_name in queries:
         sql = loader.get_sql(query_name)
         assert isinstance(sql, SQL)
-        assert len(sql.sql.strip()) > 0
+        assert len(sql.raw_sql.strip()) > 0
 
 
 def test_fixture_query_metadata_preservation(fixture_integration_path: Path) -> None:

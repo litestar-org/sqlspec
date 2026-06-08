@@ -114,7 +114,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-        if statement.returns_rows():
+        if statement.returns_rows() or getattr(cursor, "with_rows", False):
             fetched_data = cursor.fetchall()
             description = cursor.description or None
             column_names = resolve_column_names(description)
@@ -150,6 +150,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        if prepared_parameters and len(statements) > 1:
+            msg = "execute_script with parameters is not supported for multi-statement scripts; use execute or execute_many for parameterized statements"
+            raise SQLSpecError(msg)
 
         successful_count = 0
         last_cursor = cursor
@@ -283,6 +287,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
+        in_transaction = getattr(self.connection, "in_transaction", None)
+        if in_transaction is not None:
+            try:
+                return bool(in_transaction)
+            except Exception:
+                return False
         autocommit = getattr(self.connection, "autocommit", None)
         if autocommit is not None:
             try:
@@ -333,7 +343,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-        if statement.returns_rows():
+        if statement.returns_rows() or getattr(cursor, "with_rows", False):
             fetched_data = await cursor.fetchall()
             description = cursor.description or None
             column_names = resolve_column_names(description)
@@ -369,6 +379,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        if prepared_parameters and len(statements) > 1:
+            msg = "execute_script with parameters is not supported for multi-statement scripts; use execute or execute_many for parameterized statements"
+            raise SQLSpecError(msg)
 
         successful_count = 0
         last_cursor = cursor

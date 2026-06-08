@@ -7,29 +7,17 @@ for the native BigQuery driver and parameter creation.
 from typing import Any
 from uuid import UUID
 
+from typing_extensions import final
+
+from sqlspec.adapters.bigquery.core import _get_bq_param_type
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 
-__all__ = ("BIGQUERY_SPECIAL_CHARS", "BQ_TYPE_MAP", "BigQueryOutputConverter")
-
-BQ_TYPE_MAP: "dict[str, str]" = {
-    "str": "STRING",
-    "int": "INT64",
-    "float": "FLOAT64",
-    "bool": "BOOL",
-    "datetime": "DATETIME",
-    "date": "DATE",
-    "time": "TIME",
-    "UUID": "STRING",
-    "uuid": "STRING",
-    "Decimal": "NUMERIC",
-    "bytes": "BYTES",
-    "list": "ARRAY",
-    "dict": "STRUCT",
-}
+__all__ = ("BIGQUERY_SPECIAL_CHARS", "BigQueryOutputConverter")
 
 BIGQUERY_SPECIAL_CHARS: "frozenset[str]" = frozenset({"{", "[", "-", ":", "T", "."})
 
 
+@final
 class BigQueryOutputConverter(CachedOutputConverter):
     """BigQuery-specific output conversion with native UUID support.
 
@@ -89,7 +77,8 @@ class BigQueryOutputConverter(CachedOutputConverter):
                     uuid_obj = convert_uuid(value)
                     return ScalarQueryParameter(name, "STRING", str(uuid_obj))
 
-        param_type = BQ_TYPE_MAP.get(type(value).__name__, "STRING")
+        param_type, _ = _get_bq_param_type(value)
+        param_type = param_type or "STRING"
         return ScalarQueryParameter(name, param_type, value)
 
     def convert_bigquery_value(self, value: Any, column_type: str) -> Any:

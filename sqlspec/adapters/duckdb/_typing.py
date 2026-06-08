@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     DuckDBConnection = _DuckDBConnection
 
+__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")
+
 
 class DuckDBCursor:
     """Context manager for DuckDB connection-as-cursor.
@@ -99,6 +101,3 @@ class DuckDBSessionContext:
             self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")

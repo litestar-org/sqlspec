@@ -2,6 +2,20 @@
 
 # pyright: reportPrivateUsage=false
 
+from types import SimpleNamespace
+from typing import Any, cast
+
+
+class _LocalEndpointConnection:
+    def __init__(self) -> None:
+        self._connection = SimpleNamespace(API_BASE_URL="http://127.0.0.1:9050")
+        self.load_called = False
+
+    def load_table_from_file(self, *_args: Any, **_kwargs: Any) -> None:
+        self.load_called = True
+        msg = "local BigQuery endpoint must not start a load upload"
+        raise AssertionError(msg)
+
 
 def test_is_simple_insert_operation_basic_insert() -> None:
     """Test that a basic INSERT statement is detected correctly."""
@@ -72,3 +86,18 @@ def test_extract_table_from_insert_malformed() -> None:
     from sqlspec.adapters.bigquery.core import extract_insert_table
 
     assert extract_insert_table("NOT VALID SQL") is None
+
+
+def test_try_bulk_insert_skips_local_bigquery_endpoint() -> None:
+    """Test that emulator/local endpoints do not attempt resumable uploads."""
+    from sqlspec.adapters.bigquery.core import try_bulk_insert
+
+    connection = _LocalEndpointConnection()
+    rowcount = try_bulk_insert(
+        cast(Any, connection),
+        "INSERT INTO contract_items (name, value, note) VALUES (@name, @value, @note)",
+        [{"name": "dict1", "value": 100, "note": None}],
+    )
+
+    assert rowcount is None
+    assert not connection.load_called

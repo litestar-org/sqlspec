@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import sqlspec.exceptions
-from sqlspec.core.parameters._types import ParameterProfile, ParameterStyle
+from sqlspec.core.parameters._types import _NAMED_STYLES, ParameterProfile, ParameterStyle
 
 __all__ = (
     "EXECUTE_MANY_MIN_ROWS",
@@ -15,10 +15,6 @@ __all__ = (
 )
 
 EXECUTE_MANY_MIN_ROWS: int = 2
-
-
-def _is_sequence_like(value: Any) -> bool:
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
 
 
 def normalize_parameter_key(key: Any) -> "tuple[str, int | str]":
@@ -104,6 +100,43 @@ def collect_null_parameter_ordinals(parameters: Any, profile: "ParameterProfile"
     return null_positions
 
 
+def validate_parameter_alignment(
+    parameter_profile: "ParameterProfile | None", parameters: Any, *, is_many: bool = False
+) -> None:
+    """Ensure provided parameters align with detected placeholders.
+
+    Args:
+        parameter_profile: Placeholder metadata extracted from the statement.
+        parameters: Parameter payload the adapter will execute with.
+        is_many: Whether the call explicitly targets ``execute_many``.
+
+    Raises:
+        SQLSpecError: If counts or identifiers differ between placeholders and payload.
+    """
+    profile = parameter_profile or ParameterProfile.empty()
+    if profile.total_count == 0:
+        return
+
+    effective_is_many = is_many or looks_like_execute_many(parameters)
+
+    if effective_is_many:
+        if parameters is None:
+            if profile.total_count == 0:
+                return
+            msg = "Parameter count mismatch: expected parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if not _is_sequence_like(parameters):
+            msg = "Parameter count mismatch: expected sequence of parameter sets for execute_many."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        if len(parameters) == 0:
+            return
+        for index, param_set in enumerate(parameters):
+            _validate_single_parameter_set(profile, param_set, batch_index=index)
+        return
+
+    _validate_single_parameter_set(profile, parameters)
+
+
 def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
     identifiers: set[tuple[str, int | str]] = set()
     parameters = parameter_profile.parameters
@@ -119,12 +152,7 @@ def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set
     for parameter in parameters:
         style = parameter.style
         name = parameter.name
-        if style in {
-            ParameterStyle.NAMED_COLON,
-            ParameterStyle.NAMED_AT,
-            ParameterStyle.NAMED_DOLLAR,
-            ParameterStyle.NAMED_PYFORMAT,
-        }:
+        if style in _NAMED_STYLES:
             identifiers.add(("named", name or f"param_{parameter.ordinal}"))
         elif style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
             # When mixed with ordinal styles (like QMARK), use ordinal instead of explicit index
@@ -156,6 +184,27 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
         return identifiers, len(parameters)
     identifiers = {("index", cast("int | str", 0))}
     return identifiers, 1
+
+
+def _normalize_named_identifier_aliases(
+    parameter_profile: "ParameterProfile", identifiers: "set[tuple[str, int | str]]"
+) -> "set[tuple[str, int | str]]":
+    aliases: dict[str, str] = {}
+    for parameter in parameter_profile.parameters:
+        if parameter.style not in _NAMED_STYLES or not parameter.name:
+            continue
+        aliases[parameter.placeholder_text] = parameter.name
+
+    if not aliases:
+        return identifiers
+
+    normalized: set[tuple[str, int | str]] = set()
+    for kind, value in identifiers:
+        if kind == "named":
+            normalized.add((kind, aliases.get(str(value), value)))
+        else:
+            normalized.add((kind, value))
+    return normalized
 
 
 def _format_identifiers(identifiers: "set[tuple[str, int | str]]") -> str:
@@ -234,8 +283,9 @@ def _validate_single_parameter_set(
         msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
         raise sqlspec.exceptions.SQLSpecError(msg)
 
-    identifiers_match = expected_identifiers == actual_identifiers or _normalize_index_identifiers(
-        expected_identifiers, actual_identifiers
+    normalized_actual_identifiers = _normalize_named_identifier_aliases(parameter_profile, actual_identifiers)
+    identifiers_match = expected_identifiers == normalized_actual_identifiers or _normalize_index_identifiers(
+        expected_identifiers, normalized_actual_identifiers
     )
 
     if not identifiers_match:
@@ -246,38 +296,5 @@ def _validate_single_parameter_set(
         raise sqlspec.exceptions.SQLSpecError(msg)
 
 
-def validate_parameter_alignment(
-    parameter_profile: "ParameterProfile | None", parameters: Any, *, is_many: bool = False
-) -> None:
-    """Ensure provided parameters align with detected placeholders.
-
-    Args:
-        parameter_profile: Placeholder metadata extracted from the statement.
-        parameters: Parameter payload the adapter will execute with.
-        is_many: Whether the call explicitly targets ``execute_many``.
-
-    Raises:
-        SQLSpecError: If counts or identifiers differ between placeholders and payload.
-    """
-    profile = parameter_profile or ParameterProfile.empty()
-    if profile.total_count == 0:
-        return
-
-    effective_is_many = is_many or looks_like_execute_many(parameters)
-
-    if effective_is_many:
-        if parameters is None:
-            if profile.total_count == 0:
-                return
-            msg = "Parameter count mismatch: expected parameter sets for execute_many."
-            raise sqlspec.exceptions.SQLSpecError(msg)
-        if not _is_sequence_like(parameters):
-            msg = "Parameter count mismatch: expected sequence of parameter sets for execute_many."
-            raise sqlspec.exceptions.SQLSpecError(msg)
-        if len(parameters) == 0:
-            return
-        for index, param_set in enumerate(parameters):
-            _validate_single_parameter_set(profile, param_set, batch_index=index)
-        return
-
-    _validate_single_parameter_set(profile, parameters)
+def _is_sequence_like(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))

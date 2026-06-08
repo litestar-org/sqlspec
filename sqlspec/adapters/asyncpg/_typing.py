@@ -29,6 +29,8 @@ if not TYPE_CHECKING:
     AsyncpgPool = Pool
     AsyncpgPreparedStatement = PreparedStatement
 
+__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")
+
 
 class AsyncpgCursor:
     """Context manager for AsyncPG cursor management."""
@@ -98,6 +100,3 @@ class AsyncpgSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")

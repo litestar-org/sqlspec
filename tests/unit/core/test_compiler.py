@@ -14,12 +14,13 @@ Test Coverage:
 8. Performance characteristics - Compilation speed and efficiency testing
 """
 
+import inspect
 import logging
 import threading
 import time
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import Mock, patch
 
 import pytest
@@ -29,6 +30,7 @@ from sqlglot.errors import ParseError
 
 from sqlspec.core import (
     CompiledSQL,
+    OperationProfile,
     OperationType,
     ParameterProcessor,
     ParameterProfile,
@@ -565,7 +567,7 @@ def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig")
     """AST transformers should not trigger a second parse."""
 
     def pass_through(
-        expression: exp.Expr, parameters: Any, _parameter_profile: "ParameterProfile"
+        expression: exp.Expr, parameters: Any, _parameter_profile: "ParameterProfile", _is_many: bool = False
     ) -> "tuple[exp.Expr, Any]":
         return expression, parameters
 
@@ -584,7 +586,7 @@ def test_ast_transformer_receives_parameter_profile(basic_statement_config: "Sta
     captured: dict[str, int] = {}
 
     def capture_profile(
-        expression: exp.Expr, parameters: Any, parameter_profile: "ParameterProfile"
+        expression: exp.Expr, parameters: Any, parameter_profile: "ParameterProfile", _is_many: bool = False
     ) -> "tuple[exp.Expr, Any]":
         captured["count"] = parameter_profile.total_count
         return expression, parameters
@@ -611,6 +613,96 @@ def test_statement_transformer_updates_operation_type(basic_statement_config: "S
 
     assert result.operation_type == "DELETE"
     assert "DELETE" in result.compiled_sql
+
+
+def test_parameter_casts_detected_with_statement_transformer() -> None:
+    """Parameter casts are detected from the final transformed AST."""
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+    )
+
+    def rename_table(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
+        updated = expression.transform(lambda node: exp.to_table("accounts") if isinstance(node, exp.Table) else node)
+        return updated, parameters
+
+    config = StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_caching=True,
+        enable_parsing=True,
+        enable_validation=False,
+        statement_transformers=(rename_table,),
+    )
+    processor = SQLProcessor(config)
+
+    result = processor.compile("SELECT $1::text FROM users", [1])
+
+    assert result.parameter_casts == {1: "TEXT"}
+    assert "accounts" in result.compiled_sql
+
+
+def test_parse_cache_entry_does_not_store_parameter_casts() -> None:
+    """Parse cache entries should store expression, operation, and profile only."""
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+    )
+    config = StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_caching=True,
+        enable_parsing=True,
+        enable_validation=False,
+    )
+    processor = SQLProcessor(config)
+
+    processor.compile("SELECT $1::text FROM users", [1])
+    cache_entry = next(iter(processor._parse_cache.values()))
+
+    assert len(cache_entry) == 3
+
+
+@requires_interpreted
+def test_detect_parameter_casts_called_exactly_once_with_transformer() -> None:
+    """Transformers should not trigger duplicate parameter-cast AST walks."""
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+    )
+
+    def pass_through(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
+        return expression, parameters
+
+    config = StatementConfig(
+        dialect="postgres",
+        parameter_config=parameter_config,
+        enable_caching=False,
+        enable_parsing=True,
+        enable_validation=False,
+        statement_transformers=(pass_through,),
+    )
+
+    original_detect_parameter_casts = SQLProcessor._detect_parameter_casts
+    detect_parameter_casts_calls = 0
+
+    def count_detect_parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
+        nonlocal detect_parameter_casts_calls
+        detect_parameter_casts_calls += 1
+        return original_detect_parameter_casts(expression)
+
+    processor = SQLProcessor(config)
+
+    with patch.object(SQLProcessor, "_detect_parameter_casts", staticmethod(count_detect_parameter_casts)):
+        processor.compile("SELECT $1::text FROM users", [1])
+
+    assert detect_parameter_casts_calls == 1
 
 
 def test_parsing_enabled_optimization(
@@ -661,7 +753,6 @@ def test_parsing_disabled_fallback(
         "SCRIPT",
         "DDL",
         "COMMAND",
-        "UNKNOWN",
     ]
 
 
@@ -1057,7 +1148,7 @@ def test_execute_many_detection(
 def test_module_constants() -> None:
     """Test module constants are properly defined."""
 
-    operation_types = ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "COMMAND", "UNKNOWN"]
+    operation_types = get_args(OperationType)
     assert "SELECT" in operation_types
     assert "INSERT" in operation_types
     assert "UPDATE" in operation_types
@@ -1067,7 +1158,7 @@ def test_module_constants() -> None:
     assert "SCRIPT" in operation_types
     assert "DDL" in operation_types
     assert "COMMAND" in operation_types
-    assert "UNKNOWN" in operation_types
+    assert "UNKNOWN" not in operation_types
 
 
 @requires_interpreted
@@ -1090,3 +1181,52 @@ def test_compile_with_pipeline_passes_expression() -> None:
 
         _, kwargs = mock_compile.call_args
         assert kwargs["expression"] is expression
+
+
+def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") -> None:
+    """Verify c11 native-class optimization invariants and compiler behavior."""
+    for cls in (OperationProfile, CompiledSQL, SQLProcessor):
+        source = inspect.getsource(cls)
+        assert source.startswith("@final\n@mypyc_attr(allow_interpreted_subclasses=False)\n")
+
+    for name in (
+        "_normalize_expression_override",
+        "_unpack_parse_cache_entry",
+        "_detect_operation_type",
+        "_detect_parameter_casts",
+        "_build_operation_profile",
+        "_make_parse_cache_key",
+    ):
+        assert isinstance(SQLProcessor.__dict__.get(name), staticmethod)
+
+    source = inspect.getsource(SQLProcessor._compile_uncached)
+    assert "dialect_str = str(self._config.dialect)" not in source
+
+    processor = SQLProcessor(basic_statement_config)
+    select_result = processor.compile("SELECT * FROM users WHERE id = ?", (42,))
+    assert select_result.operation_type == "SELECT"
+    assert select_result.operation_profile.returns_rows is True
+
+    insert_result = processor.compile("INSERT INTO users (name) VALUES (?)", ("alice",))
+    assert insert_result.operation_type == "INSERT"
+    assert insert_result.operation_profile.modifies_rows is True
+
+    ddl_result = processor.compile("CREATE TABLE test (id INTEGER PRIMARY KEY)", None)
+    assert ddl_result.operation_type == "DDL"
+
+    result1 = processor.compile("SELECT id FROM users WHERE id = ?", (1,))
+    result2 = processor.compile("SELECT id FROM users WHERE id = ?", (2,))
+    assert result1.compiled_sql == result2.compiled_sql
+    assert processor._cache_hits >= 1
+
+    assert SQLProcessor._detect_operation_type(sqlglot.parse_one("SELECT 1")) == "SELECT"
+    assert SQLProcessor._make_parse_cache_key("SELECT 1", None) == ("default", "SELECT 1")
+    assert SQLProcessor._make_parse_cache_key("SELECT 1", "postgres") == ("postgres", "SELECT 1")
+    assert SQLProcessor._normalize_expression_override(None, "SELECT 1", "SELECT 1") is None
+
+    profile = SQLProcessor._build_operation_profile(sqlglot.parse_one("SELECT 1"), "SELECT")
+    assert profile.returns_rows is True
+    assert profile.modifies_rows is False
+
+    casts = SQLProcessor._detect_parameter_casts(sqlglot.parse_one("SELECT ?"))
+    assert isinstance(casts, dict)

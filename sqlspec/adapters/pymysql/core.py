@@ -1,5 +1,9 @@
 """PyMySQL adapter compiled helpers."""
 
+# NOTE: Keep in sync with sqlspec/adapters/mysqlconnector/core.py.
+# Intentional divergences: driver-name strings, error-code extraction strategy,
+# and private JSON helper names.
+
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any
 
@@ -114,10 +118,6 @@ _MYSQL_CONNECTION_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
 }
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
@@ -165,6 +165,10 @@ def build_profile() -> "DriverParameterProfile":
         custom_type_coercions=coercions,
         default_dialect="mysql",
     )
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
 
 
 driver_profile = build_profile()
@@ -221,10 +225,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. Specific error codes (most reliable for MySQL)
-    2. SQLSTATE codes (where available)
-    3. Generic error code ranges
-    4. Default SQLSpecError fallback
+        1. Specific error codes (most reliable for MySQL)
+        2. SQLSTATE codes (where available)
+        3. Generic error code ranges
+        4. Default SQLSpecError fallback
 
     Args:
         error: The PyMySQL exception to map

@@ -105,9 +105,10 @@ class MigrationFixer:
     def create_backup(self) -> Path:
         """Create timestamped backup directory with all migration files.
 
+        Keep in sync with MigrationSquasher._create_backup.
+
         Returns:
             Path to created backup directory.
-
         """
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_dir = self.migrations_path / f".backup_{timestamp}"
@@ -127,7 +128,6 @@ class MigrationFixer:
         Args:
             renames: List of planned rename operations.
             dry_run: If True, log operations without executing.
-
         """
         if not renames:
             return
@@ -145,9 +145,9 @@ class MigrationFixer:
         """Update SQL query names and version comments in file content.
 
         Transforms query names and version metadata from old version to new version:
-            -- name: migrate-{old_version}-up  →  -- name: migrate-{new_version}-up
-            -- name: migrate-{old_version}-down  →  -- name: migrate-{new_version}-down
-            -- Version: {old_version}  →  -- Version: {new_version}
+            -- name: migrate-{old_version}-up → -- name: migrate-{new_version}-up
+            -- name: migrate-{old_version}-down → -- name: migrate-{new_version}-down
+            -- Version: {old_version} → -- Version: {new_version}
 
         Creates version-specific regex patterns to avoid unintended replacements
         of other migrate-* patterns in the file.
@@ -156,7 +156,6 @@ class MigrationFixer:
             file_path: Path to file to update.
             old_version: Old version string (None values skipped gracefully).
             new_version: New version string (None values skipped gracefully).
-
         """
         if not old_version or not new_version:
             logger.warning("Skipping content update - missing version information")
@@ -178,6 +177,8 @@ class MigrationFixer:
     def rollback(self) -> None:
         """Restore migration files from backup.
 
+        Keep in sync with MigrationSquasher._rollback_backup.
+
         Deletes current migration files and restores from backup directory.
         Only restores if backup exists.
         """
@@ -194,6 +195,8 @@ class MigrationFixer:
 
     def cleanup(self) -> None:
         """Remove backup directory after successful conversion.
+
+        Keep in sync with MigrationSquasher._cleanup_backup.
 
         Only removes backup if it exists. Logs warning if no backup found.
         """

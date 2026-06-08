@@ -45,18 +45,17 @@ class SQLTemplateDefinition:
 
         rendered_lines: list[str] = [self._format(self.header, context)]
         rendered_lines.extend(self._format(line, context) for line in self.metadata if line)
-        rendered_lines.append("")
-        rendered_lines.append(self._format(self.body, context))
+        rendered_lines.extend(("", self._format(self.body, context)))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
 
     def _format(self, template: str, context: "Mapping[str, str]") -> str:
         try:
             return template.format_map(context)
-        except KeyError as exc:  # pragma: no cover - defensive
+        except KeyError as exc:  # pragma: no cover
             missing = str(exc).strip("'")
             msg = f"Missing template variable '{missing}' in SQL template"
             raise TemplateValidationError(msg) from exc
-        except ValueError as exc:  # pragma: no cover - defensive
+        except ValueError as exc:  # pragma: no cover
             msg = f"Invalid SQL template fragment: {exc}"
             raise TemplateValidationError(msg) from exc
 
@@ -84,11 +83,11 @@ class PythonTemplateDefinition:
     def _format(self, template: str, context: "Mapping[str, str]") -> str:
         try:
             return template.format_map(context)
-        except KeyError as exc:  # pragma: no cover - defensive
+        except KeyError as exc:  # pragma: no cover
             missing = str(exc).strip("'")
             msg = f"Missing template variable '{missing}' in Python template"
             raise TemplateValidationError(msg) from exc
-        except ValueError as exc:  # pragma: no cover - defensive
+        except ValueError as exc:  # pragma: no cover
             msg = f"Invalid Python template fragment: {exc}"
             raise TemplateValidationError(msg) from exc
 

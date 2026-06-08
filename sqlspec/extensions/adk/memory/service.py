@@ -20,9 +20,9 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 
-logger = get_logger("sqlspec.extensions.adk.memory.service")
-
 __all__ = ("SQLSpecMemoryService", "SQLSpecSyncMemoryService")
+
+logger = get_logger("sqlspec.extensions.adk.memory.service")
 
 
 class SQLSpecMemoryService(BaseMemoryService):
@@ -32,37 +32,11 @@ class SQLSpecMemoryService(BaseMemoryService):
     Delegates all database operations to a store implementation.
 
     ADK BaseMemoryService defines two core methods:
-    - add_session_to_memory(session) - Ingests session into memory (returns void)
-    - search_memory(app_name, user_id, query) - Searches stored memories
+        - add_session_to_memory(session) - Ingests session into memory (returns void)
+        - search_memory(app_name, user_id, query) - Searches stored memories
 
     Args:
-        store: Database store implementation (e.g., AsyncpgADKMemoryStore).
-
-    Example:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.adapters.asyncpg.adk import AsyncpgADKMemoryStore
-        from sqlspec.extensions.adk.memory.service import SQLSpecMemoryService
-
-        config = AsyncpgConfig(
-            connection_config={"dsn": "postgresql://..."},
-            extension_config={
-                "adk": {
-                    "memory_table": "adk_memory_entries",
-                    "memory_use_fts": True,
-                }
-            }
-        )
-        store = AsyncpgADKMemoryStore(config)
-        await store.ensure_tables()
-
-        service = SQLSpecMemoryService(store)
-        await service.add_session_to_memory(completed_session)
-
-        response = await service.search_memory(
-            app_name="my_app",
-            user_id="user123",
-            query="previous conversation about Python"
-        )
+        store: Database store implementation.
     """
 
     def __init__(self, store: "BaseAsyncADKMemoryStore") -> None:
@@ -90,11 +64,6 @@ class SQLSpecMemoryService(BaseMemoryService):
 
         Args:
             session: Completed ADK Session with events.
-
-        Notes:
-            - Events without content are skipped
-            - Duplicate event_ids are silently ignored (idempotent)
-            - Uses bulk insert for efficiency
         """
         records = session_to_memory_records(session)
 
@@ -234,31 +203,6 @@ class SQLSpecSyncMemoryService:
 
     Args:
         store: Sync database store implementation.
-
-    Example:
-        from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
-        from sqlspec.extensions.adk.memory.service import SQLSpecSyncMemoryService
-
-        config = SqliteConfig(
-            connection_config={"database": "app.db"},
-            extension_config={
-                "adk": {
-                    "memory_table": "adk_memory_entries",
-                }
-            }
-        )
-        store = SqliteADKMemoryStore(config)
-        store.ensure_tables()
-
-        service = SQLSpecSyncMemoryService(store)
-        service.add_session_to_memory(completed_session)
-
-        memories = service.search_memory(
-            app_name="my_app",
-            user_id="user123",
-            query="Python discussion"
-        )
     """
 
     def __init__(self, store: "BaseSyncADKMemoryStore") -> None:

@@ -4,10 +4,17 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.data_dictionary import get_data_dictionary_loader, get_dialect_config
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
+    get_data_dictionary_loader,
+    get_dialect_config,
+)
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver

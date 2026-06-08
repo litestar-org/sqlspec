@@ -4,7 +4,10 @@ Tests all protocol type guards, validation functions, edge cases, and performanc
 Uses function-based pytest approach as per AGENTS.md requirements.
 """
 
+import typing
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import msgspec
@@ -35,6 +38,7 @@ from sqlspec.utils.type_guards import (
     has_expressions_attribute,
     has_parent_attribute,
     has_this_attribute,
+    is_async_readable,
     is_attrs_instance,
     is_attrs_instance_with_field,
     is_attrs_instance_without_field,
@@ -58,6 +62,7 @@ from sqlspec.utils.type_guards import (
     is_pydantic_model,
     is_pydantic_model_with_field,
     is_pydantic_model_without_field,
+    is_readable,
     is_schema,
     is_schema_or_dict,
     is_schema_or_dict_with_field,
@@ -105,18 +110,13 @@ class MockSQLGlotExpression:
     def __init__(
         self, this: Any = _UNSET, expressions: Any = _UNSET, parent: Any = _UNSET, args: "dict[str, Any] | None" = None
     ) -> None:
-        # Only set attributes if they were explicitly provided
         if this is not _UNSET:
             self.this = this
         if expressions is not _UNSET:
             self.expressions = expressions
         if parent is not _UNSET:
             self.parent = parent
-
-        # SQLGlot expressions always have an args dict
         self.args = args or {}
-
-        # Set any additional attributes from args
         if args:
             for key, value in args.items():
                 if key not in {"this", "expressions", "parent"}:
@@ -154,6 +154,28 @@ class MockValueWrapper:
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+
+class SyncReadable:
+    def read(self) -> str:
+        return "sync"
+
+
+class AsyncReadable:
+    async def read(self) -> str:
+        return "async"
+
+
+def test_is_readable_accepts_sync_read_method() -> None:
+    assert is_readable(SyncReadable()) is True
+
+
+def test_is_async_readable_rejects_sync_read_method() -> None:
+    assert is_async_readable(SyncReadable()) is False
+
+
+def test_is_async_readable_accepts_async_read_method() -> None:
+    assert is_async_readable(AsyncReadable()) is True
 
 
 def test_is_dataclass_instance_with_valid_dataclass() -> None:
@@ -290,7 +312,6 @@ def test_is_dict_row_with_non_dictionary() -> None:
 
 def test_is_pydantic_model_when_not_installed() -> None:
     """Test is_pydantic_model returns False when pydantic not available."""
-
     assert is_pydantic_model("not a model") is False
     assert is_pydantic_model({}) is False
 
@@ -376,7 +397,6 @@ def test_is_schema_or_dict_with_neither() -> None:
 def test_is_schema_with_field_with_dataclass() -> None:
     """Test is_schema_with_field works with dataclass fields."""
     instance = SampleDataclass(name="test", age=25)
-
     assert is_schema_with_field(instance, "name") is False
     assert is_schema_with_field(instance, "nonexistent") is False
 
@@ -384,7 +404,6 @@ def test_is_schema_with_field_with_dataclass() -> None:
 def test_is_schema_without_field_with_dataclass() -> None:
     """Test is_schema_without_field works with dataclass fields."""
     instance = SampleDataclass(name="test", age=25)
-
     assert is_schema_without_field(instance, "nonexistent") is True
     assert is_schema_without_field(instance, "name") is True
 
@@ -393,7 +412,6 @@ def test_is_schema_or_dict_with_field_combined() -> None:
     """Test is_schema_or_dict_with_field works with both schemas and dicts."""
     instance = SampleDataclass(name="test", age=25)
     data = {"name": "test", "age": 25}
-
     assert is_schema_or_dict_with_field(instance, "name") is False
     assert is_schema_or_dict_with_field(data, "name") is True
     assert is_schema_or_dict_with_field(instance, "nonexistent") is False
@@ -404,7 +422,6 @@ def test_is_schema_or_dict_without_field_combined() -> None:
     """Test is_schema_or_dict_without_field works with both schemas and dicts."""
     instance = SampleDataclass(name="test", age=25)
     data = {"name": "test", "age": 25}
-
     assert is_schema_or_dict_without_field(instance, "nonexistent") is True
     assert is_schema_or_dict_without_field(data, "nonexistent") is True
     assert is_schema_or_dict_without_field(instance, "name") is True
@@ -455,8 +472,7 @@ def test_is_dto_data_when_litestar_not_installed() -> None:
 
 def test_is_expression_with_mock() -> None:
     """Test is_expression with mock SQLGlot expressions."""
-    mock_expr = MockSQLGlotExpression()
-
+    mock_expr = cast("exp.Expr", MockSQLGlotExpression())
     result = is_expression(mock_expr)
     assert isinstance(result, bool)
 
@@ -554,7 +570,6 @@ def test_is_string_literal_with_string_flag() -> None:
 def test_is_string_literal_without_string_flag() -> None:
     """Test is_string_literal handles missing is_string attribute."""
     literal = cast("exp.Literal", MockLiteral(this="string_value"))
-
     assert is_string_literal(literal) is True
 
 
@@ -573,7 +588,6 @@ def test_is_number_literal_with_number_flag() -> None:
 def test_is_number_literal_without_number_flag() -> None:
     """Test is_number_literal handles missing is_number attribute."""
     literal = cast("exp.Literal", MockLiteral(this="123"))
-
     assert is_number_literal(literal) is True
 
 
@@ -586,7 +600,7 @@ def test_is_number_literal_with_non_number_this() -> None:
 def test_get_param_style_and_name_with_attributes() -> None:
     """Test get_param_style_and_name returns style and name when present."""
     param = MockParameterProtocol(style="named", name="test_param")
-    style, name = get_param_style_and_name(param)
+    (style, name) = get_param_style_and_name(param)
     assert style == "named"
     assert name == "test_param"
 
@@ -594,7 +608,7 @@ def test_get_param_style_and_name_with_attributes() -> None:
 def test_get_param_style_and_name_without_attributes() -> None:
     """Test get_param_style_and_name returns None, None when attributes missing."""
     param = object()
-    style, name = get_param_style_and_name(param)
+    (style, name) = get_param_style_and_name(param)
     assert style is None
     assert name is None
 
@@ -620,7 +634,7 @@ def test_get_initial_expression_with_attribute() -> None:
             self.initial_expression = mock_expr
 
     context = MockContext()
-    assert get_initial_expression(context) is mock_expr  # type: ignore[comparison-overlap]
+    assert cast("object", get_initial_expression(context)) is cast("object", mock_expr)
 
 
 def test_get_initial_expression_without_attribute() -> None:
@@ -667,7 +681,6 @@ def test_extract_dataclass_fields_basic() -> None:
     """Test extract_dataclass_fields returns correct fields."""
     instance = SampleDataclass(name="test", age=25)
     fields = extract_dataclass_fields(instance)
-
     field_names = {field.name for field in fields}
     assert "name" in field_names
     assert "age" in field_names
@@ -678,7 +691,6 @@ def test_extract_dataclass_fields_exclude_none() -> None:
     """Test extract_dataclass_fields excludes None values when requested."""
     instance = SampleDataclass(name="test", age=25, optional_field=None)
     fields = extract_dataclass_fields(instance, exclude_none=True)
-
     field_names = {field.name for field in fields}
     assert "name" in field_names
     assert "age" in field_names
@@ -688,11 +700,9 @@ def test_extract_dataclass_fields_exclude_none() -> None:
 def test_extract_dataclass_fields_include_exclude() -> None:
     """Test extract_dataclass_fields respects include/exclude parameters."""
     instance = SampleDataclass(name="test", age=25)
-
     fields = extract_dataclass_fields(instance, include={"name"})
     field_names = {field.name for field in fields}
     assert field_names == {"name"}
-
     fields = extract_dataclass_fields(instance, exclude={"age"})
     field_names = {field.name for field in fields}
     assert "name" in field_names
@@ -703,8 +713,7 @@ def test_extract_dataclass_fields_include_exclude() -> None:
 def test_extract_dataclass_fields_conflicting_include_exclude() -> None:
     """Test extract_dataclass_fields raises error for conflicting include/exclude."""
     instance = SampleDataclass(name="test", age=25)
-
-    with pytest.raises(ValueError, match="Fields .* are both included and excluded"):  # noqa: RUF043
+    with pytest.raises(ValueError, match=r"Fields .* are both included and excluded"):
         extract_dataclass_fields(instance, include={"name"}, exclude={"name"})
 
 
@@ -712,7 +721,6 @@ def test_extract_dataclass_items_basic() -> None:
     """Test extract_dataclass_items returns correct name-value pairs."""
     instance = SampleDataclass(name="test", age=25)
     items = extract_dataclass_items(instance)
-
     items_dict = dict(items)
     assert items_dict["name"] == "test"
     assert items_dict["age"] == 25
@@ -723,7 +731,6 @@ def test_dataclass_to_dict_basic() -> None:
     """Test dataclass_to_dict converts dataclass to dictionary."""
     instance = SampleDataclass(name="test", age=25)
     result = dataclass_to_dict(instance)
-
     expected = {"name": "test", "age": 25, "optional_field": None}
     assert result == expected
 
@@ -732,7 +739,6 @@ def test_dataclass_to_dict_exclude_none() -> None:
     """Test dataclass_to_dict excludes None values when requested."""
     instance = SampleDataclass(name="test", age=25, optional_field=None)
     result = dataclass_to_dict(instance, exclude_none=True)
-
     expected = {"name": "test", "age": 25}
     assert result == expected
 
@@ -746,9 +752,7 @@ def test_dataclass_to_dict_nested() -> None:
 
     inner = SampleDataclass(name="inner", age=30)
     outer = NestedDataclass(inner=inner)
-
     result = dataclass_to_dict(outer, convert_nested=True)
-
     expected = {"inner": {"name": "inner", "age": 30, "optional_field": None}}
     assert result == expected
 
@@ -762,9 +766,7 @@ def test_dataclass_to_dict_nested_disabled() -> None:
 
     inner = SampleDataclass(name="inner", age=30)
     outer = NestedDataclass(inner=inner)
-
     result = dataclass_to_dict(outer, convert_nested=False)
-
     assert result["inner"] is inner
 
 
@@ -779,14 +781,13 @@ def test_schema_dump_with_primitives() -> None:
     """Test schema_dump returns primitive payload unchanged."""
     payload = "primary"
     result = schema_dump(payload)
-    assert result == payload  # type: ignore[comparison-overlap]
+    assert result == payload
 
 
 def test_schema_dump_with_dataclass() -> None:
     """Test schema_dump converts dataclass to dict."""
     instance = SampleDataclass(name="test", age=25)
     result = schema_dump(instance)
-
     expected = {"name": "test", "age": 25, "optional_field": None}
     assert result == expected
 
@@ -795,7 +796,6 @@ def test_schema_dump_exclude_unset() -> None:
     """Test schema_dump excludes unset/empty values when requested."""
     instance = SampleDataclass(name="test", age=25, optional_field=None)
     result = schema_dump(instance, exclude_unset=True)
-
     expected = {"name": "test", "age": 25, "optional_field": None}
     assert result == expected
 
@@ -810,7 +810,6 @@ def test_schema_dump_with_dict_attribute() -> None:
 
     obj = ObjectWithDict()
     result = schema_dump(cast("Any", obj))
-
     expected = {"name": "test", "age": 25}
     assert result == expected
 
@@ -819,12 +818,10 @@ def test_serializer_pipeline_reuses_entry() -> None:
     reset_serializer_cache()
     metrics = get_serializer_metrics()
     assert metrics["size"] == 0
-
     sample = _SerializerRecord(identifier=1, name="first")
     pipeline = get_collection_serializer(sample)
     metrics = get_serializer_metrics()
     assert metrics["size"] == 1
-
     same_pipeline = get_collection_serializer(_SerializerRecord(identifier=2, name="second"))
     assert pipeline is same_pipeline
 
@@ -834,12 +831,10 @@ def test_serializer_metrics_track_hits_and_misses(monkeypatch: pytest.MonkeyPatc
 
     reset_serializer_cache()
     monkeypatch.setattr(schema_module, "_METRICS_ENABLED", True)
-
     sample = _SerializerRecord(identifier=1, name="instrumented")
     get_collection_serializer(sample)
     metrics = get_serializer_metrics()
     assert metrics["misses"] == 1
-
     get_collection_serializer(sample)
     metrics = get_serializer_metrics()
     assert metrics["hits"] == 1
@@ -872,7 +867,6 @@ def test_serializer_pipeline_arrow_conversion() -> None:
 )
 def test_type_guard_performance(guard_func: Any, test_obj: Any, expected: bool) -> None:
     """Test that type guards perform efficiently and return expected results."""
-
     for _ in range(100):
         result = guard_func(test_obj)
         assert result == expected
@@ -881,7 +875,6 @@ def test_type_guard_performance(guard_func: Any, test_obj: Any, expected: bool) 
 def test_multiple_type_guards_chain() -> None:
     """Test chaining multiple type guards doesn't degrade performance."""
     instance = SampleDataclass(name="test", age=25)
-
     for _ in range(50):
         assert is_schema_or_dict(instance) is True
         assert is_dataclass_with_field(instance, "name") is True
@@ -910,7 +903,6 @@ def test_sqlglot_helpers_with_invalid_objects() -> None:
     """Test SQLGlot helper functions handle invalid objects gracefully."""
     invalid_expr = cast("exp.Expr", "not an expression")
     invalid_expression = cast("exp.Expression", "not an expression")
-
     assert get_node_this(invalid_expr) is None
     assert get_node_expressions(invalid_expression) is None
     assert get_literal_parent(invalid_expression) is None
@@ -923,24 +915,23 @@ def test_edge_case_empty_string_literal() -> None:
     """Test literal type guards with edge cases."""
     empty_literal = cast("exp.Literal", MockLiteral(this=""))
     assert is_string_literal(empty_literal) is True
-
     zero_literal = cast("exp.Literal", MockLiteral(this="0"))
     assert is_number_literal(zero_literal) is True
 
 
-class MockMsgspecStructWithCamelRename(msgspec.Struct, rename="camel"):  # type: ignore[misc]
+class MockMsgspecStructWithCamelRename(msgspec.Struct, rename="camel"):
     """Mock msgspec struct with camel rename configuration."""
 
     test_name: str = "test"
 
 
-class MockMsgspecStructWithKebabRename(msgspec.Struct, rename="kebab"):  # type: ignore[misc]
+class MockMsgspecStructWithKebabRename(msgspec.Struct, rename="kebab"):
     """Mock msgspec struct with kebab rename configuration."""
 
     test_name: str = "test"
 
 
-class MockMsgspecStructWithPascalRename(msgspec.Struct, rename="pascal"):  # type: ignore[misc]
+class MockMsgspecStructWithPascalRename(msgspec.Struct, rename="pascal"):
     """Mock msgspec struct with pascal rename configuration."""
 
     test_name: str = "test"
@@ -1022,10 +1013,8 @@ def test_get_msgspec_rename_config_with_non_msgspec_class() -> None:
     """Test get_msgspec_rename_config returns None for non-msgspec classes."""
     result = get_msgspec_rename_config(SampleDataclass)
     assert result is None
-
     result = get_msgspec_rename_config(dict)
     assert result is None
-
     result = get_msgspec_rename_config(list)
     assert result is None
 
@@ -1040,7 +1029,7 @@ def test_get_msgspec_rename_config_with_invalid_config_structure() -> None:
     assert result is None
 
     class InvalidConfigStruct2:
-        __struct_config__ = None  # type: ignore[var-annotated]
+        __struct_config__ = None
 
     result = get_msgspec_rename_config(InvalidConfigStruct2)
     assert result is None
@@ -1049,8 +1038,6 @@ def test_get_msgspec_rename_config_with_invalid_config_structure() -> None:
 def test_get_msgspec_rename_config_performance() -> None:
     """Test get_msgspec_rename_config performs efficiently."""
     schema_type = MockMsgspecStructWithCamelRename
-
-    # Test repeated calls to ensure no performance degradation
     for _ in range(100):
         result = get_msgspec_rename_config(schema_type)
         assert result == "camel"
@@ -1091,14 +1078,32 @@ def test_supports_arrow_results_without_protocol_implementation() -> None:
 
 def test_supports_arrow_results_with_none() -> None:
     """Test supports_arrow_results with None."""
-
     assert supports_arrow_results(None) is False
 
 
 def test_supports_arrow_results_with_primitive_types() -> None:
     """Test supports_arrow_results with primitive types."""
-
     assert supports_arrow_results("string") is False
     assert supports_arrow_results(42) is False
     assert supports_arrow_results([1, 2, 3]) is False
     assert supports_arrow_results({"key": "value"}) is False
+
+
+def test_typing_module_typing_module_source_does_not_reference_private_typeddict() -> None:
+    """sqlspec.typing must not import or reference typing._TypedDict."""
+    assert "_TypedDict" not in Path("sqlspec/typing.py").read_text()
+
+
+def test_typing_module_supported_schema_model_includes_mapping() -> None:
+    """SupportedSchemaModel should include Mapping[str, Any]."""
+    from sqlspec.typing import SupportedSchemaModel
+
+    args = typing.get_args(SupportedSchemaModel)
+    assert any(getattr(arg, "__origin__", None) is Mapping for arg in args)
+
+
+def test_typing_module_typing_module_has_no_private_typeddict_name() -> None:
+    """sqlspec.typing should not expose the private _TypedDict name."""
+    import sqlspec.typing as typing_module
+
+    assert not hasattr(typing_module, "_TypedDict")

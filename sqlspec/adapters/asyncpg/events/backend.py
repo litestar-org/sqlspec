@@ -22,19 +22,9 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
-logger = get_logger("sqlspec.events.postgres")
-
 __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_backend")
 
-
-def _extract_event_id(payload: "str | None") -> "str | None":
-    if not payload:
-        return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        event_id = raw.get("event_id")
-        return event_id if isinstance(event_id, str) else None
-    return None
+logger = get_logger("sqlspec.events.postgres")
 
 
 class AsyncpgHybridEventsBackend:
@@ -191,7 +181,7 @@ class AsyncpgEventsBackend:
 def create_event_backend(
     config: "AsyncpgConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> AsyncpgEventsBackend | AsyncpgHybridEventsBackend | None:
-    """Factory used by EventChannel to create the native backend."""
+    """EventChannel factory for the native backend."""
     match backend_name:
         case "listen_notify":
             try:
@@ -208,3 +198,13 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _extract_event_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None

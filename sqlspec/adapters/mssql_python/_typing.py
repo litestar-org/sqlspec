@@ -24,6 +24,16 @@ if not TYPE_CHECKING:
     MssqlPythonConnection = Connection
     MssqlPythonRawCursor = Cursor
 
+__all__ = (
+    "MSSQL_PYTHON_MODULE",
+    "MssqlPythonAsyncCursor",
+    "MssqlPythonAsyncSessionContext",
+    "MssqlPythonConnection",
+    "MssqlPythonCursor",
+    "MssqlPythonRawCursor",
+    "MssqlPythonSessionContext",
+)
+
 
 class MssqlPythonCursor:
     """Sync context manager for mssql-python cursor management."""
@@ -153,14 +163,3 @@ class MssqlPythonAsyncSessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = (
-    "MSSQL_PYTHON_MODULE",
-    "MssqlPythonAsyncCursor",
-    "MssqlPythonAsyncSessionContext",
-    "MssqlPythonConnection",
-    "MssqlPythonCursor",
-    "MssqlPythonRawCursor",
-    "MssqlPythonSessionContext",
-)

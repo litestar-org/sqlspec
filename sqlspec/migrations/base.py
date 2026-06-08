@@ -1,7 +1,5 @@
 """Base classes for SQLSpec migrations."""
 
-import ast
-import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
@@ -11,26 +9,20 @@ from rich.console import Console
 
 from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
-from sqlspec.loader import SQLFileLoader
-from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.loaders import get_migration_loader
-from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateDescriptionHints, build_template_settings
+from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
 from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
-from sqlspec.utils.sync_tools import await_
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.core import SQL
-    from sqlspec.migrations.version import MigrationVersion
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
+__all__ = ("BaseMigrationCommands", "BaseMigrationTracker")
 
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
@@ -100,14 +92,14 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """Get SQL builder for creating the tracking table.
 
         Schema includes both legacy and new versioning columns:
-        - version_num: Migration version (sequential or timestamp format)
-        - version_type: Format indicator ('sequential' or 'timestamp')
-        - execution_sequence: Auto-incrementing application order
-        - description: Human-readable migration description
-        - applied_at: Timestamp when migration was applied
-        - execution_time_ms: Migration execution duration
-        - checksum: MD5 hash for content verification
-        - applied_by: User who applied the migration
+            - version_num: Migration version (sequential or timestamp format)
+            - version_type: Format indicator ('sequential' or 'timestamp')
+            - execution_sequence: Auto-incrementing application order
+            - description: Human-readable migration description
+            - applied_at: Timestamp when migration was applied
+            - execution_time_ms: Migration execution duration
+            - checksum: MD5 hash for content verification
+            - applied_by: User who applied the migration
 
         Returns:
             SQL builder object for table creation.
@@ -243,6 +235,17 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.delete().from_(self.version_table).where(sql.version_num.in_(versions))
 
+    def _get_check_versions_exist_sql(self, versions: "list[str]") -> Select:
+        """Get SQL builder for checking whether any versions exist.
+
+        Args:
+            versions: List of version strings to check.
+
+        Returns:
+            SQL builder object for version existence query.
+        """
+        return sql.select("version_num").from_(self.version_table).where(sql.version_num.in_(versions))
+
     def _get_record_squashed_migration_sql(
         self,
         version: str,
@@ -305,36 +308,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.select("*").from_(self.version_table).limit(0)
 
-    def _get_add_missing_columns_sql(self, missing_columns: "set[str]") -> "list[str]":
-        """Generate ALTER TABLE statements to add missing columns.
-
-        Args:
-            missing_columns: Set of column names that need to be added.
-
-        Returns:
-            List of SQL statements to execute.
-        """
-
-        statements = []
-        target_create = self._get_create_table_sql()
-
-        column_definitions = {col.name.lower(): col for col in target_create.columns}
-
-        for col_name in sorted(missing_columns):
-            if col_name in column_definitions:
-                col_def = column_definitions[col_name]
-                alter = sql.alter_table(self.version_table).add_column(
-                    name=col_def.name,
-                    dtype=col_def.dtype,
-                    default=col_def.default,
-                    not_null=col_def.not_null,
-                    unique=col_def.unique,
-                    comment=col_def.comment,
-                )
-                statements.append(str(alter))
-
-        return statements
-
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
 
@@ -379,269 +352,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
         """Remove a migration record."""
         ...
-
-
-@mypyc_attr(allow_interpreted_subclasses=True)
-class BaseMigrationRunner(ABC, Generic[DriverT]):
-    """Base class for migration execution."""
-
-    extension_configs: "dict[str, dict[str, Any]]"
-
-    def __init__(
-        self,
-        migrations_path: Path,
-        extension_migrations: "dict[str, Path] | None" = None,
-        context: "Any | None" = None,
-        extension_configs: "dict[str, dict[str, Any]] | None" = None,
-        description_hints: "TemplateDescriptionHints | None" = None,
-    ) -> None:
-        """Initialize the migration runner.
-
-        Args:
-            migrations_path: Path to the directory containing migration files.
-            extension_migrations: Optional mapping of extension names to their migration paths.
-            context: Optional migration context for Python migrations.
-            extension_configs: Optional mapping of extension names to their configurations.
-            description_hints: Preferred metadata keys for extracting human descriptions
-                from SQL comments and Python docstrings.
-        """
-        self.migrations_path = migrations_path
-        self.extension_migrations = extension_migrations or {}
-        self.loader = SQLFileLoader()
-        self.project_root: Path | None = None
-        self.context = context
-        self.extension_configs = extension_configs or {}
-        self.description_hints = description_hints or TemplateDescriptionHints()
-
-    def _extract_version(self, filename: str) -> str | None:
-        """Extract version from filename.
-
-        Args:
-            filename: The migration filename.
-
-        Returns:
-            The extracted version string or None.
-        """
-        stem = Path(filename).stem
-
-        if stem.startswith("ext_"):
-            return stem
-
-        parts = stem.split("_", 1)
-        return parts[0].zfill(4) if parts and parts[0].isdigit() else None
-
-    def calculate_checksum(self, content: str) -> str:
-        """Calculate MD5 checksum of migration content.
-
-        Args:
-            content: The migration file content.
-
-        Returns:
-            MD5 checksum hex string.
-        """
-
-        return hashlib.md5(content.encode()).hexdigest()  # noqa: S324
-
-    def _get_migration_files_sync(self) -> "list[tuple[str, Path]]":
-        """Get all migration files sorted by version.
-
-        Uses version-aware sorting that handles both sequential and timestamp
-        formats correctly, with extension migrations sorted by extension name.
-
-        Returns:
-            List of tuples containing (version, file_path).
-        """
-        migrations = []
-
-        # Scan primary migration path
-        if self.migrations_path.exists():
-            for pattern in ("*.sql", "*.py"):
-                for file_path in self.migrations_path.glob(pattern):
-                    if file_path.name.startswith("."):
-                        continue
-                    version = self._extract_version(file_path.name)
-                    if version:
-                        migrations.append((version, file_path))
-
-        # Scan extension migration paths
-        for ext_name, ext_path in self.extension_migrations.items():
-            if ext_path.exists():
-                for pattern in ("*.sql", "*.py"):
-                    for file_path in ext_path.glob(pattern):
-                        if file_path.name.startswith("."):
-                            continue
-                        # Prefix extension migrations to avoid version conflicts
-                        version = self._extract_version(file_path.name)
-                        if version:
-                            # Use ext_ prefix to distinguish extension migrations
-                            prefixed_version = f"ext_{ext_name}_{version}"
-                            migrations.append((prefixed_version, file_path))
-
-        return sorted(migrations, key=_migration_sort_key)
-
-    def _load_migration_metadata(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
-        """Load migration metadata from file.
-
-        Args:
-            file_path: Path to the migration file.
-            version: Optional pre-extracted version (preserves prefixes like ext_adk_0001).
-
-        Returns:
-            Migration metadata dictionary.
-        """
-        if version is None:
-            version = self._extract_version(file_path.name)
-
-        context_to_use = self.context
-
-        for ext_name, ext_path in self.extension_migrations.items():
-            if file_path.parent == ext_path:
-                if ext_name in self.extension_configs and self.context:
-                    context_to_use = MigrationContext(
-                        dialect=self.context.dialect,
-                        config=self.context.config,
-                        driver=self.context.driver,
-                        metadata=self.context.metadata.copy() if self.context.metadata else {},
-                        extension_config=self.extension_configs[ext_name],
-                    )
-                break
-
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use)
-        loader.validate_migration_file(file_path)
-        content = file_path.read_text(encoding="utf-8")
-        checksum = self.calculate_checksum(content)
-        description = self._extract_description(content, file_path)
-        if not description:
-            description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
-
-        has_upgrade, has_downgrade = True, False
-
-        if file_path.suffix == ".sql":
-            up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            self.loader.clear_cache()
-            self.loader.load_sql(file_path)
-            has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
-        else:
-            try:
-                has_downgrade = bool(await_(loader.get_down_sql, raise_sync_error=False)(file_path))
-            except Exception:
-                has_downgrade = False
-
-        return {
-            "version": version,
-            "description": description,
-            "file_path": file_path,
-            "checksum": checksum,
-            "has_upgrade": has_upgrade,
-            "has_downgrade": has_downgrade,
-            "loader": loader,
-        }
-
-    def _extract_description(self, content: str, file_path: Path) -> str:
-        if file_path.suffix == ".sql":
-            return self._extract_sql_description(content)
-        if file_path.suffix == ".py":
-            return self._extract_python_description(content)
-        return ""
-
-    def _extract_sql_description(self, content: str) -> str:
-        keys = self.description_hints.sql_keys
-        for line in content.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("--"):
-                body = stripped.lstrip("-").strip()
-                if not body:
-                    continue
-                if ":" in body:
-                    key, value = body.split(":", 1)
-                    if key.strip() in keys:
-                        return value.strip()
-                continue
-            break
-        return ""
-
-    def _extract_python_description(self, content: str) -> str:
-        try:
-            module = ast.parse(content)
-        except SyntaxError:
-            return ""
-        docstring = ast.get_docstring(module) or ""
-        keys = self.description_hints.python_keys
-        for line in docstring.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if ":" in stripped:
-                key, value = stripped.split(":", 1)
-                if key.strip() in keys:
-                    return value.strip()
-            return stripped
-        return ""
-
-    def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
-        """Get migration SQL for given direction.
-
-        Args:
-            migration: Migration metadata.
-            direction: Either 'up' or 'down'.
-
-        Returns:
-            SQL object for the migration.
-        """
-        if not migration.get(f"has_{direction}grade"):
-            if direction == "down":
-                logger.warning("Migration %s has no downgrade query", migration["version"])
-                return None
-            msg = f"Migration {migration['version']} has no upgrade query"
-            raise ValueError(msg)
-
-        file_path, loader = migration["file_path"], migration["loader"]
-
-        try:
-            method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = await_(method, raise_sync_error=False)(file_path)
-
-        except Exception as e:
-            if direction == "down":
-                logger.warning("Failed to load downgrade for migration %s: %s", migration["version"], e)
-                return None
-            msg = f"Failed to load upgrade for migration {migration['version']}: {e}"
-            raise ValueError(msg) from e
-        else:
-            if sql_statements:
-                return cast("list[str]", sql_statements)
-            return None
-
-    @abstractmethod
-    def get_migration_files(self) -> "list[tuple[str, Path]] | Awaitable[list[tuple[str, Path]]]":
-        """Get all migration files sorted by version."""
-        ...
-
-    @abstractmethod
-    def load_migration(self, file_path: Path) -> "dict[str, Any] | Awaitable[dict[str, Any]]":
-        """Load a migration file and extract its components."""
-        ...
-
-    @abstractmethod
-    def execute_upgrade(self, driver: DriverT, migration: "dict[str, Any]") -> "None | Awaitable[None]":
-        """Execute an upgrade migration."""
-        ...
-
-    @abstractmethod
-    def execute_downgrade(self, driver: DriverT, migration: "dict[str, Any]") -> "None | Awaitable[None]":
-        """Execute a downgrade migration."""
-        ...
-
-    @abstractmethod
-    def load_all_migrations(self) -> "dict[str, SQL] | Awaitable[dict[str, SQL]]":
-        """Load all migrations into a single namespace for bulk operations."""
-        ...
-
-
-def _migration_sort_key(item: "tuple[str, Path]") -> "MigrationVersion":
-    return parse_version(item[0])
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -816,7 +526,7 @@ The timestamp is automatically generated in UTC timezone.
 
 Migrations are applied in chronological order based on their timestamps.
 The database tracks both version and execution order separately to handle
-out-of-order migrations gracefully (e.g., from late-merging branches).
+out-of-order migrations gracefully.
 """
 
     def _get_init_init_content(self) -> str:
@@ -859,6 +569,36 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         if self._last_command_metrics is None:
             self._last_command_metrics = {}
         self._last_command_metrics[name] = self._last_command_metrics.get(name, 0.0) + value
+
+    def _collect_pending_migrations(
+        self, all_migrations: "list[tuple[str, Path]]", applied_set: set[str], revision: str
+    ) -> "list[tuple[str, Path]]":
+        """Collect pending migrations that need to be applied."""
+        pending = []
+        for version, file_path in all_migrations:
+            if version not in applied_set:
+                if revision == "head":
+                    pending.append((version, file_path))
+                else:
+                    parsed_version = parse_version(version)
+                    parsed_revision = parse_version(revision)
+                    if parsed_version <= parsed_revision:
+                        pending.append((version, file_path))
+        return pending
+
+    def _collect_revert_migrations(self, applied: "list[dict[str, Any]]", revision: str) -> "list[dict[str, Any]]":
+        """Collect migrations to revert based on target revision."""
+        if revision == "-1":
+            return [applied[-1]]
+        if revision == "base":
+            return list(reversed(applied))
+        parsed_revision = parse_version(revision)
+        to_revert = []
+        for migration in reversed(applied):
+            parsed_migration_version = parse_version(migration["version_num"])
+            if parsed_migration_version > parsed_revision:
+                to_revert.append(migration)
+        return to_revert
 
     def _resolve_use_logger(self, method_value: bool) -> bool:
         """Resolve effective use_logger setting.
@@ -927,6 +667,6 @@ out-of-order migrations gracefully (e.g., from late-merging branches).
         ...
 
     @abstractmethod
-    def revision(self, message: str, file_type: str = "sql") -> "None | Awaitable[None]":
+    def revision(self, message: str, file_type: str | None = None) -> "None | Awaitable[None]":
         """Create a new migration file."""
         ...

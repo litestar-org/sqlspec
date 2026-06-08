@@ -8,11 +8,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
-
 __all__ = (
     "HOT_SURFACE_CLASSIFICATIONS",
     "build_inventory",
@@ -23,6 +18,12 @@ __all__ = (
     "load_mypyc_patterns",
     "main",
 )
+
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
 
 CANDIDATE_CLASSIFICATIONS = {"compile_now", "helper_split_first", "prove_separately"}
 SURFACE_ORDER = ("compiled", "candidate", "keep_interpreted", "interpreted")
@@ -61,8 +62,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Storage error normalization is typed runtime logic with no Arrow dependence.",
     },
     "sqlspec/storage/_utils.py": {
-        "classification": "keep_interpreted",
-        "reason": "Retains optional PyArrow import shims after pure path helpers moved to _paths.py.",
+        "classification": "compile_now",
+        "reason": "Optional PyArrow import shims compile cleanly and avoid runtime path logic.",
     },
     "sqlspec/data_dictionary/_loader.py": {
         "classification": "compile_now",
@@ -100,10 +101,6 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Shared BigQuery INFORMATION_SCHEMA formatting helpers for native BigQuery and ADBC-as-BigQuery dictionaries.",
     },
-    "sqlspec/dialects/_compat.py": {
-        "classification": "compile_now",
-        "reason": "Small sqlglot[c] compatibility helpers compile with the custom dialect surface.",
-    },
     "sqlspec/dialects/postgres/_generators.py": {
         "classification": "compile_now",
         "reason": "Postgres extension generator hooks compile with sqlglot[c] and patch the compiled base generator directly.",
@@ -133,20 +130,24 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled render helpers stay in _generators.",
     },
     "sqlspec/extensions/events/_models.py": {
-        "classification": "keep_interpreted",
-        "reason": "Slot dataclass must expose __slots__ for tests/public behavior; mypyc native class removes that runtime attribute.",
+        "classification": "compile_now",
+        "reason": "EventMessage has concrete datetime annotations and slot dataclass layout compatible with mypyc.",
     },
     "sqlspec/extensions/events/_hints.py": {
         "classification": "compile_now",
         "reason": "Event runtime hint resolution is pure adapter-name/default selection logic.",
+    },
+    "sqlspec/extensions/events/_names.py": {
+        "classification": "compile_now",
+        "reason": "Event channel and table validators are pure regex checks shared by compiled queue code.",
     },
     "sqlspec/extensions/events/_payload.py": {
         "classification": "compile_now",
         "reason": "Event JSON payload encode/decode helpers are typed and independent of optional native backends.",
     },
     "sqlspec/extensions/events/_queue.py": {
-        "classification": "keep_interpreted",
-        "reason": "Table-backed queue owns class-level capability flags and listener ack paths that regress under native mypyc classes.",
+        "classification": "compile_now",
+        "reason": "Table-backed queue class flags use ClassVar and concrete queue classes are final.",
     },
     "sqlspec/extensions/events/_channel.py": {
         "classification": "keep_interpreted",
@@ -189,8 +190,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Migration runtime is compiled while command dispatch remains excluded.",
     },
     "sqlspec/observability/_formatting.py": {
-        "classification": "keep_interpreted",
-        "reason": "Public logging.Formatter subclass stays interpreted; cloud formatter helpers remain compiled.",
+        "classification": "compile_now",
+        "reason": "Logging Formatter subclass compiles with the same boundary as compiled utility formatters.",
     },
     "sqlspec/core/_pagination.py": {
         "classification": "keep_interpreted",
@@ -217,8 +218,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
     },
     "sqlspec/utils/module_loader.py": {
-        "classification": "keep_interpreted",
-        "reason": "Heavy dynamic import and optional dependency probing surface.",
+        "classification": "compile_now",
+        "reason": "Optional dependency probing helper compiles cleanly and is called by many import paths.",
     },
     "sqlspec/utils/serializers/_json.py": {
         "classification": "compile_now",

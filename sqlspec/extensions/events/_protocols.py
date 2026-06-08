@@ -11,14 +11,14 @@ __all__ = ("AsyncEventBackendProtocol", "AsyncEventHandler", "SyncEventBackendPr
 class AsyncEventHandler(Protocol):
     """Protocol describing async event handler callables."""
 
-    async def __call__(self, message: "EventMessage") -> Any:  # pragma: no cover - typing only
+    async def __call__(self, message: "EventMessage") -> Any:  # pragma: no cover
         """Process a queued event message asynchronously."""
 
 
 class SyncEventHandler(Protocol):
     """Protocol describing sync event handler callables."""
 
-    def __call__(self, message: "EventMessage") -> Any:  # pragma: no cover - typing only
+    def __call__(self, message: "EventMessage") -> Any:  # pragma: no cover
         """Process a queued event message synchronously."""
 
 

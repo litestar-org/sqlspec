@@ -14,17 +14,17 @@ How to use in new dispatch methods
 1. Obtain an exc_handler via ``self.handle_database_exceptions()``.
 2. Wrap the database call with ``async with exc_handler:`` (or ``with``).
 3. **After** the context manager exits, call
-   ``self._check_pending_exception(exc_handler)`` to raise any mapped error.
-   For dispatch methods that also record observability spans, use
-   ``_raise_database_exception`` from ``sqlspec.driver._common`` which
-   additionally re-chains the original exception.
+ ``self._check_pending_exception(exc_handler)`` to raise any mapped error.
+ For dispatch methods that also record observability spans, use
+ ``_raise_database_exception`` from ``sqlspec.driver._common`` which
+ additionally re-chains the original exception.
 
 Class hierarchy
 ^^^^^^^^^^^^^^^
 ``BaseAsyncExceptionHandler`` / ``BaseSyncExceptionHandler`` (this module)
-  -> adapter-specific subclasses in ``sqlspec/adapters/{adapter}/driver.py``
-  -> consumed by ``_check_pending_exception`` and ``_raise_database_exception``
-     helpers on ``AsyncDriverAdapterBase`` / ``SyncDriverAdapterBase``.
+ -> adapter-specific subclasses in ``sqlspec/adapters/{adapter}/driver.py``
+ -> consumed by ``_check_pending_exception`` and ``_raise_database_exception``
+ helpers on ``AsyncDriverAdapterBase`` / ``SyncDriverAdapterBase``.
 """
 
 from typing import TYPE_CHECKING

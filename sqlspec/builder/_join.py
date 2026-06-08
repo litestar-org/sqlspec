@@ -4,7 +4,7 @@
 Provides mixins for JOIN operations in SELECT statements.
 """
 
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, Union, cast, final
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -30,8 +30,11 @@ def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.
     if has_expression_and_parameters(on):
         for param_name, param_value in on.parameters.items():
             builder.add_parameter(param_value, name=param_name)
-    parsed_expr = exp.maybe_parse(on.sql, dialect=builder.dialect)  # pyright: ignore[reportAttributeAccessIssue]
-    return parsed_expr if parsed_expr is not None else exp.condition(str(on.sql))  # pyright: ignore[reportAttributeAccessIssue]
+    raw_sql = getattr(on, "raw_sql", None)
+    if raw_sql is None:
+        raw_sql = on.sql  # pyright: ignore[reportAttributeAccessIssue]
+    parsed_expr = exp.maybe_parse(raw_sql, dialect=builder.dialect)
+    return parsed_expr if parsed_expr is not None else exp.condition(raw_sql)
 
 
 def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None) -> exp.Expr | None:
@@ -68,7 +71,7 @@ def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuil
 
 def _parse_join_table(builder: "SQLBuilderProtocol", table: str | exp.Expr | Any, alias: str | None) -> exp.Expr:
     if isinstance(table, str):
-        return parse_table_expression(table, alias)
+        return parse_table_expression(table, alias, dialect=builder.dialect)
     if has_parameter_builder(table):
         return _handle_query_builder_table(table, alias, builder)
     if isinstance(table, exp.Expr):
@@ -106,6 +109,26 @@ def _apply_lateral_modifier(join_expr: exp.Join) -> None:
         join_expr.set("side", None)
     else:
         join_expr.set("kind", "LATERAL")
+
+
+def _attach_as_of_version(
+    table_expr: exp.Expr, alias: str | None, as_of: Any, as_of_type: str | None = None
+) -> exp.Expr:
+    inner_table = table_expr.copy()
+    target_alias = alias
+
+    if isinstance(inner_table, exp.Alias):
+        target_alias = inner_table.alias
+        inner_table = inner_table.this
+    elif isinstance(inner_table, exp.Table):
+        alias_expr = inner_table.args.get("alias")
+        if alias_expr is not None:
+            target_alias = alias_expr.this
+            inner_table.set("alias", None)
+
+    version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+    inner_table.set("version", version)
+    return exp.alias_(inner_table, target_alias) if target_alias else inner_table
 
 
 def build_join_clause(
@@ -164,26 +187,7 @@ class JoinClauseMixin:
         join_expr = build_join_clause(builder, table, on, alias, join_type, lateral=lateral)
 
         if as_of is not None:
-            inner_table = join_expr.this
-            inner_table = inner_table.copy()
-
-            target_alias = alias
-
-            if isinstance(inner_table, exp.Alias):
-                target_alias = inner_table.alias
-                inner_table = inner_table.this
-
-            if target_alias is None and isinstance(inner_table, exp.Table):
-                alias_expr = inner_table.args.get("alias")
-                if alias_expr is not None:
-                    target_alias = alias_expr.this
-                    inner_table.set("alias", None)
-
-            version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
-            inner_table.set("version", version)
-
-            new_this = exp.alias_(inner_table, target_alias) if target_alias else inner_table
-            join_expr.set("this", new_this)
+            join_expr.set("this", _attach_as_of_version(join_expr.this, alias, as_of, as_of_type))
 
         builder._expression = builder._expression.join(join_expr, copy=False)
         return cast("Self", builder)
@@ -240,26 +244,7 @@ class JoinClauseMixin:
         table_expr = _parse_join_table(builder, table, alias)
 
         if as_of is not None:
-            # Handle logic similar to join() but specifically for cross join which parses table earlier
-            inner_table = table_expr
-
-            # Copy to avoid mutating original expression
-            inner_table = inner_table.copy()
-
-            target_alias = alias
-            if isinstance(inner_table, exp.Alias):
-                target_alias = inner_table.alias
-                inner_table = inner_table.this
-            elif isinstance(inner_table, exp.Table):
-                alias_expr = inner_table.args.get("alias")
-                if alias_expr is not None:
-                    target_alias = alias_expr.this
-                    inner_table.set("alias", None)
-
-            # Create Version expression and attach to table
-            version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
-            inner_table.set("version", version)
-            table_expr = exp.alias_(inner_table, target_alias) if target_alias else inner_table
+            table_expr = _attach_as_of_version(table_expr, alias, as_of, as_of_type)
 
         join_expr = exp.Join(this=table_expr, kind="CROSS")
         builder._expression = builder._expression.join(join_expr, copy=False)
@@ -277,16 +262,6 @@ class JoinClauseMixin:
 
         Returns:
             Self for method chaining
-
-        Example:
-            ```python
-            query = (
-                sql
-                .select("u.name", "arr.value")
-                .from_("users u")
-                .lateral_join("UNNEST(u.tags)", alias="arr")
-            )
-            ```
         """
         return self.join(table, on=on, alias=alias, join_type="INNER", lateral=True)
 
@@ -318,31 +293,11 @@ class JoinClauseMixin:
         return self.join(table, on=None, alias=alias, join_type="CROSS", lateral=True)
 
 
+@final
 class JoinBuilder:
-    """Builder for JOIN operations with fluent syntax.
+    """Builder for JOIN operations with fluent syntax."""
 
-    Example:
-        ```python
-        from sqlspec import sql
-
-        # sql.left_join_("posts").on("users.id = posts.user_id")
-        join_clause = sql.left_join_("posts").on(
-            "users.id = posts.user_id"
-        )
-
-        # Or with query builder
-        query = (
-            sql
-            .select("users.name", "posts.title")
-            .from_("users")
-            .join(
-                sql.left_join_("posts").on(
-                    "users.id = posts.user_id"
-                )
-            )
-        )
-        ```
-    """
+    __slots__ = ("_alias", "_as_of", "_as_of_type", "_join_type", "_lateral", "_table")
 
     def __init__(self, join_type: str, lateral: bool = False) -> None:
         """Initialize the join builder.
@@ -354,7 +309,6 @@ class JoinBuilder:
         self._join_type = join_type.upper()
         self._lateral = lateral
         self._table: str | exp.Expr | None = None
-        self._condition: exp.Expr | None = None
         self._alias: str | None = None
         self._as_of: Any | None = None
         self._as_of_type: str | None = None
@@ -391,7 +345,7 @@ class JoinBuilder:
         """Set the join condition and build the JOIN expression.
 
         Args:
-            condition: JOIN condition (e.g., "users.id = posts.user_id")
+            condition: JOIN condition
 
         Returns:
             Complete JOIN expression
@@ -418,36 +372,21 @@ class JoinBuilder:
                 table_expr = exp.alias_(table_expr, self._alias)
 
         if self._as_of is not None:
-            inner_table = table_expr.copy()
-            target_alias = self._alias
+            table_expr = _attach_as_of_version(table_expr, self._alias, self._as_of, self._as_of_type)
 
-            if isinstance(inner_table, exp.Alias):
-                target_alias = inner_table.alias
-                inner_table = inner_table.this
-            elif isinstance(inner_table, exp.Table):
-                alias_expr = inner_table.args.get("alias")
-                if alias_expr is not None:
-                    target_alias = alias_expr.this
-                    inner_table.set("alias", None)
-
-            version = exp.Version(
-                this=self._as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(self._as_of)
-            )
-            inner_table.set("version", version)
-            table_expr = exp.alias_(inner_table, target_alias) if target_alias else inner_table
-
-        if self._join_type in {"INNER JOIN", "INNER", "LATERAL JOIN"}:
-            join_expr = exp.Join(this=table_expr, on=condition_expr)
-        elif self._join_type in {"LEFT JOIN", "LEFT"}:
-            join_expr = exp.Join(this=table_expr, on=condition_expr, side="LEFT")
-        elif self._join_type in {"RIGHT JOIN", "RIGHT"}:
-            join_expr = exp.Join(this=table_expr, on=condition_expr, side="RIGHT")
-        elif self._join_type in {"FULL JOIN", "FULL"}:
-            join_expr = exp.Join(this=table_expr, on=condition_expr, side="FULL", kind="OUTER")
-        elif self._join_type in {"CROSS JOIN", "CROSS"}:
-            join_expr = exp.Join(this=table_expr, kind="CROSS")
-        else:
-            join_expr = exp.Join(this=table_expr, on=condition_expr)
+        match self._join_type:
+            case "INNER JOIN" | "INNER" | "LATERAL JOIN":
+                join_expr = exp.Join(this=table_expr, on=condition_expr)
+            case "LEFT JOIN" | "LEFT":
+                join_expr = exp.Join(this=table_expr, on=condition_expr, side="LEFT")
+            case "RIGHT JOIN" | "RIGHT":
+                join_expr = exp.Join(this=table_expr, on=condition_expr, side="RIGHT")
+            case "FULL JOIN" | "FULL":
+                join_expr = exp.Join(this=table_expr, on=condition_expr, side="FULL", kind="OUTER")
+            case "CROSS JOIN" | "CROSS":
+                join_expr = exp.Join(this=table_expr, kind="CROSS")
+            case _:
+                join_expr = exp.Join(this=table_expr, on=condition_expr)
 
         if self._lateral or self._join_type == "LATERAL JOIN":
             current_kind = join_expr.args.get("kind")
@@ -482,7 +421,6 @@ def create_join_builder(join_type: str, lateral: bool = False) -> "JoinBuilder":
         builder._join_type = join_type.upper()
         builder._lateral = lateral
         builder._table = None
-        builder._condition = None
         builder._alias = None
         builder._as_of = None
         builder._as_of_type = None

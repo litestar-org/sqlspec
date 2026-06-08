@@ -1,4 +1,4 @@
-"""Persistent Oracle AQ queue-handle caches used by Oracle AQ event backends.
+"""Persistent Oracle AQ queue-handle caches for Oracle AQ event backends.
 
 Eliminates per-iteration session + queue handle acquisition. The hub holds a
 single dedicated connection per backend instance and caches one queue handle
@@ -21,29 +21,29 @@ from sqlspec.utils.logging import get_logger, log_with_context
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
-logger = get_logger("sqlspec.adapters.oracledb.events.hub")
-
 __all__ = ("OracleAsyncAQHub", "OracleSyncAQHub")
+
+logger = get_logger("sqlspec.adapters.oracledb.events.hub")
 
 
 _AQ_AVAILABLE = False
 OracleDatabaseError: Any
 
-try:  # pragma: no cover - optional dependency path
+try:  # pragma: no cover
     from sqlspec.adapters.oracledb._typing import AQMSG_INVISIBLE as _AQMSG_INVISIBLE
     from sqlspec.adapters.oracledb._typing import AQMSG_PAYLOAD_TYPE_JSON as _AQMSG_PAYLOAD_TYPE_JSON
     from sqlspec.adapters.oracledb._typing import AQMSG_VISIBLE as _AQMSG_VISIBLE
     from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
     from sqlspec.adapters.oracledb._typing import AQDequeueOptions as _AQDequeueOptions
     from sqlspec.adapters.oracledb._typing import DatabaseError as _OracleDatabaseErrorImported
-except ImportError:  # pragma: no cover - optional dependency path
+except ImportError:  # pragma: no cover
     _AQDequeueOptions = None
     _AQMSG_INVISIBLE = None
     _AQMSG_PAYLOAD_TYPE_JSON = None
     _AQMSG_VISIBLE = None
     _DB_TYPE_JSON = None
     OracleDatabaseError = None
-else:  # pragma: no cover - optional dependency path
+else:  # pragma: no cover
     _AQ_AVAILABLE = True
     OracleDatabaseError = _OracleDatabaseErrorImported
 
@@ -63,7 +63,7 @@ def _resolve_payload_type() -> Any:
 
 def _resolve_options(visibility: "int | None", default_visibility: "int | None", wait_seconds: float) -> Any:
     """Build an AQDequeueOptions instance for the requested wait + visibility."""
-    if AQDequeueOptions is None:  # pragma: no cover - optional dependency path
+    if AQDequeueOptions is None:  # pragma: no cover
         msg = "oracledb AQDequeueOptions"
         raise MissingDependencyError(msg, install_package="oracledb")
     options = AQDequeueOptions()
@@ -145,7 +145,7 @@ class OracleSyncAQHub:
             options = _resolve_options(self._visibility, self._default_visibility, wait_seconds)
             try:
                 message = queue.deqone(options=options)
-            except Exception as error:  # pragma: no cover - driver surfaced runtime
+            except Exception as error:  # pragma: no cover
                 if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
@@ -188,7 +188,7 @@ class OracleSyncAQHub:
         cached = self._queues.get(channel)
         if cached is not None:
             return cached
-        if not _AQ_AVAILABLE:  # pragma: no cover - optional dependency path
+        if not _AQ_AVAILABLE:  # pragma: no cover
             msg = "oracledb"
             raise MissingDependencyError(msg, install_package="oracledb")
         driver = self._session_driver
@@ -272,7 +272,7 @@ class OracleAsyncAQHub:
             options = _resolve_options(self._visibility, self._default_visibility, wait_seconds)
             try:
                 message = await queue.deqone(options=options)
-            except Exception as error:  # pragma: no cover - driver surfaced runtime
+            except Exception as error:  # pragma: no cover
                 if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
@@ -315,7 +315,7 @@ class OracleAsyncAQHub:
         cached = self._queues.get(channel)
         if cached is not None:
             return cached
-        if not _AQ_AVAILABLE:  # pragma: no cover - optional dependency path
+        if not _AQ_AVAILABLE:  # pragma: no cover
             msg = "oracledb"
             raise MissingDependencyError(msg, install_package="oracledb")
         driver = self._session_driver

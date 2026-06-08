@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from asyncmy import Connection  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
+from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
+from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -27,11 +29,24 @@ if TYPE_CHECKING:
         async def close(self) -> Any: ...
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
+    AsyncmyDictCursor: TypeAlias = _AsyncmyDictCursor
+    AsyncmyPool: TypeAlias = _AsyncmyPool
     AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
 
 if not TYPE_CHECKING:
     AsyncmyConnection = Connection
+    AsyncmyDictCursor = _AsyncmyDictCursor
+    AsyncmyPool = _AsyncmyPool
     AsyncmyRawCursor = _AsyncmyCursor
+
+__all__ = (
+    "AsyncmyConnection",
+    "AsyncmyCursor",
+    "AsyncmyDictCursor",
+    "AsyncmyPool",
+    "AsyncmyRawCursor",
+    "AsyncmySessionContext",
+)
 
 
 class AsyncmyCursor:
@@ -108,6 +123,3 @@ class AsyncmySessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyRawCursor", "AsyncmySessionContext")

@@ -34,6 +34,8 @@ __all__ = (
     "ensure_pyarrow",
     "ensure_pydantic",
     "ensure_uvloop",
+    "import_optional",
+    "import_optional_attr",
     "import_string",
     "module_available",
     "module_to_os_path",
@@ -46,6 +48,7 @@ __all__ = (
 # =============================================================================
 
 _dependency_cache: "dict[str, bool]" = {}
+_optional_module_cache: "dict[str, ModuleType | None]" = {}
 
 
 def module_available(module_name: str) -> bool:
@@ -85,9 +88,61 @@ def reset_dependency_cache(module_name: str | None = None) -> None:
 
     if module_name is None:
         _dependency_cache.clear()
+        _optional_module_cache.clear()
         return
 
     _dependency_cache.pop(module_name, None)
+    _optional_module_cache.pop(module_name, None)
+
+
+def import_optional(module_name: str) -> "ModuleType | None":
+    """Return the imported module if available, otherwise ``None``.
+
+    Silent-fallback twin of the :func:`ensure_pyarrow`-style helpers: use it
+    when the caller has a working fallback (e.g. stdlib ``uuid``) and must not
+    raise on a missing optional dependency. The resolved module (or ``None``)
+    is cached per interpreter session; call :func:`reset_dependency_cache` to
+    invalidate it.
+
+    Args:
+        module_name: Dotted module path to import.
+
+    Returns:
+        The imported module, or ``None`` when it is not installed.
+    """
+
+    if module_name in _optional_module_cache:
+        return _optional_module_cache[module_name]
+
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        module = None
+
+    _optional_module_cache[module_name] = module
+    return module
+
+
+def import_optional_attr(module_name: str, attr: str) -> Any:
+    """Return ``getattr(module, attr)`` when the module imports, else ``None``.
+
+    Companion to :func:`import_optional` for acquiring a submodule, class, or
+    constant from an optional dependency (e.g. ``pgvector.asyncpg``) without
+    raising when the dependency or attribute is absent.
+
+    Args:
+        module_name: Dotted module path to import.
+        attr: Attribute name to resolve on the imported module.
+
+    Returns:
+        The resolved attribute, or ``None`` when the module or attribute is
+        unavailable.
+    """
+
+    module = import_optional(module_name)
+    if module is None:
+        return None
+    return getattr(module, attr, None)
 
 
 class OptionalDependencyFlag:

@@ -38,15 +38,6 @@ __all__ = (
     "AiosqliteSessionContext",
 )
 
-SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
-SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
-SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
-SQLITE_CONSTRAINT_CHECK_CODE = 531
-SQLITE_CONSTRAINT_CODE = 19
-SQLITE_CANTOPEN_CODE = 14
-SQLITE_IOERR_CODE = 10
-SQLITE_MISMATCH_CODE = 20
-
 
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiosqlite database exceptions.

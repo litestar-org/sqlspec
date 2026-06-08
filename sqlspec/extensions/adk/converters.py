@@ -3,7 +3,7 @@
 Implements full-event JSON storage: the entire Event is serialized via
 ``Event.model_dump_json(exclude_none=True)`` into a single ``event_json``
 column, with a small set of indexed scalar columns extracted alongside for
-query performance.  Reconstruction uses ``Event.model_validate_json()``.
+query performance. Reconstruction uses ``Event.model_validate_json()``.
 
 Also provides scoped-state helpers that normalise ADK state prefixes
 (``app:``, ``user:``, ``temp:``) so the shared service layer can split,
@@ -49,6 +49,7 @@ def session_to_record(session: "Session") -> SessionRecord:
         app_name=session.app_name,
         user_id=session.user_id,
         state=filter_temp_state(session.state),
+        # create_time is not exposed by ADK Session; a re-upsert of a restored session will reset this timestamp.
         create_time=datetime.now(timezone.utc),
         update_time=datetime.fromtimestamp(session.last_update_time, tz=timezone.utc),
     )
@@ -68,6 +69,8 @@ def compute_update_marker(update_time: "datetime") -> str:
     """
     if update_time.tzinfo is not None:
         update_time = update_time.astimezone(timezone.utc)
+    else:
+        update_time = update_time.replace(tzinfo=timezone.utc)
     return update_time.isoformat(timespec="microseconds")
 
 
@@ -107,7 +110,7 @@ def event_to_record(event: "Event", session_id: str) -> EventRecord:
     """Convert ADK Event to database record using full-event JSON storage.
 
     The entire Event is serialized into ``event_json`` via Pydantic's
-    ``model_dump_json(exclude_none=True)``.  A small number of indexed scalar
+    ``model_dump_json(exclude_none=True)``. A small number of indexed scalar
     columns are extracted alongside for query performance.
 
     Args:
@@ -205,8 +208,8 @@ def merge_scoped_state(
         Merged state dict.
     """
     merged = dict(session_state)
-    if app_state:
+    if app_state is not None:
         merged.update(app_state)
-    if user_state:
+    if user_state is not None:
         merged.update(user_state)
     return merged

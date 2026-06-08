@@ -55,7 +55,7 @@ def test_input_handler_claims_list_of_float() -> None:
     kwargs = cursor.var.call_args.kwargs
     assert kwargs["arraysize"] == 1
     assert callable(kwargs["inconverter"])
-    packed = kwargs["inconverter"](None)
+    packed = kwargs["inconverter"]([1.0, 2.0, 3.0])
     assert isinstance(packed, array.array)
     assert packed.typecode == "f"
     assert list(packed) == [1.0, 2.0, 3.0]
@@ -71,7 +71,7 @@ def test_input_handler_claims_tuple_of_float() -> None:
     result = _input_type_handler(cursor, (0.5, 0.25, 0.125), 1)
 
     assert result == "var-token"
-    packed = cursor.var.call_args.kwargs["inconverter"](None)
+    packed = cursor.var.call_args.kwargs["inconverter"]((0.5, 0.25, 0.125))
     assert packed.typecode == "f"
     assert list(packed) == [0.5, 0.25, 0.125]
 
@@ -85,7 +85,7 @@ def test_input_handler_packs_int_in_int8_range_as_int8() -> None:
 
     _input_type_handler(cursor, [-128, 0, 64, 127], 1)
 
-    packed = cursor.var.call_args.kwargs["inconverter"](None)
+    packed = cursor.var.call_args.kwargs["inconverter"]([-128, 0, 64, 127])
     assert packed.typecode == "b"
     assert list(packed) == [-128, 0, 64, 127]
 
@@ -99,7 +99,7 @@ def test_input_handler_packs_int_outside_int8_range_as_float32() -> None:
 
     _input_type_handler(cursor, [0, 200], 1)
 
-    packed = cursor.var.call_args.kwargs["inconverter"](None)
+    packed = cursor.var.call_args.kwargs["inconverter"]([0, 200])
     assert packed.typecode == "f"
     assert list(packed) == [0.0, 200.0]
 
@@ -294,3 +294,71 @@ def test_output_handler_default_format_when_attr_missing() -> None:
 
     assert result == "var-token"
     cursor.var.assert_called_once()
+
+
+def test_vector_executemany_each_row_packed() -> None:
+    """Each executemany row must receive its own packed vector array."""
+    from sqlspec.adapters.oracledb._vector_handlers import (
+        _input_type_handler,  # pyright: ignore[reportPrivateUsage]
+        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    rows = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+    cursor = _mock_cursor()
+    cursor.var.return_value = "var-token"
+
+    result = _input_type_handler(cursor, rows[0], 1)
+
+    assert result == "var-token"
+    inconverter = cursor.var.call_args.kwargs["inconverter"]
+    assert inconverter is _pack_sequence_converter
+
+    packed_results = [inconverter(row) for row in rows]
+
+    assert len(packed_results) == 3
+    for row, packed in zip(rows, packed_results):
+        assert isinstance(packed, array.array)
+        assert packed.typecode == "f"
+        assert list(packed) == [float(value) for value in row]
+    assert packed_results[0] is not packed_results[1]
+    assert packed_results[1] is not packed_results[2]
+    assert packed_results[0] is not packed_results[2]
+
+
+def test_pack_sequence_converter_is_module_level_named_function() -> None:
+    """The vector inconverter must be a named module-level function."""
+    import inspect
+
+    from sqlspec.adapters.oracledb._vector_handlers import (
+        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert inspect.isfunction(_pack_sequence_converter)
+    assert _pack_sequence_converter.__name__ == "_pack_sequence_converter"
+    assert "<lambda>" not in repr(_pack_sequence_converter)
+
+
+def test_pack_sequence_converter_float_list() -> None:
+    """_pack_sequence_converter packs float lists as float32."""
+    from sqlspec.adapters.oracledb._vector_handlers import (
+        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    result = _pack_sequence_converter([1.5, 2.5, 3.5])
+
+    assert isinstance(result, array.array)
+    assert result.typecode == "f"
+    assert list(result) == [1.5, 2.5, 3.5]
+
+
+def test_pack_sequence_converter_int8_range() -> None:
+    """_pack_sequence_converter packs small int lists as int8."""
+    from sqlspec.adapters.oracledb._vector_handlers import (
+        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    result = _pack_sequence_converter([-128, 0, 127])
+
+    assert isinstance(result, array.array)
+    assert result.typecode == "b"
+    assert list(result) == [-128, 0, 127]

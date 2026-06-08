@@ -1,6 +1,7 @@
 """Test migration context functionality."""
 
 import asyncio
+import copy
 from unittest.mock import Mock
 
 import pytest
@@ -41,6 +42,26 @@ def test_migration_context_manual_creation() -> None:
     assert context.config is None
     assert context.driver is None
     assert context.metadata == {"custom_key": "custom_value"}
+
+
+def test_migration_context_uses_slots() -> None:
+    """MigrationContext should use slots=True while preserving mutable context behavior."""
+    context = MigrationContext(metadata=None, extension_config=None)
+
+    assert hasattr(MigrationContext, "__slots__")
+    assert not hasattr(context, "__dict__")
+    assert {"config", "dialect", "metadata", "extension_config", "driver", "_execution_metadata"}.issubset(
+        set(MigrationContext.__slots__)
+    )
+    assert context.metadata == {}
+    assert context.extension_config == {}
+
+    context.dialect = "sqlite"
+    context.set_execution_metadata("key", "value")
+
+    assert context.get_execution_metadata("key") == "value"
+    assert copy.copy(context).dialect == "sqlite"
+    assert copy.deepcopy(context).dialect == "sqlite"
 
 
 def test_migration_context_initialization() -> None:

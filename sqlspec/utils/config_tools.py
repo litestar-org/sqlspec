@@ -1,9 +1,9 @@
 """Configuration utilities for SQLSpec.
 
 This module consolidates configuration-related helpers:
-- pyproject.toml discovery for CLI convenience
-- dotted path resolution for config objects
-- connection config normalization for adapters
+    - pyproject.toml discovery for CLI convenience
+    - dotted path resolution for config objects
+    - connection config normalization for adapters
 """
 
 import inspect
@@ -289,9 +289,9 @@ def normalize_connection_config(
     """Normalize an adapter connection_config dictionary.
 
     This function:
-    - Copies the provided mapping into a new dict.
-    - Merges any nested dict stored under ``extra_key`` into the top-level config.
-    - Ensures the extra mapping is a dictionary (or None).
+        - Copies the provided mapping into a new dict.
+        - Merges any nested dict stored under ``extra_key`` into the top-level config.
+        - Ensures the extra mapping is a dictionary (or None).
 
     Args:
         connection_config: Raw connection configuration mapping.

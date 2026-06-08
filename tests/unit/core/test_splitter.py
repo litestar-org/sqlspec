@@ -1,16 +1,81 @@
 """Unit tests for SQL splitter helpers."""
 
-from sqlspec.core.splitter import _join_string_fragments, split_sql_script
+import pytest
+
+import sqlspec.core.splitter as splitter_module
+from sqlspec.core.splitter import GenericDialectConfig, StatementSplitter, Token, TokenType, split_sql_script
 
 
-def test_join_string_fragments_returns_joined_text() -> None:
-    """The optional writer path should preserve plain string assembly behavior."""
-    assert _join_string_fragments(["SELECT", " ", "1"]) == "SELECT 1"
+def test_join_string_fragments_helper_removed() -> None:
+    """The one-line join helper should not remain in the splitter module."""
+
+    assert not hasattr(splitter_module, "_join_string_fragments")
+
+
+def test_dialect_class_map_contains_expected_aliases() -> None:
+    """split_sql_script should instantiate only the selected dialect config."""
+
+    assert splitter_module._DIALECT_CLASS_MAP == {
+        "generic": splitter_module.GenericDialectConfig,
+        "oracle": splitter_module.OracleDialectConfig,
+        "tsql": splitter_module.TSQLDialectConfig,
+        "mssql": splitter_module.TSQLDialectConfig,
+        "sqlserver": splitter_module.TSQLDialectConfig,
+        "postgresql": splitter_module.PostgreSQLDialectConfig,
+        "postgres": splitter_module.PostgreSQLDialectConfig,
+        "paradedb": splitter_module.PostgreSQLDialectConfig,
+        "pgvector": splitter_module.PostgreSQLDialectConfig,
+        "mysql": splitter_module.MySQLDialectConfig,
+        "sqlite": splitter_module.SQLiteDialectConfig,
+        "duckdb": splitter_module.DuckDBDialectConfig,
+        "bigquery": splitter_module.BigQueryDialectConfig,
+    }
 
 
 def test_split_sql_script_preserves_statement_output() -> None:
     """Statement splitting should preserve existing semicolon handling."""
     assert split_sql_script("SELECT 1; SELECT 2;", strip_trailing_terminator=True) == ["SELECT 1", "SELECT 2"]
+
+
+def test_contains_executable_content_accepts_pre_tokenized_statement(monkeypatch: pytest.MonkeyPatch) -> None:
+    splitter = StatementSplitter(GenericDialectConfig())
+    tokens = [
+        Token(TokenType.COMMENT_LINE, "-- note", 1, 1, 0),
+        Token(TokenType.WHITESPACE, "\n", 1, 8, 7),
+        Token(TokenType.OTHER, "SELECT", 2, 1, 8),
+    ]
+
+    def fail_tokenize(_self: StatementSplitter, _statement: str) -> list[Token]:
+        msg = "_contains_executable_content should not re-tokenize"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(StatementSplitter, "_tokenize", fail_tokenize)
+
+    assert splitter._contains_executable_content(tokens) is True
+
+
+def test_contains_executable_content_rejects_comment_only_tokens() -> None:
+    splitter = StatementSplitter(GenericDialectConfig())
+    tokens = [Token(TokenType.COMMENT_LINE, "-- note", 1, 1, 0), Token(TokenType.WHITESPACE, "\n", 1, 8, 7)]
+
+    assert splitter._contains_executable_content(tokens) is False
+
+
+def test_split_sql_script_drops_whitespace_and_comment_only_scripts() -> None:
+    assert split_sql_script(" \n\t ", strip_trailing_terminator=True) == []
+    assert split_sql_script("-- note\n/* block */", strip_trailing_terminator=True) == []
+
+
+def test_split_sql_script_preserves_comment_before_statement() -> None:
+    script = "-- note\nSELECT 1;"
+
+    assert split_sql_script(script, strip_trailing_terminator=True) == ["-- note\nSELECT 1"]
+
+
+def test_split_sql_script_preserves_block_tracking_after_token_append_consolidation() -> None:
+    script = "BEGIN\nSELECT 1;\nSELECT 2;\nEND;\nSELECT 3;"
+
+    assert split_sql_script(script, strip_trailing_terminator=True) == ["BEGIN\nSELECT 1;\nSELECT 2;\nEND;", "SELECT 3"]
 
 
 def test_tsql_go_separates_batches() -> None:

@@ -3,11 +3,14 @@
 from dataclasses import dataclass
 from typing import Any, Final
 
+from typing_extensions import final
+
 __all__ = ("EventRuntimeHints", "get_runtime_hints", "resolve_adapter_name")
 
 _ADAPTER_MODULE_PARTS = 3
 
 
+@final
 @dataclass(frozen=True)
 class EventRuntimeHints:
     """Adapter-specific defaults for event polling and leases."""

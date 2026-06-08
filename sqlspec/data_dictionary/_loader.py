@@ -2,6 +2,8 @@ from importlib import resources
 from importlib.resources import as_file
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.loader import SQLFileLoader
@@ -24,10 +26,7 @@ SQL_RESOURCE_PACKAGE = "sqlspec.data_dictionary"
 SQL_RESOURCE_NAME = "sql"
 
 
-def _sql_resource_root() -> "Traversable":
-    return resources.files(SQL_RESOURCE_PACKAGE).joinpath(SQL_RESOURCE_NAME)
-
-
+@mypyc_attr(allow_interpreted_subclasses=False)
 class DataDictionaryLoader:
     """Loads and manages data dictionary SQL for all dialects."""
 
@@ -136,3 +135,7 @@ def get_data_dictionary_loader() -> DataDictionaryLoader:
     if _loader_instance is None:
         _loader_instance = DataDictionaryLoader()
     return _loader_instance
+
+
+def _sql_resource_root() -> "Traversable":
+    return resources.files(SQL_RESOURCE_PACKAGE).joinpath(SQL_RESOURCE_NAME)

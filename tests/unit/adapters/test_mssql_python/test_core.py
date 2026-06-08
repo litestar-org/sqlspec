@@ -38,6 +38,24 @@ def test_build_connection_config_from_parts_formats_odbc_options() -> None:
     assert kwargs == {"autocommit": True}
 
 
+def test_build_connection_config_no_duplicate_uid() -> None:
+    """Passing both 'uid' and 'user' produces exactly one UID= option."""
+    connection_string, _ = build_connection_config({"server": "srv", "uid": "user1", "user": "user2"})
+
+    assert connection_string.count("UID=") == 1
+    assert "UID=user1" in connection_string
+    assert "user=user2" not in connection_string
+
+
+def test_build_connection_config_no_duplicate_pwd() -> None:
+    """Passing both 'pwd' and 'password' produces exactly one PWD= option."""
+    connection_string, _ = build_connection_config({"server": "srv", "pwd": "secret1", "password": "secret2"})
+
+    assert connection_string.count("PWD=") == 1
+    assert "PWD=secret1" in connection_string
+    assert "password=secret2" not in connection_string
+
+
 def test_create_mapped_exception_extracts_sql_server_error_number() -> None:
     """SQL Server native error numbers should map to specific SQLSpec exceptions."""
     exc = MSSQL_PYTHON_MODULE.IntegrityError(

@@ -17,8 +17,6 @@ if TYPE_CHECKING:
 
     from sqlspec.dialects.spanner import Spangres, Spanner
 
-SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
-
 __all__ = (
     "VectorDistance",
     "has_vector_distance_ancestor",
@@ -32,6 +30,8 @@ __all__ = (
     "vector_distance_metric",
 )
 
+SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
+
 _VECTOR_DISTANCE_META_KEY: Final[str] = "sqlspec_vector_distance_metric"
 _OperatorTransform = Callable[[Any, exp.Operator], str]
 _SQLGLOT_VECTOR_DISTANCE_REGISTERED = False
@@ -43,18 +43,6 @@ _BIGQUERY_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _DUCKDB_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _SPANNER_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _SPANGRES_OPERATOR_TRANSFORM: _OperatorTransform | None = None
-
-
-def _normalize_metric(metric: Any) -> str:
-    """Normalize vector metrics to a lowercase string."""
-    if isinstance(metric, exp.Literal):
-        return str(metric.this).lower()
-    if isinstance(metric, exp.Identifier):
-        identifier = metric.this
-        return identifier.lower() if isinstance(identifier, str) else "euclidean"
-    if isinstance(metric, str):
-        return metric.lower()
-    return "euclidean"
 
 
 def is_vector_distance_expression(expression: object) -> bool:
@@ -82,6 +70,18 @@ def vector_distance_metric(expression: object) -> str:
         return metric
     operator = expression.args.get("operator")
     return str(operator).lower() if operator is not None else "euclidean"
+
+
+def _normalize_metric(metric: Any) -> str:
+    """Normalize vector metrics to a lowercase string."""
+    if isinstance(metric, exp.Literal):
+        return str(metric.this).lower()
+    if isinstance(metric, exp.Identifier):
+        identifier = metric.this
+        return identifier.lower() if isinstance(identifier, str) else "euclidean"
+    if isinstance(metric, str):
+        return metric.lower()
+    return "euclidean"
 
 
 def _build_vector_distance(this: exp.Expr, expression: exp.Expr, metric: Any = "euclidean") -> exp.Operator:
@@ -148,7 +148,7 @@ def render_vector_distance_bigquery(left: str, right: str, metric: str) -> str:
     return render_vector_distance_generic(left, right, metric)
 
 
-def render_vector_distance_duckdb(left: str, right: str, metric: str) -> str:
+def render_vector_distance_duckdb(left: str, right: str, metric: str, *, dimension: int | None = None) -> str:
     """Render DuckDB VSS extension function syntax."""
     function_map = {
         "euclidean": "array_distance",
@@ -157,7 +157,8 @@ def render_vector_distance_duckdb(left: str, right: str, metric: str) -> str:
     }
     function_name = function_map.get(metric)
     if function_name:
-        return f"{function_name}({left}, CAST({right} AS DOUBLE[]))"
+        target_type = f"DOUBLE[{dimension}]" if dimension is not None else "DOUBLE[]"
+        return f"{function_name}({left}, CAST({right} AS {target_type}))"
 
     return render_vector_distance_generic(left, right, metric)
 
@@ -187,19 +188,8 @@ def _render_with_metric(generator: "Generator", expression: exp.Operator, dialec
     if dialect == "bigquery":
         return render_vector_distance_bigquery(left_sql, right_sql, metric)
     if dialect == "duckdb":
-        if isinstance(expression.expression, exp.Array) and expression.expression.expressions:
-            target_type = f"DOUBLE[{len(expression.expression.expressions)}]"
-        else:
-            target_type = "DOUBLE[]"
-        function_map = {
-            "euclidean": "array_distance",
-            "cosine": "array_cosine_distance",
-            "inner_product": "array_negative_inner_product",
-        }
-        function_name = function_map.get(metric)
-        if function_name:
-            return f"{function_name}({left_sql}, CAST({right_sql} AS {target_type}))"
-        return render_vector_distance_generic(left_sql, right_sql, metric)
+        dimension = len(expression.expression.expressions) if isinstance(expression.expression, exp.Array) else None
+        return render_vector_distance_duckdb(left_sql, right_sql, metric, dimension=dimension)
 
     return render_vector_distance_generic(left_sql, right_sql, metric)
 

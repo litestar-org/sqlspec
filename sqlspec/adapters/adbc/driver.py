@@ -6,8 +6,11 @@ database dialects, parameter style conversion, and transaction management.
 
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from typing_extensions import final
+
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
+    _prepare_batch_with_casts,
     collect_rows,
     create_mapped_exception,
     detect_dialect,
@@ -47,7 +50,10 @@ __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionConte
 
 logger = get_logger("sqlspec.adapters.adbc")
 
+_MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 
+
+@final
 class AdbcExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling ADBC database exceptions.
 
@@ -68,6 +74,7 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
         return True
 
 
+@final
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC driver for Arrow Database Connectivity.
 
@@ -122,19 +129,9 @@ class AdbcDriver(SyncDriverAdapterBase):
             Execution result with data or row count
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        parameter_casts = resolve_parameter_casts(statement) if self._is_postgres else {}
 
         try:
-            if self._is_postgres and parameter_casts:
-                execute_parameters = prepare_postgres_parameters(
-                    prepared_parameters,
-                    parameter_casts,
-                    self.statement_config,
-                    dialect=self._dialect_name,
-                    json_serializer=self._json_serializer,
-                )
-            else:
-                execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+            execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
             cursor.execute(sql, parameters=execute_parameters)
 
         except Exception:
@@ -180,26 +177,15 @@ class AdbcDriver(SyncDriverAdapterBase):
                 row_count = 0
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 parameter_count = len(prepared_parameters)
-                if self._is_postgres:
-                    parameter_casts = resolve_parameter_casts(statement)
-                    processed_params: list[Any] | tuple[Any, ...]
-                    if parameter_casts:
-                        processed_params = [
-                            prepare_postgres_parameters(
-                                param_set,
-                                parameter_casts,
-                                self.statement_config,
-                                dialect=self._dialect_name,
-                                json_serializer=self._json_serializer,
-                            )
-                            for param_set in prepared_parameters
-                        ]
-                    else:
-                        processed_params = prepared_parameters
-                    cursor.executemany(sql, processed_params)
-                    row_count = resolve_many_rowcount(cursor, processed_params, fallback_count=parameter_count)
-                else:
+                try:
                     cursor.executemany(sql, prepared_parameters)
+                except Exception as exc:
+                    if _MULTI_ROW_BIND_UNSUPPORTED not in str(exc):
+                        raise
+                    for row in prepared_parameters:
+                        cursor.execute(sql, parameters=row)
+                    row_count = parameter_count
+                else:
                     row_count = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
             else:
                 cursor.executemany(sql, prepared_parameters)
@@ -261,25 +247,14 @@ class AdbcDriver(SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin database transaction.
 
-        ADBC SQLite holds an implicit transaction after the first DML and
-        rejects an explicit ``BEGIN`` with "cannot start a transaction
-        within a transaction." On that dialect this is a no-op; the
-        implicit transaction is closed by ``commit()`` / ``rollback()``.
+        ADBC connections operate with autocommit disabled and manage the
+        active transaction internally, so no explicit statement is issued.
         """
-        if self._dialect_name == "sqlite":
-            return
-        try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("BEGIN")
-        except Exception as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
         """Commit database transaction."""
         try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("COMMIT")
+            self.connection.commit()
         except Exception as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -287,8 +262,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     def rollback(self) -> None:
         """Rollback database transaction."""
         try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("ROLLBACK")
+            self.connection.rollback()
         except Exception as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -375,12 +349,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         Returns:
             ArrowResult with native Arrow data
-
-        Example:
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM users WHERE age > $1", 18
-            ... )
-            >>> df = result.to_pandas()  # Fast zero-copy conversion
         """
         ensure_pyarrow()
 
@@ -558,10 +526,23 @@ class AdbcDriver(SyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
-        if enable_cast_detection and prepared_statement and self._is_postgres and not is_many:
+        if enable_cast_detection and prepared_statement and self._is_postgres:
+            prepared_parameters = super().prepare_driver_parameters(
+                parameters, statement_config, is_many, prepared_statement
+            )
             parameter_casts = resolve_parameter_casts(prepared_statement)
+            if is_many:
+                if not parameter_casts or not isinstance(prepared_parameters, (list, tuple)):
+                    return prepared_parameters
+                return _prepare_batch_with_casts(
+                    prepared_parameters,
+                    parameter_casts,
+                    statement_config,
+                    dialect=self._dialect_name,
+                    json_serializer=self._json_serializer,
+                )
             return prepare_postgres_parameters(
-                parameters,
+                prepared_parameters,
                 parameter_casts,
                 statement_config,
                 dialect=self._dialect_name,

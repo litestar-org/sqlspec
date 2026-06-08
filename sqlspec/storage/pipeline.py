@@ -4,14 +4,14 @@ from collections import deque
 from functools import partial
 from pathlib import Path
 from time import perf_counter, time
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
 from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload
+from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
@@ -46,7 +46,6 @@ __all__ = (
     "reset_storage_bridge_metrics",
 )
 
-StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
 StorageDestination: TypeAlias = str | Path
 StorageDiagnostics: TypeAlias = dict[str, float]
 
@@ -220,10 +219,7 @@ def get_storage_bridge_diagnostics() -> "StorageDiagnostics":
 
 def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
     if format_hint == "json":
-        data = to_json(rows, as_bytes=True)
-        if isinstance(data, bytes):
-            return data
-        return data.encode()
+        return to_json(rows, as_bytes=True)
     buffer = bytearray()
     for row in rows:
         buffer.extend(to_json(row, as_bytes=True))
@@ -313,8 +309,8 @@ def _make_resolved_backend_cache_key(
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class SyncStoragePipeline:
-    """Pipeline coordinating storage registry operations and telemetry."""
+class _StoragePipelineBase:
+    """Shared registry and backend-resolution state for storage pipelines."""
 
     __slots__ = ("_csv_write_options", "_resolved_backend_cache", "_storage_options", "registry")
 
@@ -343,6 +339,13 @@ class SyncStoragePipeline:
         resolved = _resolve_storage_backend(self.registry, destination, backend_options)
         self._resolved_backend_cache[cache_key] = resolved
         return resolved
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class SyncStoragePipeline(_StoragePipelineBase):
+    """Pipeline coordinating storage registry operations and telemetry."""
+
+    __slots__ = ()
 
     def write_rows(
         self,
@@ -473,36 +476,10 @@ class SyncStoragePipeline:
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class AsyncStoragePipeline:
+class AsyncStoragePipeline(_StoragePipelineBase):
     """Async variant of the storage pipeline leveraging async-capable backends when available."""
 
-    __slots__ = ("_csv_write_options", "_resolved_backend_cache", "_storage_options", "registry")
-
-    def __init__(
-        self, *, registry: StorageRegistry | None = None, storage_options: "dict[str, Any] | None" = None
-    ) -> None:
-        self.registry = registry or storage_registry
-        self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
-        self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
-        self._csv_write_options = _extract_csv_write_options(self._storage_options)
-
-    def clear_cache(self) -> None:
-        """Clear cached storage backend resolutions for this pipeline instance."""
-        self._resolved_backend_cache.clear()
-
-    def _resolve_backend(
-        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str, str]":
-        """Resolve storage backend and normalized path for a destination."""
-        cache_key = _make_resolved_backend_cache_key(destination, backend_options)
-        if cache_key is None:
-            return _resolve_storage_backend(self.registry, destination, backend_options)
-        cached = self._resolved_backend_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        resolved = _resolve_storage_backend(self.registry, destination, backend_options)
-        self._resolved_backend_cache[cache_key] = resolved
-        return resolved
+    __slots__ = ()
 
     async def write_rows(
         self,

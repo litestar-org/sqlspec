@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -9,6 +10,8 @@ from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from starlette.requests import Request
     from starlette.responses import Response
 
@@ -48,6 +51,12 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
+        async with self._connection_cm(request):
+            return await call_next(request)
+
+    @asynccontextmanager
+    async def _connection_cm(self, request: "Request") -> "AsyncIterator[Any]":
+        """Yield a request-scoped connection for manual transaction mode."""
         config = self.config_state.config
         connection_key = self.config_state.connection_key
 
@@ -56,14 +65,14 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
             async with with_ensure_async_(config.provide_connection(pool)) as connection:
                 set_state_value(request.state, connection_key, connection)
                 try:
-                    return await call_next(request)
+                    yield connection
                 finally:
                     pop_state_value(request.state, connection_key)
         else:
             connection = await ensure_async_(config.create_connection)()
             set_state_value(request.state, connection_key, connection)
             try:
-                return await call_next(request)
+                yield connection
             finally:
                 pop_state_value(request.state, connection_key)
                 await ensure_async_(connection.close)()
@@ -97,30 +106,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
-        config = self.config_state.config
-        connection_key = self.config_state.connection_key
-
-        if config.supports_connection_pooling:
-            pool = get_state_value(request.app.state, self.config_state.pool_key)
-            async with with_ensure_async_(config.provide_connection(pool)) as connection:
-                set_state_value(request.state, connection_key, connection)
-                try:
-                    response = await call_next(request)
-
-                    if self._should_commit(response.status_code):
-                        await ensure_async_(connection.commit)()
-                    else:
-                        await ensure_async_(connection.rollback)()
-                except Exception:
-                    await ensure_async_(connection.rollback)()
-                    raise
-                else:
-                    return response
-                finally:
-                    pop_state_value(request.state, connection_key)
-        else:
-            connection = await ensure_async_(config.create_connection)()
-            set_state_value(request.state, connection_key, connection)
+        async with self._connection_cm(request) as connection:
             try:
                 response = await call_next(request)
 
@@ -133,6 +119,26 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
                 raise
             else:
                 return response
+
+    @asynccontextmanager
+    async def _connection_cm(self, request: "Request") -> "AsyncIterator[Any]":
+        """Yield a request-scoped connection for autocommit transaction mode."""
+        config = self.config_state.config
+        connection_key = self.config_state.connection_key
+
+        if config.supports_connection_pooling:
+            pool = get_state_value(request.app.state, self.config_state.pool_key)
+            async with with_ensure_async_(config.provide_connection(pool)) as connection:
+                set_state_value(request.state, connection_key, connection)
+                try:
+                    yield connection
+                finally:
+                    pop_state_value(request.state, connection_key)
+        else:
+            connection = await ensure_async_(config.create_connection)()
+            set_state_value(request.state, connection_key, connection)
+            try:
+                yield connection
             finally:
                 pop_state_value(request.state, connection_key)
                 await ensure_async_(connection.close)()
@@ -166,26 +172,11 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
     and propagates them through the request lifecycle via CorrelationContext.
 
     The middleware:
-    1. Extracts correlation ID from configurable headers
-    2. Sets it in the CorrelationContext for async/sync access
-    3. Stores it in request.state.correlation_id
-    4. Adds X-Correlation-ID header to the response
-    5. Cleans up the context on request completion
-
-    Example:
-        ```python
-        from starlette.applications import Starlette
-        from sqlspec.extensions.starlette.middleware import (
-            CorrelationMiddleware,
-        )
-
-        app = Starlette()
-        app.add_middleware(
-            CorrelationMiddleware,
-            primary_header="x-request-id",
-            auto_trace_headers=True,
-        )
-        ```
+        1. Extracts correlation ID from configurable headers
+        2. Sets it in the CorrelationContext for async/sync access
+        3. Stores it in request.state.correlation_id
+        4. Adds X-Correlation-ID header to the response
+        5. Cleans up the context on request completion
     """
 
     def __init__(
@@ -252,7 +243,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
 
         Args:
             app: Starlette application instance.
-            framework: Framework name to include in attributes (e.g. "starlette", "fastapi").
+            framework: Framework name to include in attributes.
         """
         super().__init__(app)
         self._framework = framework

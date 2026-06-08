@@ -3,7 +3,7 @@
 import datetime
 import decimal
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import (
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = (
+    "_prepare_batch_with_casts",
     "apply_driver_features",
     "build_connection_config",
     "build_postgres_extension_probe_names",
@@ -163,8 +164,7 @@ def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_diale
     Args:
         connection: ADBC connection with driver metadata.
         logger: Optional logger for diagnostics.
-        fallback_dialect: Pre-resolved dialect from config (e.g. from
-            ``resolve_dialect_from_config``). Used when introspection
+        fallback_dialect: Pre-resolved dialect from config. Used when introspection
             yields no match, before defaulting to ``postgres``.
 
     Returns:
@@ -437,7 +437,7 @@ def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = Non
         cursor: Database cursor to execute rollback.
         logger: Optional logger for diagnostics.
     """
-    if dialect != "postgres":
+    if not is_postgres_dialect(dialect):
         return
     try:
         cursor.execute("ROLLBACK")
@@ -457,7 +457,7 @@ def normalize_postgres_empty_parameters(dialect: str, parameters: Any) -> Any:
     Returns:
         Normalized parameter payload.
     """
-    if dialect == "postgres" and isinstance(parameters, dict) and not parameters:
+    if is_postgres_dialect(dialect) and isinstance(parameters, dict) and not parameters:
         return None
     return parameters
 
@@ -495,9 +495,9 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. SQLSTATE codes (most reliable for ADBC drivers)
-    2. Error message patterns
-    3. Default SQLSpecError fallback
+        1. SQLSTATE codes (most reliable for ADBC drivers)
+        2. Error message patterns
+        3. Default SQLSpecError fallback
 
     Args:
         error: The ADBC exception to map
@@ -617,22 +617,19 @@ def _convert_array_for_postgres_adbc(value: Any) -> Any:
     return value
 
 
-def _get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Return dialect-aware type coercion mapping for Arrow parameter handling."""
-
-    return {
-        datetime.datetime: _identity,
-        datetime.date: _identity,
-        datetime.time: _identity,
-        decimal.Decimal: float,
-        bool: _identity,
-        int: _identity,
-        float: _identity,
-        bytes: _identity,
-        tuple: _convert_array_for_postgres_adbc,
-        list: _convert_array_for_postgres_adbc,
-        dict: _identity,
-    }
+_BASE_TYPE_COERCION_MAP: Final[dict[type, Any]] = {
+    datetime.datetime: _identity,
+    datetime.date: _identity,
+    datetime.time: _identity,
+    decimal.Decimal: float,
+    bool: _identity,
+    int: _identity,
+    float: _identity,
+    bytes: _identity,
+    tuple: _convert_array_for_postgres_adbc,
+    list: _convert_array_for_postgres_adbc,
+    dict: _identity,
+}
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -670,7 +667,7 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-driver_profile = build_profile()
+driver_profile: Final[DriverParameterProfile] = build_profile()
 
 
 def get_statement_config(detected_dialect: str) -> StatementConfig:
@@ -678,8 +675,6 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
     )
-
-    type_map = _get_type_coercion_map(detected_dialect)
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
     profile = driver_profile
@@ -689,7 +684,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         "supported_parameter_styles": set(supported_styles),
         "default_execution_parameter_style": default_style,
         "supported_execution_parameter_styles": set(supported_styles),
-        "type_coercion_map": type_map,
+        "type_coercion_map": _BASE_TYPE_COERCION_MAP,
     }
 
     if detected_dialect == "duckdb":
@@ -891,6 +886,37 @@ def _get_type_coercion_dispatcher(
     return dispatcher
 
 
+def _prepare_parameter_sequence_with_casts(
+    parameters: "list[Any] | tuple[Any, ...]",
+    parameter_casts: "dict[int, str]",
+    type_map: "dict[type, Callable[[Any], Any]]",
+    dispatcher: "TypeDispatcher[Callable[[Any], Any]] | None",
+    converter: Any,
+    json_encoder: "Callable[[Any], str]",
+) -> "list[Any] | tuple[Any, ...]":
+    result: list[Any] = []
+    for idx, param in enumerate(parameters, start=1):
+        cast_type = parameter_casts.get(idx, "").upper()
+        if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
+            if isinstance(param, dict):
+                result.append(json_encoder(param))
+            else:
+                result.append(param)
+        elif isinstance(param, dict):
+            result.append(converter.convert_dict(param))
+        else:
+            if type_map and dispatcher is not None:
+                exact_converter = type_map.get(type(param))
+                if exact_converter is not None and type(param) is not dict:
+                    param = exact_converter(param)
+                else:
+                    converter_func = dispatcher.get(param)
+                    if converter_func is not None and type(param) is not dict:
+                        param = converter_func(param)
+            result.append(param)
+    return tuple(result) if isinstance(parameters, tuple) else result
+
+
 def prepare_parameters_with_casts(
     parameters: Any,
     parameter_casts: "dict[int, str]",
@@ -903,28 +929,38 @@ def prepare_parameters_with_casts(
     json_encoder = statement_config.parameter_config.json_serializer or json_serializer
 
     if isinstance(parameters, (list, tuple)):
-        result: list[Any] = []
         converter = get_adbc_type_converter(dialect)
         type_map = statement_config.parameter_config.type_coercion_map
         dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
-        for idx, param in enumerate(parameters, start=1):
-            cast_type = parameter_casts.get(idx, "").upper()
-            if cast_type in {"JSON", "JSONB", "TYPE.JSON", "TYPE.JSONB"}:
-                if isinstance(param, dict):
-                    result.append(json_encoder(param))
-                else:
-                    result.append(param)
-            elif isinstance(param, dict):
-                result.append(converter.convert_dict(param))
-            else:
-                if type_map and dispatcher is not None:
-                    exact_converter = type_map.get(type(param))
-                    if exact_converter is not None and type(param) is not dict:
-                        param = exact_converter(param)
-                    else:
-                        converter_func = dispatcher.get(param)
-                        if converter_func is not None and type(param) is not dict:
-                            param = converter_func(param)
-                result.append(param)
-        return tuple(result) if isinstance(parameters, tuple) else result
+        return _prepare_parameter_sequence_with_casts(
+            parameters, parameter_casts, type_map, dispatcher, converter, json_encoder
+        )
     return parameters
+
+
+def _prepare_batch_with_casts(
+    parameter_sets: Any,
+    parameter_casts: "dict[int, str]",
+    statement_config: "StatementConfig",
+    *,
+    dialect: str,
+    json_serializer: "Callable[[Any], str]",
+) -> Any:
+    """Prepare an execute-many batch while sharing converter setup across rows."""
+    if not isinstance(parameter_sets, (list, tuple)):
+        return normalize_postgres_empty_parameters(dialect, parameter_sets)
+
+    postgres_compatible = [normalize_postgres_empty_parameters(dialect, row) for row in parameter_sets]
+    if not parameter_casts:
+        return postgres_compatible
+
+    json_encoder = statement_config.parameter_config.json_serializer or json_serializer
+    converter = get_adbc_type_converter(dialect)
+    type_map = statement_config.parameter_config.type_coercion_map
+    dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
+    return [
+        _prepare_parameter_sequence_with_casts(row, parameter_casts, type_map, dispatcher, converter, json_encoder)
+        if isinstance(row, (list, tuple))
+        else row
+        for row in postgres_compatible
+    ]

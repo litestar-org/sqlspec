@@ -10,23 +10,6 @@ class CloudLogFormatter(Protocol):
 
     Implementations format log entries according to cloud provider
     structured logging requirements (GCP, AWS, Azure).
-
-    Example:
-        ```python
-        class GCPLogFormatter:
-            def format(
-                self,
-                level: str,
-                message: str,
-                *,
-                correlation_id: str | None = None,
-                trace_id: str | None = None,
-                span_id: str | None = None,
-                duration_ms: float | None = None,
-                extra: dict[str, Any] | None = None,
-            ) -> dict[str, Any]:
-                return {"severity": level, "message": message, ...}
-        ```
     """
 
     def format(

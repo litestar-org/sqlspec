@@ -1,6 +1,7 @@
 """Compiled helpers for shared configuration runtime behavior."""
 
 import asyncio
+import inspect
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -101,7 +102,7 @@ def create_sync_pool(
     lock: threading.Lock,
     get_connection_instance: "Callable[[], PoolT | None]",
     create_pool: "Callable[[], PoolT]",
-    emit_pool_create: "Callable[[PoolT], None]",
+    emit_pool_create_sync: "Callable[[PoolT], None]",
 ) -> PoolT:
     """Create a sync pool once, using the existing lock/emit hooks."""
     if connection_instance is not None:
@@ -112,27 +113,26 @@ def create_sync_pool(
         if existing_pool is not None:
             return existing_pool
         pool = create_pool()
-        emit_pool_create(pool)
+        emit_pool_create_sync(pool)
         return pool
 
 
 def close_sync_pool(
     connection_instance: "PoolT | None",
     close_pool: "Callable[[], None]",
-    emit_pool_destroy: "Callable[[PoolT], None]",
+    emit_pool_destroy_sync: "Callable[[PoolT], None]",
     emit_pool_destroying_sync: "Callable[[PoolT], None] | None" = None,
 ) -> None:
     """Close a sync pool and emit teardown hooks.
 
-    ``emit_pool_destroying_sync`` fires *before* ``close_pool`` so registered hooks
-    (e.g., persistent listener hubs releasing checked-out sessions) can clear
+    ``emit_pool_destroying_sync`` fires *before* ``close_pool`` so registered hooks can clear
     pool-checked-out resources that would otherwise block the close.
     """
     if connection_instance is not None and emit_pool_destroying_sync is not None:
         emit_pool_destroying_sync(connection_instance)
     close_pool()
     if connection_instance is not None:
-        emit_pool_destroy(connection_instance)
+        emit_pool_destroy_sync(connection_instance)
 
 
 async def create_async_pool(
@@ -140,7 +140,7 @@ async def create_async_pool(
     lock: asyncio.Lock,
     get_connection_instance: "Callable[[], PoolT | None]",
     create_pool: "Callable[[], Awaitable[PoolT]]",
-    emit_pool_create: "Callable[[PoolT], None]",
+    emit_pool_create_async: "Callable[[PoolT], Awaitable[None] | None]",
 ) -> PoolT:
     """Create an async pool once, using the existing lock/emit hooks."""
     if connection_instance is not None:
@@ -151,24 +151,30 @@ async def create_async_pool(
         if existing_pool is not None:
             return existing_pool
         pool = await create_pool()
-        emit_pool_create(pool)
+        result = emit_pool_create_async(pool)
+        if inspect.isawaitable(result):
+            await result
         return pool
 
 
 async def close_async_pool(
     connection_instance: "PoolT | None",
     close_pool: "Callable[[], Awaitable[None]]",
-    emit_pool_destroy: "Callable[[PoolT], None]",
-    emit_pool_destroying_async: "Callable[[PoolT], Awaitable[None]] | None" = None,
+    emit_pool_destroy_async: "Callable[[PoolT], Awaitable[None] | None]",
+    emit_pool_destroying_async: "Callable[[PoolT], Awaitable[None] | None] | None" = None,
 ) -> None:
     """Close an async pool and emit teardown hooks.
 
     ``emit_pool_destroying_async`` fires *before* ``close_pool`` so async lifecycle
-    hooks (e.g., async listener hubs awaiting connection release) can complete
+    hooks can complete
     teardown before the pool drains its sessions.
     """
     if connection_instance is not None and emit_pool_destroying_async is not None:
-        await emit_pool_destroying_async(connection_instance)
+        result = emit_pool_destroying_async(connection_instance)
+        if inspect.isawaitable(result):
+            await result
     await close_pool()
     if connection_instance is not None:
-        emit_pool_destroy(connection_instance)
+        result = emit_pool_destroy_async(connection_instance)
+        if inspect.isawaitable(result):
+            await result

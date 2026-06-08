@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from sqlspec._typing import UUID_UTILS_INSTALLED
+from sqlspec.typing import UUID_UTILS_INSTALLED
 from sqlspec.utils.type_converters import _uuid_to_string, build_nested_decimal_normalizer, build_uuid_coercions
 
 

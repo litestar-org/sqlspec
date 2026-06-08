@@ -38,31 +38,9 @@ class SQLSpecPlugin:
 
     Provides Sanic-native configuration parsing and request helper methods.
     Runtime listener and middleware behavior is registered by ``init_app``.
-
-    Example:
-        from sanic import Sanic
-        from sqlspec import SQLSpec
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-        from sqlspec.extensions.sanic import SQLSpecPlugin
-
-        sqlspec = SQLSpec()
-        sqlspec.add_config(
-            AsyncpgConfig(
-                connection_config={"dsn": "postgresql://localhost/mydb"},
-                extension_config={
-                    "sanic": {
-                        "commit_mode": "autocommit",
-                        "session_key": "db",
-                    }
-                },
-            )
-        )
-
-        app = Sanic("app")
-        db_ext = SQLSpecPlugin(sqlspec, app)
     """
 
-    __slots__ = ("_config_states", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")
+    __slots__ = ("_config_states", "_extractor", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")
 
     def __init__(self, sqlspec: SQLSpec, app: "Sanic[Any, Any] | None" = None) -> None:
         """Initialize SQLSpec Sanic extension.
@@ -80,6 +58,17 @@ class SQLSpecPlugin:
             settings = self._extract_sanic_settings(cfg)
             state = self._create_config_state(cfg, settings)
             self._config_states.append(state)
+
+        correlation_state = self._first_correlation_state()
+        self._extractor = (
+            CorrelationExtractor(
+                primary_header=correlation_state.correlation_header,
+                additional_headers=correlation_state.correlation_headers,
+                auto_trace_headers=correlation_state.auto_trace_headers,
+            )
+            if correlation_state is not None
+            else None
+        )
 
         if app is not None:
             self.init_app(app)
@@ -267,16 +256,10 @@ class SQLSpecPlugin:
         Args:
             request: Sanic request instance.
         """
-        config_state = self._first_correlation_state()
-        if config_state is None:
+        if self._extractor is None:
             return
 
-        extractor = CorrelationExtractor(
-            primary_header=config_state.correlation_header,
-            additional_headers=config_state.correlation_headers,
-            auto_trace_headers=config_state.auto_trace_headers,
-        )
-        correlation_id = extractor.extract(lambda header: request.headers.get(header))
+        correlation_id = self._extractor.extract(lambda header: request.headers.get(header))
         set_context_value(request.ctx, "_sqlspec_previous_correlation_id", CorrelationContext.get())
         set_context_value(request.ctx, "_sqlspec_correlation_id", correlation_id)
         set_context_value(request.ctx, "correlation_id", correlation_id)

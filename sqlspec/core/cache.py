@@ -4,9 +4,9 @@ This module provides a caching system with LRU eviction and TTL support for
 SQL statement processing and SQLGlot expression caching.
 
 Components:
-- CacheKey: Immutable cache key
-- LRUCache: LRU + TTL cache implementation
-- NamespacedCache: Namespace-aware cache wrapper for statement processing
+    - CacheKey: Immutable cache key
+    - LRUCache: LRU + TTL cache implementation
+    - NamespacedCache: Namespace-aware cache wrapper for statement processing
 """
 
 import logging
@@ -59,7 +59,6 @@ DEFAULT_TTL_SECONDS: Final = 3600
 CACHE_STATS_UPDATE_INTERVAL: Final = 100
 
 
-CACHE_KEY_SLOTS: Final = ("_hash", "_key_data")
 CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp", "access_count")
 LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats", "_namespace")
 CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
@@ -336,10 +335,6 @@ class LRUCache:
             self._tail.prev = self._head
             self._stats.reset()
 
-    def size(self) -> int:
-        """Get current cache size."""
-        return len(self._cache)
-
     def is_empty(self) -> bool:
         """Check if cache is empty."""
         return not self._cache
@@ -415,7 +410,7 @@ def get_cache_instances() -> "tuple[LRUCache | None, NamespacedCache | None]":
 
 
 def set_cache_instances(default_cache: "LRUCache | None", namespaced_cache: "NamespacedCache | None") -> None:
-    """Replace cache instances (used by tests and diagnostics).
+    """Replace cache instances for tests and diagnostics.
 
     Args:
         default_cache: Default cache instance or None.
@@ -433,6 +428,15 @@ def clear_all_caches() -> None:
     cache = get_cache()
     cache.clear()
     reset_statement_pipeline_cache()
+
+
+def reset_stats_only() -> None:
+    """Reset cache statistics without evicting cached entries."""
+    if _default_cache is not None:
+        _default_cache.get_stats().reset()
+    if _namespaced_cache is not None:
+        for cache in _namespaced_cache._caches.values():
+            cache.get_stats().reset()
 
 
 def get_cache_statistics() -> "dict[str, CacheStats]":
@@ -500,16 +504,6 @@ def get_cache_config() -> CacheConfig:
     return _global_cache_config
 
 
-def _configure_pipeline_cache(config: "CacheConfig") -> None:
-    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
-    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
-    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
-    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
-    configure_statement_pipeline_cache(
-        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
-    )
-
-
 def update_cache_config(config: CacheConfig) -> None:
     """Update the global cache configuration.
 
@@ -553,11 +547,6 @@ def update_cache_config(config: CacheConfig) -> None:
         fragment_cache_enabled=config.fragment_cache_enabled,
         optimized_cache_enabled=config.optimized_cache_enabled,
     )
-
-
-def reset_cache_stats() -> None:
-    """Reset all cache statistics."""
-    clear_all_caches()
 
 
 def log_cache_stats() -> None:
@@ -634,36 +623,12 @@ def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> st
     return f"{namespace}:{dialect or 'default'}:{key}"
 
 
-def _sql_cache_enabled(config: "CacheConfig") -> bool:
-    return config.sql_cache_enabled
-
-
-def _sql_cache_size(config: "CacheConfig") -> int:
-    return config.sql_cache_size
-
-
-def _fragment_cache_enabled(config: "CacheConfig") -> bool:
-    return config.fragment_cache_enabled
-
-
-def _fragment_cache_size(config: "CacheConfig") -> int:
-    return config.fragment_cache_size
-
-
-def _optimized_cache_enabled(config: "CacheConfig") -> bool:
-    return config.optimized_cache_enabled
-
-
-def _optimized_cache_size(config: "CacheConfig") -> int:
-    return config.optimized_cache_size
-
-
 NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]" = {
-    "statement": (_sql_cache_enabled, _sql_cache_size),
-    "builder": (_sql_cache_enabled, _sql_cache_size),
-    "expression": (_fragment_cache_enabled, _fragment_cache_size),
-    "file": (_fragment_cache_enabled, _fragment_cache_size),
-    "optimized": (_optimized_cache_enabled, _optimized_cache_size),
+    "statement": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
+    "builder": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
+    "expression": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),
+    "file": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),
+    "optimized": (lambda config: config.optimized_cache_enabled, lambda config: config.optimized_cache_size),
 }
 
 
@@ -987,27 +952,6 @@ class Filter:
         return hash((self.field_name, self.operation, self.value))
 
 
-def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
-    """Create canonical representation of filters for cache keys.
-
-    Args:
-        filters: List of filters to canonicalize
-
-    Returns:
-        Tuple of unique filters sorted by field_name, operation, then value
-    """
-    if not filters:
-        return ()
-
-    # Deduplicate and sort for canonical representation
-    unique_filters = set(filters)
-    return tuple(sorted(unique_filters, key=_filter_sort_key))
-
-
-def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
-    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class FiltersView:
     """Read-only view of filters without copying.
@@ -1083,3 +1027,34 @@ def reset_pipeline_registry() -> None:
     """Clear shared statement pipeline caches and metrics."""
 
     reset_statement_pipeline_cache()
+
+
+def _configure_pipeline_cache(config: "CacheConfig") -> None:
+    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
+    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
+    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
+    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
+    configure_statement_pipeline_cache(
+        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
+    )
+
+
+def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
+    """Create canonical representation of filters for cache keys.
+
+    Args:
+        filters: List of filters to canonicalize
+
+    Returns:
+        Tuple of unique filters sorted by field_name, operation, then value
+    """
+    if not filters:
+        return ()
+
+    # Deduplicate and sort for canonical representation
+    unique_filters = set(filters)
+    return tuple(sorted(unique_filters, key=_filter_sort_key))
+
+
+def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
+    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)

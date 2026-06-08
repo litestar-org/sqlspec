@@ -1,4 +1,4 @@
-"""Persistent LISTEN/NOTIFY hub used by asyncpg event backends.
+"""Persistent LISTEN/NOTIFY hub for asyncpg event backends.
 
 Owns a single dedicated asyncpg connection per backend instance. Subscribe /
 unsubscribe are serialized under an asyncio.Lock so concurrent callers cannot
@@ -24,9 +24,9 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 
-logger = get_logger("sqlspec.adapters.asyncpg.events.hub")
-
 __all__ = ("AsyncpgListenerHub",)
+
+logger = get_logger("sqlspec.adapters.asyncpg.events.hub")
 
 
 class AsyncpgListenerHub:
@@ -137,7 +137,7 @@ class AsyncpgListenerHub:
 
     def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
         task = asyncio.current_task()
-        if task is None:  # pragma: no cover - coroutine dequeue calls always run in a task
+        if task is None:  # pragma: no cover
             msg = "AsyncpgListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
         queues = self._queues.get(channel)

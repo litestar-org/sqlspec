@@ -208,3 +208,32 @@ def test_provide_write_session_alias() -> None:
 
     with config.provide_write_session() as driver:
         assert isinstance(driver.connection, _Txn)
+
+
+def test_create_connection_delegates_to_get_database() -> None:
+    """create_connection should use get_database rather than rebuilding Database."""
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    sentinel = object()
+    get_database_call_count = 0
+
+    class _DB:
+        def snapshot(self):
+            return sentinel
+
+    def _get_database() -> _DB:
+        nonlocal get_database_call_count
+        get_database_call_count += 1
+        return _DB()
+
+    def _unexpected_get_client() -> object:
+        raise AssertionError("create_connection should delegate to get_database")
+
+    config.get_database = _get_database  # type: ignore[assignment]
+    config._get_client = _unexpected_get_client  # type: ignore[method-assign]
+    config.connection_instance = object()  # type: ignore[assignment]
+
+    assert config.create_connection() is sentinel
+    assert get_database_call_count == 1
+
+    assert config.create_connection() is sentinel
+    assert get_database_call_count == 2

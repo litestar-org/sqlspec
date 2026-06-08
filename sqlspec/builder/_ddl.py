@@ -4,8 +4,9 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -59,7 +60,6 @@ VALID_FOREIGN_KEY_ACTIONS = {
     FOREIGN_KEY_ACTION_SET_DEFAULT,
     FOREIGN_KEY_ACTION_RESTRICT,
     FOREIGN_KEY_ACTION_NO_ACTION,
-    None,
 }
 
 VALID_CONSTRAINT_TYPES = {
@@ -88,6 +88,9 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expr":
 
     if col.unique:
         constraints.append(exp.ColumnConstraint(kind=exp.UniqueColumnConstraint()))
+
+    if col.auto_increment:
+        constraints.append(exp.ColumnConstraint(kind=exp.AutoIncrementColumnConstraint()))
 
     if col.default is not None:
         default_expr: exp.Expr | None = None
@@ -138,6 +141,13 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         return pk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_FOREIGN_KEY:
+        fk_options: list[str] = []
+        if constraint.deferrable:
+            if constraint.initially_deferred:
+                fk_options.append("DEFERRABLE INITIALLY DEFERRED")
+            else:
+                fk_options.append("DEFERRABLE INITIALLY IMMEDIATE")
+
         fk_constraint = exp.ForeignKey(
             expressions=[exp.to_identifier(col) for col in constraint.columns],
             reference=exp.Reference(
@@ -146,6 +156,7 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
                 on_delete=constraint.on_delete,
                 on_update=constraint.on_update,
             ),
+            options=fk_options or None,
         )
 
         if constraint.name:
@@ -160,7 +171,13 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         return unique_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
-        check_expr = exp.Check(this=exp.maybe_parse(constraint.condition) if constraint.condition else None)
+        check_expr = exp.Check(
+            this=constraint.condition_expr
+            if constraint.condition_expr is not None
+            else exp.maybe_parse(constraint.condition)
+            if constraint.condition
+            else None
+        )
 
         if constraint.name:
             return exp.Constraint(this=exp.to_identifier(constraint.name), expression=check_expr)
@@ -182,6 +199,31 @@ class DDLBuilder(QueryBuilder):
         msg = "Subclasses must implement _create_base_expression."
         raise NotImplementedError(msg)
 
+    def _resolve_select_query(self, query: object, context: str, *, require_select_type: bool = True) -> exp.Expr:
+        select_parameters: dict[str, Any] | None = None
+
+        if isinstance(query, SQL):
+            select_expr = query.expression
+            select_parameters = query.parameters
+        elif isinstance(query, Select):
+            select_expr = query.get_expression()
+            select_parameters = query.parameters
+        elif isinstance(query, str):
+            select_expr = exp.maybe_parse(query)
+        elif isinstance(query, exp.Expr):
+            select_expr = query
+        else:
+            self._raise_sql_builder_error(f"Unsupported type for SELECT query in {context}.")
+
+        if select_expr is None or (require_select_type and not isinstance(select_expr, exp.Select)):
+            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
+
+        if select_parameters:
+            for p_name, p_value in select_parameters.items():
+                self._parameters[p_name] = p_value
+
+        return select_expr
+
     @property
     def _expected_result_type(self) -> "type[SQLResult]":
         return SQLResult
@@ -193,6 +235,26 @@ class DDLBuilder(QueryBuilder):
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         return super().to_statement(config=config)
+
+
+@trait
+class _DropDDLMixin:
+    __slots__ = ()
+
+    _cascade: bool | None
+    _if_exists: bool
+
+    def if_exists(self) -> Self:
+        cast("Any", self)._if_exists = True
+        return self
+
+    def cascade(self) -> Self:
+        cast("Any", self)._cascade = True
+        return self
+
+    def restrict(self) -> Self:
+        cast("Any", self)._cascade = False
+        return self
 
 
 class ColumnDefinition:
@@ -245,6 +307,7 @@ class ConstraintDefinition:
     __slots__ = (
         "columns",
         "condition",
+        "condition_expr",
         "constraint_type",
         "deferrable",
         "initially_deferred",
@@ -263,6 +326,7 @@ class ConstraintDefinition:
         references_table: "str | None" = None,
         references_columns: "list[str] | None" = None,
         condition: "str | None" = None,
+        condition_expr: "exp.Expr | None" = None,
         on_delete: "str | None" = None,
         on_update: "str | None" = None,
         deferrable: bool = False,
@@ -274,6 +338,7 @@ class ConstraintDefinition:
         self.references_table = references_table
         self.references_columns = references_columns or []
         self.condition = condition
+        self.condition_expr = condition_expr
         self.on_delete = on_delete
         self.on_update = on_update
         self.deferrable = deferrable
@@ -281,18 +346,7 @@ class ConstraintDefinition:
 
 
 class CreateTable(DDLBuilder):
-    """Builder for CREATE TABLE statements with columns and constraints.
-
-    Example:
-        builder = (
-            CreateTable("users")
-            .column("id", "SERIAL", primary_key=True)
-            .column("email", "VARCHAR(255)", not_null=True, unique=True)
-            .column("created_at", "TIMESTAMP", default="CURRENT_TIMESTAMP")
-            .foreign_key_constraint("org_id", "organizations", "id")
-        )
-        sql = builder.build().sql
-    """
+    """Builder for CREATE TABLE statements with columns and constraints."""
 
     __slots__ = (
         "_columns",
@@ -471,19 +525,22 @@ class CreateTable(DDLBuilder):
         self._constraints.append(constraint)
         return self
 
-    def check_constraint(self, condition: Union[str, "ColumnExpression"], name: "str | None" = None) -> "Self":
+    def check_constraint(self, condition: "str | ColumnExpression", name: "str | None" = None) -> "Self":
         """Add a check constraint."""
-        if not condition:
+        if condition is None or (isinstance(condition, str) and not condition):
             self._raise_sql_builder_error("Check constraint must have a condition")
 
-        condition_str: str
+        condition_expr: exp.Expr | None = None
+        condition_str: str | None = None
         if has_sqlglot_expression(condition):
             sqlglot_expr = condition.sqlglot_expression
-            condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
+            condition_expr = sqlglot_expr if isinstance(sqlglot_expr, exp.Expr) else None
         else:
             condition_str = str(condition)
 
-        constraint = ConstraintDefinition(constraint_type=CONSTRAINT_TYPE_CHECK, name=name, condition=condition_str)
+        constraint = ConstraintDefinition(
+            constraint_type=CONSTRAINT_TYPE_CHECK, name=name, condition=condition_str, condition_expr=condition_expr
+        )
 
         self._constraints.append(constraint)
         return self
@@ -591,7 +648,7 @@ class CreateTable(DDLBuilder):
         return any(c.name == col_name and c.primary_key for c in self._columns)
 
 
-class DropTable(DDLBuilder):
+class DropTable(DDLBuilder, _DropDDLMixin):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_table_name")
@@ -612,18 +669,6 @@ class DropTable(DDLBuilder):
         self._table_name = name
         return self
 
-    def if_exists(self) -> Self:
-        self._if_exists = True
-        return self
-
-    def cascade(self) -> Self:
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        self._cascade = False
-        return self
-
     def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
             self._raise_sql_builder_error("Table name must be set for DROP TABLE.")
@@ -632,7 +677,7 @@ class DropTable(DDLBuilder):
         )
 
 
-class DropIndex(DDLBuilder):
+class DropIndex(DDLBuilder, _DropDDLMixin):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_index_name", "_table_name")
@@ -658,18 +703,6 @@ class DropIndex(DDLBuilder):
         self._table_name = table_name
         return self
 
-    def if_exists(self) -> Self:
-        self._if_exists = True
-        return self
-
-    def cascade(self) -> Self:
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        self._cascade = False
-        return self
-
     def _create_base_expression(self) -> exp.Expr:
         if not self._index_name:
             self._raise_sql_builder_error("Index name must be set for DROP INDEX.")
@@ -682,7 +715,7 @@ class DropIndex(DDLBuilder):
         )
 
 
-class DropView(DDLBuilder):
+class DropView(DDLBuilder, _DropDDLMixin):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_view_name")
@@ -703,18 +736,6 @@ class DropView(DDLBuilder):
         self._view_name = view_name
         return self
 
-    def if_exists(self) -> Self:
-        self._if_exists = True
-        return self
-
-    def cascade(self) -> Self:
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        self._cascade = False
-        return self
-
     def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
             self._raise_sql_builder_error("View name must be set for DROP VIEW.")
@@ -723,7 +744,7 @@ class DropView(DDLBuilder):
         )
 
 
-class DropSchema(DDLBuilder):
+class DropSchema(DDLBuilder, _DropDDLMixin):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_schema_name")
@@ -744,18 +765,6 @@ class DropSchema(DDLBuilder):
         self._schema_name = schema_name
         return self
 
-    def if_exists(self) -> Self:
-        self._if_exists = True
-        return self
-
-    def cascade(self) -> Self:
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        self._cascade = False
-        return self
-
     def _create_base_expression(self) -> exp.Expr:
         if not self._schema_name:
             self._raise_sql_builder_error("Schema name must be set for DROP SCHEMA.")
@@ -764,7 +773,7 @@ class DropSchema(DDLBuilder):
         )
 
 
-class DropMaterializedView(DDLBuilder):
+class DropMaterializedView(DDLBuilder, _DropDDLMixin):
     """Builder for DROP MATERIALIZED VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_view_name")
@@ -784,21 +793,6 @@ class DropMaterializedView(DDLBuilder):
     def name(self, view_name: str) -> Self:
         """Set the materialized view name."""
         self._view_name = view_name
-        return self
-
-    def if_exists(self) -> Self:
-        """Add IF EXISTS clause."""
-        self._if_exists = True
-        return self
-
-    def cascade(self) -> Self:
-        """Add CASCADE to drop dependent objects."""
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        """Add RESTRICT to prevent dropping if dependencies exist."""
-        self._cascade = False
         return self
 
     def _create_base_expression(self) -> exp.Expr:
@@ -866,7 +860,7 @@ class CreateIndex(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        """Build the CREATE INDEX expression used by this builder.
+        """Build the CREATE INDEX expression for this builder.
 
         Columns are turned into raw expressions (not ``Ordered``) to preserve natural NULL ordering,
         string ``where`` clauses become expressions, and the final ``exp.Index`` is wrapped in an ``exp.Create`` with the configured flags.
@@ -886,6 +880,11 @@ class CreateIndex(DDLBuilder):
             where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
+
+        if self._using:
+            if index_params is None:
+                index_params = exp.IndexParameters()
+            index_params.set("using", exp.Var(this=self._using))
 
         index_expr = exp.Index(
             this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
@@ -1031,16 +1030,6 @@ class CreateSchema(DDLBuilder):
 class CreateTableAsSelect(DDLBuilder):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
 
-    Example:
-        builder = (
-            CreateTableAsSelectBuilder()
-            .name("my_table")
-            .if_not_exists()
-            .columns("id", "name")
-            .as_select(select_builder)
-        )
-        sql = builder.build().sql
-
     Methods:
         - name(table_name: str): Set the table name.
         - if_not_exists(): Add IF NOT EXISTS.
@@ -1079,32 +1068,13 @@ class CreateTableAsSelect(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
 
-        select_expr = None
-        select_parameters = None
-
-        if isinstance(self._select_query, SQL):
-            select_expr = self._select_query.expression
-            select_parameters = self._select_query.parameters
-        elif isinstance(self._select_query, Select):
-            select_expr = self._select_query.get_expression()
-            select_parameters = self._select_query.parameters
-
+        select_expr = self._resolve_select_query(self._select_query, "CTAS", require_select_type=False)
+        if isinstance(self._select_query, Select):
             with_ctes = self._select_query.with_ctes
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
                 for alias, cte in with_ctes.items():
                     if has_with_method(select_expr):
                         select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
-        elif isinstance(self._select_query, str):
-            select_expr = exp.maybe_parse(self._select_query)
-            select_parameters = None
-        else:
-            self._raise_sql_builder_error("Unsupported type for SELECT query in CTAS.")
-        if select_expr is None:
-            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
-
-        if select_parameters:
-            for p_name, p_value in select_parameters.items():
-                self._parameters[p_name] = p_value
 
         schema_expr = None
         if self._columns:
@@ -1204,26 +1174,7 @@ class CreateMaterializedView(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
-        select_expr: exp.Expr | None = None
-        select_parameters: dict[str, Any] | None = None
-
-        if isinstance(self._select_query, SQL):
-            select_expr = self._select_query.expression
-            select_parameters = self._select_query.parameters
-        elif isinstance(self._select_query, Select):
-            select_expr = self._select_query.get_expression()
-            select_parameters = self._select_query.parameters
-        elif isinstance(self._select_query, str):
-            select_expr = exp.maybe_parse(self._select_query)
-            select_parameters = None
-        else:
-            self._raise_sql_builder_error("Unsupported type for SELECT query in materialized view.")
-        if select_expr is None or not isinstance(select_expr, exp.Select):
-            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
-
-        if select_parameters:
-            for p_name, p_value in select_parameters.items():
-                self._parameters[p_name] = p_value
+        select_expr = self._resolve_select_query(self._select_query, "materialized view")
 
         schema_expr = None
         if self._columns:
@@ -1300,26 +1251,7 @@ class CreateView(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
 
-        select_expr: exp.Expr | None = None
-        select_parameters: dict[str, Any] | None = None
-
-        if isinstance(self._select_query, SQL):
-            select_expr = self._select_query.expression
-            select_parameters = self._select_query.parameters
-        elif isinstance(self._select_query, Select):
-            select_expr = self._select_query.get_expression()
-            select_parameters = self._select_query.parameters
-        elif isinstance(self._select_query, str):
-            select_expr = exp.maybe_parse(self._select_query)
-            select_parameters = None
-        else:
-            self._raise_sql_builder_error("Unsupported type for SELECT query in view.")
-        if select_expr is None or not isinstance(select_expr, exp.Select):
-            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
-
-        if select_parameters:
-            for p_name, p_value in select_parameters.items():
-                self._parameters[p_name] = p_value
+        select_expr = self._resolve_select_query(self._select_query, "view")
 
         schema_expr = None
         if self._columns:
@@ -1341,16 +1273,7 @@ class CreateView(DDLBuilder):
 
 
 class AlterTable(DDLBuilder):
-    """Builder for ALTER TABLE operations.
-
-    Example:
-        builder = (
-            AlterTable("users")
-            .add_column("email", "VARCHAR(255)", not_null=True)
-            .drop_column("old_field")
-            .add_constraint("check_age", "CHECK (age >= 18)")
-        )
-    """
+    """Builder for ALTER TABLE operations."""
 
     __slots__ = ("_if_exists", "_operations", "_schema", "_table_name")
 
@@ -1514,6 +1437,32 @@ class AlterTable(DDLBuilder):
         """Remove NOT NULL constraint from a column."""
         operation = AlterOperation(operation_type="ALTER COLUMN DROP NOT NULL", column_name=column)
 
+        self._operations.append(operation)
+        return self
+
+    def in_schema(self, schema_name: str) -> "Self":
+        """Set the schema for the table."""
+        self._schema = schema_name
+        return self
+
+    def set_column_default(self, column: str, value: "Any") -> "Self":
+        """Set the default value for a column."""
+        if not column:
+            self._raise_sql_builder_error("Column name must be a non-empty string")
+
+        column_def = ColumnDefinition(name=column, dtype="", default=value)
+        operation = AlterOperation(
+            operation_type="ALTER COLUMN SET DEFAULT", column_name=column, column_definition=column_def
+        )
+        self._operations.append(operation)
+        return self
+
+    def drop_column_default(self, column: str) -> "Self":
+        """Remove the default value from a column."""
+        if not column:
+            self._raise_sql_builder_error("Column name must be a non-empty string")
+
+        operation = AlterOperation(operation_type="ALTER COLUMN DROP DEFAULT", column_name=column)
         self._operations.append(operation)
         return self
 

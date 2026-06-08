@@ -13,7 +13,7 @@ import pytest
 
 from sqlspec.core import SQL
 from sqlspec.core.parameters._validator import PARAMETER_REGEX, ParameterValidator
-from sqlspec.data_dictionary._loader import DataDictionaryLoader
+from sqlspec.data_dictionary import DataDictionaryLoader
 
 # ---------------------------------------------------------------------------
 # Helpers

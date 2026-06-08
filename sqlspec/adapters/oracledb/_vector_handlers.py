@@ -144,6 +144,10 @@ def _pack_python_sequence(value: "list[Any] | tuple[Any, ...]") -> "array.array[
     return array.array(_TYPECODE_FLOAT32, [float(v) for v in value])
 
 
+def _pack_sequence_converter(v: Any) -> "array.array[Any]":
+    return _pack_python_sequence(v)
+
+
 def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
     """Oracle input type handler for vector payloads.
 
@@ -168,8 +172,7 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     if isinstance(value, array.array):
         return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize)
 
-    packed = _pack_python_sequence(value)
-    return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=lambda _v: packed)
+    return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=_pack_sequence_converter)
 
 
 def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:

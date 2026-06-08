@@ -508,6 +508,33 @@ def test_sync_driver_special_handling_integration(sqlite_sync_driver: SqliteDriv
         mock_special.assert_called_once()
 
 
+def test_sync_driver_special_handling_takes_priority_over_script_in_fast_path(sqlite_sync_driver: SqliteDriver) -> None:
+    assert sqlite_sync_driver._observability is None or sqlite_sync_driver._observability.is_idle
+
+    statement = SQL(
+        "INSERT INTO users (name) VALUES ('alice'); INSERT INTO users (name) VALUES ('bob');",
+        statement_config=sqlite_sync_driver.statement_config,
+        is_script=True,
+    )
+    sentinel = SQLResult(
+        statement=SQL("SELECT 1", statement_config=sqlite_sync_driver.statement_config), rows_affected=999
+    )
+
+    def _special_handling_returning_sentinel(_cursor: Any, stmt: SQL) -> SQLResult | None:
+        if stmt.is_script:
+            return sentinel
+        return None
+
+    with (
+        patch.object(sqlite_sync_driver, "dispatch_special_handling", side_effect=_special_handling_returning_sentinel),
+        patch.object(sqlite_sync_driver, "dispatch_execute_script") as mock_execute_script,
+    ):
+        result = sqlite_sync_driver.dispatch_statement_execution(statement, sqlite_sync_driver.connection)
+
+    assert result is sentinel
+    mock_execute_script.assert_not_called()
+
+
 def test_sync_driver_error_handling_in_dispatch(sqlite_sync_driver: SqliteDriver) -> None:
     """Test error handling during statement dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=sqlite_sync_driver.statement_config)

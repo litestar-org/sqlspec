@@ -21,7 +21,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_converters import build_decimal_converter, build_time_iso_converter, build_uuid_coercions
+from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
@@ -42,12 +42,8 @@ __all__ = (
 )
 
 
-_TIME_TO_ISO = build_time_iso_converter()
+_TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
@@ -150,6 +146,10 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
 driver_profile = build_profile()
 
 
@@ -198,7 +198,7 @@ def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], descriptio
 
 _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
-_CONSTRAINT_EXCEPTION_TYPE: "type[BaseException] | None" = None
+_CONSTRAINT_EXCEPTION_TYPE: type[BaseException] | None = None
 
 
 def _register_duckdb_exception_mappings() -> None:
@@ -272,11 +272,11 @@ def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseExcepti
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
-    2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
-    3. Type-name substring fallback (for environments without duckdb importable)
-    4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
-    5. Default SQLSpecError fallback
+        1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
+        2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
+        3. Type-name substring fallback (for environments without duckdb importable)
+        4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
+        5. Default SQLSpecError fallback
 
     Args:
         exc_type: The exception type (class)

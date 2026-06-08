@@ -8,7 +8,7 @@ __all__ = ("get_dialect_config", "list_registered_dialects", "normalize_dialect_
 
 
 _DIALECT_CONFIGS: dict[str, "DialectConfig"] = {}
-_DIALECTS_LOADED = False
+_DIALECTS_LOADED: bool = False
 
 DIALECT_ALIASES: dict[str, str] = {
     "postgresql": "postgres",
@@ -38,7 +38,7 @@ def _load_default_dialects() -> None:
     if _DIALECTS_LOADED:
         return
     importlib.import_module("sqlspec.data_dictionary.dialects")
-    _DIALECTS_LOADED = True  # pyright: ignore
+    _DIALECTS_LOADED = True
 
 
 def register_dialect(config: "DialectConfig") -> None:

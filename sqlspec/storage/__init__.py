@@ -1,11 +1,11 @@
 """Storage abstraction layer for SQLSpec.
 
 Provides a storage system with:
-- Multiple backend support (local, fsspec, obstore)
-- Configuration-based registration
-- URI scheme-based backend resolution
-- Named storage configurations
-- Capability-based backend selection
+    - Multiple backend support (local, fsspec, obstore)
+    - Configuration-based registration
+    - URI scheme-based backend resolution
+    - Named storage configurations
+    - Capability-based backend selection
 """
 
 from sqlspec.storage._paths import resolve_storage_path

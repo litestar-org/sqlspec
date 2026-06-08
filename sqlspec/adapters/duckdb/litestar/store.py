@@ -21,27 +21,15 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
     utility to provide an async interface compatible with the Store protocol.
 
     Provides efficient session management with:
-    - Sync operations wrapped for async compatibility
-    - INSERT OR REPLACE for UPSERT functionality
-    - Native TIMESTAMP type support
-    - Automatic expiration handling
-    - Efficient cleanup of expired sessions
-    - Columnar storage optimized for analytical queries
-
-    Note:
-        DuckDB is primarily designed for analytical (OLAP) workloads.
-        For high-concurrency OLTP session stores, consider PostgreSQL adapters.
+        - Sync operations wrapped for async compatibility
+        - INSERT OR REPLACE for UPSERT functionality
+        - Native TIMESTAMP type support
+        - Automatic expiration handling
+        - Efficient cleanup of expired sessions
+        - Columnar storage optimized for analytical queries
 
     Args:
         config: DuckDBConfig instance.
-
-    Example:
-        from sqlspec.adapters.duckdb import DuckDBConfig
-        from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
-
-        config = DuckDBConfig()
-        store = DuckdbStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -51,9 +39,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
         Args:
             config: DuckDBConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -62,12 +47,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses TIMESTAMP type for expires_at (DuckDB native datetime type)
-            - TIMESTAMP supports ISO 8601 format and direct comparisons
-            - Columnar storage makes this efficient for analytical queries
-            - DuckDB does not support partial indexes, so full index is created
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -97,10 +76,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
         Returns:
             ISO 8601 formatted string, or None if dt is None.
-
-        Notes:
-            DuckDB's TIMESTAMP type accepts ISO 8601 format strings.
-            This enables efficient storage and comparison operations.
         """
         if dt is None:
             return None
@@ -181,14 +156,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         return await async_(self._get)(key, renew_for)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Synchronous implementation of set.
-
-        Notes:
-            Stores expires_at as TIMESTAMP (ISO 8601 string) for DuckDB native support.
-            Uses INSERT ON CONFLICT instead of INSERT OR REPLACE to ensure all columns
-            are properly updated. created_at uses DEFAULT on insert, updated_at gets
-            current timestamp on both insert and update.
-        """
+        """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         expires_at_str = self._datetime_to_timestamp(expires_at)

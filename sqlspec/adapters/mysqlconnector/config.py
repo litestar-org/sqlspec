@@ -108,17 +108,17 @@ class MysqlConnectorDriverFeatures(TypedDict):
     """MysqlConnector driver feature flags.
 
     json_serializer: Custom JSON serializer function.
-        Defaults to sqlspec.utils.serializers.to_json.
+     Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
-        Defaults to sqlspec.utils.serializers.from_json.
+     Defaults to sqlspec.utils.serializers.from_json.
     on_connection_create: Callback executed when a connection is acquired.
-        For sync: Callable[[MysqlConnectorSyncConnection], None]
-        For async: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]
-        Called exactly once per physical connection using WeakSet tracking.
+     For sync: Callable[[MysqlConnectorSyncConnection], None]
+     For async: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]
+     Called exactly once per physical connection using WeakSet tracking.
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
+     Defaults to True when extension_config["events"] is configured.
     events_backend: Event channel backend selection.
-        Only option: "table_queue".
+     Only option: "table_queue".
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -138,11 +138,7 @@ class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
         self._connection: MysqlConnectorSyncConnection | None = None
 
     def __enter__(self) -> MysqlConnectorSyncConnection:
-        if self._config.connection_instance is not None:
-            self._connection = cast("MysqlConnectorSyncConnection", self._config.connection_instance.get_connection())
-        else:
-            self._connection = self._config.create_connection()
-        self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
+        self._connection = self._config._acquire_sync_connection()  # pyright: ignore[reportPrivateUsage]
         return cast("MysqlConnectorSyncConnection", self._connection)
 
     def __exit__(
@@ -162,11 +158,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._connection: MysqlConnectorSyncConnection | None = None
 
     def acquire_connection(self) -> MysqlConnectorSyncConnection:
-        if self._config.connection_instance is not None:
-            self._connection = cast("MysqlConnectorSyncConnection", self._config.connection_instance.get_connection())
-        else:
-            self._connection = self._config.create_connection()
-        self._config._ensure_connection_initialized(self._connection)  # pyright: ignore[reportPrivateUsage]
+        self._connection = self._config._acquire_sync_connection()  # pyright: ignore[reportPrivateUsage]
         return cast("MysqlConnectorSyncConnection", self._connection)
 
     def release_connection(self, _conn: MysqlConnectorSyncConnection, **kwargs: Any) -> None:
@@ -277,6 +269,15 @@ class MysqlConnectorSyncConfig(
             self._user_connection_hook(connection)
             self._initialized_connections.add(connection)
 
+    def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
+        """Acquire and initialize a sync mysql-connector connection."""
+        if self.connection_instance is not None:
+            connection = cast("MysqlConnectorSyncConnection", self.connection_instance.get_connection())
+        else:
+            connection = self.create_connection()
+        self._ensure_connection_initialized(connection)
+        return connection
+
     def _create_pool(self) -> "MySQLConnectionPool":
         config = dict(self.connection_config)
         pool_name = config.pop("pool_name", None)
@@ -288,6 +289,7 @@ class MysqlConnectorSyncConfig(
 
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
+            # MySQLConnectionPool has no explicit close API; dropping the reference releases the pool.
             self.connection_instance = None
 
     def create_connection(self) -> MysqlConnectorSyncConnection:

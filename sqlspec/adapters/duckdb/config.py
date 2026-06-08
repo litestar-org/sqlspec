@@ -21,8 +21,6 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 __all__ = (
@@ -119,7 +117,7 @@ class DuckDBSecretConfig(TypedDict):
     """DuckDB secret configuration for AI/API integrations."""
 
     secret_type: str
-    """Type of secret (e.g., 'openai', 'aws', 'azure', 'gcp')."""
+    """Type of secret."""
 
     name: str
     """Name of the secret."""
@@ -143,14 +141,14 @@ class DuckDBDriverFeatures(TypedDict):
         enable_uuid_conversion: Enable automatic UUID string conversion.
             When True (default), UUID strings are automatically converted to UUID objects.
             When False, UUID strings are treated as regular strings.
-        extension_flags: Connection-level flags (e.g., allow_community_extensions) applied
+        extension_flags: Connection-level flags applied
             via SET statements immediately after connection creation.
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
             Provides pub/sub capabilities via table-backed queue (DuckDB has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-            Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
+        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             DuckDB does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
     """
@@ -189,34 +187,18 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     - Configurable type handlers for JSON serialization and UUID conversion
 
     DuckDB Connection Pool Configuration:
-    - Default pool size is 1-4 connections (DuckDB uses single connection by default)
-    - Connection recycling is set to 24 hours by default (set to 0 to disable)
-    - Shared memory databases use `:memory:shared_db` for proper concurrency
+        - Default pool size is 1-4 connections (DuckDB uses single connection by default)
+        - Connection recycling is set to 24 hours by default (set to 0 to disable)
+        - Shared memory databases use `:memory:shared_db` for proper concurrency
 
     Type Handler Configuration via driver_features:
-    - `json_serializer`: Custom JSON serializer for dict/list parameters.
-      Defaults to `sqlspec.utils.serializers.to_json` if not provided.
-      Example: `json_serializer=msgspec.json.encode(...).decode('utf-8')`
+        - `json_serializer`: Custom JSON serializer for dict/list parameters.
+            Defaults to `sqlspec.utils.serializers.to_json` if not provided.
+            Accepts serializer callables that return text.
 
     - `enable_uuid_conversion`: Enable automatic UUID string conversion (default: True).
-      When True, UUID strings in query results are automatically converted to UUID objects.
-      When False, UUID strings are treated as regular strings.
-
-    Example:
-        >>> import msgspec
-        >>> from sqlspec.adapters.duckdb import DuckDBConfig
-        >>>
-        >>> # Custom JSON serializer
-        >>> def custom_json(obj):
-        ...     return msgspec.json.encode(obj).decode("utf-8")
-        >>>
-        >>> config = DuckDBConfig(
-        ...     connection_config={"database": ":memory:"},
-        ...     driver_features={
-        ...         "json_serializer": custom_json,
-        ...         "enable_uuid_conversion": False,
-        ...     },
-        ... )
+     When True, UUID strings in query results are automatically converted to UUID objects.
+     When False, UUID strings are treated as regular strings.
     """
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
@@ -256,7 +238,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             driver_features: DuckDB-specific driver features including json_serializer
                 and enable_uuid_conversion options
             bind_key: Optional unique identifier for this configuration
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings)
+            extension_config: Extension-specific configuration
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
@@ -343,12 +325,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         Returns:
             DuckDBConnection: A connection from the pool
-
-        Note:
-            For automatic connection management, prefer using provide_connection()
-            or provide_session() which handle returning connections to the pool.
-            The caller is responsible for returning the connection to the pool
-            using pool.release(connection) when done.
         """
         pool = self.provide_pool()
 

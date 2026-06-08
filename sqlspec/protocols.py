@@ -17,15 +17,8 @@ if TYPE_CHECKING:
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
-    from sqlspec.typing import (
-        ArrowRecordBatch,
-        ArrowTable,
-        ColumnMetadata,
-        ForeignKeyMetadata,
-        IndexMetadata,
-        TableMetadata,
-        VersionInfo,
-    )
+    from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
     "ArrowTableStatsProtocol",
@@ -91,7 +84,7 @@ __all__ = (
 
 @runtime_checkable
 class ReadableProtocol(Protocol):
-    """Protocol for objects that have a read method (e.g., LOBs)."""
+    """Protocol for objects that have a read method."""
 
     def read(self, size: "int | None" = None) -> "bytes | str":
         """Read content from the object."""
@@ -358,9 +351,6 @@ class StatementProtocol(Protocol):
     def raw_sql(self) -> "str | None": ...
 
     @property
-    def sql(self) -> str: ...
-
-    @property
     def operation_type(self) -> str: ...
 
 
@@ -408,7 +398,7 @@ class MappingLikeProtocol(Protocol):
 
 @runtime_checkable
 class HasAsDictProtocol(Protocol):
-    """Protocol for objects with _asdict() method (e.g., NamedTuple).
+    """Protocol for objects with _asdict() method.
 
     Used for row types that don't support dict() constructor directly
     but can be converted via _asdict() method.
@@ -626,8 +616,9 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async arrow writing not implemented"
         raise NotImplementedError(msg)
 
+    # NOTE: Returns AsyncIterator directly; this is intentionally not async def.
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
-        """Async stream Arrow record batches from matching objects."""
+        """Stream Arrow record batches from matching objects."""
         msg = "Async arrow streaming not implemented"
         raise NotImplementedError(msg)
 
@@ -769,10 +760,6 @@ class SQLBuilderProtocol(Protocol):
 
     def _generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate a unique parameter name."""
-        ...
-
-    def _create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":
-        """Create placeholder expression with bound parameter."""
         ...
 
     def create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":

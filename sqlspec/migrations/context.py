@@ -14,24 +14,12 @@ from sqlspec.utils.type_guards import has_statement_config_factory
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
-logger = get_logger("sqlspec.migrations.context")
-
 __all__ = ("MigrationContext",)
 
-
-def _normalize_dialect_name(dialect: Any | None) -> "str | None":
-    if dialect is None:
-        return None
-    if isinstance(dialect, str):
-        return dialect
-    if isinstance(dialect, type):
-        return dialect.__name__
-    if isinstance(dialect, Dialect):
-        return dialect.__class__.__name__
-    return None
+logger = get_logger("sqlspec.migrations.context")
 
 
-@dataclass
+@dataclass(slots=True)
 class MigrationContext:
     """Context object passed to migration functions.
 
@@ -42,7 +30,7 @@ class MigrationContext:
     config: "Any | None" = None
     """Database configuration object."""
     dialect: "str | None" = None
-    """Database dialect (e.g., 'postgres', 'mysql', 'sqlite')."""
+    """Database dialect."""
     metadata: "dict[str, Any] | None" = None
     """Additional metadata for the migration."""
     extension_config: "dict[str, Any] | None" = None
@@ -155,3 +143,15 @@ class MigrationContext:
         if not inspect.iscoroutinefunction(migration_func) and self.is_async_driver:
             self.set_execution_metadata("mixed_execution", value=True)
             logger.debug("Sync migration function in async driver context - using compatibility mode")
+
+
+def _normalize_dialect_name(dialect: Any | None) -> "str | None":
+    if dialect is None:
+        return None
+    if isinstance(dialect, str):
+        return dialect
+    if isinstance(dialect, type):
+        return dialect.__name__
+    if isinstance(dialect, Dialect):
+        return dialect.__class__.__name__
+    return None

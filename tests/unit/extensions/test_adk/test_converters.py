@@ -9,7 +9,7 @@ Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
 """
 
 import importlib.util
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -22,6 +22,7 @@ from google.adk.sessions.session import Session
 from google.genai import types
 
 from sqlspec.extensions.adk.converters import (
+    compute_update_marker,
     event_to_record,
     filter_temp_state,
     merge_scoped_state,
@@ -213,6 +214,29 @@ def test_merge_scoped_state_does_not_mutate_session_state() -> None:
     original = dict(session)
     merge_scoped_state(session_state=session, app_state={"app:x": 1})
     assert session == original
+
+
+def test_merge_scoped_state_accepts_explicit_empty_app_state() -> None:
+    app_state: dict[str, object] = {}
+    merged = merge_scoped_state(session_state={"session": "value"}, app_state=app_state)
+    assert merged == {"session": "value"}
+
+
+def test_merge_scoped_state_accepts_explicit_empty_user_state() -> None:
+    user_state: dict[str, object] = {}
+    merged = merge_scoped_state(session_state={"session": "value"}, user_state=user_state)
+    assert merged == {"session": "value"}
+
+
+def test_compute_update_marker_normalizes_naive_datetime_to_utc() -> None:
+    marker = compute_update_marker(datetime(2024, 1, 15, 12, 0, 0))
+    assert marker == "2024-01-15T12:00:00.000000+00:00"
+
+
+def test_compute_update_marker_normalizes_aware_datetime_to_utc() -> None:
+    eastern = timezone(timedelta(hours=-5))
+    marker = compute_update_marker(datetime(2024, 1, 15, 7, 0, 0, tzinfo=eastern))
+    assert marker == "2024-01-15T12:00:00.000000+00:00"
 
 
 # ---------------------------------------------------------------------------

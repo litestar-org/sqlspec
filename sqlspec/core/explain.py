@@ -31,12 +31,12 @@ class ExplainFormat(str, Enum):
     """Output formats for EXPLAIN statements.
 
     Different databases support different output formats:
-    - TEXT: All databases (default)
-    - JSON: PostgreSQL, MySQL (8.0+), DuckDB
-    - XML: PostgreSQL
-    - YAML: PostgreSQL
-    - TREE: MySQL (8.0+), DuckDB
-    - TRADITIONAL: MySQL (tabular output)
+        - TEXT: All databases (default)
+        - JSON: PostgreSQL, MySQL (8.0+), DuckDB
+        - XML: PostgreSQL
+        - YAML: PostgreSQL
+        - TREE: MySQL (8.0+), DuckDB
+        - TRADITIONAL: MySQL (tabular output)
     """
 
     TEXT = "text"

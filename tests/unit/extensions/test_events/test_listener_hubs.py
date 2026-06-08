@@ -69,43 +69,89 @@ class _AsyncpgConfig:
 
 
 class _PsqlpyListener:
+    def __init__(self, emit_on_add: str | None = None) -> None:
+        self.emit_on_add = emit_on_add
+        self.callbacks: dict[str, Any] = {}
+        self.listen_called = False
+        self.listen_count = 0
+        self.abort_count = 0
+        self.emitted: list[tuple[str, str]] = []
+
     async def startup(self) -> None:
         pass
 
     async def add_callback(self, *, channel: str, callback: Any) -> None:
-        _ = (channel, callback)
+        self.callbacks[channel] = callback
+        if self.emit_on_add is not None:
+            await callback(0, channel, self.emit_on_add)
 
     def listen(self) -> None:
-        pass
+        self.listen_called = True
+        self.listen_count += 1
+
+    async def emit(self, channel: str, payload: str) -> None:
+        self.emitted.append((channel, payload))
+        callback = self.callbacks.get(channel)
+        if callback is not None:
+            await callback(None, payload, channel, 0)
 
     async def clear_channel_callbacks(self, *, channel: str) -> None:
-        _ = channel
+        self.callbacks.pop(channel, None)
 
     def abort_listen(self) -> None:
-        pass
+        self.listen_called = False
+        self.abort_count += 1
 
     async def shutdown(self) -> None:
         pass
 
 
 class _PsqlpyPool:
-    def __init__(self) -> None:
-        self.listener_handle = _PsqlpyListener()
+    def __init__(self, listener_handle: _PsqlpyListener | None = None) -> None:
+        self.listener_handle = listener_handle or _PsqlpyListener()
 
     def listener(self) -> _PsqlpyListener:
         return self.listener_handle
 
 
 class _PsqlpyConfig:
-    def __init__(self) -> None:
-        self.pool = _PsqlpyPool()
+    def __init__(self, listener_handle: _PsqlpyListener | None = None) -> None:
+        self.listener_handle = listener_handle or _PsqlpyListener()
+        self.pool = _PsqlpyPool(self.listener_handle)
         self._runtime = _StubRuntime()
 
     async def provide_pool(self) -> _PsqlpyPool:
         return self.pool
 
+    def provide_session(self) -> Any:
+        return _PsqlpySession(self.listener_handle)
+
     def get_observability_runtime(self) -> _StubRuntime:
         return self._runtime
+
+
+class _PsqlpyDriver:
+    def __init__(self, listener: _PsqlpyListener) -> None:
+        self.listener = listener
+
+    async def execute_script(self, statement: Any) -> None:
+        channel, payload = statement.parameters
+        if self.listener.listen_called:
+            await self.listener.emit(channel, payload)
+
+    async def commit(self) -> None:
+        return None
+
+
+class _PsqlpySession:
+    def __init__(self, listener: _PsqlpyListener) -> None:
+        self.driver = _PsqlpyDriver(listener)
+
+    async def __aenter__(self) -> _PsqlpyDriver:
+        return self.driver
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        return None
 
 
 class _PsycopgAsyncConnection:
@@ -247,6 +293,43 @@ async def test_psqlpy_listener_hub_broadcasts_to_same_channel_consumers() -> Non
     result_a, result_b = await asyncio.gather(task_a, task_b)
     assert result_a == payload
     assert result_b == payload
+    await hub.shutdown()
+
+
+async def test_psqlpy_listener_hub_attaches_consumer_before_callback_registration() -> None:
+    payload = "payload-1"
+    hub = PsqlpyListenerHub(_PsqlpyConfig(_PsqlpyListener(emit_on_add=payload)))  # type: ignore[arg-type]
+
+    result = await hub.dequeue("alerts", 0.25)
+
+    assert result == payload
+    await hub.shutdown()
+
+
+async def test_psqlpy_listener_hub_filters_ready_probe_payloads() -> None:
+    listener = _PsqlpyListener()
+    hub = PsqlpyListenerHub(_PsqlpyConfig(listener))  # type: ignore[arg-type]
+
+    result = await hub.dequeue("alerts", 0.01)
+
+    assert result is None
+    assert listener.listen_called is True
+    assert len(listener.emitted) == 1
+    assert listener.emitted[0][0] == "alerts"
+    await hub.shutdown()
+
+
+async def test_psqlpy_listener_hub_rearms_for_new_channels() -> None:
+    listener = _PsqlpyListener()
+    hub = PsqlpyListenerHub(_PsqlpyConfig(listener))  # type: ignore[arg-type]
+
+    assert await hub.dequeue("channel_a", 0.01) is None
+    assert await hub.dequeue("channel_b", 0.01) is None
+
+    assert listener.listen_count == 2
+    assert listener.abort_count == 1
+    assert [channel for channel, _ in listener.emitted] == ["channel_a", "channel_b"]
+    assert all(payload.startswith("__sqlspec_psqlpy_ready__:") for _, payload in listener.emitted)
     await hub.shutdown()
 
 

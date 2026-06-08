@@ -16,48 +16,15 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
     from sqlspec.extensions.adk import MemoryRecord
 
+__all__ = ("SqliteADKMemoryStore", "SqliteADKStore")
+
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 
-__all__ = ("SqliteADKMemoryStore", "SqliteADKStore")
 
 logger: "logging.Logger" = get_logger("sqlspec.adapters.sqlite.adk.store")
-
-
-def _datetime_to_julian(dt: datetime) -> float:
-    """Convert datetime to Julian Day number for SQLite storage.
-
-    Args:
-        dt: Datetime to convert (must be UTC-aware).
-
-    Returns:
-        Julian Day number as REAL.
-
-    Notes:
-        Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
-        This enables direct comparison with julianday('now') in SQL queries.
-    """
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
-    return JULIAN_EPOCH + delta_days
-
-
-def _julian_to_datetime(julian: float) -> datetime:
-    """Convert Julian Day number back to datetime.
-
-    Args:
-        julian: Julian Day number.
-
-    Returns:
-        UTC-aware datetime.
-    """
-    days_since_epoch = julian - JULIAN_EPOCH
-    timestamp = days_since_epoch * SECONDS_PER_DAY
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
 class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
@@ -68,39 +35,15 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
     utility to provide an async interface compatible with the Store protocol.
 
     Provides:
-    - Session state management with JSON storage (as TEXT)
-    - Event history tracking with full-event JSON storage
-    - Julian Day timestamps (REAL) for efficient date operations
-    - Foreign key constraints with cascade delete
-    - Atomic event+state writes via append_event_and_update_state
-    - PRAGMA optimization profile for file-based databases
+        - Session state management with JSON storage (as TEXT)
+        - Event history tracking with full-event JSON storage
+        - Julian Day timestamps (REAL) for efficient date operations
+        - Foreign key constraints with cascade delete
+        - Atomic event+state writes via append_event_and_update_state
+        - PRAGMA optimization profile for file-based databases
 
     Args:
         config: SqliteConfig instance with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.adk import SqliteADKStore
-
-        config = SqliteConfig(
-            database=":memory:",
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE"
-                }
-            }
-        )
-        store = SqliteADKStore(config)
-        await store.ensure_tables()
-
-    Notes:
-        - JSON stored as TEXT with SQLSpec serializers (msgspec/orjson/stdlib)
-        - Timestamps as REAL (Julian day: julianday('now'))
-        - Full event stored as JSON TEXT in event_data column
-        - PRAGMA foreign_keys = ON (enable per connection)
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -110,12 +53,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Args:
             config: SqliteConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
         """
         super().__init__(config)
 
@@ -124,11 +61,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Args:
             connection: SQLite connection.
-
-        Notes:
-            Enables foreign keys and applies performance PRAGMAs.
-            For file-based databases, adds cache_size, mmap_size,
-            and journal_size_limit optimizations.
         """
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA cache_size = -64000")
@@ -140,13 +72,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - TEXT for IDs, names, and JSON state
-            - REAL for Julian Day timestamps
-            - Optional owner ID column for multi-tenant scenarios
-            - Composite index on (app_name, user_id)
-            - Index on update_time DESC for recent session queries
         """
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -172,13 +97,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             SQL statement to create adk_events table with indexes.
-
-        Notes:
-            - TEXT for IDs and indexed scalars
-            - TEXT for full event JSON (event_data)
-            - REAL for Julian Day timestamps
-            - Foreign key to sessions with CASCADE delete
-            - Index on (session_id, timestamp ASC)
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -199,10 +117,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            SQLite automatically drops indexes when dropping tables.
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
@@ -263,11 +177,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses Julian Day for create_time and update_time.
-            State is always JSON-serialized (empty dict becomes '{}', never NULL).
-            If owner_id_column is configured, owner_id is inserted into that column.
         """
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
@@ -309,10 +218,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            SQLite returns Julian Day (REAL) for timestamps.
-            JSON is parsed from TEXT storage.
         """
         return await async_(self._get_session)(session_id)
 
@@ -338,11 +243,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current Julian Day.
-            Empty dict is serialized as '{}', never NULL.
         """
         await async_(self._update_session_state)(session_id, state)
 
@@ -396,9 +296,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
         """
         return await async_(self._list_sessions)(app_name, user_id)
 
@@ -416,9 +313,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
         await async_(self._delete_session)(session_id)
 
@@ -458,10 +352,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         Args:
             event_record: Event record with 5 keys: session_id, invocation_id,
                 author, timestamp, event_json.
-
-        Notes:
-            Uses Julian Day for timestamp.
-            event_json dict is serialized to TEXT as event_data column.
         """
         await async_(self._append_event)(event_record)
 
@@ -590,10 +480,6 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
         Returns:
             List of event records ordered by timestamp ASC.
-
-        Notes:
-            Uses index on (session_id, timestamp ASC).
-            Parses event_data TEXT back to dict for event_json field.
         """
         return await async_(self._get_events)(session_id, after_timestamp, limit)
 
@@ -612,31 +498,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
     Args:
         config: SqliteConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
-
-        config = SqliteConfig(
-            database="app.db",
-            extension_config={
-                "adk": {
-                    "memory_table": "adk_memory_entries",
-                    "memory_use_fts": False,
-                    "memory_max_results": 20,
-                }
-            }
-        )
-        store = SqliteADKMemoryStore(config)
-        store.ensure_tables()
-
-    Notes:
-        - JSON stored as TEXT with SQLSpec serializers
-        - REAL for Julian Day timestamps
-        - event_id UNIQUE constraint for deduplication
-        - Composite index on (app_name, user_id, timestamp DESC)
-        - Optional FTS5 virtual table for full-text search
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -646,14 +507,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         Args:
             config: SqliteConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         super().__init__(config)
 
@@ -662,14 +515,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         Returns:
             SQL statement to create memory table with indexes.
-
-        Notes:
-            - TEXT for IDs, names, and JSON content
-            - REAL for Julian Day timestamps
-            - UNIQUE constraint on event_id for deduplication
-            - Composite index on (app_name, user_id, timestamp DESC)
-            - Optional owner ID column for multi-tenancy
-            - Optional FTS5 virtual table for full-text search
         """
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -728,10 +573,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         Returns:
             List of SQL statements to drop the memory table and FTS table.
-
-        Notes:
-            SQLite automatically drops indexes when dropping tables.
-            FTS5 virtual table must be dropped separately if it exists.
         """
         statements = [f"DROP TABLE IF EXISTS {self._memory_table}"]
         if self._use_fts:
@@ -743,9 +584,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         Args:
             connection: SQLite connection.
-
-        Notes:
-            SQLite requires PRAGMA foreign_keys = ON per connection.
         """
         connection.execute("PRAGMA foreign_keys = ON")
 
@@ -879,7 +717,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
         if self._use_fts:
             try:
                 return self._search_entries_fts(query, app_name, user_id, effective_limit)
-            except Exception as exc:  # pragma: no cover - defensive fallback
+            except Exception as exc:  # pragma: no cover
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
 
@@ -990,3 +828,33 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
     async def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
         return await async_(self._delete_entries_older_than)(days)
+
+
+def _datetime_to_julian(dt: datetime) -> float:
+    """Convert datetime to Julian Day number for SQLite storage.
+
+    Args:
+        dt: Datetime to convert (must be UTC-aware).
+
+    Returns:
+        Julian Day number as REAL.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+    return JULIAN_EPOCH + delta_days
+
+
+def _julian_to_datetime(julian: float) -> datetime:
+    """Convert Julian Day number back to datetime.
+
+    Args:
+        julian: Julian Day number.
+
+    Returns:
+        UTC-aware datetime.
+    """
+    days_since_epoch = julian - JULIAN_EPOCH
+    timestamp = days_since_epoch * SECONDS_PER_DAY
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)

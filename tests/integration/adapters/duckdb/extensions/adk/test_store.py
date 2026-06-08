@@ -1,4 +1,11 @@
-"""Integration tests for DuckDB ADK session store."""
+"""Integration tests for DuckDB ADK session store.
+
+The shared session/event CRUD lifecycle (create_tables, session round-trip, list/delete,
+append/get events, get_events filtering) is covered by
+tests/integration/adapters/contracts/test_adk_store_contract.py. This module keeps the
+adapter-specific coverage (owner_id_column, storage-type fidelity, timestamp precision,
+concurrency, event ordering/JSON details) that is not portable across the contract matrix.
+"""
 
 import json
 from collections.abc import AsyncGenerator
@@ -39,203 +46,6 @@ async def duckdb_adk_store(tmp_path: Path) -> "AsyncGenerator[DuckdbADKStore, No
     finally:
         if db_path.exists():
             db_path.unlink()
-
-
-async def test_create_tables(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test table creation succeeds without errors."""
-    assert duckdb_adk_store.session_table == "test_sessions"
-    assert duckdb_adk_store.events_table == "test_events"
-
-
-async def test_create_and_get_session(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating and retrieving a session."""
-    session_id = "session-001"
-    app_name = "test-app"
-    user_id = "user-001"
-    state = {"key": "value", "count": 42}
-
-    created_session = await duckdb_adk_store.create_session(
-        session_id=session_id, app_name=app_name, user_id=user_id, state=state
-    )
-
-    assert created_session["id"] == session_id
-    assert created_session["app_name"] == app_name
-    assert created_session["user_id"] == user_id
-    assert created_session["state"] == state
-    assert isinstance(created_session["create_time"], datetime)
-    assert isinstance(created_session["update_time"], datetime)
-
-    retrieved_session = await duckdb_adk_store.get_session(session_id)
-    assert retrieved_session is not None
-    assert retrieved_session["id"] == session_id
-    assert retrieved_session["state"] == state
-
-
-async def test_get_nonexistent_session(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test getting a non-existent session returns None."""
-    result = await duckdb_adk_store.get_session("nonexistent-session")
-    assert result is None
-
-
-async def test_update_session_state(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test updating session state."""
-    session_id = "session-002"
-    initial_state = {"status": "active"}
-    updated_state = {"status": "completed", "result": "success"}
-
-    await duckdb_adk_store.create_session(
-        session_id=session_id, app_name="test-app", user_id="user-002", state=initial_state
-    )
-
-    session_before = await duckdb_adk_store.get_session(session_id)
-    assert session_before is not None
-    assert session_before["state"] == initial_state
-
-    await duckdb_adk_store.update_session_state(session_id, updated_state)
-
-    session_after = await duckdb_adk_store.get_session(session_id)
-    assert session_after is not None
-    assert session_after["state"] == updated_state
-    assert session_after["update_time"] >= session_before["update_time"]
-
-
-async def test_list_sessions(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test listing sessions for an app and user."""
-    app_name = "test-app"
-    user_id = "user-003"
-
-    await duckdb_adk_store.create_session("session-1", app_name, user_id, {"num": 1})
-    await duckdb_adk_store.create_session("session-2", app_name, user_id, {"num": 2})
-    await duckdb_adk_store.create_session("session-3", app_name, user_id, {"num": 3})
-    await duckdb_adk_store.create_session("session-other", "other-app", user_id, {"num": 999})
-
-    sessions = await duckdb_adk_store.list_sessions(app_name, user_id)
-
-    assert len(sessions) == 3
-    session_ids = {s["id"] for s in sessions}
-    assert session_ids == {"session-1", "session-2", "session-3"}
-    assert all(s["app_name"] == app_name for s in sessions)
-    assert all(s["user_id"] == user_id for s in sessions)
-
-
-async def test_list_sessions_empty(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test listing sessions when none exist."""
-    sessions = await duckdb_adk_store.list_sessions("nonexistent-app", "nonexistent-user")
-    assert sessions == []
-
-
-async def test_delete_session(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test deleting a session."""
-    session_id = "session-to-delete"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-004", {"data": "test"})
-
-    assert await duckdb_adk_store.get_session(session_id) is not None
-
-    await duckdb_adk_store.delete_session(session_id)
-
-    assert await duckdb_adk_store.get_session(session_id) is None
-
-
-async def test_delete_session_cascade_events(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test deleting a session also deletes associated events."""
-    session_id = "session-with-events"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-005", {"data": "test"})
-
-    event_record: EventRecord = {
-        "session_id": session_id,
-        "invocation_id": "",
-        "author": "user",
-        "timestamp": datetime.now(timezone.utc),
-        "event_json": {
-            "id": "event-001",
-            "content": {"message": "Hello"},
-            "app_name": "test-app",
-            "user_id": "user-005",
-        },
-    }
-    await duckdb_adk_store.append_event(event_record)
-
-    events = await duckdb_adk_store.get_events(session_id)
-    assert len(events) == 1
-
-    await duckdb_adk_store.delete_session(session_id)
-
-    assert await duckdb_adk_store.get_session(session_id) is None
-    events_after = await duckdb_adk_store.get_events(session_id)
-    assert len(events_after) == 0
-
-
-async def test_create_event(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating an event and verifying the returned 5-key EventRecord."""
-    session_id = "session-006"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-006", {})
-
-    timestamp = datetime.now(timezone.utc)
-    content = {"text": "Test message", "role": "user"}
-
-    event_record: EventRecord = {
-        "session_id": session_id,
-        "invocation_id": "",
-        "author": "user",
-        "timestamp": timestamp,
-        "event_json": {"id": "event-002", "content": content, "app_name": "test-app", "user_id": "user-006"},
-    }
-    await duckdb_adk_store.append_event(event_record)
-
-    events = await duckdb_adk_store.get_events(session_id)
-    assert len(events) == 1
-    assert events[0]["session_id"] == session_id
-    assert events[0]["author"] == "user"
-
-    # Content is stored inside event_json
-    event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
-    )
-    assert event_data["content"] == content
-
-
-async def test_list_events(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test listing events for a session."""
-    session_id = "session-007"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-007", {})
-
-    event1: EventRecord = {
-        "session_id": session_id,
-        "invocation_id": "",
-        "author": "user",
-        "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-1", "content": {"message": "First"}, "app_name": "test-app", "user_id": "user-007"},
-    }
-    event2: EventRecord = {
-        "session_id": session_id,
-        "invocation_id": "",
-        "author": "assistant",
-        "timestamp": datetime.now(timezone.utc),
-        "event_json": {
-            "id": "event-2",
-            "content": {"message": "Second"},
-            "app_name": "test-app",
-            "user_id": "user-007",
-        },
-    }
-    await duckdb_adk_store.append_event(event1)
-    await duckdb_adk_store.append_event(event2)
-
-    events = await duckdb_adk_store.get_events(session_id)
-
-    assert len(events) == 2
-    assert events[0]["author"] == "user"
-    assert events[1]["author"] == "assistant"
-    assert events[0]["timestamp"] <= events[1]["timestamp"]
-
-
-async def test_list_events_empty(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test listing events when none exist."""
-    session_id = "session-no-events"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
-
-    events = await duckdb_adk_store.get_events(session_id)
-    assert events == []
 
 
 async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
@@ -345,36 +155,6 @@ async def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore)
     assert session["state"] == complex_state
     assert session["state"]["user"]["preferences"]["theme"] == "dark"
     assert session["state"]["conversation"]["turn_count"] == 5
-
-
-async def test_empty_state(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating session with empty state."""
-    session_id = "session-empty-state"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-011", {})
-
-    session = await duckdb_adk_store.get_session(session_id)
-    assert session is not None
-    assert session["state"] == {}
-
-
-async def test_table_not_found_handling(tmp_path: Path) -> None:
-    """Test graceful handling when tables don't exist."""
-    db_path = tmp_path / "test_no_tables.duckdb"
-    try:
-        config = DuckDBConfig(connection_config={"database": str(db_path)})
-        store = DuckdbADKStore(config)
-
-        result = await store.get_session("nonexistent")
-        assert result is None
-
-        sessions = await store.list_sessions("app", "user")
-        assert sessions == []
-
-        events = await store.get_events("session")
-        assert events == []
-    finally:
-        if db_path.exists():
-            db_path.unlink()
 
 
 async def test_event_json_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:

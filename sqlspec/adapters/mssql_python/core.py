@@ -124,14 +124,19 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     parts: list[str] = []
     consumed: set[str] = set()
+    seen_odbc_keys: set[str] = set()
     for key, option_name in _CONNECTION_STRING_KEYS:
         if key not in config:
             continue
         value = config[key]
         if value is None:
             continue
+        if option_name in seen_odbc_keys:
+            consumed.add(key)
+            continue
         parts.append(f"{option_name}={_format_connection_value(value)}")
         consumed.add(key)
+        seen_odbc_keys.add(option_name)
 
     extra = config.get("extra")
     if isinstance(extra, dict):

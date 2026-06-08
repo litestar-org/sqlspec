@@ -63,16 +63,10 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.stack import StackOperation
+    from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters, VersionInfo
-
-
-logger = get_logger(__name__)
-
-# Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
-# on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
-# core.apply_driver_features and read at the dispatch_execute call sites below.
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = (
     "OracleAsyncDriver",
@@ -82,6 +76,14 @@ __all__ = (
     "OracleSyncExceptionHandler",
     "OracleSyncSessionContext",
 )
+
+
+logger = get_logger(__name__)
+
+# Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
+# on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
+# core.apply_driver_features and read at the dispatch_execute call sites below.
+
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: int = 23
@@ -318,7 +320,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Execution result containing data for SELECT statements or row count for others
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -335,7 +336,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         cursor.execute(sql, prepared_parameters or {})
 
         # SELECT result processing for Oracle
-        if statement.returns_rows():
+        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+
+        if is_select_like:
             fetched_data = cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(
@@ -368,10 +371,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Execution result with affected row count
-
-        Raises:
-            ValueError: If no parameters are provided
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -393,7 +392,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Execution result containing statement count and success information
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
@@ -426,7 +424,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If commit fails
-
         """
         try:
             self.connection.commit()
@@ -439,7 +436,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If rollback fails
-
         """
         try:
             self.connection.rollback()
@@ -472,7 +468,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Context manager for cursor operations
-
         """
         return OracleSyncCursor(connection)
 
@@ -517,14 +512,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             ArrowResult containing pyarrow.Table or RecordBatch
-
-        Examples:
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM users WHERE age > :1", (18,)
-            ... )
-            >>> df = result.to_pandas()
-            >>> print(df.head())
-
         """
         ensure_pyarrow()
 
@@ -541,14 +528,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 msg = "Oracle native Arrow support is not available for this connection."
                 raise ImproperConfigurationError(msg) from exc
             return super().select_to_arrow(
-                statement,
-                *parameters,
-                statement_config=statement_config,
+                prepared_statement,
+                statement_config=config,
                 return_format=return_format,
                 native_only=native_only,
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
-                **kwargs,
             )
 
         arrow_table = pa.table(oracle_df)
@@ -665,7 +650,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         Returns:
             Data dictionary instance for metadata queries
-
         """
         if self._data_dictionary is None:
             self._data_dictionary = OracledbSyncDataDictionary()
@@ -748,7 +732,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 if started_transaction:
                     try:
                         self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                    except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
                 raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
 
@@ -831,7 +815,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Execution result containing data for SELECT statements or row count for others
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -883,10 +866,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Execution result with affected row count
-
-        Raises:
-            ValueError: If no parameters are provided
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -908,7 +887,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Execution result containing statement count and success information
-
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
@@ -941,7 +919,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If commit fails
-
         """
         try:
             await self.connection.commit()
@@ -954,7 +931,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Raises:
             SQLSpecError: If rollback fails
-
         """
         try:
             await self.connection.rollback()
@@ -990,7 +966,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Context manager for cursor operations
-
         """
         return OracleAsyncCursor(connection)
 
@@ -1035,14 +1010,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             ArrowResult containing pyarrow.Table or RecordBatch
-
-        Examples:
-            >>> result = await driver.select_to_arrow(
-            ...     "SELECT * FROM users WHERE age > :1", (18,)
-            ... )
-            >>> df = result.to_pandas()
-            >>> print(df.head())
-
         """
         ensure_pyarrow()
 
@@ -1059,14 +1026,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 msg = "Oracle native Arrow support is not available for this connection."
                 raise ImproperConfigurationError(msg) from exc
             return await super().select_to_arrow(
-                statement,
-                *parameters,
-                statement_config=statement_config,
+                prepared_statement,
+                statement_config=config,
                 return_format=return_format,
                 native_only=native_only,
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
-                **kwargs,
             )
 
         arrow_table = pa.table(oracle_df)
@@ -1187,7 +1152,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         Returns:
             Data dictionary instance for metadata queries
-
         """
         if self._data_dictionary is None:
             self._data_dictionary = OracledbAsyncDataDictionary()
@@ -1276,7 +1240,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 if started_transaction:
                     try:
                         await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover - diagnostics only
+                    except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
                 raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
 

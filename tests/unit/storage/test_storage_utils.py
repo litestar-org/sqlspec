@@ -3,8 +3,12 @@
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
+from sqlspec.storage import StorageFormat as PublicStorageFormat
 from sqlspec.storage import resolve_storage_path
+from sqlspec.storage._arrow_payload import StorageFormat as ArrowPayloadStorageFormat
 from sqlspec.storage._paths import resolve_storage_path as resolve_compiled_storage_path
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_parquet
+from sqlspec.storage.pipeline import StorageFormat as PipelineStorageFormat
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.module_loader import ensure_pyarrow
 
@@ -15,6 +19,16 @@ def test_ensure_pyarrow_succeeds_when_installed() -> None:
         pytest.skip("pyarrow not installed")
 
     ensure_pyarrow()
+
+
+def test_import_pyarrow_helpers_return_modules_when_installed() -> None:
+    """The storage import helpers should return the guarded PyArrow modules."""
+    if not PYARROW_INSTALLED:
+        pytest.skip("pyarrow not installed")
+
+    assert import_pyarrow().__name__ == "pyarrow"
+    assert import_pyarrow_parquet().__name__ == "pyarrow.parquet"
+    assert import_pyarrow_csv().__name__ == "pyarrow.csv"
 
 
 def test_ensure_pyarrow_raises_when_not_installed() -> None:
@@ -83,3 +97,11 @@ def test_compiled_storage_path_helper_matches_public_reexport() -> None:
     assert resolve_compiled_storage_path(path, base_path="/tmp", protocol="file", strip_file_scheme=True) == (
         resolve_storage_path(path, base_path="/tmp", protocol="file", strip_file_scheme=True)
     )
+
+
+def test_pipeline_reexports_arrow_payload_storage_format_literal() -> None:
+    assert PipelineStorageFormat is ArrowPayloadStorageFormat
+
+
+def test_public_storage_format_matches_pipeline_reexport() -> None:
+    assert PublicStorageFormat is PipelineStorageFormat

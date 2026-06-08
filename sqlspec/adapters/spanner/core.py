@@ -219,8 +219,8 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-    1. Native google.api_core exception types (isinstance checks)
-    2. Default SQLSpecError fallback
+        1. Native google.api_core exception types (isinstance checks)
+        2. Default SQLSpecError fallback
 
     Args:
         error: The Spanner exception to map

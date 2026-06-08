@@ -7,8 +7,20 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import StatementConfig
+from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.exceptions import EventChannelError
-from sqlspec.extensions.events import EventMessage, SyncTableEventQueue, parse_event_timestamp
+from sqlspec.extensions.events import AsyncTableEventQueue, EventMessage, SyncTableEventQueue, parse_event_timestamp
+
+
+def test_table_event_queue_classes_are_final_with_classvar_flags() -> None:
+    assert getattr(SyncTableEventQueue, "__final__", False) is True
+    assert getattr(AsyncTableEventQueue, "__final__", False) is True
+    assert SyncTableEventQueue.supports_sync is True
+    assert SyncTableEventQueue.supports_async is False
+    assert AsyncTableEventQueue.supports_sync is False
+    assert AsyncTableEventQueue.supports_async is True
+    assert SyncTableEventQueue.backend_name == "table_queue"
+    assert AsyncTableEventQueue.backend_name == "table_queue"
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:
@@ -122,6 +134,41 @@ def test_table_event_queue_statement_config_property(tmp_path) -> None:
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     queue = SyncTableEventQueue(config)
     assert queue._statement_config is config.statement_config
+
+
+def test_fetch_candidate_parameter_fingerprint_stable_across_datetime_values() -> None:
+    first = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    second = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    first_fingerprint = structural_fingerprint({
+        "channel": "events",
+        "available_cutoff": first,
+        "pending_status": "pending",
+        "leased_status": "leased",
+        "lease_cutoff": first,
+    })
+    second_fingerprint = structural_fingerprint({
+        "channel": "events",
+        "available_cutoff": second,
+        "pending_status": "pending",
+        "leased_status": "leased",
+        "lease_cutoff": second,
+    })
+
+    assert first_fingerprint == second_fingerprint
+
+
+def test_ack_parameter_fingerprint_stable_across_event_ids() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    first = structural_fingerprint({"acked": "acked", "acked_at": now, "event_id": "event-1"})
+    second = structural_fingerprint({"acked": "acked", "acked_at": now, "event_id": "event-2"})
+
+    assert first == second
+
+
+def test_statement_config_enables_caching_by_default() -> None:
+    assert StatementConfig().enable_caching is True
 
 
 def test_event_message_dataclass_fields() -> None:

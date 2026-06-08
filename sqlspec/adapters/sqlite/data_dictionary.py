@@ -5,15 +5,21 @@ from typing import TYPE_CHECKING, ClassVar
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.sqlite.core import format_identifier
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    TableMetadata,
+    VersionInfo,
+    get_dialect_config,
+)
 from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_features, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-
-__all__ = ("SqliteDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
+
+__all__ = ("SqliteDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -39,7 +45,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             SQLite version information or None if detection fails.
-
         """
         driver_id = id(driver)
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
@@ -73,7 +78,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         version_info = self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
@@ -87,7 +91,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             SQLite-specific type name.
-
         """
         config = get_dialect_config(type(self).dialect)
         version_info = self.get_version(driver)
@@ -120,7 +123,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_type=ColumnMetadata)
 
-        assert table is not None
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
@@ -142,7 +144,6 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
                 indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
             return indexes
 
-        assert table is not None
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         table_name = table
         table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name

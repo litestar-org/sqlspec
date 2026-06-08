@@ -1,7 +1,7 @@
 """Base store classes for ADK artifact metadata backend (sync and async).
 
 These abstract base classes define the database operations needed to manage
-artifact version metadata.  Content storage is handled separately by
+artifact version metadata. Content storage is handled separately by
 ``sqlspec/storage/`` backends; these stores only manage the relational
 metadata rows.
 
@@ -21,45 +21,21 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.artifact._types import ArtifactRecord
 
+__all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
+
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.artifact.store")
 
-__all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63
 
 
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)
-
-
 class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
     """Base class for async SQLSpec-backed ADK artifact metadata stores.
 
-    Manages artifact version metadata in a SQL table.  Content bytes are
+    Manages artifact version metadata in a SQL table. Content bytes are
     stored externally via ``sqlspec/storage/`` backends and referenced
     by canonical URI in each metadata row.
 
@@ -67,10 +43,6 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
 
     Args:
         config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - artifact_table: Artifact versions table name (default: "adk_artifact_versions")
     """
 
     __slots__ = ("_artifact_table", "_config")
@@ -136,7 +108,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         """List distinct artifact filenames.
 
         When ``session_id`` is provided, returns filenames from both
-        session-scoped and user-scoped artifacts.  When None, returns
+        session-scoped and user-scoped artifacts. When None, returns
         only user-scoped artifact filenames.
 
         Args:
@@ -171,7 +143,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         """Delete all version records for an artifact and return them.
 
         The caller uses the returned records to clean up content from
-        object storage.  Metadata is deleted first (fail-fast); content
+        object storage. Metadata is deleted first (fail-fast); content
         cleanup is best-effort.
 
         Args:
@@ -217,6 +189,31 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
             db_system=resolve_db_system(type(self).__name__),
             artifact_table=self._artifact_table,
         )
+
+
+def _validate_table_name(table_name: str) -> None:
+    """Validate table name for SQL safety.
+
+    Args:
+        table_name: Table name to validate.
+
+    Raises:
+        ValueError: If table name is invalid.
+    """
+    if not table_name:
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+
+    if len(table_name) > MAX_TABLE_NAME_LENGTH:
+        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
+        raise ValueError(msg)
+
+    if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        msg = (
+            f"Invalid table name: {table_name!r}. "
+            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
+        )
+        raise ValueError(msg)
 
 
 class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):

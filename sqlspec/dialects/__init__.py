@@ -6,7 +6,7 @@ assignment. Entry-point registration (``sqlglot.dialects`` group in
 
 Import this module to ensure all sqlspec dialects are available::
 
-    import sqlspec.dialects  # registers spanner, spangres, etc.
+ import sqlspec.dialects  # registers spanner, spangres, etc.
 """
 
 from sqlglot.dialects.dialect import Dialect
@@ -14,9 +14,9 @@ from sqlglot.dialects.dialect import Dialect
 from sqlspec.dialects.postgres import ParadeDB, PGVector
 from sqlspec.dialects.spanner import Spangres, Spanner
 
+__all__ = ("PGVector", "ParadeDB", "Spangres", "Spanner")
+
 Dialect.classes["pgvector"] = PGVector
 Dialect.classes["paradedb"] = ParadeDB
 Dialect.classes["spanner"] = Spanner
 Dialect.classes["spangres"] = Spangres
-
-__all__ = ("PGVector", "ParadeDB", "Spangres", "Spanner")

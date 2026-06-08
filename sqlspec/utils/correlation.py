@@ -11,6 +11,8 @@ from contextvars import ContextVar
 from logging import Logger, LoggerAdapter
 from typing import Any, ClassVar
 
+from mypy_extensions import mypyc_attr
+
 __all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
 
 correlation_id_var: "ContextVar[str | None]" = ContextVar("sqlspec_correlation_id", default=None)
@@ -91,7 +93,7 @@ class CorrelationContext:
 
 
 @contextmanager
-def correlation_context(correlation_id: str | None = None) -> Generator[str, None, None]:
+def correlation_context(correlation_id: "str | None" = None) -> "Generator[str, None, None]":
     """Convenience context manager for correlation ID tracking.
 
     Args:
@@ -113,6 +115,7 @@ def correlation_context(correlation_id: str | None = None) -> Generator[str, Non
         yield cid
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class _CorrelationAdapter(LoggerAdapter):  # pyright: ignore
     """Logger adapter that adds correlation ID to all logs."""
 

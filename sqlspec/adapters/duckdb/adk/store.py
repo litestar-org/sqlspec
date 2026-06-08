@@ -5,11 +5,6 @@ DuckDB is an OLAP database optimized for analytical queries. This adapter provid
 - Excellent performance for analytical queries on session data
 - Native JSON type support for flexible state storage
 - Perfect for development, testing, and analytical workloads
-
-Notes:
-    DuckDB is optimized for OLAP workloads and analytical queries. For highly
-    concurrent DML operations (frequent inserts/updates/deletes), consider
-    PostgreSQL or other OLTP-optimized databases.
 """
 
 import contextlib
@@ -40,40 +35,14 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
     Implements session and event storage for Google Agent Development Kit
     using DuckDB's synchronous driver with async wrappers via ``async_()``.
     Provides:
-    - Session state management with native JSON type
-    - Event history with single JSON blob (event_json) plus indexed scalars
-    - Native TIMESTAMPTZ type support
-    - Manual cascade delete (DuckDB has no FK CASCADE)
-    - Columnar storage for analytical queries
+        - Session state management with native JSON type
+        - Event history with single JSON blob (event_json) plus indexed scalars
+        - Native TIMESTAMPTZ type support
+        - Manual cascade delete (DuckDB has no FK CASCADE)
+        - Columnar storage for analytical queries
 
     Args:
         config: DuckDBConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.duckdb import DuckDBConfig
-        from sqlspec.adapters.duckdb.adk import DuckdbADKStore
-
-        config = DuckDBConfig(
-            database="sessions.ddb",
-            extension_config={
-                "adk": {
-                    "session_table": "my_sessions",
-                    "events_table": "my_events",
-                    "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
-                }
-            }
-        )
-        store = DuckdbADKStore(config)
-        await store.ensure_tables()
-
-    Notes:
-        - Uses DuckDB native JSON type for event_json and state
-        - TIMESTAMPTZ for date/time storage with microsecond precision
-        - event_json stores the full ADK Event as a single JSON blob
-        - Columnar storage provides excellent analytical query performance
-        - DuckDB doesn't support CASCADE in foreign keys (manual cascade required)
-        - Optimized for OLAP workloads; for high-concurrency writes use PostgreSQL
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -83,12 +52,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Args:
             config: DuckDBConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - session_table: Sessions table name (default: "adk_sessions")
-            - events_table: Events table name (default: "adk_events")
-            - owner_id_column: Optional owner FK column DDL (default: None)
         """
         super().__init__(config)
 
@@ -97,15 +60,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Returns:
             SQL statement to create adk_sessions table with indexes.
-
-        Notes:
-            - VARCHAR for IDs and names
-            - JSON type for state storage (DuckDB native)
-            - TIMESTAMPTZ for create_time and update_time
-            - CURRENT_TIMESTAMP for defaults
-            - Optional owner ID column for multi-tenant scenarios
-            - Composite index on (app_name, user_id) for listing
-            - Index on update_time DESC for recent session queries
         """
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -129,14 +83,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Returns:
             SQL statement to create adk_events table with indexes.
-
-        Notes:
-            - 5-column schema: session_id, invocation_id, author, timestamp, event_json
-            - event_json stores the full ADK Event as a single JSON blob
-            - No decomposed columns -- eliminates column drift with upstream ADK
-            - Foreign key constraint (DuckDB doesn't support CASCADE)
-            - Index on (session_id, timestamp ASC) for ordered event retrieval
-            - Manual cascade delete required in delete_session method
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -155,10 +101,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Returns:
             List of SQL statements to drop tables and indexes.
-
-        Notes:
-            Order matters: drop events table (child) before sessions (parent).
-            DuckDB automatically drops indexes when dropping tables.
         """
         return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
 
@@ -249,10 +191,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Returns:
             Created session record.
-
-        Notes:
-            Uses current UTC timestamp for create_time and update_time.
-            State is JSON-serialized using SQLSpec serializers.
         """
         return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
 
@@ -297,10 +235,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Returns:
             Session record or None if not found.
-
-        Notes:
-            DuckDB returns datetime objects for TIMESTAMPTZ columns.
-            JSON is parsed from database storage.
         """
         return await async_(self._get_session)(session_id)
 
@@ -325,10 +259,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
         Args:
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Update time is automatically set to current UTC timestamp.
         """
         await async_(self._update_session_state)(session_id, state)
 
@@ -347,9 +277,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Args:
             session_id: Session identifier.
-
-        Notes:
-            DuckDB doesn't support CASCADE in foreign keys, so we manually delete events first.
         """
         await async_(self._delete_session)(session_id)
 
@@ -402,9 +329,6 @@ class DuckdbADKStore(BaseAsyncADKStore["DuckDBConfig"]):
 
         Returns:
             List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
         """
         return await async_(self._list_sessions)(app_name, user_id)
 
@@ -570,42 +494,15 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
     Implements memory entry storage for Google Agent Development Kit
     using DuckDB's synchronous driver with async wrappers via ``async_()``.
     Provides:
-    - Session memory storage with native JSON type
-    - Simple ILIKE search or BM25 full-text search via FTS extension
-    - Native TIMESTAMP type support
-    - Deduplication via event_id unique constraint
-    - Efficient upserts using INSERT OR IGNORE
-    - Columnar storage for analytical queries
+        - Session memory storage with native JSON type
+        - Simple ILIKE search or BM25 full-text search via FTS extension
+        - Native TIMESTAMP type support
+        - Deduplication via event_id unique constraint
+        - Efficient upserts using INSERT OR IGNORE
+        - Columnar storage for analytical queries
 
     Args:
         config: DuckDBConfig with extension_config["adk"] settings.
-
-    Example:
-        from sqlspec.adapters.duckdb import DuckDBConfig
-        from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
-
-        config = DuckDBConfig(
-            database="app.ddb",
-            extension_config={
-                "adk": {
-                    "memory_table": "adk_memory_entries",
-                    "memory_max_results": 20,
-                }
-            }
-        )
-        store = DuckdbADKMemoryStore(config)
-        await store.ensure_tables()
-
-    Notes:
-        - Uses DuckDB native JSON type (not JSONB)
-        - TIMESTAMP for date/time storage with microsecond precision
-        - event_id UNIQUE constraint for deduplication
-        - Composite index on (app_name, user_id, timestamp DESC)
-        - FTS uses match_bm25() for BM25-ranked results (not @@ operator)
-        - FTS index is refreshed after inserts, not on every search
-        - Columnar storage provides excellent analytical query performance
-        - Optimized for OLAP workloads; for high-concurrency writes use PostgreSQL
-        - Configuration is read from config.extension_config["adk"]
     """
 
     __slots__ = ()
@@ -615,14 +512,6 @@ class DuckdbADKMemoryStore(BaseAsyncADKMemoryStore["DuckDBConfig"]):
 
         Args:
             config: DuckDBConfig instance.
-
-        Notes:
-            Configuration is read from config.extension_config["adk"]:
-            - memory_table: Memory table name (default: "adk_memory_entries")
-            - memory_use_fts: Enable full-text search when supported (default: False)
-            - memory_max_results: Max search results (default: 20)
-            - owner_id_column: Optional owner FK column DDL (default: None)
-            - enable_memory: Whether memory is enabled (default: True)
         """
         super().__init__(config)
 

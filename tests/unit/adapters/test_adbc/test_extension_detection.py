@@ -162,10 +162,10 @@ def test_adbc_config_provide_session_skips_extension_probe_for_non_postgres(monk
     """Non-postgres sessions should not create a connection for extension detection."""
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
 
-    def fail_create_connection() -> None:
+    def fail_create_connection(_self: AdbcConfig) -> None:
         raise AssertionError("non-postgres startup path should not probe extensions")
 
-    monkeypatch.setattr(config, "create_connection", fail_create_connection)
+    monkeypatch.setattr(AdbcConfig, "create_connection", fail_create_connection)
 
     session = config.provide_session()
 

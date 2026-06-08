@@ -9,8 +9,6 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from anyio import Path as AsyncPath
-
 from sqlspec.storage import storage_registry
 from sqlspec.utils.serializers import from_json as decode_json
 from sqlspec.utils.serializers import schema_dump
@@ -23,8 +21,154 @@ if TYPE_CHECKING:
 __all__ = ("open_fixture", "open_fixture_async", "write_fixture", "write_fixture_async")
 
 
+def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
+    """Load and parse a JSON fixture file with compression support.
+
+    Supports reading from:
+        - Regular JSON files (.json)
+        - Gzipped JSON files (.json.gz)
+        - Zipped JSON files (.json.zip)
+
+    Args:
+        fixtures_path: The path to look for fixtures (pathlib.Path)
+        fixture_name: The fixture name to load.
+
+    Returns:
+        The parsed JSON data
+    """
+    fixture_path = _find_fixture_file(fixtures_path, fixture_name)
+
+    if fixture_path.suffix in {".gz", ".zip"}:
+        f_data = _read_compressed_file(fixture_path)
+    else:
+        with fixture_path.open(mode="r", encoding="utf-8") as f:
+            f_data = f.read()
+
+    return decode_json(f_data)
+
+
+async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
+    """Load and parse a JSON fixture file asynchronously with compression support.
+
+    Supports reading from:
+        - Regular JSON files (.json)
+        - Gzipped JSON files (.json.gz)
+        - Zipped JSON files (.json.zip)
+
+    For compressed files, uses sync reading in a thread pool since gzip and zipfile
+    don't have native async equivalents.
+
+    Args:
+        fixtures_path: The path to look for fixtures (pathlib.Path)
+        fixture_name: The fixture name to load.
+
+    Returns:
+        The parsed JSON data
+    """
+    fixture_path = _find_fixture_file(fixtures_path, fixture_name)
+
+    if fixture_path.suffix in {".gz", ".zip"}:
+        f_data = await _async_read_compressed(fixture_path)
+    else:
+        f_data = await _async_read_text(fixture_path)
+
+    return decode_json(f_data)
+
+
+def write_fixture(
+    fixtures_path: str,
+    table_name: str,
+    data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",
+    storage_backend: str = "local",
+    compress: bool = False,
+    **storage_kwargs: Any,
+) -> None:
+    """Write fixture data to storage using SQLSpec storage backend.
+
+    Args:
+        fixtures_path: Base path where fixtures should be stored
+        table_name: Name of the table/fixture (used as filename)
+        data: Data to write - can be list of dicts, models, or single model
+        storage_backend: Storage backend to use (default: "local")
+        compress: Whether to gzip compress the output
+        **storage_kwargs: Additional arguments for the storage backend
+
+    Raises:
+        ValueError: If storage backend is not found
+    """
+    if storage_backend == "local":
+        uri = "file://"
+        storage_kwargs["base_path"] = _resolve_path_str(fixtures_path)
+    else:
+        uri = storage_backend
+
+    try:
+        storage = storage_registry.get(uri, **storage_kwargs)
+    except Exception as exc:
+        msg = f"Failed to get storage backend for '{storage_backend}': {exc}"
+        raise ValueError(msg) from exc
+
+    json_content = _serialize_data(data)
+
+    if compress:
+        file_path = f"{table_name}.json.gz"
+        content = gzip.compress(json_content.encode("utf-8"))
+        storage.write_bytes_sync(file_path, content)
+    else:
+        file_path = f"{table_name}.json"
+        storage.write_text_sync(file_path, json_content)
+
+
+async def write_fixture_async(
+    fixtures_path: str,
+    table_name: str,
+    data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",
+    storage_backend: str = "local",
+    compress: bool = False,
+    **storage_kwargs: Any,
+) -> None:
+    """Write fixture data to storage using SQLSpec storage backend asynchronously.
+
+    Args:
+        fixtures_path: Base path where fixtures should be stored
+        table_name: Name of the table/fixture (used as filename)
+        data: Data to write - can be list of dicts, models, or single model
+        storage_backend: Storage backend to use (default: "local")
+        compress: Whether to gzip compress the output
+        **storage_kwargs: Additional arguments for the storage backend
+
+    Raises:
+        ValueError: If storage backend is not found
+    """
+    if storage_backend == "local":
+        uri = "file://"
+        storage_kwargs["base_path"] = _resolve_path_str(fixtures_path)
+    else:
+        uri = storage_backend
+
+    try:
+        storage = storage_registry.get(uri, **storage_kwargs)
+    except Exception as exc:
+        msg = f"Failed to get storage backend for '{storage_backend}': {exc}"
+        raise ValueError(msg) from exc
+
+    json_content = await _async_serialize(data)
+
+    if compress:
+        file_path = f"{table_name}.json.gz"
+        content = await _async_compress(json_content)
+        await storage.write_bytes_async(file_path, content)
+    else:
+        file_path = f"{table_name}.json"
+        await storage.write_text_async(file_path, json_content)
+
+
 def _read_text_sync(path: "Path") -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _resolve_path_str(path: str) -> str:
+    return str(Path(path).resolve())
 
 
 def _compress_text(content: str) -> bytes:
@@ -87,64 +231,6 @@ def _find_fixture_file(fixtures_path: Any, fixture_name: str) -> Path:
     raise FileNotFoundError(msg)
 
 
-def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
-    """Load and parse a JSON fixture file with compression support.
-
-    Supports reading from:
-    - Regular JSON files (.json)
-    - Gzipped JSON files (.json.gz)
-    - Zipped JSON files (.json.zip)
-
-    Args:
-        fixtures_path: The path to look for fixtures (pathlib.Path)
-        fixture_name: The fixture name to load.
-
-
-    Returns:
-        The parsed JSON data
-    """
-    fixture_path = _find_fixture_file(fixtures_path, fixture_name)
-
-    if fixture_path.suffix in {".gz", ".zip"}:
-        f_data = _read_compressed_file(fixture_path)
-    else:
-        with fixture_path.open(mode="r", encoding="utf-8") as f:
-            f_data = f.read()
-
-    return decode_json(f_data)
-
-
-async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
-    """Load and parse a JSON fixture file asynchronously with compression support.
-
-    Supports reading from:
-    - Regular JSON files (.json)
-    - Gzipped JSON files (.json.gz)
-    - Zipped JSON files (.json.zip)
-
-    For compressed files, uses sync reading in a thread pool since gzip and zipfile
-    don't have native async equivalents.
-
-    Args:
-        fixtures_path: The path to look for fixtures (pathlib.Path)
-        fixture_name: The fixture name to load.
-
-
-    Returns:
-        The parsed JSON data
-    """
-    fixture_path = _find_fixture_file(fixtures_path, fixture_name)
-
-    if fixture_path.suffix in {".gz", ".zip"}:
-        read_func = async_(_read_compressed_file)
-        f_data = await read_func(fixture_path)
-    else:
-        async_read = async_(_read_text_sync)
-        f_data = await async_read(fixture_path)
-
-    return decode_json(f_data)
-
-
 def _serialize_data(data: Any) -> str:
     """Serialize data to JSON string, handling different input types.
 
@@ -170,91 +256,7 @@ def _serialize_data(data: Any) -> str:
     return encode_json(schema_dump(data))
 
 
-def write_fixture(
-    fixtures_path: str,
-    table_name: str,
-    data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",
-    storage_backend: str = "local",
-    compress: bool = False,
-    **storage_kwargs: Any,
-) -> None:
-    """Write fixture data to storage using SQLSpec storage backend.
-
-    Args:
-        fixtures_path: Base path where fixtures should be stored
-        table_name: Name of the table/fixture (used as filename)
-        data: Data to write - can be list of dicts, models, or single model
-        storage_backend: Storage backend to use (default: "local")
-        compress: Whether to gzip compress the output
-        **storage_kwargs: Additional arguments for the storage backend
-
-    Raises:
-        ValueError: If storage backend is not found
-    """
-    if storage_backend == "local":
-        uri = "file://"
-        storage_kwargs["base_path"] = str(Path(fixtures_path).resolve())
-    else:
-        uri = storage_backend
-
-    try:
-        storage = storage_registry.get(uri, **storage_kwargs)
-    except Exception as exc:
-        msg = f"Failed to get storage backend for '{storage_backend}': {exc}"
-        raise ValueError(msg) from exc
-
-    json_content = _serialize_data(data)
-
-    if compress:
-        file_path = f"{table_name}.json.gz"
-        content = gzip.compress(json_content.encode("utf-8"))
-        storage.write_bytes_sync(file_path, content)
-    else:
-        file_path = f"{table_name}.json"
-        storage.write_text_sync(file_path, json_content)
-
-
-async def write_fixture_async(
-    fixtures_path: str,
-    table_name: str,
-    data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",
-    storage_backend: str = "local",
-    compress: bool = False,
-    **storage_kwargs: Any,
-) -> None:
-    """Write fixture data to storage using SQLSpec storage backend asynchronously.
-
-    Args:
-        fixtures_path: Base path where fixtures should be stored
-        table_name: Name of the table/fixture (used as filename)
-        data: Data to write - can be list of dicts, models, or single model
-        storage_backend: Storage backend to use (default: "local")
-        compress: Whether to gzip compress the output
-        **storage_kwargs: Additional arguments for the storage backend
-
-    Raises:
-        ValueError: If storage backend is not found
-    """
-    if storage_backend == "local":
-        uri = "file://"
-        storage_kwargs["base_path"] = str(await AsyncPath(fixtures_path).resolve())
-    else:
-        uri = storage_backend
-
-    try:
-        storage = storage_registry.get(uri, **storage_kwargs)
-    except Exception as exc:
-        msg = f"Failed to get storage backend for '{storage_backend}': {exc}"
-        raise ValueError(msg) from exc
-
-    serialize_func = async_(_serialize_data)
-    json_content = await serialize_func(data)
-
-    if compress:
-        file_path = f"{table_name}.json.gz"
-        compress_func = async_(_compress_text)
-        content = await compress_func(json_content)
-        await storage.write_bytes_async(file_path, content)
-    else:
-        file_path = f"{table_name}.json"
-        await storage.write_text_async(file_path, json_content)
+_async_read_text = async_(_read_text_sync)
+_async_read_compressed = async_(_read_compressed_file)
+_async_serialize = async_(_serialize_data)
+_async_compress = async_(_compress_text)

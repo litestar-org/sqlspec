@@ -10,6 +10,8 @@ from sqlspec.adapters.asyncpg.core import (
     build_connection_config,
     default_statement_config,
     register_json_codecs,
+    register_pgvector_support,
+    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
@@ -73,8 +75,8 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB AsyncPG adapter.
 
     on_connection_create: Async callback executed when a connection is acquired from pool.
-        Receives the raw asyncpg connection for low-level driver configuration.
-        Called after internal setup (JSON codecs, pgvector registration).
+     Receives the raw asyncpg connection for low-level driver configuration.
+     Called after internal setup (JSON codecs, pgvector registration).
     """
 
     enable_auto_retry: NotRequired[bool]
@@ -96,6 +98,7 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
 class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
     """Uses pool.acquire() context manager pattern instead of direct acquire/release."""
 
+    # _connection inherited from AsyncPoolSessionFactory.__slots__ is never written; this class uses _ctx exclusively via the pool.acquire() context manager pattern.
     __slots__ = ("_ctx",)
 
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
@@ -154,14 +157,16 @@ class CockroachAsyncpgConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        raw_enable_pgvector = bool(driver_features and driver_features.get("enable_pgvector") is True)
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+        driver_features["enable_pgvector"] = raw_enable_pgvector
 
         driver_features.setdefault("enable_auto_retry", True)
 
         # Extract user connection hook before storing driver_features
-        features_dict = dict(driver_features) if driver_features else {}
+        features_dict = dict(driver_features)
         self._user_connection_hook: Callable[[CockroachAsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -191,6 +196,9 @@ class CockroachAsyncpgConfig(
                 encoder=self.driver_features.get("json_serializer", to_json),
                 decoder=self.driver_features.get("json_deserializer", from_json),
             )
+
+        if self.driver_features.get("enable_pgvector") is True:
+            await register_pgvector_support(connection)
 
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
@@ -224,7 +232,8 @@ class CockroachAsyncpgConfig(
         return CockroachAsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config or self.statement_config or default_statement_config,
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )

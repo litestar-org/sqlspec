@@ -55,12 +55,12 @@ class PyMysqlDriverFeatures(TypedDict):
     """PyMySQL driver feature flags.
 
     json_serializer: Custom JSON serializer function.
-        Defaults to sqlspec.utils.serializers.to_json.
+     Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
-        Defaults to sqlspec.utils.serializers.from_json.
+     Defaults to sqlspec.utils.serializers.from_json.
     on_connection_create: Callback executed when a connection is created.
-        Receives the raw pymysql connection for low-level driver configuration.
-        Runs after connection creation.
+     Receives the raw pymysql connection for low-level driver configuration.
+     Runs after connection creation.
     enable_events: Enable database event channel support.
     events_backend: Event channel backend selection.
     """
@@ -139,8 +139,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        extra = config.pop("extra", {})
-        config.update(extra)
         return PyMysqlConnectionPool(
             config,
             recycle_seconds=pool_recycle,

@@ -101,10 +101,6 @@ class CapacityLimiter:
 _default_limiter = CapacityLimiter(1000)
 
 
-def _return_value(value: Any) -> Any:
-    return value
-
-
 class _RunWrapper(Generic[ParamSpecT, ReturnT]):
     __slots__ = ("__dict__", "_function")
 
@@ -155,7 +151,7 @@ def await_(
     Args:
         async_function: The async function to convert.
         raise_sync_error: If True, raises RuntimeError when no loop exists.
-                         If False (default), uses portal pattern for automatic bridging.
+            If False (default), uses portal pattern for automatic bridging.
 
     Returns:
         A blocking function that runs the async function.

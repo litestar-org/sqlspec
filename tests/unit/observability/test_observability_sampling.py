@@ -3,6 +3,8 @@
 import pytest
 
 from sqlspec.observability import AWSLogFormatter, GCPLogFormatter, ObservabilityConfig, SamplingConfig, StatementEvent
+from sqlspec.observability._config import LifecycleHook as ConfigLifecycleHook
+from sqlspec.observability._dispatcher import LifecycleHook as DispatcherLifecycleHook
 
 # =============================================================================
 # ObservabilityConfig Sampling Tests
@@ -99,6 +101,24 @@ def test_sampling_merge_partial_override() -> None:
     assert merged.sampling.deterministic is True
     assert merged.sampling.force_sample_on_error is True
     assert merged.sampling.force_sample_slow_queries_ms == 100.0
+
+
+def test_lifecycle_hook_alias_matches_dispatcher() -> None:
+    assert ConfigLifecycleHook is DispatcherLifecycleHook
+
+
+def test_sampling_merge_allows_false_boolean_overrides() -> None:
+    base = ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.5, deterministic=True, force_sample_on_error=True))
+    override = ObservabilityConfig(
+        sampling=SamplingConfig(sample_rate=1.0, deterministic=False, force_sample_on_error=False)
+    )
+
+    merged = ObservabilityConfig.merge(base, override)
+
+    assert merged.sampling is not None
+    assert merged.sampling.sample_rate == 1.0
+    assert merged.sampling.deterministic is False
+    assert merged.sampling.force_sample_on_error is False
 
 
 # =============================================================================

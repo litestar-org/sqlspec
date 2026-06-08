@@ -6,8 +6,9 @@ type coercion, error handling, and query job management.
 """
 
 import io
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
+from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
@@ -29,7 +30,6 @@ from sqlspec.adapters.bigquery.core import (
     try_bulk_insert,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
-from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import (
     StatementConfig,
     build_arrow_result_from_table,
@@ -38,7 +38,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
-from sqlspec.exceptions import MissingDependencyError, SQLSpecError, StorageCapabilityError
+from sqlspec.exceptions import MissingDependencyError, StorageCapabilityError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -59,9 +59,9 @@ if TYPE_CHECKING:
     )
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-logger = get_logger(__name__)
-
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
+
+logger = get_logger(__name__)
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -97,11 +97,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_job_result_timeout",
         "_job_retry",
         "_job_retry_deadline",
         "_json_serializer",
         "_literal_inliner",
-        "_type_converter",
     )
     dialect = "bigquery"
 
@@ -113,11 +113,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> None:
         features = driver_features or {}
 
-        enable_uuid_conversion = features.get("enable_uuid_conversion", True)
-        self._type_converter = BigQueryOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
-
         if statement_config is None:
-            statement_config = default_statement_config.replace(cache_config=get_cache_config())
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
 
         parameter_json_serializer = statement_config.parameter_config.json_serializer
         if parameter_json_serializer is None:
@@ -132,6 +131,26 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry = build_retry(self._job_retry_deadline)
+        self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
+
+    def _job_request_timeout(self) -> float | None:
+        timeout = self._job_result_timeout
+        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+            return float(timeout)
+        return None
+
+    def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
+        return run_query_job(
+            connection,
+            sql,
+            parameters,
+            default_job_config=self._default_query_job_config,
+            job_config=None,
+            json_serializer=self._json_serializer,
+            retry=self._job_retry,
+            timeout=self._job_request_timeout(),
+            job_retry=self._job_retry,
+        )
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -148,15 +167,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with query results and metadata
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.job = run_query_job(
-            cursor,
-            sql,
-            parameters,
-            default_job_config=self._default_query_job_config,
-            job_config=None,
-            json_serializer=self._json_serializer,
-        )
-        job_result = cursor.job.result(job_retry=self._job_retry)
+        cursor.job = self._run_query_job(cursor, sql, parameters)
+        job_result = cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
             statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
@@ -216,15 +228,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         script_sql = build_inlined_script(
             sql, prepared_parameters, parsed_expression, allow_parse=allow_parse, literal_inliner=self._literal_inliner
         )
-        cursor.job = run_query_job(
-            cursor,
-            script_sql,
-            None,
-            default_job_config=self._default_query_job_config,
-            job_config=None,
-            json_serializer=self._json_serializer,
-        )
-        cursor.job.result(job_retry=self._job_retry)
+        cursor.job = self._run_query_job(cursor, script_sql, None)
+        cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -248,15 +253,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         last_rowcount = 0
 
         for stmt in statements:
-            job = run_query_job(
-                cursor,
-                stmt,
-                prepared_parameters or {},
-                default_job_config=self._default_query_job_config,
-                job_config=None,
-                json_serializer=self._json_serializer,
-            )
-            job.result(job_retry=self._job_retry)
+            job = self._run_query_job(cursor, stmt, prepared_parameters or {})
+            job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
             last_job = job
             last_rowcount = normalize_script_rowcount(last_rowcount, job)
             successful_count += 1
@@ -334,19 +332,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         Raises:
             MissingDependencyError: If pyarrow not installed, or if Storage API not available and native_only=True
-
-        Example:
-            >>> # Will use native Arrow if Storage API available, otherwise converts
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM dataset.users WHERE age > @age",
-            ...     {"age": 18},
-            ... )
-            >>> df = result.to_pandas()
-
-            >>> # Force native Arrow (raises if Storage API unavailable)
-            >>> result = driver.select_to_arrow(
-            ...     "SELECT * FROM dataset.users", native_only=True
-            ... )
         """
         ensure_pyarrow()
 
@@ -387,15 +372,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         arrow_result: ArrowResult | None = None
 
         with exc_handler:
-            query_job = run_query_job(
-                self.connection,
-                sql,
-                driver_params,
-                default_job_config=self._default_query_job_config,
-                job_config=None,
-                json_serializer=self._json_serializer,
-            )
-            query_job.result()  # Wait for completion
+            query_job = self._run_query_job(self.connection, sql, driver_params)
+            query_job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)  # Wait for completion
 
             # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()

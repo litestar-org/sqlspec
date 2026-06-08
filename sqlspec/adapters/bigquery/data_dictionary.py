@@ -4,17 +4,17 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.data_dictionary.dialects.bigquery import (
     format_bigquery_information_schema_tables,
     format_bigquery_schema_prefix,
 )
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-
-__all__ = ("BigQueryDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
+
+__all__ = ("BigQueryDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -34,7 +34,6 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             None because BigQuery does not expose version info.
-
         """
         _ = driver
         return None
@@ -48,7 +47,6 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         _ = driver
         return self.resolve_feature_flag(feature, None)
@@ -62,7 +60,6 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             BigQuery-specific type name.
-
         """
         _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)

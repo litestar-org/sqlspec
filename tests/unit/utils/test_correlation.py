@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.utils.correlation import CorrelationContext, correlation_context, get_correlation_adapter
+from sqlspec.utils.correlation import CorrelationContext, get_correlation_adapter
 
 
 def setup_function() -> None:
@@ -172,28 +172,28 @@ def test_thread_safety() -> None:
         assert results[i] == f"thread-{i}"
 
 
-def test_with_provided_id() -> None:
-    """Test correlation_context with provided ID."""
+def test_context_classmethod_with_provided_id() -> None:
+    """Test CorrelationContext.context with provided ID."""
     test_id = "function-test"
 
-    with correlation_context(test_id) as context_id:
+    with CorrelationContext.context(test_id) as context_id:
         assert context_id == test_id
         assert CorrelationContext.get() == test_id
 
 
-def test_with_generated_id() -> None:
-    """Test correlation_context with auto-generated ID."""
-    with correlation_context() as context_id:
+def test_context_classmethod_with_generated_id() -> None:
+    """Test CorrelationContext.context with auto-generated ID."""
+    with CorrelationContext.context() as context_id:
         assert isinstance(context_id, str)
         assert len(context_id) > 0
         assert CorrelationContext.get() == context_id
         uuid.UUID(context_id)
 
 
-def test_compatibility_with_class_method() -> None:
-    """Test that function and class method are compatible."""
+def test_nested_classmethod_context() -> None:
+    """Test that nested classmethod contexts restore correctly."""
     with CorrelationContext.context("class-method"):
-        with correlation_context("function") as func_id:
+        with CorrelationContext.context("function") as func_id:
             assert func_id == "function"
             assert CorrelationContext.get() == "function"
 
@@ -279,7 +279,7 @@ def test_database_operation_simulation() -> None:
         correlation_id = CorrelationContext.get()
         return {"query": query, "correlation_id": correlation_id, "result": "success"}
 
-    with correlation_context() as correlation_id:
+    with CorrelationContext.context() as correlation_id:
         result1 = simulate_db_query("SELECT * FROM users")
         result2 = simulate_db_query("SELECT * FROM orders")
 
@@ -295,10 +295,10 @@ def test_nested_operation_contexts() -> None:
     def operation(name: str) -> None:
         results.append({"operation": name, "correlation_id": CorrelationContext.get()})
 
-    with correlation_context("request-123") as outer_id:
+    with CorrelationContext.context("request-123") as outer_id:
         operation("outer-start")
 
-        with correlation_context("sub-operation-456") as inner_id:
+        with CorrelationContext.context("sub-operation-456") as inner_id:
             operation("inner")
             assert inner_id != outer_id
 
@@ -317,7 +317,7 @@ async def test_async_context_preservation() -> None:
         await asyncio.sleep(delay)
         return CorrelationContext.get() or "no-id"
 
-    with correlation_context("async-test") as correlation_id:
+    with CorrelationContext.context("async-test") as correlation_id:
         tasks = [async_operation(0.01), async_operation(0.02), async_operation(0.005)]
 
         results = await asyncio.gather(*tasks)
@@ -340,7 +340,7 @@ def test_logging_integration() -> None:
     correlation_adapter = get_correlation_adapter(logger)
 
     try:
-        with correlation_context("integration-test"):
+        with CorrelationContext.context("integration-test"):
             correlation_adapter.info("Test message with correlation")
 
         log_output = log_stream.getvalue()
@@ -356,7 +356,7 @@ def test_concurrent_contexts() -> None:
 
     def worker_with_context(worker_id: int) -> tuple[int, str | None]:
         correlation_id = f"worker-{worker_id}"
-        with correlation_context(correlation_id):
+        with CorrelationContext.context(correlation_id):
             import time
 
             time.sleep(0.01)

@@ -1,3 +1,4 @@
+# pyright: reportAssignmentType=false
 """Tests for sqlspec.utils.serializers module.
 
 Tests for the canonical JSON serialization surface and contract-level regressions.
@@ -26,29 +27,21 @@ from sqlspec.utils.serializers._schema import reset_serializer_cache
 
 def test_to_json_basic_types() -> None:
     """Test serialization of basic Python types."""
-
     assert to_json("hello") == '"hello"'
-
     assert to_json(42) == "42"
-
     assert to_json(True) == "true"
     assert to_json(False) == "false"
-
     assert to_json(None) == "null"
 
 
 def test_to_json_collections() -> None:
     """Test serialization of collections."""
-
     list_result = to_json([1, 2, 3])
     assert list_result in {"[1,2,3]", "[1, 2, 3]"}
     assert to_json([]) == "[]"
-
     result = to_json({"key": "value", "num": 42})
-
     parsed = json.loads(result)
     assert parsed == {"key": "value", "num": 42}
-
     assert to_json({}) == "{}"
 
 
@@ -58,9 +51,7 @@ def test_to_json_nested_structures() -> None:
         "users": [{"id": 1, "name": "Alice", "active": True}, {"id": 2, "name": "Bob", "active": False}],
         "metadata": {"total": 2, "page": 1},
     }
-
     result = to_json(nested)
-
     parsed = json.loads(result)
     assert parsed == nested
 
@@ -69,7 +60,6 @@ def test_to_json_unicode_strings() -> None:
     """Test serialization of Unicode strings."""
     unicode_text = "Hello 世界 🌍 café naïve résumé"
     result = to_json(unicode_text)
-
     parsed = json.loads(result)
     assert parsed == unicode_text
 
@@ -78,7 +68,6 @@ def test_to_json_special_characters() -> None:
     """Test serialization of strings with special characters."""
     special_chars = "Line1\nLine2\tTabbed\"Quoted'Single\\Backslash"
     result = to_json(special_chars)
-
     parsed = json.loads(result)
     assert parsed == special_chars
 
@@ -86,21 +75,16 @@ def test_to_json_special_characters() -> None:
 def test_to_json_offset_pagination() -> None:
     """Test serialization of OffsetPagination containers."""
     pagination = OffsetPagination([{"id": 1}], limit=10, offset=5, total=20)
-
     result = to_json(pagination)
-
     parsed = json.loads(result)
     assert parsed == {"items": [{"id": 1}], "limit": 10, "offset": 5, "total": 20}
 
 
 def test_to_json_numeric_edge_cases() -> None:
     """Test serialization of edge case numeric values."""
-
     large_int = 9223372036854775807
     assert to_json(large_int) == str(large_int)
-
     assert to_json(-42) == "-42"
-
     assert to_json(0) == "0"
     assert to_json(0.0) == "0.0"
 
@@ -117,7 +101,6 @@ def test_to_json_tuple_serialization() -> None:
     tuple_result = to_json((1, 2, 3))
     assert tuple_result in {"[1,2,3]", "[1, 2, 3]"}
     assert to_json(()) == "[]"
-
     nested_tuple = ((1, 2), (3, 4))
     result = to_json(nested_tuple)
     parsed = json.loads(result)
@@ -127,7 +110,6 @@ def test_to_json_tuple_serialization() -> None:
 def test_to_json_none_in_collections() -> None:
     """Test serialization of None values within collections."""
     data_with_none = {"value": None, "items": [1, None, "text"], "nested": {"null_field": None}}
-
     result = to_json(data_with_none)
     parsed = json.loads(result)
     assert parsed == data_with_none
@@ -143,45 +125,26 @@ def test_to_json_mixed_type_collections() -> None:
 
 def test_from_json_basic_types() -> None:
     """Test deserialization of basic JSON types."""
-
     assert from_json('"hello"') == "hello"
-
     assert from_json("42") == 42
     assert from_json("3.14") == pytest.approx(3.14)
-
     assert from_json("true") is True
     assert from_json("false") is False
-
     assert from_json("null") is None
 
 
 def test_from_json_collections() -> None:
     """Test deserialization of JSON collections."""
-
     assert from_json("[1, 2, 3]") == [1, 2, 3]
     assert from_json("[]") == []
-
     result = from_json('{"key": "value", "num": 42}')
     assert result == {"key": "value", "num": 42}
-
     assert from_json("{}") == {}
 
 
 def test_from_json_nested_structures() -> None:
     """Test deserialization of nested JSON structures."""
-    json_string = """
-    {
-        "users": [
-            {"id": 1, "name": "Alice", "active": true},
-            {"id": 2, "name": "Bob", "active": false}
-        ],
-        "metadata": {
-            "total": 2,
-            "page": 1
-        }
-    }
-    """
-
+    json_string = '\n    {\n        "users": [\n            {"id": 1, "name": "Alice", "active": true},\n            {"id": 2, "name": "Bob", "active": false}\n        ],\n        "metadata": {\n            "total": 2,\n            "page": 1\n        }\n    }\n    '
     result = from_json(json_string)
     expected = {
         "users": [{"id": 1, "name": "Alice", "active": True}, {"id": 2, "name": "Bob", "active": False}],
@@ -207,12 +170,9 @@ def test_from_json_escaped_characters() -> None:
 
 def test_from_json_numeric_edge_cases() -> None:
     """Test deserialization of edge case numeric values."""
-
     assert from_json("9223372036854775807") == 9223372036854775807
-
     assert from_json("-42") == -42
     assert from_json("-3.14") == pytest.approx(-3.14)
-
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0
 
@@ -226,30 +186,24 @@ def test_from_json_scientific_notation() -> None:
 
 def test_from_json_whitespace_handling() -> None:
     """Test that whitespace in JSON is handled correctly."""
-
     assert from_json('  "hello"  ') == "hello"
     assert from_json('\n\t{\n\t  "key": "value"\n\t}\n') == {"key": "value"}
 
 
 def test_from_json_invalid_json_raises_error() -> None:
     """Test that invalid JSON raises appropriate errors."""
-
     try:
         import msgspec
 
         expected_errors = (ValueError, json.JSONDecodeError, msgspec.DecodeError)
     except ImportError:
         expected_errors = (ValueError, json.JSONDecodeError)
-
     with pytest.raises(expected_errors):
         from_json("invalid json")
-
     with pytest.raises(expected_errors):
         from_json('{"unclosed": "object"')
-
     with pytest.raises(expected_errors):
         from_json('["unclosed array"')
-
     with pytest.raises(expected_errors):
         from_json("")
 
@@ -262,10 +216,8 @@ def test_from_json_trailing_commas_error() -> None:
         expected_errors = (ValueError, json.JSONDecodeError, msgspec.DecodeError)
     except ImportError:
         expected_errors = (ValueError, json.JSONDecodeError)
-
     with pytest.raises(expected_errors):
         from_json('{"key": "value",}')
-
     with pytest.raises(expected_errors):
         from_json("[1, 2, 3,]")
 
@@ -273,7 +225,6 @@ def test_from_json_trailing_commas_error() -> None:
 def test_round_trip_basic() -> None:
     """Test round-trip with basic data types."""
     test_data = ["string", 42, math.pi, True, False, None, [], {}]
-
     for data in test_data:
         serialized = to_json(data)
         deserialized = from_json(serialized)
@@ -295,7 +246,6 @@ def test_round_trip_complex() -> None:
             "deeply_nested": {"level": 3, "items": ["a", "b", "c"]},
         },
     }
-
     serialized = to_json(complex_data)
     deserialized = from_json(serialized)
     assert deserialized == complex_data
@@ -311,7 +261,6 @@ def test_round_trip_unicode() -> None:
         "accented": "café résumé naïve",
         "special": 'quotes"backslash\\newline\n',
     }
-
     serialized = to_json(unicode_data)
     deserialized = from_json(serialized)
     assert deserialized == unicode_data
@@ -326,7 +275,6 @@ def test_round_trip_numeric_precision() -> None:
         "zero": 0,
         "large": 9223372036854775807,
     }
-
     serialized = to_json(numeric_data)
     deserialized = from_json(serialized)
     assert deserialized == numeric_data
@@ -340,7 +288,6 @@ def test_round_trip_empty_structures() -> None:
         "list_with_empty": [[], {}],
         "dict_with_empty": {"empty_list": [], "empty_dict": {}},
     }
-
     serialized = to_json(empty_data)
     deserialized = from_json(serialized)
     assert deserialized == empty_data
@@ -356,14 +303,11 @@ def test_edge_case_very_long_strings() -> None:
 
 def test_edge_case_deeply_nested_structures() -> None:
     """Test deeply nested data structures."""
-
     nested = "base"
     for i in range(100):
         nested = {"level": i, "data": nested}
-
     serialized = to_json(nested)
     deserialized = from_json(serialized)
-
     current = deserialized
     for i in range(99, -1, -1):
         assert current["level"] == i
@@ -381,7 +325,6 @@ def test_edge_case_large_arrays() -> None:
 
 def test_edge_case_dict_with_numeric_keys() -> None:
     """Test that dict keys are properly handled."""
-
     data = {"1": "one", "2": "two", "key": "value"}
     serialized = to_json(data)
     deserialized = from_json(serialized)
@@ -390,13 +333,10 @@ def test_edge_case_dict_with_numeric_keys() -> None:
 
 def test_edge_case_special_float_values() -> None:
     """Test handling of special float values."""
-
     special_values = [float("inf"), float("-inf"), float("nan")]
-
     for value in special_values:
         try:
             serialized = to_json(value)
-
             json.loads(serialized)
         except (ValueError, OverflowError):
             pass
@@ -405,9 +345,7 @@ def test_edge_case_special_float_values() -> None:
 def test_compatibility_produces_valid_json() -> None:
     """Test that to_json produces JSON that can be parsed by stdlib json."""
     test_data = {"string": "hello", "number": 42, "array": [1, 2, 3], "nested": {"key": "value"}}
-
     serialized = to_json(test_data)
-
     stdlib_parsed = json.loads(serialized)
     assert stdlib_parsed == test_data
 
@@ -415,7 +353,6 @@ def test_compatibility_produces_valid_json() -> None:
 def test_compatibility_parses_stdlib_json_output() -> None:
     """Test that from_json can parse output from stdlib json."""
     test_data = {"string": "hello", "number": 42, "array": [1, 2, 3], "nested": {"key": "value"}}
-
     stdlib_serialized = json.dumps(test_data)
     our_parsed = from_json(stdlib_serialized)
     assert our_parsed == test_data
@@ -423,12 +360,9 @@ def test_compatibility_parses_stdlib_json_output() -> None:
 
 def test_compatibility_consistent_formatting() -> None:
     """Test that formatting is consistent with expectations."""
-
     simple_data = {"key": "value", "num": 42}
-
     our_output = to_json(simple_data)
     stdlib_output = json.dumps(simple_data)
-
     assert from_json(our_output) == json.loads(stdlib_output) == simple_data
 
 
@@ -457,17 +391,14 @@ def test_parametrized_round_trip(test_input: Any) -> None:
 
 def test_imports_work_correctly() -> None:
     """Test that the canonical serializer imports round-trip correctly."""
-
     assert callable(to_json)
     assert callable(from_json)
-
     test_data = {"test": "import"}
     assert from_json(to_json(test_data)) == test_data
 
 
 def test_module_all_exports() -> None:
     """Test that __all__ contains the expected exports."""
-
     expected = {
         "DEFAULT_TYPE_ENCODERS",
         "SchemaSerializer",
@@ -483,7 +414,6 @@ def test_module_all_exports() -> None:
         "serialize_collection",
         "to_json",
     }
-
     assert set(__all__) == expected
 
 
@@ -494,13 +424,11 @@ def test_error_messages_are_helpful() -> None:
         assert False, "Should have raised an exception"
     except Exception as e:
         error_msg = str(e).lower()
-
         assert any(word in error_msg for word in ["json", "decode", "parse", "invalid", "expect", "malformed"])
 
 
 def test_to_json_embeds_pydantic_models_as_objects() -> None:
     """Pydantic models should normalize to plain objects, not JSON strings."""
-
     try:
         from pydantic import BaseModel
     except ImportError:
@@ -511,13 +439,11 @@ def test_to_json_embeds_pydantic_models_as_objects() -> None:
         label: str
 
     result = to_json({"payload": Payload(identifier=1, label="alpha")})
-
     assert json.loads(result) == {"payload": {"identifier": 1, "label": "alpha"}}
 
 
 def test_to_json_raises_type_error_for_unsupported_objects() -> None:
     """Unsupported objects should fail explicitly instead of stringifying."""
-
     with pytest.raises(TypeError, match="unsupported"):
         to_json({"payload": object()})
 
@@ -532,7 +458,6 @@ def test_numpy_array_enc_hook_basic() -> None:
 
     arr = np.array([1.0, 2.0, 3.0])
     result = numpy_array_enc_hook(arr)
-
     assert result == [1.0, 2.0, 3.0]
     assert isinstance(result, list)
 
@@ -544,12 +469,9 @@ def test_numpy_array_enc_hook_multidimensional() -> None:
 
     arr_2d = np.array([[1, 2], [3, 4]])
     result = numpy_array_enc_hook(arr_2d)
-
     assert result == [[1, 2], [3, 4]]
-
     arr_3d = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
     result_3d = numpy_array_enc_hook(arr_3d)
-
     assert result_3d == [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
 
 
@@ -560,7 +482,6 @@ def test_numpy_array_enc_hook_empty() -> None:
 
     empty_arr = np.array([])
     result = numpy_array_enc_hook(empty_arr)
-
     assert result == []
 
 
@@ -571,13 +492,10 @@ def test_numpy_array_enc_hook_various_dtypes() -> None:
 
     arr_float32 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     assert numpy_array_enc_hook(arr_float32) == [1.0, 2.0, 3.0]
-
     arr_float64 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     assert numpy_array_enc_hook(arr_float64) == [1.0, 2.0, 3.0]
-
     arr_int64 = np.array([1, 2, 3], dtype=np.int64)
     assert numpy_array_enc_hook(arr_int64) == [1, 2, 3]
-
     arr_uint8 = np.array([1, 2, 3], dtype=np.uint8)
     assert numpy_array_enc_hook(arr_uint8) == [1, 2, 3]
 
@@ -585,7 +503,6 @@ def test_numpy_array_enc_hook_various_dtypes() -> None:
 @pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
 def test_numpy_array_enc_hook_non_array() -> None:
     """Test that non-array values are passed through unchanged."""
-
     assert numpy_array_enc_hook([1, 2, 3]) == [1, 2, 3]
     assert numpy_array_enc_hook("string") == "string"
     assert numpy_array_enc_hook(42) == 42
@@ -598,7 +515,6 @@ def test_numpy_array_dec_hook_basic() -> None:
     import numpy as np
 
     result = numpy_array_dec_hook([1.0, 2.0, 3.0])
-
     assert isinstance(result, np.ndarray)
     assert np.array_equal(result, np.array([1.0, 2.0, 3.0]))
 
@@ -610,7 +526,6 @@ def test_numpy_array_dec_hook_multidimensional() -> None:
 
     result_2d = numpy_array_dec_hook([[1, 2], [3, 4]])
     expected_2d = np.array([[1, 2], [3, 4]])
-
     assert isinstance(result_2d, np.ndarray)
     assert np.array_equal(result_2d, expected_2d)
 
@@ -621,7 +536,6 @@ def test_numpy_array_dec_hook_empty() -> None:
     import numpy as np
 
     result = numpy_array_dec_hook([])
-
     assert isinstance(result, np.ndarray)
     assert len(result) == 0
 
@@ -629,7 +543,6 @@ def test_numpy_array_dec_hook_empty() -> None:
 @pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
 def test_numpy_array_dec_hook_non_list() -> None:
     """Test that non-list values are passed through unchanged."""
-
     assert numpy_array_dec_hook("string") == "string"
     assert numpy_array_dec_hook(42) == 42
     assert numpy_array_dec_hook(None) is None
@@ -638,11 +551,9 @@ def test_numpy_array_dec_hook_non_list() -> None:
 @pytest.mark.skipif(not numpy_available, reason="NumPy not installed")
 def test_numpy_array_dec_hook_supports_litestar_decoder_signature() -> None:
     """The decoder hook should accept Litestar's ``(target_type, value)`` contract."""
-
     import numpy as np
 
     decoded = numpy_array_dec_hook(np.ndarray, [1.0, 2.0, 3.0])
-
     assert isinstance(decoded, np.ndarray)
     assert np.array_equal(decoded, np.array([1.0, 2.0, 3.0]))
 
@@ -655,7 +566,6 @@ def test_numpy_array_predicate_basic() -> None:
     arr = np.array([1, 2, 3])
     assert numpy_array_predicate(arr) is True
     assert numpy_array_predicate(np.ndarray) is True
-
     assert numpy_array_predicate([1, 2, 3]) is False
     assert numpy_array_predicate("string") is False
     assert numpy_array_predicate(42) is False
@@ -668,10 +578,8 @@ def test_numpy_round_trip() -> None:
     import numpy as np
 
     original = np.array([1.5, 2.5, 3.5])
-
     encoded = numpy_array_enc_hook(original)
     decoded = numpy_array_dec_hook(encoded)
-
     assert isinstance(encoded, list)
     assert isinstance(decoded, np.ndarray)
     assert np.array_equal(decoded, original)
@@ -683,10 +591,8 @@ def test_numpy_round_trip_multidimensional() -> None:
     import numpy as np
 
     original = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
-
     encoded = numpy_array_enc_hook(original)
     decoded = numpy_array_dec_hook(encoded)
-
     assert isinstance(encoded, list)
     assert isinstance(decoded, np.ndarray)
     assert np.array_equal(decoded, original)
@@ -698,12 +604,9 @@ def test_numpy_serialization_with_to_json() -> None:
     import numpy as np
 
     arr = np.array([1.0, 2.0, 3.0])
-
     encoded = numpy_array_enc_hook(arr)
     json_str = to_json(encoded)
-
     assert isinstance(json_str, str)
-
     decoded_list = from_json(json_str)
     assert decoded_list == [1.0, 2.0, 3.0]
 
@@ -727,11 +630,9 @@ def test_structural_encoder_resolution_is_cached_by_exact_type(monkeypatch: pyte
         return original_probe(value)
 
     monkeypatch.setattr(json_module, "is_dataclass_instance", count_probe)
-
     assert json_module._resolve_structural_encoder(_Payload(id=1)) == {"id": 1}
     assert json_module._resolve_structural_encoder(_Payload(id=2)) == {"id": 2}
     assert call_count == 1
-
     json_module._STRUCTURAL_ENCODER_CACHE.clear()
 
 
@@ -757,10 +658,8 @@ def test_schema_serializer_cache_is_lru_bounded(monkeypatch: pytest.MonkeyPatch)
     first = get_collection_serializer(_First(id=1))
     second = get_collection_serializer(_Second(id=1))
     assert len(schema_module._SCHEMA_SERIALIZERS) == 2
-
     assert get_collection_serializer(_First(id=2)) is first
     third = get_collection_serializer(_Third(id=1))
-
     assert len(schema_module._SCHEMA_SERIALIZERS) == 2
     assert schema_module._make_serializer_key(_First(id=3), True, False) in schema_module._SCHEMA_SERIALIZERS
     assert schema_module._make_serializer_key(_Third(id=2), True, False) in schema_module._SCHEMA_SERIALIZERS
@@ -784,283 +683,279 @@ def test_schema_serializer_cache_handles_concurrent_registration() -> None:
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         serializer_ids = set(executor.map(get_serializer, range(32)))
-
     assert len(serializer_ids) == 1
 
 
-class TestSchemaDumpWireFormatOptOut:
-    """``wire_format=False`` opts msgspec into Python attribute names (ignores rename=)."""
+@pytest.fixture(autouse=True)
+def schema_dump_wire_format_opt_out__reset_cache() -> "Any":
+    reset_serializer_cache()
+    yield
+    reset_serializer_cache()
 
-    @pytest.fixture(autouse=True)
-    def _reset_cache(self) -> "Any":
-        reset_serializer_cache()
-        yield
-        reset_serializer_cache()
 
-    def test_msgspec_rename_camel_python_names_opt_in(self) -> None:
-        import msgspec
+def test_schema_dump_wire_format_opt_out_msgspec_rename_camel_python_names_opt_in() -> None:
+    import msgspec
 
-        class _User(msgspec.Struct, rename="camel"):
-            user_id: str
-            display_name: str
+    class _User(msgspec.Struct, rename="camel"):
+        user_id: str
+        display_name: str
 
-        obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj, wire_format=False) == {"user_id": "abc", "display_name": "Cody"}
+    obj = _User(user_id="abc", display_name="Cody")
+    assert schema_dump(obj, wire_format=False) == {"user_id": "abc", "display_name": "Cody"}
 
-    def test_msgspec_rename_kebab_python_names_opt_in(self) -> None:
-        import msgspec
 
-        class _User(msgspec.Struct, rename="kebab"):
-            user_id: str
+def test_schema_dump_wire_format_opt_out_msgspec_rename_kebab_python_names_opt_in() -> None:
+    import msgspec
 
-        obj = _User(user_id="abc")
-        assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
+    class _User(msgspec.Struct, rename="kebab"):
+        user_id: str
 
-    def test_wire_format_cache_isolation(self) -> None:
-        """Cache must distinguish wire_format=True from =False for the same Struct type."""
-        import msgspec
+    obj = _User(user_id="abc")
+    assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
 
-        class _User(msgspec.Struct, rename="camel"):
-            user_id: str
 
-        obj = _User(user_id="abc")
-        assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
-        assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
-        assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
-        assert schema_dump(obj) == {"user_id": "abc"}  # default is wire_format=False
+def test_schema_dump_wire_format_opt_out_wire_format_cache_isolation() -> None:
+    """Cache must distinguish wire_format=True from =False for the same Struct type."""
+    import msgspec
 
-    @pytest.mark.parametrize(
-        ("exclude_unset", "wire_format", "expected_key"),
-        [(False, False, "user_id"), (False, True, "userId"), (True, False, "user_id"), (True, True, "userId")],
+    class _User(msgspec.Struct, rename="camel"):
+        user_id: str
+
+    obj = _User(user_id="abc")
+    assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
+    assert schema_dump(obj, wire_format=False) == {"user_id": "abc"}
+    assert schema_dump(obj, wire_format=True) == {"userId": "abc"}
+    assert schema_dump(obj) == {"user_id": "abc"}
+
+
+@pytest.mark.parametrize(
+    ("exclude_unset", "wire_format", "expected_key"),
+    [(False, False, "user_id"), (False, True, "userId"), (True, False, "user_id"), (True, True, "userId")],
+)
+def test_schema_dump_wire_format_opt_out_msgspec_fields_are_precomputed_per_serializer(
+    monkeypatch: pytest.MonkeyPatch, exclude_unset: bool, wire_format: bool, expected_key: str
+) -> None:
+    """Serializer registration should precompute immutable msgspec field metadata once."""
+    import msgspec
+
+    from sqlspec.utils.serializers import _schema as schema_module
+
+    class _User(msgspec.Struct, rename="camel"):
+        user_id: str
+
+    original_fields = schema_module.msgspec_fields
+    call_count = 0
+
+    def count_fields(schema_type: type[Any]) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return original_fields(schema_type)
+
+    monkeypatch.setattr(schema_module, "msgspec_fields", count_fields)
+    pipeline = get_collection_serializer(_User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format)
+    assert call_count == 1
+    dumped = pipeline.dump_many([_User(user_id="first"), _User(user_id="second")])
+    assert dumped == [{expected_key: "first"}, {expected_key: "second"}]
+    assert call_count == 1
+
+
+def test_schema_dump_wire_format_opt_out_msgspec_dump_modes_use_one_parameterized_function() -> None:
+    """All msgspec serializer modes should share one dump implementation."""
+    import msgspec
+
+    from sqlspec.utils.serializers import _schema as schema_module
+
+    class _User(msgspec.Struct, rename="camel"):
+        user_id: str
+
+    dump_function = getattr(schema_module, "_dump_msgspec_struct")
+    removed_function_names = (
+        "_dump_msgspec_fields",
+        "_dump_msgspec_excluding_unset",
+        "_dump_msgspec_fields_python",
+        "_dump_msgspec_excluding_unset_python",
     )
-    def test_msgspec_fields_are_precomputed_per_serializer(
-        self, monkeypatch: pytest.MonkeyPatch, exclude_unset: bool, wire_format: bool, expected_key: str
-    ) -> None:
-        """Serializer registration should precompute immutable msgspec field metadata once."""
-        import msgspec
-
-        from sqlspec.utils.serializers import _schema as schema_module
-
-        class _User(msgspec.Struct, rename="camel"):
-            user_id: str
-
-        original_fields = schema_module.msgspec_fields
-        call_count = 0
-
-        def count_fields(schema_type: type[Any]) -> Any:
-            nonlocal call_count
-            call_count += 1
-            return original_fields(schema_type)
-
-        monkeypatch.setattr(schema_module, "msgspec_fields", count_fields)
-
+    assert not any(hasattr(schema_module, name) for name in removed_function_names)
+    for exclude_unset, wire_format in ((False, False), (False, True), (True, False), (True, True)):
         pipeline = get_collection_serializer(
             _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format
         )
-        assert call_count == 1
-
-        dumped = pipeline.dump_many([_User(user_id="first"), _User(user_id="second")])
-
-        assert dumped == [{expected_key: "first"}, {expected_key: "second"}]
-        assert call_count == 1
-
-    def test_msgspec_dump_modes_use_one_parameterized_function(self) -> None:
-        """All msgspec serializer modes should share one dump implementation."""
-        import msgspec
-
-        from sqlspec.utils.serializers import _schema as schema_module
-
-        class _User(msgspec.Struct, rename="camel"):
-            user_id: str
-
-        dump_function = getattr(schema_module, "_dump_msgspec_struct")
-        removed_function_names = (
-            "_dump_msgspec_fields",
-            "_dump_msgspec_excluding_unset",
-            "_dump_msgspec_fields_python",
-            "_dump_msgspec_excluding_unset_python",
-        )
-        assert not any(hasattr(schema_module, name) for name in removed_function_names)
-
-        for exclude_unset, wire_format in ((False, False), (False, True), (True, False), (True, True)):
-            pipeline = get_collection_serializer(
-                _User(user_id="first"), exclude_unset=exclude_unset, wire_format=wire_format
-            )
-            assert getattr(getattr(pipeline, "_dump"), "func") is dump_function
-
-    def test_pydantic_unaffected_by_wire_format(self) -> None:
-        pytest.importorskip("pydantic")
-        import pydantic
-
-        class _User(pydantic.BaseModel):
-            user_id: str = pydantic.Field(alias="userId")
-
-            model_config = pydantic.ConfigDict(populate_by_name=True)
-
-        obj = _User(userId="abc")  # construct via alias to keep type-checkers happy
-        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
-        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
-
-    def test_dataclass_unaffected_by_wire_format(self) -> None:
-        from dataclasses import dataclass
-
-        @dataclass
-        class _User:
-            user_id: str
-
-        obj = _User(user_id="abc")
-        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
-        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
-
-    def test_attrs_unaffected_by_wire_format(self) -> None:
-        pytest.importorskip("attrs")
-        import attrs
-
-        @attrs.define
-        class _User:
-            user_id: str = attrs.field(alias="userId")
-
-        obj = _User(userId="abc")  # attrs alias= is for __init__ only
-        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
-        assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
+        assert getattr(getattr(pipeline, "_dump"), "func") is dump_function
 
 
-class TestSchemaDumpRename:
-    """Regression suite for GitHub #418 — schema_dump honors msgspec rename meta when ``wire_format=True``."""
+def test_schema_dump_wire_format_opt_out_pydantic_unaffected_by_wire_format() -> None:
+    pytest.importorskip("pydantic")
+    import pydantic
 
-    @pytest.fixture(autouse=True)
-    def _reset_cache(self) -> "Any":
-        reset_serializer_cache()
-        yield
-        reset_serializer_cache()
+    class _User(pydantic.BaseModel):
+        user_id: str = pydantic.Field(alias="userId")
+        model_config = pydantic.ConfigDict(populate_by_name=True)
 
-    def test_rename_camel(self) -> None:
-        import msgspec
-
-        class _User(msgspec.Struct, rename="camel"):
-            user_id: str
-            display_name: str
-
-        obj = _User(user_id="abc-123", display_name="Cody")
-        assert schema_dump(obj, wire_format=True) == {"userId": "abc-123", "displayName": "Cody"}
-
-    def test_rename_kebab(self) -> None:
-        import msgspec
-
-        class _User(msgspec.Struct, rename="kebab"):
-            user_id: str
-            display_name: str
-
-        obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj, wire_format=True) == {"user-id": "abc", "display-name": "Cody"}
-
-    def test_rename_pascal(self) -> None:
-        import msgspec
-
-        class _User(msgspec.Struct, rename="pascal"):
-            user_id: str
-            display_name: str
-
-        obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj, wire_format=True) == {"UserId": "abc", "DisplayName": "Cody"}
-
-    def test_rename_callable(self) -> None:
-        import msgspec
-
-        def _upper(name: str) -> str:
-            return name.upper()
-
-        class _User(msgspec.Struct, rename=_upper):
-            user_id: str
-            display_name: str
-
-        obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj, wire_format=True) == {"USER_ID": "abc", "DISPLAY_NAME": "Cody"}
-
-    def test_no_rename_preserved(self) -> None:
-        import msgspec
-
-        class _User(msgspec.Struct):
-            user_id: str
-            display_name: str
-
-        obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
-
-    def test_exclude_unset_with_rename(self) -> None:
-        import msgspec
-        from msgspec import UNSET
-
-        class _User(msgspec.Struct, rename="camel", omit_defaults=False):
-            user_id: str = UNSET  # type: ignore[assignment]
-            display_name: str = UNSET  # type: ignore[assignment]
-
-        obj = _User(user_id="abc")
-        assert schema_dump(obj, exclude_unset=True, wire_format=True) == {"userId": "abc"}
+    obj = _User(userId="abc")
+    assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+    assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
 
 
-class TestSchemaDumpDefaultIsPythonNames:
-    """Default ``schema_dump(struct)`` emits Python attribute names regardless of ``rename=`` meta.
+def test_schema_dump_wire_format_opt_out_dataclass_unaffected_by_wire_format() -> None:
+    from dataclasses import dataclass
 
-    Cross-library consistency contract: the same call shape on every supported schema kind
-    (msgspec, Pydantic, dataclass, attrs, dict) returns Python-attribute-name keys. Wire-aligned
-    output requires explicit ``wire_format=True``.
-    """
+    @dataclass
+    class _User:
+        user_id: str
 
-    @pytest.fixture(autouse=True)
-    def _reset_cache(self) -> "Any":
-        reset_serializer_cache()
-        yield
-        reset_serializer_cache()
+    obj = _User(user_id="abc")
+    assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+    assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
 
-    def test_msgspec_rename_camel_default_emits_python_names(self) -> None:
-        import msgspec
 
-        class _User(msgspec.Struct, rename="camel"):
-            user_id: str
-            display_name: str
+def test_schema_dump_wire_format_opt_out_attrs_unaffected_by_wire_format() -> None:
+    pytest.importorskip("attrs")
+    import attrs
 
-        obj = _User(user_id="abc", display_name="Cody")
-        assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
+    @attrs.define
+    class _User:
+        user_id: str = attrs.field(alias="userId")
 
-    def test_msgspec_rename_kebab_default_emits_python_names(self) -> None:
-        import msgspec
+    obj = _User(userId="abc")
+    assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+    assert schema_dump(obj, exclude_unset=False, wire_format=False) == {"user_id": "abc"}
 
-        class _User(msgspec.Struct, rename="kebab"):
-            user_id: str
 
-        obj = _User(user_id="abc")
-        assert schema_dump(obj) == {"user_id": "abc"}
+@pytest.fixture(autouse=True)
+def schema_dump_rename__reset_cache() -> "Any":
+    reset_serializer_cache()
+    yield
+    reset_serializer_cache()
 
-    def test_pydantic_alias_default_emits_python_names(self) -> None:
-        pytest.importorskip("pydantic")
-        import pydantic
 
-        class _User(pydantic.BaseModel):
-            user_id: str = pydantic.Field(alias="userId")
+def test_schema_dump_rename_rename_camel() -> None:
+    import msgspec
 
-            model_config = pydantic.ConfigDict(populate_by_name=True)
+    class _User(msgspec.Struct, rename="camel"):
+        user_id: str
+        display_name: str
 
-        obj = _User(userId="abc")
-        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+    obj = _User(user_id="abc-123", display_name="Cody")
+    assert schema_dump(obj, wire_format=True) == {"userId": "abc-123", "displayName": "Cody"}
 
-    def test_dataclass_default_emits_python_names(self) -> None:
-        from dataclasses import dataclass
 
-        @dataclass
-        class _User:
-            user_id: str
+def test_schema_dump_rename_rename_kebab() -> None:
+    import msgspec
 
-        obj = _User(user_id="abc")
-        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+    class _User(msgspec.Struct, rename="kebab"):
+        user_id: str
+        display_name: str
 
-    def test_attrs_default_emits_python_names(self) -> None:
-        pytest.importorskip("attrs")
-        import attrs
+    obj = _User(user_id="abc", display_name="Cody")
+    assert schema_dump(obj, wire_format=True) == {"user-id": "abc", "display-name": "Cody"}
 
-        @attrs.define
-        class _User:
-            user_id: str = attrs.field(alias="userId")
 
-        obj = _User(userId="abc")
-        assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+def test_schema_dump_rename_rename_pascal() -> None:
+    import msgspec
+
+    class _User(msgspec.Struct, rename="pascal"):
+        user_id: str
+        display_name: str
+
+    obj = _User(user_id="abc", display_name="Cody")
+    assert schema_dump(obj, wire_format=True) == {"UserId": "abc", "DisplayName": "Cody"}
+
+
+def test_schema_dump_rename_rename_callable() -> None:
+    import msgspec
+
+    def _upper(name: str) -> str:
+        return name.upper()
+
+    class _User(msgspec.Struct, rename=_upper):
+        user_id: str
+        display_name: str
+
+    obj = _User(user_id="abc", display_name="Cody")
+    assert schema_dump(obj, wire_format=True) == {"USER_ID": "abc", "DISPLAY_NAME": "Cody"}
+
+
+def test_schema_dump_rename_no_rename_preserved() -> None:
+    import msgspec
+
+    class _User(msgspec.Struct):
+        user_id: str
+        display_name: str
+
+    obj = _User(user_id="abc", display_name="Cody")
+    assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
+
+
+def test_schema_dump_rename_exclude_unset_with_rename() -> None:
+    import msgspec
+    from msgspec import UNSET
+
+    class _User(msgspec.Struct, rename="camel", omit_defaults=False):
+        user_id: str = UNSET
+        display_name: str = UNSET
+
+    obj = _User(user_id="abc")
+    assert schema_dump(obj, exclude_unset=True, wire_format=True) == {"userId": "abc"}
+
+
+@pytest.fixture(autouse=True)
+def schema_dump_default_is_python_names__reset_cache() -> "Any":
+    reset_serializer_cache()
+    yield
+    reset_serializer_cache()
+
+
+def test_schema_dump_default_is_python_names_msgspec_rename_camel_default_emits_python_names() -> None:
+    import msgspec
+
+    class _User(msgspec.Struct, rename="camel"):
+        user_id: str
+        display_name: str
+
+    obj = _User(user_id="abc", display_name="Cody")
+    assert schema_dump(obj) == {"user_id": "abc", "display_name": "Cody"}
+
+
+def test_schema_dump_default_is_python_names_msgspec_rename_kebab_default_emits_python_names() -> None:
+    import msgspec
+
+    class _User(msgspec.Struct, rename="kebab"):
+        user_id: str
+
+    obj = _User(user_id="abc")
+    assert schema_dump(obj) == {"user_id": "abc"}
+
+
+def test_schema_dump_default_is_python_names_pydantic_alias_default_emits_python_names() -> None:
+    pytest.importorskip("pydantic")
+    import pydantic
+
+    class _User(pydantic.BaseModel):
+        user_id: str = pydantic.Field(alias="userId")
+        model_config = pydantic.ConfigDict(populate_by_name=True)
+
+    obj = _User(userId="abc")
+    assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+
+
+def test_schema_dump_default_is_python_names_dataclass_default_emits_python_names() -> None:
+    from dataclasses import dataclass
+
+    @dataclass
+    class _User:
+        user_id: str
+
+    obj = _User(user_id="abc")
+    assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+
+
+def test_schema_dump_default_is_python_names_attrs_default_emits_python_names() -> None:
+    pytest.importorskip("attrs")
+    import attrs
+
+    @attrs.define
+    class _User:
+        user_id: str = attrs.field(alias="userId")
+
+    obj = _User(userId="abc")
+    assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}

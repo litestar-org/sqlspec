@@ -12,37 +12,12 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 @pytest.fixture(scope="function")
-async def aiosqlite_session() -> "AsyncGenerator[AiosqliteDriver, None]":
-    """Create an aiosqlite session with test table.
-
-    Ensures proper pool cleanup to prevent event loop issues
-    when running with pytest-xdist and function-scoped event loops.
-    """
+async def aiosqlite_session_config() -> "AsyncGenerator[AiosqliteConfig, None]":
+    """Provide a per-test config for sessions that create mutable tables."""
     config = AiosqliteConfig()
 
     try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    value INTEGER DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            await session.commit()
-
-            try:
-                yield session
-            finally:
-                try:
-                    await session.commit()
-                except Exception:
-                    try:
-                        await session.rollback()
-                    except Exception:
-                        pass
+        yield config
     finally:
         if config.connection_instance:
             await config.close_pool()
@@ -50,12 +25,36 @@ async def aiosqlite_session() -> "AsyncGenerator[AiosqliteDriver, None]":
 
 
 @pytest.fixture(scope="function")
-async def aiosqlite_config() -> "AsyncGenerator[AiosqliteConfig, None]":
-    """Provide AiosqliteConfig for connection tests.
+async def aiosqlite_session(aiosqlite_session_config: AiosqliteConfig) -> "AsyncGenerator[AiosqliteDriver, None]":
+    """Create an aiosqlite session with a fresh test table."""
 
-    Ensures proper pool cleanup to prevent event loop issues
-    when running with pytest-xdist and function-scoped event loops.
-    """
+    async with aiosqlite_session_config.provide_session() as session:
+        await session.execute_script("""
+            CREATE TABLE IF NOT EXISTS test_table (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                value INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        await session.commit()
+
+        try:
+            yield session
+        finally:
+            try:
+                await session.commit()
+            except Exception:
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+
+
+@pytest.fixture(scope="session")
+async def aiosqlite_config() -> "AsyncGenerator[AiosqliteConfig, None]":
+    """Provide a reusable config for tests that own their session cleanup."""
     config = AiosqliteConfig()
 
     try:

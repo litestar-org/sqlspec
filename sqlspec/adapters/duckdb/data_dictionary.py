@@ -4,13 +4,13 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-
-__all__ = ("DuckDBDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
+
+__all__ = ("DuckDBDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -30,7 +30,6 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             DuckDB version information or None if detection fails.
-
         """
         driver_id = id(driver)
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
@@ -63,7 +62,6 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         version_info = self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
@@ -77,7 +75,6 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             DuckDB-specific type name.
-
         """
         _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)

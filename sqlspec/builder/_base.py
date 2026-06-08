@@ -26,6 +26,7 @@ from sqlspec.core import (
     StatementConfig,
     get_cache,
     get_cache_config,
+    hash_expression,
     hash_optimized_expression,
 )
 from sqlspec.core.filters import StatementFilter
@@ -187,7 +188,6 @@ class QueryBuilder(ABC):
 
         Returns:
             The current SQLGlot expression or None if not set
-
         """
         return self._expression
 
@@ -196,7 +196,6 @@ class QueryBuilder(ABC):
 
         Args:
             expression: SQLGlot expression to set
-
         """
         if not is_expression(expression):
             self._raise_invalid_expression_type(expression)
@@ -207,7 +206,6 @@ class QueryBuilder(ABC):
 
         Returns:
             True if expression is set, False otherwise
-
         """
         return self._expression is not None
 
@@ -217,7 +215,6 @@ class QueryBuilder(ABC):
 
         Returns:
             A new sqlglot expression appropriate for the query type.
-
         """
 
     @property
@@ -227,7 +224,6 @@ class QueryBuilder(ABC):
 
         Returns:
             type[ResultT]: The type of the result.
-
         """
 
     @staticmethod
@@ -240,7 +236,6 @@ class QueryBuilder(ABC):
 
         Raises:
             SQLBuilderError: Always raises this exception.
-
         """
         raise SQLBuilderError(message) from cause
 
@@ -253,7 +248,6 @@ class QueryBuilder(ABC):
 
         Raises:
             TypeError: Always raised for type mismatch
-
         """
         msg = f"Expected Expression, got {type(expression)}"
         raise TypeError(msg)
@@ -268,7 +262,6 @@ class QueryBuilder(ABC):
 
         Raises:
             SQLBuilderError: Always raised for CTE errors
-
         """
         msg = f"CTE '{alias}': {message}"
         raise SQLBuilderError(msg)
@@ -282,7 +275,6 @@ class QueryBuilder(ABC):
 
         Raises:
             SQLBuilderError: Always raised with chained cause
-
         """
         msg = f"Failed to parse CTE query: {cause!s}"
         raise SQLBuilderError(msg) from cause
@@ -296,7 +288,6 @@ class QueryBuilder(ABC):
 
         Returns:
             Expression representing the current builder state with CTEs applied.
-
         """
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
@@ -339,7 +330,7 @@ class QueryBuilder(ABC):
             cte_select_expression = query_expr.copy()
             param_mapping = self._merge_cte_parameters(alias, query.parameters)
             updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
-            if not isinstance(updated_expression, exp.Select):  # pragma: no cover - defensive
+            if not isinstance(updated_expression, exp.Select):  # pragma: no cover
                 msg = "CTE placeholder update produced non-select expression"
                 raise SQLBuilderError(msg)
             return updated_expression
@@ -347,7 +338,7 @@ class QueryBuilder(ABC):
         if isinstance(query, str):
             try:
                 parsed_expression = sqlglot.parse_one(query, read=self.dialect_name)
-            except SQLGlotParseError as e:  # pragma: no cover - defensive
+            except SQLGlotParseError as e:  # pragma: no cover
                 self._raise_cte_parse_error(e)
             if not isinstance(parsed_expression, exp.Select):
                 self._raise_cte_query_error(
@@ -367,11 +358,10 @@ class QueryBuilder(ABC):
 
         Args:
             value: The value of the parameter.
-            context: Optional context hint for parameter naming (e.g., "where", "join")
+            context: Optional context hint for parameter naming
 
         Returns:
-            str: The placeholder name for the parameter (e.g., :param_1 or :where_param_1).
-
+            str: The placeholder name for the parameter.
         """
         self._parameter_counter += 1
 
@@ -389,7 +379,6 @@ class QueryBuilder(ABC):
 
         Returns:
             Parameter placeholder name.
-
         """
         return self._add_parameter(value, context=context)
 
@@ -405,7 +394,6 @@ class QueryBuilder(ABC):
 
         Returns:
             A new expression with literals replaced by parameter placeholders
-
         """
         return expression.transform(_ExpressionParameterizer(self), copy=False)
 
@@ -418,11 +406,10 @@ class QueryBuilder(ABC):
         Args:
             value: The value of the parameter.
             name: Optional explicit name for the parameter. If None, a name
-                  will be generated.
+                will be generated.
 
         Returns:
             tuple[Self, str]: The builder instance and the parameter name.
-
         """
         if name:
             if name in self._parameters:
@@ -440,7 +427,6 @@ class QueryBuilder(ABC):
 
         Args:
             parameters: Mapping of parameter names to values.
-
         """
         if not parameters:
             return
@@ -456,7 +442,6 @@ class QueryBuilder(ABC):
 
         Args:
             ctes: Iterable of CTE expressions to register.
-
         """
         for cte in ctes:
             alias = self._resolve_cte_alias(cte)
@@ -485,7 +470,6 @@ class QueryBuilder(ABC):
 
         Returns:
             A unique parameter name that doesn't exist in current parameters
-
         """
         current_index = self._parameter_name_counters.get(base_name, 0)
 
@@ -506,10 +490,6 @@ class QueryBuilder(ABC):
         self._parameter_name_counters[base_name] = next_index
         return candidate
 
-    def _create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
-        """Backwards-compatible placeholder helper (delegates to create_placeholder)."""
-        return self.create_placeholder(value, base_name)
-
     def create_placeholder(self, value: Any, base_name: str) -> tuple[exp.Placeholder, str]:
         """Create placeholder expression with a unique parameter name.
 
@@ -519,7 +499,6 @@ class QueryBuilder(ABC):
 
         Returns:
             Tuple of placeholder expression and the final parameter name.
-
         """
         param_name = self._generate_unique_parameter_name(base_name)
         _, param_name = self.add_parameter(value, name=param_name)
@@ -534,7 +513,6 @@ class QueryBuilder(ABC):
 
         Returns:
             Mapping of old parameter names to new unique names
-
         """
         param_mapping = {}
         for old_name, value in parameters.items():
@@ -552,7 +530,6 @@ class QueryBuilder(ABC):
 
         Returns:
             Updated expression with new placeholder names
-
         """
         return expression.transform(_PlaceholderReplacer(param_mapping), copy=False)
 
@@ -564,18 +541,13 @@ class QueryBuilder(ABC):
 
         Returns:
             A unique cache key representing the builder state and configuration
-
         """
         dialect_name: str = self.dialect_name or "default"
 
         if self._expression is None:
             self._expression = self._create_base_expression()
 
-        if self._expression:
-            expr_sql = self._expression.sql()
-            expr_hash = hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()
-        else:
-            expr_hash = "None"
+        expr_hash = str(hash_expression(self._expression)) if self._expression is not None else "None"
 
         parameters_snapshot = sorted(self._parameters.items())
         parameters_hash = hashlib.sha256(str(parameters_snapshot).encode()).hexdigest()[:8]
@@ -613,11 +585,10 @@ class QueryBuilder(ABC):
         Args:
             alias: The alias for the CTE.
             query: The CTE query, which can be another QueryBuilder instance,
-                   a raw SQL string, or a sqlglot Select expression.
+                a raw SQL string, or a sqlglot Select expression.
 
         Returns:
             Self: The current builder instance for method chaining.
-
         """
         if alias in self._with_ctes:
             self._raise_sql_builder_error(f"CTE with alias '{alias}' already exists.")
@@ -631,20 +602,10 @@ class QueryBuilder(ABC):
 
         Args:
             dialect: Optional dialect override. If provided, generates SQL for this dialect
-                    instead of the builder's default dialect.
+                instead of the builder's default dialect.
 
         Returns:
             BuiltQuery: A dataclass containing the SQL string and parameters.
-
-        Examples:
-            # Use builder's default dialect
-            query = sql.select("*").from_("products")
-            result = query.build()
-
-            # Override dialect at build time
-            postgres_sql = query.build(dialect="postgres")
-            mysql_sql = query.build(dialect="mysql")
-
         """
         final_expression = self._build_final_expression()
 
@@ -676,30 +637,16 @@ class QueryBuilder(ABC):
 
         Args:
             show_parameters: If True, replace parameter placeholders with actual values (for debugging).
-                           If False (default), return SQL with parameter placeholders.
+                If False (default), return SQL with parameter placeholders.
             dialect: Optional dialect override. If provided, generates SQL for this dialect
-                    instead of the builder's default dialect.
+                instead of the builder's default dialect.
 
         Returns:
             SQL string with or without parameter values filled in
 
-        Examples:
-            Get SQL with placeholders (for execution):
-                sql_str = query.to_sql()
-                # "SELECT * FROM products WHERE id = :id"
-
-            Get SQL with values (for debugging):
-                sql_str = query.to_sql(show_parameters=True)
-                # "SELECT * FROM products WHERE id = 123"
-
-            Override dialect at output time:
-                postgres_sql = query.to_sql(dialect="postgres")
-                mysql_sql = query.to_sql(dialect="mysql")
-
         Warning:
             SQL with show_parameters=True is for debugging ONLY.
             Never execute SQL with interpolated parameters directly - use parameterized queries.
-
         """
         safe_query = self.build(dialect=dialect)
 
@@ -732,7 +679,6 @@ class QueryBuilder(ABC):
 
         Returns:
             The optimized expression
-
         """
         if not self.enable_optimization:
             return expression
@@ -778,7 +724,6 @@ class QueryBuilder(ABC):
 
         Returns:
             SQL: A SQL statement object.
-
         """
         cache_config = get_cache_config()
         if not cache_config.compiled_cache_enabled:
@@ -804,12 +749,11 @@ class QueryBuilder(ABC):
         WHERE clauses, ORDER BY, LIMIT/OFFSET, etc.
 
         Args:
-            *filters: Statement filters (e.g., InCollectionFilter, SearchFilter, OrderByFilter).
+            *filters: Statement filters.
             config: Optional SQL configuration.
 
         Returns:
             SQL statement with all filters applied.
-
         """
         sql_statement = self.to_statement(config)
         for filter_obj in filters:
@@ -824,10 +768,17 @@ class QueryBuilder(ABC):
 
         Returns:
             SQL: A SQL statement object.
-
         """
         dialect_override = config.dialect if config else None
         safe_query = self.build(dialect=dialect_override)
+        statement_expression = self._build_final_expression(copy=True)
+
+        if self.enable_optimization and isinstance(statement_expression, exp.Expr):
+            statement_expression = self._optimize_expression(statement_expression)
+
+        target_dialect = dialect_override or safe_query.dialect
+        if self._is_oracle_dialect(target_dialect) and isinstance(statement_expression, exp.Expr):
+            statement_expression = self._unquote_identifiers_for_oracle(statement_expression)
 
         kwargs, parameters = self._extract_statement_parameters(safe_query.parameters)
 
@@ -839,23 +790,11 @@ class QueryBuilder(ABC):
                 dialect=safe_query.dialect,
             )
 
-        sql_string = safe_query.sql
-        if (
-            config.dialect is not None
-            and config.dialect != safe_query.dialect
-            and isinstance(self._expression, exp.Expr)
-        ):
-            try:
-                identify = self._should_identify(config.dialect)
-                sql_string = self._expression.sql(dialect=config.dialect, pretty=True, identify=identify)
-            except Exception:
-                sql_string = safe_query.sql
-
         if kwargs:
-            return SQL(sql_string, statement_config=config, **kwargs)
+            return SQL(statement_expression, statement_config=config, **kwargs)
         if parameters:
-            return SQL(sql_string, *parameters, statement_config=config)
-        return SQL(sql_string, statement_config=config)
+            return SQL(statement_expression, *parameters, statement_config=config)
+        return SQL(statement_expression, statement_config=config)
 
     def _extract_statement_parameters(
         self, raw_parameters: Any
@@ -867,7 +806,6 @@ class QueryBuilder(ABC):
 
         Returns:
             Tuple of (kwargs, parameters) for SQL statement construction
-
         """
         if isinstance(raw_parameters, dict):
             return raw_parameters, None
@@ -885,7 +823,6 @@ class QueryBuilder(ABC):
 
         Returns:
             str: The SQL string for this query.
-
         """
         return self.build().sql
 
@@ -909,7 +846,6 @@ class QueryBuilder(ABC):
 
         Args:
             sql_obj: Object with parameters attribute containing parameter mappings
-
         """
         if not has_expression_and_parameters(sql_obj):
             return
@@ -998,7 +934,6 @@ class QueryBuilder(ABC):
 
         Returns:
             BuiltQuery containing SQL and parameters.
-
         """
         expr: exp.Expr | None = None
 

@@ -4,13 +4,13 @@ from typing import TYPE_CHECKING, ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.typing import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-
-__all__ = ("SpannerDataDictionary",)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
+
+__all__ = ("SpannerDataDictionary",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -30,7 +30,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             None since Spanner does not expose version information.
-
         """
         _ = driver
         return None
@@ -44,7 +43,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             True if feature is supported, False otherwise.
-
         """
         _ = driver
         return self.resolve_feature_flag(feature, None)
@@ -58,7 +56,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
 
         Returns:
             Spanner-specific type name.
-
         """
         _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)

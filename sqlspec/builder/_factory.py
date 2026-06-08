@@ -5,8 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
@@ -220,8 +219,11 @@ def build_copy_to_statement(
     )
 
 
+@final
 class SQLFactory:
     """Factory for creating SQL builders and column expressions."""
+
+    __slots__ = ("dialect",)
 
     @staticmethod
     def _detect_type_from_expression(parsed_expr: exp.Expr) -> str:
@@ -250,13 +252,6 @@ class SQLFactory:
                     extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
                 )
         return None
-
-    @classmethod
-    def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
-        parsed_expr = cls._parse_sql_expression(sql, dialect)
-        if parsed_expr is None:
-            return "COMMAND"
-        return cls._detect_type_from_expression(parsed_expr)
 
     def __init__(self, dialect: DialectType = None) -> None:
         """Initialize the SQL factory.
@@ -304,7 +299,7 @@ class SQLFactory:
             return builder
 
         if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
-            return SQL(statement)
+            return SQL(parsed_expr)
 
         msg = (
             f"sql(...) only supports SELECT statements or DML statements with RETURNING clause. "
@@ -425,32 +420,6 @@ class SQLFactory:
 
         Returns:
             Explain builder for further configuration
-
-        Examples:
-            Basic EXPLAIN:
-                plan = sql.explain("SELECT * FROM users").build()
-
-            With options:
-                plan = (
-                    sql.explain("SELECT * FROM users", analyze=True, format="json")
-                    .buffers()
-                    .timing()
-                    .build()
-                )
-
-            From QueryBuilder:
-                query = sql.select("*").from_("users").where("id = :id", id=1)
-                plan = sql.explain(query, analyze=True).build()
-
-            Chained configuration:
-                plan = (
-                    sql.explain(sql.select("*").from_("large_table"))
-                    .analyze()
-                    .format("json")
-                    .buffers()
-                    .timing()
-                    .build()
-                )
         """
         builder_dialect = dialect or self.dialect
 
@@ -469,10 +438,6 @@ class SQLFactory:
         Property that returns a new Merge builder instance using the factory's
         default dialect. Cleaner syntax alternative to merge() method.
 
-        Examples:
-            query = sql.merge_.into("products").using(data, alias="src")
-            query = sql.merge_.into("products", alias="t").on("t.id = src.id")
-
         Returns:
             New Merge builder instance
         """
@@ -482,8 +447,8 @@ class SQLFactory:
         """Create an upsert builder (MERGE or INSERT ON CONFLICT).
 
         Automatically selects the appropriate builder based on database dialect:
-        - PostgreSQL 15+, Oracle, BigQuery: Returns MERGE builder
-        - SQLite, DuckDB, MySQL: Returns INSERT builder with ON CONFLICT support
+            - PostgreSQL 15+, Oracle, BigQuery: Returns MERGE builder
+            - SQLite, DuckDB, MySQL: Returns INSERT builder with ON CONFLICT support
 
         Args:
             table: Target table name
@@ -491,24 +456,6 @@ class SQLFactory:
 
         Returns:
             MERGE builder for supported databases, INSERT builder otherwise
-
-        Examples:
-            PostgreSQL/Oracle/BigQuery (uses MERGE):
-                upsert_query = (
-                    sql.upsert("products", dialect="postgres")
-                    .using([{"id": 1, "name": "Product 1"}], alias="src")
-                    .on("t.id = src.id")
-                    .when_matched_then_update(name="src.name")
-                    .when_not_matched_then_insert(id="src.id", name="src.name")
-                )
-
-            SQLite/DuckDB/MySQL (uses INSERT ON CONFLICT):
-                upsert_query = (
-                    sql.upsert("products", dialect="sqlite")
-                    .values(id=1, name="Product 1")
-                    .on_conflict("id")
-                    .do_update(name="EXCLUDED.name")
-                )
         """
         builder_dialect = dialect or self.dialect
         dialect_str = str(builder_dialect).lower() if builder_dialect else None
@@ -850,23 +797,6 @@ class SQLFactory:
 
         Returns:
             Case builder instance for CASE expression building.
-
-        Example:
-            ```python
-            case_expr = (
-                sql.case_
-                .when("x = 1", "one")
-                .when("x = 2", "two")
-                .else_("other")
-                .end()
-            )
-            aliased_case = (
-                sql.case_
-                .when("status = 'active'", 1)
-                .else_(0)
-                .as_("is_active")
-            )
-            ```
         """
         return Case()
 
@@ -904,24 +834,6 @@ class SQLFactory:
 
         Returns:
             WindowFunctionBuilder configured for COUNT(*) OVER()
-
-        Example:
-            >>> query = (
-            ...     sql
-            ...     .select("*", sql.count_over_.as_("total"))
-            ...     .from_("users")
-            ...     .where_eq("status", "active")
-            ...     .limit(10)
-            ... )
-            # Produces: SELECT *, COUNT(*) OVER() AS total FROM users WHERE status = :status LIMIT 10
-
-            >>> # With partition:
-            >>> query = sql.select(
-            ...     "*",
-            ...     sql.count_over_.partition_by("department").as_(
-            ...         "dept_count"
-            ...     ),
-            ... )
         """
         return WindowFunctionBuilder("count", exp.Star())
 
@@ -996,16 +908,6 @@ class SQLFactory:
 
         Returns:
             JoinBuilder configured for LATERAL JOIN
-
-        Example:
-            ```python
-            query = (
-                sql
-                .select("u.name", "arr.value")
-                .from_("users u")
-                .join(sql.lateral_join_("UNNEST(u.tags)").on("true"))
-            )
-            ```
         """
         return create_join_builder("lateral join", lateral=True)
 
@@ -1035,11 +937,9 @@ class SQLFactory:
 
         Returns:
             Column object for the given name.
-
-        Note:
-            Special SQL constructs like case_, row_number_, etc. are
-            handled as properties for type safety.
         """
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
         return Column(name)
 
     @staticmethod
@@ -1056,31 +956,6 @@ class SQLFactory:
 
         Raises:
             SQLBuilderError: If the SQL fragment cannot be parsed.
-
-        Example:
-            ```python
-            expr = sql.raw("COALESCE(name, 'Unknown')")
-
-
-            stmt = sql.raw(
-                "LOWER(name) LIKE LOWER(:pattern)", pattern=f"%{query}%"
-            )
-
-
-            expr = sql.raw(
-                "price BETWEEN :min_price AND :max_price",
-                min_price=100,
-                max_price=500,
-            )
-
-
-            query = sql.select(
-                "name",
-                sql.raw(
-                    "ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC)"
-                ),
-            ).from_("employees")
-            ```
         """
         if not parameters:
             try:
@@ -1138,26 +1013,6 @@ class SQLFactory:
 
         Returns:
             COUNT() OVER() window function expression.
-
-        Example:
-            >>> # Simple total count alongside paginated results:
-            >>> query = (
-            ...     sql
-            ...     .select("id", "name", sql.count_over().as_("total"))
-            ...     .from_("users")
-            ...     .where_eq("status", "active")
-            ...     .limit(10)
-            ...     .offset(0)
-            ... )
-            # Produces: SELECT id, name, COUNT(*) OVER() AS total FROM users WHERE status = :status LIMIT 10
-
-            >>> # With partition (count per group):
-            >>> query = sql.select(
-            ...     "*",
-            ...     sql.count_over(partition_by="department").as_(
-            ...         "dept_count"
-            ...     ),
-            ... )
         """
         if isinstance(column, str) and column == "*":
             count_expr = exp.Count(this=exp.Star())
@@ -1314,16 +1169,6 @@ class SQLFactory:
 
         Returns:
             ROLLUP expression.
-
-        Example:
-            ```python
-            query = (
-                sql
-                .select("product", "region", sql.sum("sales"))
-                .from_("sales_data")
-                .group_by(sql.rollup("product", "region"))
-            )
-            ```
         """
         column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
         return FunctionExpression(exp.Rollup(expressions=column_exprs))
@@ -1337,16 +1182,6 @@ class SQLFactory:
 
         Returns:
             CUBE expression.
-
-        Example:
-            ```python
-            query = (
-                sql
-                .select("product", "region", sql.sum("sales"))
-                .from_("sales_data")
-                .group_by(sql.cube("product", "region"))
-            )
-            ```
         """
         column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
         return FunctionExpression(exp.Cube(expressions=column_exprs))
@@ -1360,18 +1195,6 @@ class SQLFactory:
 
         Returns:
             GROUPING SETS expression.
-
-        Example:
-            ```python
-            query = (
-                sql
-                .select("product", "region", sql.sum("sales"))
-                .from_("sales_data")
-                .group_by(
-                    sql.grouping_sets(("product",), ("region",), ())
-                )
-            )
-            ```
         """
         set_expressions = []
         for column_set in column_sets:
@@ -1395,17 +1218,6 @@ class SQLFactory:
 
         Returns:
             ANY expression.
-
-        Example:
-            ```python
-            subquery = sql.select("user_id").from_("active_users")
-            query = (
-                sql
-                .select("*")
-                .from_("users")
-                .where(sql.id.eq(sql.any(subquery)))
-            )
-            ```
         """
         if isinstance(values, list):
             literals = [SQLFactory.to_literal(v) for v in values]
@@ -1424,19 +1236,8 @@ class SQLFactory:
 
         Returns:
             NOT ANY expression.
-
-        Example:
-            ```python
-            subquery = sql.select("user_id").from_("blocked_users")
-            query = (
-                sql
-                .select("*")
-                .from_("users")
-                .where(sql.id.neq(sql.not_any(subquery)))
-            )
-            ```
         """
-        return SQLFactory.any(values)
+        return FunctionExpression(exp.Not(this=SQLFactory.any(values).expression))
 
     @staticmethod
     def concat(*expressions: str | exp.Expr) -> StringExpression:
@@ -1512,11 +1313,11 @@ class SQLFactory:
 
         Uses SQLGlot's built-in exp.convert() function for literal creation.
         Handles all Python primitive types:
-        - None -> exp.Null (renders as NULL)
-        - bool -> exp.Boolean (renders as TRUE/FALSE or 1/0 based on dialect)
-        - int/float -> exp.Literal with is_number=True
-        - str -> exp.Literal with is_string=True
-        - exp.Expr -> returned as-is (passthrough)
+            - None -> exp.Null (renders as NULL)
+            - bool -> exp.Boolean (renders as TRUE/FALSE or 1/0 based on dialect)
+            - int/float -> exp.Literal with is_number=True
+            - str -> exp.Literal with is_string=True
+            - exp.Expr -> returned as-is (passthrough)
 
         Args:
             value: Python value or SQLGlot expression to convert.
@@ -1538,20 +1339,13 @@ class SQLFactory:
         Args:
             column: Column to compare.
             *args: Alternating search values and results, with optional default at the end.
-                  Format: search1, result1, search2, result2, ..., [default]
+            Format: search1, result1, search2, result2, ..., [default]
 
         Raises:
             ValueError: If fewer than two search/result pairs are provided.
 
         Returns:
             CASE expression equivalent to DECODE.
-
-        Example:
-            ```python
-            sql.decode(
-                "status", "A", "Active", "I", "Inactive", "Unknown"
-            )
-            ```
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
 
@@ -1584,7 +1378,7 @@ class SQLFactory:
 
         Args:
             column: Column or expression to cast.
-            data_type: Target data type (e.g., 'INT', 'VARCHAR(100)', 'DECIMAL(10,2)').
+            data_type: Target data type.
 
         Returns:
             CAST expression.
@@ -1636,11 +1430,6 @@ class SQLFactory:
 
         Returns:
             CASE expression equivalent to NVL2.
-
-        Example:
-            ```python
-            sql.nvl2("salary", "Has Salary", "No Salary")
-            ```
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
         not_null_expr = to_expression(value_if_not_null)
@@ -1666,24 +1455,6 @@ class SQLFactory:
 
         Returns:
             INSERT expression with placeholders for bulk operations
-
-        Example:
-            ```python
-            from sqlspec import sql
-
-
-            insert_expr = sql.bulk_insert("my_table", 3)
-
-
-            insert_expr = sql.bulk_insert(
-                "my_table", 3, placeholder_style="%s"
-            )
-
-
-            insert_expr = sql.bulk_insert(
-                "my_table", 3, placeholder_style=":1"
-            )
-            ```
         """
         return FunctionExpression(
             exp.Insert(
@@ -1704,24 +1475,6 @@ class SQLFactory:
 
         Returns:
             TruncateTable builder instance
-
-        Example:
-            ```python
-            from sqlspec import sql
-
-
-            truncate_sql = sql.truncate_table("my_table").build().sql
-
-
-            truncate_sql = (
-                sql
-                .truncate_table("my_table")
-                .cascade()
-                .restart_identity()
-                .build()
-                .sql
-            )
-            ```
         """
         return Truncate(table_name, dialect=self.dialect)
 
@@ -1797,10 +1550,6 @@ class SQLFactory:
 
         Returns:
             LAG window function expression.
-
-        Example:
-            >>> sql.lag("salary", offset=1, order_by="hire_date")
-            >>> sql.lag("price", partition_by="category", order_by="date")
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
         func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
@@ -1829,10 +1578,6 @@ class SQLFactory:
 
         Returns:
             LEAD window function expression.
-
-        Example:
-            >>> sql.lead("salary", offset=1, order_by="hire_date")
-            >>> sql.lead("price", partition_by="category", order_by="date")
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
         func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]

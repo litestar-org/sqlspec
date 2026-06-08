@@ -9,11 +9,11 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
+__all__ = ("SQLiteStore",)
+
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
-
-__all__ = ("SQLiteStore",)
 
 
 class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
@@ -24,21 +24,13 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
     utility to provide an async interface compatible with the Store protocol.
 
     Provides efficient session management with:
-    - Sync operations wrapped for async compatibility
-    - INSERT OR REPLACE for UPSERT functionality
-    - Automatic expiration handling
-    - Efficient cleanup of expired sessions
+        - Sync operations wrapped for async compatibility
+        - INSERT OR REPLACE for UPSERT functionality
+        - Automatic expiration handling
+        - Efficient cleanup of expired sessions
 
     Args:
         config: SqliteConfig instance.
-
-    Example:
-        from sqlspec.adapters.sqlite import SqliteConfig
-        from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
-
-        config = SqliteConfig(database=":memory:")
-        store = SQLiteStore(config)
-        await store.create_table()
     """
 
     __slots__ = ()
@@ -48,9 +40,6 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
 
         Args:
             config: SqliteConfig instance.
-
-        Notes:
-            Table name is read from config.extension_config["litestar"]["session_table"].
         """
         super().__init__(config)
 
@@ -59,12 +48,6 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
-
-        Notes:
-            - Uses REAL type for expires_at (stores Julian Day number)
-            - Julian Day enables direct comparison with julianday('now')
-            - Partial index WHERE expires_at IS NOT NULL reduces index size
-            - This approach ensures the index is actually used by query optimizer
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -92,10 +75,6 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
 
         Returns:
             Julian Day number as REAL, or None if dt is None.
-
-        Notes:
-            Julian Day number is days since November 24, 4714 BCE (proleptic Gregorian).
-            This enables direct comparison with julianday('now') in SQL queries.
         """
         if dt is None:
             return None
@@ -175,11 +154,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         return await async_(self._get)(key, renew_for)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Synchronous implementation of set.
-
-        Notes:
-            Stores expires_at as Julian Day number (REAL) for optimal index usage.
-        """
+        """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         expires_at_julian = self._datetime_to_julian(expires_at)

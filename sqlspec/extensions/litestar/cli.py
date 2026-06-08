@@ -73,10 +73,6 @@ def add_sessions_delete_expired_command() -> None:
 
         This command removes all sessions that have passed their expiration time.
         It can be scheduled via cron or systemd timers for automatic maintenance.
-
-        Examples:
-            litestar sessions delete-expired
-            litestar sessions delete-expired --verbose
         """
         backend = get_session_backend(app)
         store = backend.config.get_store_from_app(app)

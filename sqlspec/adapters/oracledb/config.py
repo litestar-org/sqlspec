@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 import oracledb
-from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
@@ -19,7 +18,7 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
-from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config, requires_session_callback
+from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
@@ -48,27 +47,6 @@ __all__ = (
     "OraclePoolParams",
     "OracleSyncConfig",
 )
-
-
-def _extract_oracle_major(connection: Any) -> "int | None":
-    """Read the major version digit from ``connection.version``.
-
-    Used by ``_init_connection`` to cache server major on the connection so the
-    JSON input handler can route bind paths without per-bind metadata queries.
-    Returns ``None`` when the version string is missing or unparsable; callers
-    treat ``None`` as "assume 21c+ (modern default)".
-    """
-    try:
-        version_str = connection.version
-    except AttributeError:
-        return None
-    if not version_str:
-        return None
-    head = version_str.split(".", 1)[0]
-    try:
-        return int(head)
-    except ValueError:
-        return None
 
 
 class OracleConnectionParams(TypedDict):
@@ -115,44 +93,44 @@ class OracleDriverFeatures(TypedDict):
     """Oracle driver feature flags.
 
     enable_numpy_vectors: Enable automatic NumPy array ↔ Oracle VECTOR conversion.
-        Requires NumPy and Oracle Database 23ai or higher with VECTOR data type support.
-        Defaults to True when NumPy is installed.
-        Provides automatic bidirectional conversion between NumPy ndarrays and Oracle VECTOR columns.
-        Supports float32, float64, int8, and uint8 dtypes.
+     Requires NumPy and Oracle Database 23ai or higher with VECTOR data type support.
+     Defaults to True when NumPy is installed.
+     Provides automatic bidirectional conversion between NumPy ndarrays and Oracle VECTOR columns.
+     Supports float32, float64, int8, and uint8 dtypes.
     enable_lowercase_column_names: Normalize implicit Oracle uppercase column names to lowercase.
-        Targets unquoted Oracle identifiers that default to uppercase while preserving quoted case-sensitive aliases.
-        Defaults to True for compatibility with schema libraries expecting snake_case fields.
+     Targets unquoted Oracle identifiers that default to uppercase while preserving quoted case-sensitive aliases.
+     Defaults to True for compatibility with schema libraries expecting snake_case fields.
     enable_uuid_binary: Enable automatic UUID ↔ RAW(16) binary conversion.
-        When True (default), Python UUID objects are automatically converted to/from
-        RAW(16) binary format for optimal storage efficiency (16 bytes vs 36 bytes).
-        Applies only to RAW(16) columns; other RAW sizes remain unchanged.
-        Uses Python's stdlib uuid module (no external dependencies).
-        Defaults to True for improved type safety and storage efficiency.
+     When True (default), Python UUID objects are automatically converted to/from
+     RAW(16) binary format for optimal storage efficiency (16 bytes vs 36 bytes).
+     Applies only to RAW(16) columns; other RAW sizes remain unchanged.
+     Uses Python's stdlib uuid module (no external dependencies).
+     Defaults to True for improved type safety and storage efficiency.
     vector_return_format: Return type for VECTOR column reads. One of:
-        - "numpy" (default when NumPy is installed): np.ndarray, zero-copy compute path.
-        - "list": list[float|int], best for code that expects native Python sequences.
-        - "array": array.array, zero-copy oracledb passthrough.
-        Defaults to "numpy" when NumPy is installed, otherwise "list".
+     - "numpy" (default when NumPy is installed): np.ndarray, zero-copy compute path.
+     - "list": list[float|int], best for code that expects native Python sequences.
+     - "array": array.array, zero-copy oracledb passthrough.
+     Defaults to "numpy" when NumPy is installed, otherwise "list".
     oracle_varchar2_byte_limit: Threshold (in UTF-8 bytes) above which ``str``
-        parameters are auto-coerced to ``DB_TYPE_CLOB``. Defaults to 4000 (the
-        Oracle SQL VARCHAR2 limit). Databases with ``MAX_STRING_SIZE=EXTENDED``
-        may set this to 32767 to keep larger strings as VARCHAR2.
+     parameters are auto-coerced to ``DB_TYPE_CLOB``. Defaults to 4000 (the
+     Oracle SQL VARCHAR2 limit). Databases with ``MAX_STRING_SIZE=EXTENDED``
+     may set this to 32767 to keep larger strings as VARCHAR2.
     oracle_raw_byte_limit: Threshold (in bytes) above which ``bytes`` parameters
-        are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
-        RAW limit).
+     are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
+     RAW limit).
     on_connection_create: Callback executed when a connection is acquired from pool.
-        For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
-        For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
-        Called after internal setup (numpy vectors, UUID handlers).
+     For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
+     For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
+     Called after internal setup (numpy vectors, UUID handlers).
     enable_events: Enable database event channel support.
-        Defaults to True when extension_config["events"] is configured.
-        Provides pub/sub capabilities via Oracle Advanced Queuing or table-backed fallback.
-        Requires extension_config["events"] for migration setup when using table_queue backend.
+     Defaults to True when extension_config["events"] is configured.
+     Provides pub/sub capabilities via Oracle Advanced Queuing or table-backed fallback.
+     Requires extension_config["events"] for migration setup when using table_queue backend.
     events_backend: Event channel backend selection.
-        Options: "advanced_queue", "table_queue"
-        - "advanced_queue": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
-        - "table_queue": Durable table-backed queue with retries and exactly-once delivery
-        Defaults to "table_queue" (works on all Oracle editions without special privileges).
+     Options: "advanced_queue", "table_queue"
+     - "advanced_queue": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
+     - "table_queue": Durable table-backed queue with retries and exactly-once delivery
+     Defaults to "table_queue" (works on all Oracle editions without special privileges).
     """
 
     enable_numpy_vectors: NotRequired[bool]
@@ -213,18 +191,7 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
-    """Configuration for Oracle synchronous database connections.
-
-    Example::
-
-        config = OracleSyncConfig(
-            connection_config=OraclePoolParams(
-                dsn="localhost:1521/XEPDB1",
-                user="app",
-                password="secret",
-            )
-        )
-    """
+    """Configuration for Oracle synchronous database connections."""
 
     __slots__ = ("_user_connection_hook",)
 
@@ -263,7 +230,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             statement_config: Default SQL statement configuration.
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
+            extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
         connection_config = normalize_connection_config(connection_config)
@@ -292,9 +259,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
-        # Always use session_callback to support user callback
-        if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
-            config["session_callback"] = self._init_connection
+        config["session_callback"] = self._init_connection
 
         return oracledb.create_pool(**config)
 
@@ -392,6 +357,27 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return namespace
 
 
+def _extract_oracle_major(connection: Any) -> "int | None":
+    """Read the major version digit from ``connection.version``.
+
+    Used by ``_init_connection`` to cache server major on the connection so the
+    JSON input handler can route bind paths without per-bind metadata queries.
+    Returns ``None`` when the version string is missing or unparsable; callers
+    treat ``None`` as "assume 21c+ (modern default)".
+    """
+    try:
+        version_str = connection.version
+    except AttributeError:
+        return None
+    if not version_str:
+        return None
+    head = version_str.split(".", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Oracle connections."""
 
@@ -402,20 +388,9 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
 
 
-@mypyc_attr(native_class=False)
+# mypyc annotations are unnecessary here because adapter config modules stay interpreted.
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
-    """Configuration for Oracle asynchronous database connections.
-
-    Example::
-
-        config = OracleAsyncConfig(
-            connection_config=OraclePoolParams(
-                dsn="localhost:1521/XEPDB1",
-                user="app",
-                password="secret",
-            )
-        )
-    """
+    """Configuration for Oracle asynchronous database connections."""
 
     __slots__ = ("_user_connection_hook",)
 
@@ -456,7 +431,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             statement_config: Default SQL statement configuration.
             driver_features: Optional driver feature configuration (TypedDict or dict).
             bind_key: Optional unique identifier for this configuration.
-            extension_config: Extension-specific configuration (e.g., Litestar plugin settings).
+            extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
         connection_config = normalize_connection_config(connection_config)
@@ -484,9 +459,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
-        # Always use session_callback to support user callback
-        if requires_session_callback(self.driver_features) or self._user_connection_hook is not None:
-            config["session_callback"] = self._init_connection
+        config["session_callback"] = self._init_connection
 
         return oracledb.create_pool_async(**config)
 

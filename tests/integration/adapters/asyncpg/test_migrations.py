@@ -1,6 +1,14 @@
-"""Integration tests for AsyncPG (PostgreSQL) migration workflow."""
+"""Integration tests for AsyncpgConfig migration helper methods and default-schema behavior.
+
+The shared init/upgrade/downgrade/current/error migration lifecycle is covered by
+tests/integration/adapters/contracts/test_migrations_contract.py. This module keeps the
+AsyncpgConfig convenience-method surface (migrate_up, migrate_down, get_current_migration,
+create_migration, stamp_migration, fix_migrations) and the PostgreSQL default_schema behavior.
+"""
 
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -8,370 +16,71 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands
-from tests.integration.adapters._postgres_migration_schema import (
-    async_table_exists,
-    create_schema_sql,
-    drop_schema_sql,
-    unique_identifier,
-    write_non_transactional_unqualified_table_migration,
-    write_unqualified_table_migration,
-)
+from sqlspec.utils.text import quote_identifier
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-async def test_asyncpg_migration_full_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
-    """Test full AsyncPG migration workflow: init -> create -> upgrade -> downgrade."""
-    migration_dir = tmp_path / "migrations"
+def unique_identifier(prefix: str) -> str:
+    """Return a short PostgreSQL-safe identifier for integration tests."""
+    return f"{prefix}_{uuid4().hex[:10]}"
 
-    config = AsyncpgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
-        migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_asyncpg"},
+
+def create_schema_sql(schema: str) -> str:
+    """Return PostgreSQL CREATE SCHEMA SQL for a trusted test identifier."""
+    return f"CREATE SCHEMA {quote_identifier(schema)}"
+
+
+def drop_schema_sql(schema: str) -> str:
+    """Return PostgreSQL DROP SCHEMA SQL for a trusted test identifier."""
+    return f"DROP SCHEMA IF EXISTS {quote_identifier(schema)} CASCADE"
+
+
+async def async_table_exists(driver: Any, schema: str, table_name: str, *, style: str = "numeric") -> bool:
+    """Return whether the table exists using an async SQLSpec driver."""
+    placeholders = "%s AND table_name = %s" if style == "pyformat" else "$1 AND table_name = $2"
+    result = await driver.execute(
+        f"SELECT 1 FROM information_schema.tables WHERE table_schema = {placeholders}", (schema, table_name)
     )
-    commands = AsyncMigrationCommands(config)
+    return bool(result.data)
 
-    await commands.init(str(migration_dir), package=True)
 
-    assert migration_dir.exists()
-    assert (migration_dir / "__init__.py").exists()
-
-    migration_content = '''"""Initial schema migration."""
+def write_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+    """Write a Python migration that creates an unqualified table."""
+    (migration_dir / "0001_create_unqualified_table.py").write_text(
+        f'''"""Create an unqualified table."""
 
 
 def up():
-    """Create users table."""
+    """Create an unqualified table."""
     return ["""
-        CREATE TABLE users (
+        CREATE TABLE {table_name} (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            name TEXT NOT NULL
         )
     """]
 
 
 def down():
-    """Drop users table."""
-    return ["DROP TABLE IF EXISTS users"]
+    """Drop the unqualified table."""
+    return ["DROP TABLE IF EXISTS {table_name}"]
 '''
-
-    migration_file = migration_dir / "0001_create_users.py"
-    migration_file.write_text(migration_content)
-
-    try:
-        await commands.upgrade()
-
-        async with config.provide_session() as driver:
-            result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'"
-            )
-            assert len(result.data) == 1
-
-            await driver.execute("INSERT INTO users (name, email) VALUES ($1, $2)", ("John Doe", "john@example.com"))
-
-            users_result = await driver.execute("SELECT * FROM users")
-            assert len(users_result.data) == 1
-            assert users_result.get_data()[0]["name"] == "John Doe"
-            assert users_result.get_data()[0]["email"] == "john@example.com"
-
-        await commands.downgrade("base")
-
-        async with config.provide_session() as driver:
-            result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'"
-            )
-            assert len(result.data) == 0
-    finally:
-        if config.connection_instance:
-            await config.close_pool()
-
-
-async def test_asyncpg_multiple_migrations_workflow(tmp_path: Path, postgres_service: "PostgresService") -> None:
-    """Test AsyncPG workflow with multiple migrations: create -> apply both -> downgrade one -> downgrade all."""
-    migration_dir = tmp_path / "migrations"
-
-    config = AsyncpgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
-        migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_asyncpg"},
     )
-    commands = AsyncMigrationCommands(config)
-
-    await commands.init(str(migration_dir), package=True)
-
-    migration1_content = '''"""Create users table."""
 
 
-def up():
-    """Create users table."""
-    return ["""
-        CREATE TABLE users (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """]
+def write_non_transactional_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+    """Write a SQL migration that creates an unqualified table without a transaction."""
+    (migration_dir / "0001_create_unqualified_table.sql").write_text(
+        f"""-- transactional: false
+-- name: migrate-0001-up
+CREATE TABLE {table_name} (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
 
-
-def down():
-    """Drop users table."""
-    return ["DROP TABLE IF EXISTS users"]
-'''
-    (migration_dir / "0001_create_users.py").write_text(migration1_content)
-
-    migration2_content = '''"""Create posts table."""
-
-
-def up():
-    """Create posts table."""
-    return ["""
-        CREATE TABLE posts (
-            id SERIAL PRIMARY KEY,
-            title VARCHAR(255) NOT NULL,
-            content TEXT,
-            user_id INTEGER REFERENCES users(id),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """]
-
-
-def down():
-    """Drop posts table."""
-    return ["DROP TABLE IF EXISTS posts"]
-'''
-    (migration_dir / "0002_create_posts.py").write_text(migration2_content)
-
-    try:
-        await commands.upgrade()
-
-        async with config.provide_session() as driver:
-            users_result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'"
-            )
-            posts_result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'posts'"
-            )
-            assert len(users_result.data) == 1
-            assert len(posts_result.data) == 1
-
-            await driver.execute("INSERT INTO users (name, email) VALUES ($1, $2)", ("John Doe", "john@example.com"))
-            await driver.execute(
-                "INSERT INTO posts (title, content, user_id) VALUES ($1, $2, $3)",
-                ("Test Post", "This is a test post", 1),
-            )
-
-        await commands.downgrade("0001")
-
-        async with config.provide_session() as driver:
-            users_result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'"
-            )
-            posts_result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'posts'"
-            )
-            assert len(users_result.data) == 1
-            assert len(posts_result.data) == 0
-
-        await commands.downgrade("base")
-
-        async with config.provide_session() as driver:
-            users_result = await driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('users', 'posts')"
-            )
-            assert len(users_result.data) == 0
-    finally:
-        if config.connection_instance:
-            await config.close_pool()
-
-
-async def test_asyncpg_migration_current_command(tmp_path: Path, postgres_service: "PostgresService") -> None:
-    """Test the current migration command shows correct version for AsyncPG."""
-    migration_dir = tmp_path / "migrations"
-
-    config = AsyncpgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
-        migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_asyncpg"},
+-- name: migrate-0001-down
+DROP TABLE IF EXISTS {table_name};"""
     )
-    commands = AsyncMigrationCommands(config)
-
-    try:
-        await commands.init(str(migration_dir), package=True)
-
-        current_version = await commands.current()
-        assert current_version is None or current_version == "base"
-
-        migration_content = '''"""Initial schema migration."""
-
-
-def up():
-    """Create users table."""
-    return ["""
-        CREATE TABLE users (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL
-        )
-    """]
-
-
-def down():
-    """Drop users table."""
-    return ["DROP TABLE IF EXISTS users"]
-'''
-        (migration_dir / "0001_create_users.py").write_text(migration_content)
-
-        await commands.upgrade()
-
-        current_version = await commands.current()
-        assert current_version == "0001"
-
-        await commands.downgrade("base")
-
-        current_version = await commands.current()
-        assert current_version is None or current_version == "base"
-    finally:
-        if config.connection_instance:
-            await config.close_pool()
-
-
-async def test_asyncpg_migration_error_handling(tmp_path: Path, postgres_service: "PostgresService") -> None:
-    """Test AsyncPG migration error handling."""
-    migration_dir = tmp_path / "migrations"
-
-    config = AsyncpgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
-        migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_asyncpg"},
-    )
-    commands = AsyncMigrationCommands(config)
-
-    try:
-        await commands.init(str(migration_dir), package=True)
-
-        migration_content = '''"""Migration with invalid SQL."""
-
-
-def up():
-    """Create table with invalid SQL."""
-    return ["CREATE INVALID SQL STATEMENT"]
-
-
-def down():
-    """Drop table."""
-    return ["DROP TABLE IF EXISTS invalid_table"]
-'''
-        (migration_dir / "0001_invalid.py").write_text(migration_content)
-
-        await commands.upgrade()
-
-        async with config.provide_session() as driver:
-            try:
-                await driver.execute("SELECT version FROM sqlspec_migrations_asyncpg ORDER BY version")
-                msg = "Expected migration table to not exist, but it does"
-                raise AssertionError(msg)
-            except Exception as e:
-                assert "no such" in str(e).lower() or "does not exist" in str(e).lower()
-    finally:
-        if config.connection_instance:
-            await config.close_pool()
-
-
-async def test_asyncpg_migration_with_transactions(tmp_path: Path, postgres_service: "PostgresService") -> None:
-    """Test AsyncPG migrations work properly with transactions."""
-    migration_dir = tmp_path / "migrations"
-
-    config = AsyncpgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
-        migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations_asyncpg"},
-    )
-    commands = AsyncMigrationCommands(config)
-
-    try:
-        await commands.init(str(migration_dir), package=True)
-
-        migration_content = '''"""Initial schema migration."""
-
-
-def up():
-    """Create users table."""
-    return ["""
-        CREATE TABLE users (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) UNIQUE NOT NULL
-        )
-    """]
-
-
-def down():
-    """Drop users table."""
-    return ["DROP TABLE IF EXISTS users"]
-'''
-        (migration_dir / "0001_create_users.py").write_text(migration_content)
-
-        await commands.upgrade()
-
-        async with config.provide_session() as driver:
-            await driver.begin()
-            try:
-                await driver.execute(
-                    "INSERT INTO users (name, email) VALUES ($1, $2)", ("Transaction User", "trans@example.com")
-                )
-
-                result = await driver.execute("SELECT * FROM users WHERE name = 'Transaction User'")
-                assert len(result.data) == 1
-                await driver.commit()
-            except Exception:
-                await driver.rollback()
-                raise
-
-            result = await driver.execute("SELECT * FROM users WHERE name = 'Transaction User'")
-            assert len(result.data) == 1
-
-        async with config.provide_session() as driver:
-            await driver.begin()
-            try:
-                await driver.execute(
-                    "INSERT INTO users (name, email) VALUES ($1, $2)", ("Rollback User", "rollback@example.com")
-                )
-
-                raise Exception("Intentional rollback")
-            except Exception:
-                await driver.rollback()
-
-            result = await driver.execute("SELECT * FROM users WHERE name = 'Rollback User'")
-            assert len(result.data) == 0
-    finally:
-        if config.connection_instance:
-            await config.close_pool()
 
 
 async def test_asyncpg_config_migrate_up_method(tmp_path: Path, postgres_service: "PostgresService") -> None:

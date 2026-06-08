@@ -66,22 +66,23 @@ class PrometheusStatementObserver:
         values: list[str] = []
         payload = event.as_dict()
         for name in self._label_names:
-            if name == "db_system":
-                db_system = event.db_system
-                if db_system is None:
-                    db_system = resolve_db_system(event.adapter)
-                values.append(db_system)
-            elif name == "driver":
-                values.append(event.driver)
-            elif name == "operation":
-                values.append(event.operation or "EXECUTE")
-            elif name == "adapter":
-                values.append(event.adapter)
-            elif name == "bind_key":
-                values.append(event.bind_key or "default")
-            else:
-                value = payload.get(name)
-                values.append("" if value is None else str(value))
+            match name:
+                case "db_system":
+                    db_system = event.db_system
+                    if db_system is None:
+                        db_system = resolve_db_system(event.adapter)
+                    values.append(db_system)
+                case "driver":
+                    values.append(event.driver)
+                case "operation":
+                    values.append(event.operation or "EXECUTE")
+                case "adapter":
+                    values.append(event.adapter)
+                case "bind_key":
+                    values.append(event.bind_key or "default")
+                case _:
+                    value = payload.get(name)
+                    values.append("" if value is None else str(value))
         return tuple(values)
 
 

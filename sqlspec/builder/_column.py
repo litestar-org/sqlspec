@@ -15,24 +15,6 @@ from sqlspec.builder._vector_distance import VectorDistance
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
 
-def _convert_value(value: Any) -> exp.Expr:
-    """Convert a Python value to a SQLGlot expression.
-
-    Special handling for datetime objects to prevent SQLGlot from
-    converting them to TIME_STR_TO_TIME function calls. Datetime
-    objects should be passed as parameters, not converted to SQL functions.
-
-    Args:
-        value: The value to convert
-
-    Returns:
-        A SQLGlot expression representing the value
-    """
-    if isinstance(value, (datetime, date)):
-        return exp.Literal(this=value, is_string=False)
-    return exp.convert(value)
-
-
 class ColumnExpression:
     """Base class for column expressions that can be combined with operators."""
 
@@ -283,60 +265,20 @@ class Column:
         """Calculate vector distance using specified metric.
 
         Generates dialect-specific SQL for vector distance calculation:
-        - PostgreSQL (pgvector): Operators <->, <=>, <#>
-        - MySQL 9+: DISTANCE(col, vec, 'METRIC') function
-        - Oracle 23ai+: VECTOR_DISTANCE(col, vec, METRIC) function
+            - PostgreSQL (pgvector): Operators <->, <=>, <#>
+            - MySQL 9+: DISTANCE(col, vec, 'METRIC') function
+            - Oracle 23ai+: VECTOR_DISTANCE(col, vec, METRIC) function
 
         Args:
             other_vector: Vector to compare against (list, Column, or SQLGlot expression).
             metric: Distance metric to use. Options:
-                   - "euclidean": L2 distance (default)
-                   - "cosine": Cosine distance
-                   - "inner_product": Negative inner product
-                   - "euclidean_squared": L2² distance (Oracle only)
+            - "euclidean": L2 distance (default)
+            - "cosine": Cosine distance
+            - "inner_product": Negative inner product
+            - "euclidean_squared": L2² distance (Oracle only)
 
         Returns:
             FunctionColumn expression for use in SELECT, WHERE, ORDER BY.
-
-        Examples:
-            Basic distance query with threshold:
-                >>> query = (
-                ...     sql
-                ...     .select("*")
-                ...     .from_("docs")
-                ...     .where(
-                ...         Column("embedding").vector_distance(
-                ...             [0.1, 0.2], metric="euclidean"
-                ...         )
-                ...         < 0.5
-                ...     )
-                ... )
-
-            Distance in SELECT clause with alias:
-                >>> query = (
-                ...     sql
-                ...     .select(
-                ...         "id",
-                ...         Column("embedding")
-                ...         .vector_distance([0.1, 0.2])
-                ...         .as_("dist"),
-                ...     )
-                ...     .from_("docs")
-                ...     .order_by("dist")
-                ... )
-
-            Compare two vector columns:
-                >>> query = (
-                ...     sql
-                ...     .select("*")
-                ...     .from_("pairs")
-                ...     .where(
-                ...         Column("vec1").vector_distance(
-                ...             Column("vec2"), metric="cosine"
-                ...         )
-                ...         < 0.3
-                ...     )
-                ... )
         """
         normalized_metric = self._normalize_metric(metric)
         vec_expr = self._convert_vector_value(other_vector)
@@ -354,21 +296,6 @@ class Column:
 
         Returns:
             FunctionColumn expression: 1 - cosine_distance(self, other_vector).
-
-        Examples:
-            Find most similar documents:
-                >>> query = (
-                ...     sql
-                ...     .select(
-                ...         "id",
-                ...         Column("embedding")
-                ...         .cosine_similarity([0.1, 0.2])
-                ...         .as_("score"),
-                ...     )
-                ...     .from_("docs")
-                ...     .order_by(sql.column("score").desc())
-                ...     .limit(10)
-                ... )
         """
         cosine_dist = self.vector_distance(other_vector, metric="cosine")
         similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))  # pyright: ignore[reportPrivateUsage]
@@ -519,3 +446,21 @@ class FunctionColumn:
     def __hash__(self) -> int:
         """Hash based on the expression identity."""
         return hash(id(self._expression))
+
+
+def _convert_value(value: Any) -> exp.Expr:
+    """Convert a Python value to a SQLGlot expression.
+
+    Special handling for datetime objects to prevent SQLGlot from
+    converting them to TIME_STR_TO_TIME function calls. Datetime
+    objects should be passed as parameters, not converted to SQL functions.
+
+    Args:
+        value: The value to convert
+
+    Returns:
+        A SQLGlot expression representing the value
+    """
+    if isinstance(value, (datetime, date)):
+        return exp.Literal(this=value, is_string=False)
+    return exp.convert(value)

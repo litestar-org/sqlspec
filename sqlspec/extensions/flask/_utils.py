@@ -12,11 +12,6 @@ __all__ = ("get_context_value", "get_or_create_session", "has_context_value", "p
 _MISSING = object()
 
 
-def _get_context_dict(target: Any) -> dict[str, Any]:
-    """Return the underlying context dictionary."""
-    return cast("DictProtocol", target).__dict__
-
-
 def get_context_value(target: Any, key: str, default: Any = _MISSING) -> Any:
     """Get a value from a Flask context object."""
     data = _get_context_dict(target)
@@ -64,8 +59,15 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
     connection = get_context_value(g, config_state.connection_key)
 
     session = config_state.config.driver_type(
-        connection=connection, statement_config=config_state.config.statement_config
+        connection=connection,
+        statement_config=config_state.config.statement_config,
+        driver_features=config_state.config.driver_features,
     )
 
     set_context_value(g, cache_key, session)
     return session
+
+
+def _get_context_dict(target: Any) -> dict[str, Any]:
+    """Return the underlying context dictionary."""
+    return cast("DictProtocol", target).__dict__

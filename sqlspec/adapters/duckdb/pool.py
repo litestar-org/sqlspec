@@ -1,6 +1,7 @@
 """DuckDB connection pool with thread-local connections."""
 
 import logging
+import re
 import threading
 import time
 import uuid
@@ -8,12 +9,18 @@ from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
+from typing_extensions import final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
+
+__all__ = ("DuckDBConnectionPool",)
+
+
+_SQL_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 logger = get_logger(POOL_LOGGER_NAME)
@@ -25,9 +32,8 @@ POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
 
-__all__ = ("DuckDBConnectionPool",)
 
-
+@final
 class DuckDBConnectionPool:
     """Thread-local connection manager for DuckDB.
 
@@ -41,8 +47,6 @@ class DuckDBConnectionPool:
 
     __slots__ = (
         "_connection_config",
-        "_connection_times",
-        "_created_connections",
         "_extension_flags",
         "_extensions",
         "_health_check_interval",
@@ -85,8 +89,6 @@ class DuckDBConnectionPool:
         self._on_connection_create = on_connection_create
         self._thread_local = threading.local()
         self._lock = threading.RLock()
-        self._created_connections = 0
-        self._connection_times: dict[int, float] = {}
         self._pool_id = str(uuid.uuid4())[:8]
         # Track if this pool uses an in-memory database
         # In-memory databases require connections to stay alive to preserve data
@@ -156,6 +158,9 @@ class DuckDBConnectionPool:
             if not (secret_type and secret_name and secret_value):
                 continue
 
+            _validate_sql_identifier(secret_name, "secret_name")
+            _validate_sql_identifier(secret_type, "secret_type")
+
             value_pairs = []
             for key, value in secret_value.items():
                 escaped_value = str(value).replace("'", "''")
@@ -175,13 +180,9 @@ class DuckDBConnectionPool:
                 connection.execute(sql)
 
         if self._on_connection_create:
-            with suppress(Exception):
-                self._on_connection_create(connection)
-
-        conn_id = id(connection)
-        with self._lock:
-            self._created_connections += 1
-            self._connection_times[conn_id] = time.time()
+            # Let a failing user hook surface its real error instead of silently returning a
+            # half-configured connection (mirrors the sqlite/aiosqlite pools).
+            self._on_connection_create(connection)
 
         return connection
 
@@ -198,7 +199,7 @@ class DuckDBConnectionPool:
             normalized = self._normalize_flag_value(value)
             try:
                 connection.execute(f"SET {key} = {normalized}")
-            except Exception as exc:  # pragma: no cover - best-effort guard
+            except Exception as exc:  # pragma: no cover
                 log_with_context(
                     logger,
                     logging.DEBUG,
@@ -348,3 +349,13 @@ class DuckDBConnectionPool:
         Args:
             connection: The connection to release (ignored)
         """
+
+
+def _validate_sql_identifier(value: str, field_name: str) -> None:
+    """Raise ValueError if value is not safe to interpolate as a SQL identifier."""
+    if not _SQL_IDENTIFIER_RE.fullmatch(value):
+        msg = (
+            f"Invalid SQL identifier for {field_name!r}: {value!r}. "
+            "Must start with a letter and contain only letters, digits, and underscores."
+        )
+        raise ValueError(msg)

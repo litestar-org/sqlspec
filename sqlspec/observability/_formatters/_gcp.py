@@ -17,18 +17,6 @@ class GCPLogFormatter:
     - logging.googleapis.com/labels for custom labels
     - logging.googleapis.com/sourceLocation for code location
 
-    Example:
-        ```python
-        formatter = GCPLogFormatter(project_id="my-project")
-        entry = formatter.format(
-            "INFO",
-            "Query executed",
-            correlation_id="abc-123",
-            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
-            duration_ms=15.5,
-        )
-        ```
-
     Reference:
         https://cloud.google.com/logging/docs/structured-logging
     """

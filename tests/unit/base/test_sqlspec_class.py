@@ -4,7 +4,7 @@ This module tests the centralized cache configuration management functionality. 
 
 1. Centralized Cache Configuration Management - Global cache configuration control
 2. Configuration methods - get_cache_config(), update_cache_config(), configure_cache()
-3. Cache statistics - get_cache_stats(), reset_cache_stats(), log_cache_stats()
+3. Cache statistics - get_cache_stats(), reset_stats_only(), log_cache_stats()
 4. Global state propagation - Configuration changes affect all modules
 5. Thread safety - Concurrent access to configuration
 6. Default configuration - Default cache settings behavior
@@ -151,9 +151,9 @@ def test_get_cache_stats_returns_statistics() -> None:
     assert hasattr(multi_stats, "total_operations")
 
 
-def test_reset_cache_stats_clears_statistics() -> None:
-    """Test that reset_cache_stats clears all cache statistics."""
-    SQLSpec.reset_cache_stats()
+def test_reset_stats_only_clears_statistics() -> None:
+    """Test that reset_stats_only clears all cache statistics."""
+    SQLSpec.reset_stats_only()
     stats = SQLSpec.get_cache_stats()
 
     multi_stats = stats["namespaced"]
@@ -162,6 +162,11 @@ def test_reset_cache_stats_clears_statistics() -> None:
     assert multi_stats.misses == 0
     assert multi_stats.evictions == 0
     assert multi_stats.total_operations == 0
+
+
+def test_reset_cache_stats_removed() -> None:
+    """The removed cache reset alias is absent from SQLSpec."""
+    assert not hasattr(SQLSpec, "reset_cache_stats")
 
 
 @requires_interpreted
@@ -292,7 +297,7 @@ def test_concurrent_statistics_access_is_thread_safe() -> None:
         try:
             for _ in range(50):
                 stats = SQLSpec.get_cache_stats()
-                SQLSpec.reset_cache_stats()
+                SQLSpec.reset_stats_only()
                 multi_stats = stats["namespaced"]
                 total_ops = multi_stats.hits + multi_stats.misses
                 results.append(total_ops)
@@ -565,7 +570,7 @@ def test_statistics_collection_during_configuration_changes() -> None:
             multi_stats = stats["namespaced"]
             assert hasattr(multi_stats, "hit_rate")
 
-            SQLSpec.reset_cache_stats()
+            SQLSpec.reset_stats_only()
 
     finally:
         SQLSpec.update_cache_config(original_config)

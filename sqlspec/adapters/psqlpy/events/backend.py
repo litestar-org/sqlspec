@@ -23,20 +23,10 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
-
-logger = get_logger("sqlspec.events.psqlpy")
-
 __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
 
-def _extract_event_id(payload: "str | None") -> "str | None":
-    if not payload:
-        return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        event_id = raw.get("event_id")
-        return event_id if isinstance(event_id, str) else None
-    return None
+logger = get_logger("sqlspec.events.psqlpy")
 
 
 class PsqlpyEventsBackend:
@@ -193,7 +183,7 @@ class PsqlpyHybridEventsBackend:
 def create_event_backend(
     config: "PsqlpyConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> PsqlpyEventsBackend | PsqlpyHybridEventsBackend | None:
-    """Factory used by EventChannel to create the native psqlpy backend."""
+    """EventChannel factory for the native psqlpy backend."""
     match backend_name:
         case "listen_notify":
             try:
@@ -208,3 +198,13 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _extract_event_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        event_id = raw.get("event_id")
+        return event_id if isinstance(event_id, str) else None
+    return None

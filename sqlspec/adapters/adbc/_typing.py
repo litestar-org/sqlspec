@@ -28,6 +28,8 @@ if not TYPE_CHECKING:
     AdbcConnection = _AdbcConnection
     AdbcRawCursor = _AdbcRawCursor
 
+__all__ = ("AdbcConnection", "AdbcCursor", "AdbcRawCursor", "AdbcSessionContext")
+
 
 class AdbcCursor:
     """Context manager for cursor management."""
@@ -106,6 +108,3 @@ class AdbcSessionContext:
             self._release_connection(self._connection)
             self._connection = None
         return None
-
-
-__all__ = ("AdbcConnection", "AdbcCursor", "AdbcRawCursor", "AdbcSessionContext")
