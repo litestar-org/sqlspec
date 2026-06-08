@@ -169,6 +169,7 @@ PROCESSED_STATE_SLOTS: Final = (
 
 SQL_SLOTS: Final = (
     "_compiled_from_cache",
+    "_declared_parameters",
     "_dialect",
     "_filters",
     "_hash",
@@ -335,6 +336,7 @@ class SQL:
         self._is_script = False
         self._raw_expression: exp.Expr | None = None
         self._rebind_processor: ParameterProcessor | None = None
+        self._declared_parameters: "tuple[Any, ...]" = ()
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)
@@ -443,6 +445,7 @@ class SQL:
         self._statement_config = get_default_config()
         self._dialect = self._normalize_dialect(self._statement_config.dialect)
         self._rebind_processor = None
+        self._declared_parameters = ()
 
     def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
@@ -480,6 +483,7 @@ class SQL:
         self._sql_param_counters = sql_obj._sql_param_counters.copy()
         self._is_many = sql_obj.is_many
         self._is_script = sql_obj.is_script
+        self._declared_parameters = sql_obj._declared_parameters
         if sql_obj.is_processed:
             self._processed_state = sql_obj.get_processed_state()
 
@@ -610,6 +614,11 @@ class SQL:
     def original_parameters(self) -> Any:
         """Get original parameters (public API)."""
         return self._original_parameters
+
+    @property
+    def declared_parameters(self) -> "tuple[Any, ...]":
+        """Get declared parameter metadata carried with this statement (public API)."""
+        return self._declared_parameters
 
     @property
     def operation_type(self) -> "OperationType":
@@ -911,6 +920,7 @@ class SQL:
             new_sql._named_parameters.update(self._named_parameters)
             new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
+        new_sql._declared_parameters = self._declared_parameters
         return new_sql
 
     def _create_empty_copy(self) -> "SQL":
@@ -933,6 +943,7 @@ class SQL:
         new_sql._named_parameters = {}
         new_sql._positional_parameters = []
         new_sql._sql_param_counters = self._sql_param_counters.copy()
+        new_sql._declared_parameters = self._declared_parameters
 
         return new_sql
 
