@@ -51,6 +51,7 @@ from sqlspec.core import (
     CacheConfig,
     CacheStats,
     ParameterConverter,
+    ParameterDeclaration,
     ParameterProcessor,
     ParameterStyle,
     ParameterStyleConfig,
@@ -61,6 +62,8 @@ from sqlspec.core import (
     Statement,
     StatementConfig,
     StatementStack,
+    register_param_type,
+    resolve_param_type,
 )
 from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
@@ -113,6 +116,7 @@ __all__ = (
     "ObservabilityConfig",
     "ObservabilityRuntime",
     "ParameterConverter",
+    "ParameterDeclaration",
     "ParameterProcessor",
     "ParameterStyle",
     "ParameterStyleConfig",
@@ -159,6 +163,8 @@ __all__ = (
     "format_statement_event",
     "loader",
     "migrations",
+    "register_param_type",
+    "resolve_param_type",
     "sql",
     "typing",
     "utils",
