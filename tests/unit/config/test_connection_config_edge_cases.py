@@ -24,7 +24,8 @@ def test_connection_config_with_zero_pool_size() -> None:
 
 def test_connection_config_with_negative_pool_size() -> None:
     """Test connection_config with negative pool size parameters."""
-    config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:", pool_min_size=-1, pool_max_size=-1))
+    connection_config: dict[str, Any] = {"database": ":memory:", "pool_min_size": -1, "pool_max_size": -1}
+    config = DuckDBConfig(connection_config=connection_config)
 
     # Negative values are stored but pool creation may validate them
     assert config.connection_config["pool_min_size"] == -1

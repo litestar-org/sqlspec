@@ -208,8 +208,8 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
     try:
         connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
-        assert connection_config["memory_limit"] == "256MB"
-        assert connection_config["threads"] == 4
+        assert connection_config["config"]["memory_limit"] == "256MB"
+        assert connection_config["config"]["threads"] == 4
 
         assert "pool_min_size" not in connection_config
         assert "pool_max_size" not in connection_config
@@ -278,20 +278,26 @@ def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:
     """Test that DuckDB config behaves consistently with SQLite/aiosqlite."""
 
     db_path = tmp_path / "consistency_test.duckdb"
-    connection_config = DuckDBPoolParams(
-        database=str(db_path), memory_limit="512MB", threads=2, pool_min_size=1, pool_max_size=4
-    )
+    connection_config: dict[str, Any] = {
+        "database": str(db_path),
+        "memory_limit": "512MB",
+        "threads": 2,
+        "pool_min_size": 1,
+        "pool_max_size": 4,
+    }
 
     config = DuckDBConfig(connection_config=connection_config)
 
     try:
         connection_config = build_connection_config(config.connection_config)
         assert connection_config["database"] == str(db_path)
-        assert connection_config["memory_limit"] == "512MB"
-        assert connection_config["threads"] == 2
+        assert connection_config["config"]["memory_limit"] == "512MB"
+        assert connection_config["config"]["threads"] == 2
 
         assert "pool_min_size" not in connection_config
         assert "pool_max_size" not in connection_config
+        assert "pool_min_size" not in connection_config["config"]
+        assert "pool_max_size" not in connection_config["config"]
 
         with config.provide_session() as session:
             session.execute("CREATE TABLE IF NOT EXISTS consistency_test (id INTEGER)")
