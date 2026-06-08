@@ -1,7 +1,6 @@
 """Service base classes for SQLSpec application services."""
 
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Generic, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -14,7 +13,6 @@ from sqlspec.exceptions import NotFoundError
 from sqlspec.typing import SchemaT
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from types import TracebackType
 
     from sqlspec.builder import QueryBuilder
@@ -412,21 +410,13 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         """Roll back the current database transaction."""
         self._session.rollback()
 
-    @contextmanager
-    def begin_transaction(self) -> "Iterator[SyncDriverT]":
+    def begin_transaction(self) -> "_SyncBeginTransactionContext[SyncDriverT]":
         """Context manager that commits on success and rolls back on error.
 
-        Yields:
+        Returns:
             The underlying driver session bound to the active transaction.
         """
-        self.begin()
-        try:
-            yield self._session
-        except Exception:
-            self.rollback()
-            raise
-        else:
-            self.commit()
+        return _SyncBeginTransactionContext(self)
 
 
 class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
@@ -442,10 +432,32 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"
-    ) -> bool:
+    ) -> "Literal[False]":
         service = self._service
         if exc_type is None:
             await service.commit()
         else:
             await service.rollback()
+        return False
+
+
+class _SyncBeginTransactionContext(Generic[SyncDriverT]):
+    __slots__ = ("_service",)
+
+    def __init__(self, service: "SQLSpecSyncService[SyncDriverT]") -> None:
+        self._service = service
+
+    def __enter__(self) -> SyncDriverT:
+        service = self._service
+        service.begin()
+        return service.session
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"
+    ) -> "Literal[False]":
+        service = self._service
+        if exc_type is None:
+            service.commit()
+        else:
+            service.rollback()
         return False
