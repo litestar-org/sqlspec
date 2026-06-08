@@ -1,10 +1,11 @@
 """Psqlpy configuration tests covering statement config builders."""
 
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
-from sqlspec.adapters.psqlpy._typing import PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyDriverFeatures
 from sqlspec.adapters.psqlpy.core import (
     build_postgres_extension_probe_names,
@@ -97,7 +98,7 @@ async def test_psqlpy_enable_pgvector_detects_extension_and_promotes_dialect() -
     config = PsqlpyConfig(driver_features={"enable_pgvector": True, "enable_paradedb": False})
     connection = _ExtensionConnection({"vector"})
 
-    await config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    await config._ensure_connection_initialized(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
 
     assert connection.queries[0][1] == [["vector"]]
     assert config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
