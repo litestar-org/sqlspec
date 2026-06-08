@@ -29,6 +29,10 @@ class _MockDriver(SyncDriverAdapterBase):
     def connection(self) -> "Any":
         return None
 
+    @property
+    def data_dictionary(self) -> "Any":
+        raise NotImplementedError
+
     def dispatch_execute(self, *args: "Any", **kwargs: "Any") -> "Any":
         raise NotImplementedError
 
