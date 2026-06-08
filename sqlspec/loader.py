@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core import SQL, ParameterDeclaration, get_cache, get_cache_config
+from sqlspec.core import SQL, ParameterDeclaration, ParameterValidator, get_cache, get_cache_config
 from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
@@ -385,6 +385,50 @@ class SQLFileLoader:
         return dialect, tuple(params), "\n".join(raw_lines[body_start:])
 
     @staticmethod
+    def _validate_declared_parameters(
+        clean_sql: str, declared: "tuple[ParameterDeclaration, ...]", statement_name: str, file_path: str
+    ) -> None:
+        """Validate declared parameters against the query's actual placeholders.
+
+        For named binding, every declared name must appear among the SQL placeholders
+        (declared names may be a subset; filters and undeclared params are allowed). For
+        positional binding, the declared count must equal the placeholder count.
+
+        Args:
+            clean_sql: The SQL body with directives/comments stripped.
+            declared: Declared parameters for the query.
+            statement_name: Raw query name for error messages.
+            file_path: File path for error reporting.
+
+        Raises:
+            SQLFileParseError: On name drift (named) or count mismatch (positional).
+        """
+        if not declared:
+            return
+        infos = ParameterValidator().extract_parameters(clean_sql)
+        named = {info.name for info in infos if info.name and not info.name.isdigit()}
+        if named:
+            for decl in declared:
+                if decl.name not in named:
+                    raise SQLFileParseError(
+                        file_path,
+                        file_path,
+                        ValueError(
+                            f"Declared parameter '{decl.name}' for query '{statement_name}' is not present in the "
+                            f"SQL placeholders {sorted(named)}"
+                        ),
+                    )
+        elif len(declared) != len(infos):
+            raise SQLFileParseError(
+                file_path,
+                file_path,
+                ValueError(
+                    f"Query '{statement_name}' declares {len(declared)} parameter(s) but the SQL has "
+                    f"{len(infos)} positional placeholder(s)"
+                ),
+            )
+
+    @staticmethod
     def _parse_sql_content(
         content: str, file_path: str, strict_parameter_annotations: bool = False
     ) -> "dict[str, NamedStatement]":
@@ -434,6 +478,10 @@ class SQLFileLoader:
                     raise SQLFileParseError(
                         file_path, file_path, ValueError(f"Duplicate statement name: {raw_statement_name}")
                     )
+
+                SQLFileLoader._validate_declared_parameters(
+                    clean_sql, declared_params, raw_statement_name, file_path
+                )
 
                 statements[normalized_name] = NamedStatement(
                     name=normalized_name,
@@ -670,12 +718,12 @@ class SQLFileLoader:
         if dialect is not None:
             dialect = _normalize_dialect(dialect)
 
+        declared = tuple(parameters) if parameters else ()
+        clean_sql = sql.strip()
+        self._validate_declared_parameters(clean_sql, declared, name, "<directly added>")
+
         statement = NamedStatement(
-            name=normalized_name,
-            sql=sql.strip(),
-            dialect=dialect,
-            start_line=0,
-            parameters=tuple(parameters) if parameters else (),
+            name=normalized_name, sql=clean_sql, dialect=dialect, start_line=0, parameters=declared
         )
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"

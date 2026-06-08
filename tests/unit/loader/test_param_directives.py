@@ -36,6 +36,7 @@ def test_parse_declared_params_interleaved_with_dialect() -> None:
 -- param: offer_ids list[int] List of offer IDs
 -- param: limit int? Maximum rows
 select offer_id from offers where status_cd = :status_cd and offer_id in (:offer_ids)
+fetch first :limit rows only
 """
     statements = SQLFileLoader._parse_sql_content(content, "test.sql")
     stmt = statements["get_offers"]
