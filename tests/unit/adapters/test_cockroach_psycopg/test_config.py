@@ -8,6 +8,11 @@ Tests cover:
 - Connection config normalization
 """
 
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
     CockroachPsycopgDriverFeatures,
@@ -15,6 +20,41 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncConfig,
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
+from sqlspec.exceptions import ImproperConfigurationError
+
+
+class _SyncPoolSpy:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.args = args
+        self.kwargs = kwargs
+        self.__class__.calls.append((args, kwargs))
+
+    def close(self) -> None:
+        return None
+
+
+class _AsyncPoolSpy:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.args = args
+        self.kwargs = kwargs
+        self.open_called = False
+        self.__class__.calls.append((args, kwargs))
+
+    async def open(self) -> None:
+        self.open_called = True
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def reset_pool_spies() -> None:
+    _SyncPoolSpy.calls = []
+    _AsyncPoolSpy.calls = []
 
 
 def test_cockroach_psycopg_sync_config_default_initialization() -> None:
@@ -78,6 +118,67 @@ def test_cockroach_psycopg_sync_config_conninfo_in_connection_config() -> None:
     """Conninfo string should be accepted in connection config."""
     config = CockroachPsycopgSyncConfig(connection_config={"conninfo": "postgresql://user:pass@localhost:26257/testdb"})
     assert "conninfo" in config.connection_config
+
+
+def test_cockroach_psycopg_sync_pool_preserves_conninfo_connection_kwargs() -> None:
+    """Conninfo should not cause explicit psycopg connection kwargs to be dropped."""
+    config = CockroachPsycopgSyncConfig(
+        connection_config={
+            "conninfo": "postgresql://user:pass@localhost:26257/testdb",
+            "prepare_threshold": 0,
+            "row_factory": "rows",
+            "cursor_factory": "cursor",
+            "context": "adapt-context",
+            "kwargs": {"application_name": "sqlspec-test"},
+        }
+    )
+
+    with patch("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _SyncPoolSpy):
+        pool = config.create_pool()
+
+    assert isinstance(pool, _SyncPoolSpy)
+    args, kwargs = _SyncPoolSpy.calls[0]
+    assert args == ("postgresql://user:pass@localhost:26257/testdb",)
+    assert kwargs["kwargs"] == {
+        "prepare_threshold": 0,
+        "row_factory": "rows",
+        "cursor_factory": "cursor",
+        "context": "adapt-context",
+        "application_name": "sqlspec-test",
+    }
+
+
+def test_cockroach_psycopg_sync_pool_forwards_lifecycle_options() -> None:
+    """psycopg-pool lifecycle options should route to ConnectionPool."""
+
+    def check(_: object) -> None:
+        return None
+
+    def reset(_: object) -> None:
+        return None
+
+    def reconnect_failed(_: object) -> None:
+        return None
+
+    config = CockroachPsycopgSyncConfig(
+        connection_config={
+            "host": "localhost",
+            "check": check,
+            "reset": reset,
+            "reconnect_failed": reconnect_failed,
+            "open": False,
+        }
+    )
+
+    with patch("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _SyncPoolSpy):
+        config.create_pool()
+
+    _, kwargs = _SyncPoolSpy.calls[0]
+    assert kwargs["check"] is check
+    assert kwargs["reset"] is reset
+    assert kwargs["reconnect_failed"] is reconnect_failed
+    assert kwargs["open"] is False
+    assert kwargs["kwargs"] == {"host": "localhost"}
 
 
 def test_cockroach_psycopg_sync_config_bind_key_configuration() -> None:
@@ -158,6 +259,70 @@ def test_cockroach_psycopg_async_config_bind_key_configuration() -> None:
     assert config.bind_key == "cockroach_async"
 
 
+@pytest.mark.anyio
+async def test_cockroach_psycopg_async_pool_preserves_conninfo_connection_kwargs() -> None:
+    """Conninfo should not cause explicit async psycopg connection kwargs to be dropped."""
+    config = CockroachPsycopgAsyncConfig(
+        connection_config={
+            "conninfo": "postgresql://user:pass@localhost:26257/testdb",
+            "prepare_threshold": None,
+            "row_factory": "async-rows",
+            "cursor_factory": "async-cursor",
+            "context": "async-adapt-context",
+            "kwargs": {"application_name": "sqlspec-async-test"},
+        }
+    )
+
+    with patch("sqlspec.adapters.cockroach_psycopg.config.AsyncConnectionPool", _AsyncPoolSpy):
+        pool = await config.create_pool()
+
+    assert isinstance(pool, _AsyncPoolSpy)
+    args, kwargs = _AsyncPoolSpy.calls[0]
+    assert args == ("postgresql://user:pass@localhost:26257/testdb",)
+    assert kwargs["kwargs"] == {
+        "prepare_threshold": None,
+        "row_factory": "async-rows",
+        "cursor_factory": "async-cursor",
+        "context": "async-adapt-context",
+        "application_name": "sqlspec-async-test",
+    }
+
+
+@pytest.mark.anyio
+async def test_cockroach_psycopg_async_pool_forwards_lifecycle_options() -> None:
+    """psycopg-pool async lifecycle options should route to AsyncConnectionPool."""
+
+    async def check(_: object) -> None:
+        return None
+
+    async def reset(_: object) -> None:
+        return None
+
+    async def reconnect_failed(_: object) -> None:
+        return None
+
+    config = CockroachPsycopgAsyncConfig(
+        connection_config={
+            "host": "cockroach-node",
+            "check": check,
+            "reset": reset,
+            "reconnect_failed": reconnect_failed,
+            "open": False,
+        }
+    )
+
+    with patch("sqlspec.adapters.cockroach_psycopg.config.AsyncConnectionPool", _AsyncPoolSpy):
+        pool = await config.create_pool()
+
+    _, kwargs = _AsyncPoolSpy.calls[0]
+    assert kwargs["check"] is check
+    assert kwargs["reset"] is reset
+    assert kwargs["reconnect_failed"] is reconnect_failed
+    assert kwargs["open"] is False
+    assert kwargs["kwargs"] == {"host": "cockroach-node"}
+    assert pool.open_called is False
+
+
 def test_cockroach_psycopg_async_config_class_attributes() -> None:
     """Config should have correct class attributes."""
     assert CockroachPsycopgAsyncConfig.supports_transactional_ddl is True
@@ -216,7 +381,15 @@ def test_cockroach_psycopg_driver_features_typed_dict_accepts_event_features() -
     assert features["events_backend"] == "table_queue"
 
 
-def test_cockroach_psycopg_driver_features_typed_dict_accepts_uuid_preference() -> None:
-    """TypedDict should accept CockroachDB-specific UUID preference."""
-    features: CockroachPsycopgDriverFeatures = {"prefer_uuid_keys": True}
-    assert features["prefer_uuid_keys"] is True
+def test_cockroach_psycopg_driver_features_rejects_unused_uuid_preference() -> None:
+    """No unused CockroachDB-specific UUID preference should remain as a no-op."""
+    assert "prefer_uuid_keys" not in CockroachPsycopgDriverFeatures.__optional_keys__
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_cockroach_psycopg_config_rejects_unused_uuid_preference(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig],
+) -> None:
+    """Raw driver feature mappings should not keep unused UUID preference silently."""
+    with pytest.raises(ImproperConfigurationError, match="prefer_uuid_keys"):
+        config_type(driver_features={"prefer_uuid_keys": True})
