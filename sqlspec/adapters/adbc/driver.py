@@ -87,6 +87,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_detected_dialect",
         "_dialect_name",
+        "_is_flightsql",
         "_is_postgres",
         "_json_serializer",
         "dialect",
@@ -101,6 +102,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         dialect: "str | None" = None,
     ) -> None:
         self._detected_dialect = detect_dialect(connection, logger, fallback_dialect=dialect)
+        self._is_flightsql = self._detect_flightsql_connection(connection)
 
         if statement_config is None:
             base_config = get_statement_config(self._detected_dialect)
@@ -156,7 +158,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 row_format=row_format,
             )
 
-        row_count = resolve_rowcount(cursor)
+        row_count = self._resolve_count_result_rowcount(cursor, fallback=resolve_rowcount(cursor))
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def dispatch_execute_many(self, cursor: "AdbcRawCursor", statement: SQL) -> "ExecutionResult":
@@ -177,19 +179,32 @@ class AdbcDriver(SyncDriverAdapterBase):
                 row_count = 0
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 parameter_count = len(prepared_parameters)
-                try:
-                    cursor.executemany(sql, prepared_parameters)
-                except Exception as exc:
-                    if _MULTI_ROW_BIND_UNSUPPORTED not in str(exc):
-                        raise
+                if self._is_flightsql:
+                    row_count = 0
                     for row in prepared_parameters:
                         cursor.execute(sql, parameters=row)
-                    row_count = parameter_count
+                        row_count += self._resolve_count_result_rowcount(cursor, fallback=1)
                 else:
-                    row_count = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
+                    try:
+                        cursor.executemany(sql, prepared_parameters)
+                    except Exception as exc:
+                        if _MULTI_ROW_BIND_UNSUPPORTED not in str(exc):
+                            raise
+                        row_count = 0
+                        for row in prepared_parameters:
+                            cursor.execute(sql, parameters=row)
+                            row_count += self._resolve_count_result_rowcount(cursor, fallback=1)
+                    else:
+                        row_count = self._resolve_count_result_rowcount(
+                            cursor,
+                            fallback=resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count),
+                        )
+            elif self._is_flightsql:
+                cursor.execute(sql, parameters=prepared_parameters)
+                row_count = self._resolve_count_result_rowcount(cursor, fallback=1)
             else:
                 cursor.executemany(sql, prepared_parameters)
-                row_count = resolve_rowcount(cursor)
+                row_count = self._resolve_count_result_rowcount(cursor, fallback=resolve_rowcount(cursor))
 
         except Exception:
             handle_postgres_rollback(self._dialect_name, cursor, logger)
@@ -227,7 +242,9 @@ class AdbcDriver(SyncDriverAdapterBase):
                 else:
                     cursor.execute(stmt)
                 successful_count += 1
-                last_rowcount = normalize_script_rowcount(last_rowcount, cursor)
+                last_rowcount = self._resolve_count_result_rowcount(
+                    cursor, fallback=normalize_script_rowcount(last_rowcount, cursor)
+                )
         except Exception:
             handle_postgres_rollback(self._dialect_name, cursor, logger)
             raise
@@ -494,19 +511,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Resolve rowcount from ADBC cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        ADBC uses explicit BEGIN and does not expose reliable transaction state.
-
-        Returns:
-            False - ADBC requires explicit transaction management.
-        """
-        return False
-
-    def _resolve_column_names(self, description: Any) -> list[str]:
-        return resolve_column_names(description, self._column_name_cache)
-
     def prepare_driver_parameters(
         self,
         parameters: Any,
@@ -554,6 +558,52 @@ class AdbcDriver(SyncDriverAdapterBase):
             )
 
         return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        ADBC uses explicit BEGIN and does not expose reliable transaction state.
+
+        Returns:
+            False - ADBC requires explicit transaction management.
+        """
+        return False
+
+    @staticmethod
+    def _detect_flightsql_connection(connection: "AdbcConnection") -> bool:
+        try:
+            driver_info = connection.adbc_get_info()
+        except Exception:
+            return False
+        driver_name = str(driver_info.get("driver_name", "")).lower()
+        return "flight sql" in driver_name or "flightsql" in driver_name
+
+    def _resolve_column_names(self, description: Any) -> list[str]:
+        return resolve_column_names(description, self._column_name_cache)
+
+    @staticmethod
+    def _resolve_count_result_rowcount(cursor: "AdbcRawCursor", *, fallback: int) -> int:
+        """Consume ADBC count result streams and return their row count."""
+        if not cursor.description:
+            return fallback
+        try:
+            rows = cursor.fetchall()
+        except Exception:
+            return fallback
+        if not rows:
+            return fallback
+
+        first_row = rows[0]
+        if isinstance(first_row, dict):
+            first_value = next(iter(first_row.values()), None)
+        elif isinstance(first_row, (tuple, list)) and first_row:
+            first_value = first_row[0]
+        else:
+            first_value = first_row
+
+        if isinstance(first_value, int):
+            return first_value
+        return fallback
 
 
 register_driver_profile("adbc", driver_profile)

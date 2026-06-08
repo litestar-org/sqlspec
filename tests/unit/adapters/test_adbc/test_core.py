@@ -2,8 +2,9 @@
 
 from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
+from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc.core import (
     _prepare_batch_with_casts,
@@ -163,6 +164,40 @@ def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
     assert prepared == [(1, 2)]
 
 
+def test_adbc_driver_resolves_count_stream_rowcount_from_tuple() -> None:
+    """FlightSQL count streams should be consumed and used as rowcount."""
+    cursor = SimpleNamespace(description=[("rows",)], fetchall=lambda: [(3,)])
+
+    rowcount = AdbcDriver._resolve_count_result_rowcount(cast("Any", cursor), fallback=-1)
+
+    assert rowcount == 3
+
+
+def test_adbc_driver_resolves_count_stream_rowcount_from_dict() -> None:
+    """FlightSQL count streams may return dict-shaped rows."""
+    cursor = SimpleNamespace(description=[("rows",)], fetchall=lambda: [{"rows": 4}])
+
+    rowcount = AdbcDriver._resolve_count_result_rowcount(cast("Any", cursor), fallback=-1)
+
+    assert rowcount == 4
+
+
+def test_adbc_driver_count_stream_rowcount_uses_fallback_without_description() -> None:
+    """Non-FlightSQL cursors without count streams should keep fallback rowcount."""
+    cursor = SimpleNamespace(description=None, fetchall=lambda: [(3,)])
+
+    rowcount = AdbcDriver._resolve_count_result_rowcount(cast("Any", cursor), fallback=2)
+
+    assert rowcount == 2
+
+
+def test_adbc_driver_detects_flightsql_connection() -> None:
+    """FlightSQL connections should use the row-by-row execute-many path."""
+    connection = SimpleNamespace(adbc_get_info=lambda: {"driver_name": "Flight SQL"})
+
+    assert AdbcDriver._detect_flightsql_connection(cast("Any", connection)) is True
+
+
 def test_detect_dialect_uses_fallback_when_introspection_returns_unknown() -> None:
     """detect_dialect honors fallback_dialect when GetInfo yields no pattern match."""
 
@@ -185,6 +220,34 @@ def test_detect_dialect_introspection_match_beats_fallback() -> None:
     conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "duckdb", "driver_name": ""})
     result = adbc_core.detect_dialect(conn, fallback_dialect="sqlite")
     assert result == "duckdb"
+
+
+def test_detect_dialect_uses_gizmosql_duckdb_vendor_version() -> None:
+    """GizmoSQL DuckDB metadata should beat the generic Flight SQL driver name."""
+
+    conn = SimpleNamespace(
+        adbc_get_info=lambda: {
+            "vendor_name": "GizmoSQL",
+            "vendor_version": "GizmoSQL DuckDB backend",
+            "driver_name": "Flight SQL",
+        }
+    )
+    result = adbc_core.detect_dialect(conn, fallback_dialect="sqlite")
+    assert result == "duckdb"
+
+
+def test_detect_dialect_uses_gizmosql_sqlite_vendor_version() -> None:
+    """GizmoSQL SQLite metadata should preserve SQLite backend detection."""
+
+    conn = SimpleNamespace(
+        adbc_get_info=lambda: {
+            "vendor_name": "GizmoSQL",
+            "vendor_version": "GizmoSQL SQLite backend",
+            "driver_name": "Flight SQL",
+        }
+    )
+    result = adbc_core.detect_dialect(conn, fallback_dialect="duckdb")
+    assert result == "sqlite"
 
 
 def test_handle_postgres_rollback_issues_rollback_for_pgvector() -> None:

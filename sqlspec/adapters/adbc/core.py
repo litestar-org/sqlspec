@@ -155,7 +155,21 @@ _PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ..
 )
 
 _BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "token")
+_FLIGHTSQL_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("username", "password")
+_FLIGHTSQL_TLS_SKIP_VERIFY_KEY: Final[str] = "adbc.flight.sql.client_option.tls_skip_verify"
+_FLIGHTSQL_AUTHORIZATION_HEADER_KEY: Final[str] = "adbc.flight.sql.authorization_header"
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
+_SQLSTATE_CLASS_CODE_LEN = 2
+_SQLSTATE_DESCRIPTIONS: dict[str, str] = {
+    "23": "integrity constraint violation",
+    "40": "transaction error",
+    "42": "SQL syntax error",
+    "08": "connection error",
+    "22": "data error",
+    "28": "authorization error",
+    "57": "operational error",
+    "02": "no data",
+}
 
 
 def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_dialect: "str | None" = None) -> str:
@@ -173,7 +187,15 @@ def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_diale
     try:
         driver_info = connection.adbc_get_info()
         vendor_name = driver_info.get("vendor_name", "").lower()
+        vendor_version = driver_info.get("vendor_version", "").lower()
         driver_name = driver_info.get("driver_name", "").lower()
+
+        if "gizmosql" in vendor_name or "gizmosql" in vendor_version:
+            if "sqlite" in vendor_version:
+                return "sqlite"
+            if "duckdb" in vendor_version:
+                return "duckdb"
+            return "duckdb"
 
         for dialect, patterns in DIALECT_PATTERNS.items():
             for pattern in patterns:
@@ -396,7 +418,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["path"] = uri[9:]
         config.pop("uri", None)
 
-    if isinstance(driver_name, str) and driver_kind == "bigquery":
+    if driver_kind in {"gizmosql", "flightsql"}:
+        _lift_flightsql_db_kwargs(config)
+    elif isinstance(driver_name, str) and driver_kind == "bigquery":
         db_kwargs = config.get("db_kwargs")
         db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
         for param in _BIGQUERY_DB_KWARGS_FIELDS:
@@ -477,14 +501,6 @@ def prepare_postgres_parameters(
     return prepare_parameters_with_casts(
         postgres_compatible, parameter_casts, statement_config, dialect=dialect, json_serializer=json_serializer
     )
-
-
-def _create_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
-    """Create an ADBC error instance without raising it."""
-    msg = f"ADBC {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
 
 
 def create_mapped_exception(error: Any) -> SQLSpecError:
@@ -584,27 +600,6 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     return _create_adbc_error(error, SQLSpecError, "database error")
 
 
-_SQLSTATE_CLASS_CODE_LEN = 2
-
-# Module-level SQLSTATE descriptions (mypyc optimization - avoid dict creation per call)
-_SQLSTATE_DESCRIPTIONS: dict[str, str] = {
-    "23": "integrity constraint violation",
-    "40": "transaction error",
-    "42": "SQL syntax error",
-    "08": "connection error",
-    "22": "data error",
-    "28": "authorization error",
-    "57": "operational error",
-    "02": "no data",
-}
-
-
-def _get_sqlstate_description(sqlstate: str) -> str:
-    """Get a human-readable description for a SQLSTATE code class."""
-    class_code = sqlstate[:_SQLSTATE_CLASS_CODE_LEN] if len(sqlstate) >= _SQLSTATE_CLASS_CODE_LEN else sqlstate
-    return _SQLSTATE_DESCRIPTIONS.get(class_code, "database error")
-
-
 def _identity(value: Any) -> Any:
     return value
 
@@ -697,47 +692,6 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
     return build_statement_config_from_profile(
         profile, parameter_overrides=parameter_overrides, statement_overrides={"dialect": sqlglot_dialect}
     )
-
-
-def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
-    if "strict_type_coercion" in processed_features and "enable_strict_type_coercion" not in processed_features:
-        processed_features["enable_strict_type_coercion"] = processed_features["strict_type_coercion"]
-    if "enable_strict_type_coercion" in processed_features and "strict_type_coercion" not in processed_features:
-        processed_features["strict_type_coercion"] = processed_features["enable_strict_type_coercion"]
-
-    if "arrow_extension_types" in processed_features and "enable_arrow_extension_types" not in processed_features:
-        processed_features["enable_arrow_extension_types"] = processed_features["arrow_extension_types"]
-    if "enable_arrow_extension_types" in processed_features and "arrow_extension_types" not in processed_features:
-        processed_features["arrow_extension_types"] = processed_features["enable_arrow_extension_types"]
-
-    return processed_features
-
-
-def _apply_adbc_json_serializer(
-    statement_config: "StatementConfig", json_serializer: "Callable[[Any], str]"
-) -> "StatementConfig":
-    """Apply a JSON serializer to statement config while preserving list/tuple converters.
-
-    Args:
-        statement_config: Base statement configuration to update.
-        json_serializer: JSON serializer function.
-
-    Returns:
-        Updated statement configuration.
-    """
-    parameter_config = statement_config.parameter_config
-    previous_list_converter = parameter_config.type_coercion_map.get(list)
-    previous_tuple_converter = parameter_config.type_coercion_map.get(tuple)
-
-    updated_parameter_config = parameter_config.with_json_serializers(json_serializer)
-    updated_map = dict(updated_parameter_config.type_coercion_map)
-
-    if previous_list_converter is not None:
-        updated_map[list] = previous_list_converter
-    if previous_tuple_converter is not None:
-        updated_map[tuple] = previous_tuple_converter
-
-    return statement_config.replace(parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map))
 
 
 def apply_driver_features(
@@ -872,6 +826,82 @@ def resolve_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
+def prepare_parameters_with_casts(
+    parameters: Any,
+    parameter_casts: "dict[int, str]",
+    statement_config: "StatementConfig",
+    *,
+    dialect: str,
+    json_serializer: "Callable[[Any], str]",
+) -> Any:
+    """Prepare parameters with cast-aware type coercion for ADBC."""
+    json_encoder = statement_config.parameter_config.json_serializer or json_serializer
+
+    if isinstance(parameters, (list, tuple)):
+        converter = get_adbc_type_converter(dialect)
+        type_map = statement_config.parameter_config.type_coercion_map
+        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
+        return _prepare_parameter_sequence_with_casts(
+            parameters, parameter_casts, type_map, dispatcher, converter, json_encoder
+        )
+    return parameters
+
+
+def _create_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create an ADBC error instance without raising it."""
+    msg = f"ADBC {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+def _get_sqlstate_description(sqlstate: str) -> str:
+    """Get a human-readable description for a SQLSTATE code class."""
+    class_code = sqlstate[:_SQLSTATE_CLASS_CODE_LEN] if len(sqlstate) >= _SQLSTATE_CLASS_CODE_LEN else sqlstate
+    return _SQLSTATE_DESCRIPTIONS.get(class_code, "database error")
+
+
+def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
+    if "strict_type_coercion" in processed_features and "enable_strict_type_coercion" not in processed_features:
+        processed_features["enable_strict_type_coercion"] = processed_features["strict_type_coercion"]
+    if "enable_strict_type_coercion" in processed_features and "strict_type_coercion" not in processed_features:
+        processed_features["strict_type_coercion"] = processed_features["enable_strict_type_coercion"]
+
+    if "arrow_extension_types" in processed_features and "enable_arrow_extension_types" not in processed_features:
+        processed_features["enable_arrow_extension_types"] = processed_features["arrow_extension_types"]
+    if "enable_arrow_extension_types" in processed_features and "arrow_extension_types" not in processed_features:
+        processed_features["arrow_extension_types"] = processed_features["enable_arrow_extension_types"]
+
+    return processed_features
+
+
+def _apply_adbc_json_serializer(
+    statement_config: "StatementConfig", json_serializer: "Callable[[Any], str]"
+) -> "StatementConfig":
+    """Apply a JSON serializer to statement config while preserving list/tuple converters.
+
+    Args:
+        statement_config: Base statement configuration to update.
+        json_serializer: JSON serializer function.
+
+    Returns:
+        Updated statement configuration.
+    """
+    parameter_config = statement_config.parameter_config
+    previous_list_converter = parameter_config.type_coercion_map.get(list)
+    previous_tuple_converter = parameter_config.type_coercion_map.get(tuple)
+
+    updated_parameter_config = parameter_config.with_json_serializers(json_serializer)
+    updated_map = dict(updated_parameter_config.type_coercion_map)
+
+    if previous_list_converter is not None:
+        updated_map[list] = previous_list_converter
+    if previous_tuple_converter is not None:
+        updated_map[tuple] = previous_tuple_converter
+
+    return statement_config.replace(parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map))
+
+
 def _get_type_coercion_dispatcher(
     type_map: "dict[type, Callable[[Any], Any]]",
 ) -> "TypeDispatcher[Callable[[Any], Any]]":
@@ -917,27 +947,6 @@ def _prepare_parameter_sequence_with_casts(
     return tuple(result) if isinstance(parameters, tuple) else result
 
 
-def prepare_parameters_with_casts(
-    parameters: Any,
-    parameter_casts: "dict[int, str]",
-    statement_config: "StatementConfig",
-    *,
-    dialect: str,
-    json_serializer: "Callable[[Any], str]",
-) -> Any:
-    """Prepare parameters with cast-aware type coercion for ADBC."""
-    json_encoder = statement_config.parameter_config.json_serializer or json_serializer
-
-    if isinstance(parameters, (list, tuple)):
-        converter = get_adbc_type_converter(dialect)
-        type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
-        return _prepare_parameter_sequence_with_casts(
-            parameters, parameter_casts, type_map, dispatcher, converter, json_encoder
-        )
-    return parameters
-
-
 def _prepare_batch_with_casts(
     parameter_sets: Any,
     parameter_casts: "dict[int, str]",
@@ -964,3 +973,34 @@ def _prepare_batch_with_casts(
         else row
         for row in postgres_compatible
     ]
+
+
+def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
+    try:
+        from adbc_driver_flightsql import DatabaseOptions
+    except ImportError:
+        return _FLIGHTSQL_TLS_SKIP_VERIFY_KEY, _FLIGHTSQL_AUTHORIZATION_HEADER_KEY
+    return DatabaseOptions.TLS_SKIP_VERIFY.value, DatabaseOptions.AUTHORIZATION_HEADER.value
+
+
+def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
+    db_kwargs = config.pop("db_kwargs", None)
+    db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+    tls_skip_verify_key, authorization_header_key = _resolve_flightsql_db_kwargs_keys()
+
+    for field in _FLIGHTSQL_DB_KWARGS_FIELDS:
+        if field in config:
+            db_kwargs_dict.setdefault(field, config.pop(field))
+
+    if "tls_skip_verify" in config:
+        tls_skip_verify = config.pop("tls_skip_verify")
+        if isinstance(tls_skip_verify, bool):
+            tls_skip_verify = str(tls_skip_verify).lower()
+        db_kwargs_dict.setdefault(tls_skip_verify_key, tls_skip_verify)
+
+    if "authorization_header" in config:
+        db_kwargs_dict.setdefault(authorization_header_key, config.pop("authorization_header"))
+
+    config.pop("gizmosql_backend", None)
+    if db_kwargs_dict:
+        config["db_kwargs"] = db_kwargs_dict

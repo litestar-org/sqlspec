@@ -262,6 +262,7 @@ jobs:
           set -eu
           images=(
             postgres:18
+            gizmodata/gizmosql:latest
             pgvector/pgvector:pg15
             paradedb/paradedb:0.21.5-pg16
             cockroachdb/cockroach:latest

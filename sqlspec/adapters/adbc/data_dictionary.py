@@ -294,6 +294,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 index_metadata_list.append(index_metadata)
             return index_metadata_list
 
+        if dialect == "duckdb":
+            query_name = "indexes_by_schema" if table is None else "indexes_by_table"
+            return driver.select(self._get_query(dialect, query_name), schema_type=IndexMetadata)
+
         if table is None:
             return driver.select(
                 self._get_query(dialect, "indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
