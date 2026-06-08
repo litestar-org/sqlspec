@@ -1,6 +1,6 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from asyncpg import Connection, Record
 from asyncpg import create_pool as asyncpg_create_pool
@@ -49,13 +49,19 @@ __all__ = (
     "AsyncpgConfig",
     "AsyncpgConnectionConfig",
     "AsyncpgDriverFeatures",
+    "AsyncpgGSSLib",
     "AsyncpgPoolConfig",
+    "AsyncpgTargetSessionAttrs",
     "register_json_codecs",
     "register_pgvector_support",
 )
 
 
 logger = get_logger(__name__)
+
+
+AsyncpgTargetSessionAttrs = Literal["any", "primary", "standby", "read-write", "read-only", "prefer-standby"]
+AsyncpgGSSLib = Literal["gssapi", "sspi"]
 
 
 class AsyncpgConnectionConfig(TypedDict):
@@ -69,13 +75,19 @@ class AsyncpgConnectionConfig(TypedDict):
     database: NotRequired[str]
     ssl: NotRequired[Any]
     passfile: NotRequired[str]
+    service: NotRequired[str]
+    servicefile: NotRequired[str]
     direct_tls: NotRequired[bool]
+    timeout: NotRequired[float]
     connect_timeout: NotRequired[float]
     command_timeout: NotRequired[float]
     statement_cache_size: NotRequired[int]
     max_cached_statement_lifetime: NotRequired[int]
     max_cacheable_statement_size: NotRequired[int]
     server_settings: NotRequired["dict[str, str]"]
+    target_session_attrs: NotRequired[AsyncpgTargetSessionAttrs]
+    krbsrvname: NotRequired[str]
+    gsslib: NotRequired[AsyncpgGSSLib]
 
 
 class AsyncpgPoolConfig(AsyncpgConnectionConfig):
@@ -85,8 +97,10 @@ class AsyncpgPoolConfig(AsyncpgConnectionConfig):
     max_size: NotRequired[int]
     max_queries: NotRequired[int]
     max_inactive_connection_lifetime: NotRequired[float]
+    connect: NotRequired["Callable[..., Awaitable[AsyncpgConnection]]"]
     setup: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
     init: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    reset: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
     loop: NotRequired["AbstractEventLoop"]
     connection_class: NotRequired[type["AsyncpgConnection"]]
     record_class: NotRequired[type[Record]]

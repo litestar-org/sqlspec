@@ -1,13 +1,14 @@
 """AsyncPG configuration tests covering statement config builders."""
 
-from typing import cast
+from typing import Any, cast, get_args, get_origin
 from unittest.mock import AsyncMock
 
 import pytest
 from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.core import (
     build_postgres_extension_probe_names,
     build_statement_config,
@@ -52,6 +53,84 @@ def test_asyncpg_config_connection_type_is_not_metaclass() -> None:
     connection_type = cast("object", AsyncpgConfig.connection_type)
     assert connection_type is PoolConnectionProxy
     assert connection_type is not cast("object", PoolConnectionProxyMeta)
+
+
+def test_asyncpg_connection_config_types_current_service_and_gss_options() -> None:
+    """Typed connection config should include current asyncpg connection options."""
+    expected_options = {"service", "servicefile", "timeout", "target_session_attrs", "krbsrvname", "gsslib"}
+
+    assert expected_options <= set(AsyncpgConnectionConfig.__annotations__)
+
+    target_session_attrs_annotation = cast("Any", AsyncpgConnectionConfig.__annotations__["target_session_attrs"])
+    assert get_origin(target_session_attrs_annotation) is NotRequired
+    assert set(get_args(get_args(target_session_attrs_annotation)[0])) == {
+        "any",
+        "primary",
+        "standby",
+        "read-write",
+        "read-only",
+        "prefer-standby",
+    }
+
+    gsslib_annotation = cast("Any", AsyncpgConnectionConfig.__annotations__["gsslib"])
+    assert get_origin(gsslib_annotation) is NotRequired
+    assert set(get_args(get_args(gsslib_annotation)[0])) == {"gssapi", "sspi"}
+
+
+def test_asyncpg_pool_config_types_current_pool_callbacks() -> None:
+    """Typed pool config should include current asyncpg pool callback options."""
+    assert {"connect", "setup", "init", "reset"} <= set(AsyncpgPoolConfig.__annotations__)
+
+
+async def test_asyncpg_create_pool_routes_current_connect_and_pool_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Current connect kwargs should reach create_pool while reset remains pool-scoped."""
+    import sqlspec.adapters.asyncpg.config as config_mod
+
+    captured_connect_kwargs: dict[str, Any] = {}
+    captured_pool_kwargs: dict[str, Any] = {}
+
+    async def reset_connection(_: object) -> None:
+        return None
+
+    async def connect_factory(**_: Any) -> object:
+        return object()
+
+    async def fake_create_pool(*, connect: Any = None, init: Any = None, reset: Any = None, **kwargs: Any) -> object:
+        captured_pool_kwargs.update({"connect": connect, "init": init, "reset": reset})
+        captured_connect_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(config_mod, "asyncpg_create_pool", fake_create_pool)
+
+    config = AsyncpgConfig(
+        connection_config={
+            "connect": connect_factory,
+            "dsn": "postgresql://localhost/test",
+            "gsslib": "gssapi",
+            "krbsrvname": "postgres",
+            "min_size": 1,
+            "reset": reset_connection,
+            "service": "analytics",
+            "servicefile": "/tmp/pg_service.conf",
+            "target_session_attrs": "read-only",
+            "timeout": 4.5,
+        }
+    )
+
+    await config._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    assert captured_pool_kwargs["connect"] is connect_factory
+    assert captured_pool_kwargs["init"].__func__ is config._init_connection.__func__  # pyright: ignore[reportPrivateUsage]
+    assert captured_pool_kwargs["init"].__self__ is config
+    assert captured_pool_kwargs["reset"] is reset_connection
+    assert captured_connect_kwargs["dsn"] == "postgresql://localhost/test"
+    assert captured_connect_kwargs["gsslib"] == "gssapi"
+    assert captured_connect_kwargs["krbsrvname"] == "postgres"
+    assert captured_connect_kwargs["service"] == "analytics"
+    assert captured_connect_kwargs["servicefile"] == "/tmp/pg_service.conf"
+    assert captured_connect_kwargs["target_session_attrs"] == "read-only"
+    assert captured_connect_kwargs["timeout"] == 4.5
+    assert "reset" not in captured_connect_kwargs
 
 
 def test_asyncpg_build_postgres_extension_probe_names_filters_disabled_features() -> None:
