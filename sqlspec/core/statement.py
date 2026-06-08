@@ -996,9 +996,9 @@ class SQL:
     # ==========================================================================
 
     def _generate_sql_param_name(self, base_name: str) -> str:
-        """Generate unique parameter name with _sqlspec_ prefix.
+        """Generate unique parameter name with parameter_ prefix.
 
-        Uses _sqlspec_ prefix to avoid collision with user-provided parameters.
+        Uses parameter_ prefix to avoid collision with user-provided parameters.
         Auto-generated parameters are namespaced to prevent conflicts.
 
         Args:
@@ -1007,7 +1007,7 @@ class SQL:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
-        prefixed_base = f"_sqlspec_{base_name}"
+        prefixed_base = f"parameter_{base_name}"
         current_index = self._sql_param_counters.get(prefixed_base, 0)
 
         if prefixed_base not in self._named_parameters:
