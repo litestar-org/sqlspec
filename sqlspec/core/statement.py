@@ -384,6 +384,7 @@ class SQL:
                 self._is_many,
                 self._is_script,
                 dict(self._named_parameters),
+                self._declared_parameters,
             ),
         )
 
@@ -1970,9 +1971,16 @@ def _rebuild_sql(
     is_many: bool,
     is_script: bool,
     named_parameters: "dict[str, Any]",
+    declared_parameters: "tuple[ParameterDeclaration, ...]",
 ) -> "SQL":
     """Reconstruct a SQL instance from pickled / deepcopied state."""
-    new_sql = SQL(raw_sql, *original_parameters, statement_config=statement_config, is_many=is_many)
+    new_sql = SQL(
+        raw_sql,
+        *original_parameters,
+        statement_config=statement_config,
+        is_many=is_many,
+        declared_parameters=declared_parameters,
+    )
     if filters:
         new_sql._filters.extend(filters)
     if named_parameters:

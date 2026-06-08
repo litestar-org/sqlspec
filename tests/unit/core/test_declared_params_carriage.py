@@ -8,7 +8,7 @@ from sqlspec.core import ParameterDeclaration
 from sqlspec.core._pool import get_sql_pool
 from sqlspec.core.statement import SQL
 
-_SENTINEL = (ParameterDeclaration("a", "int"),)
+_SENTINEL = (ParameterDeclaration("a", "int", required=False),)
 
 
 def test_default_declared_parameters_is_empty_tuple() -> None:
@@ -79,6 +79,22 @@ def test_undeclared_get_sql_has_empty_declarations() -> None:
 def test_constructor_kwarg_sets_declarations() -> None:
     sql = SQL("select :a", {"a": 1}, declared_parameters=_SENTINEL)
     assert sql.declared_parameters == _SENTINEL
+
+
+def test_declarations_survive_deepcopy() -> None:
+    import copy
+
+    sql = SQL("select :a", {"a": 1}, declared_parameters=_SENTINEL)
+    new = copy.deepcopy(sql)
+    assert new.declared_parameters == _SENTINEL
+
+
+def test_declarations_survive_pickle_roundtrip() -> None:
+    import pickle
+
+    sql = SQL("select :a", {"a": 1}, declared_parameters=_SENTINEL)
+    new = pickle.loads(pickle.dumps(sql))
+    assert new.declared_parameters == _SENTINEL
 
 
 def test_declarations_survive_driver_prepare_with_filter() -> None:

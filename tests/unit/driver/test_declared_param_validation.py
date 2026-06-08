@@ -6,6 +6,7 @@ execution method. Declared => validated (present + typed); undeclared => untouch
 """
 
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -70,6 +71,37 @@ def test_required_missing_raises(driver: _MockDriver) -> None:
         driver.prepare_statement(sql, ())
 
 
+def test_optional_missing_is_bound_as_none(driver: _MockDriver) -> None:
+    sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "int", required=False)))
+    prepared = driver.prepare_statement(sql, ())
+    assert prepared.named_parameters == {"a": None}
+
+
+def test_optional_missing_preserves_supplied_params(driver: _MockDriver) -> None:
+    sql = SQL(
+        "select :a, :b",
+        declared_parameters=_declared(
+            ParameterDeclaration("a", "int", required=False), ParameterDeclaration("b", "str")
+        ),
+    )
+    prepared = driver.prepare_statement(sql, ({"b": "kept"},))
+    assert prepared.named_parameters == {"b": "kept", "a": None}
+
+
+def test_execute_many_optional_missing_is_bound_as_none_for_each_row(driver: _MockDriver) -> None:
+    sql = SQL(
+        "select :a, :b",
+        [{"b": "first"}, {"a": 2, "b": "second"}],
+        is_many=True,
+        declared_parameters=_declared(
+            ParameterDeclaration("a", "int", required=False), ParameterDeclaration("b", "str")
+        ),
+        statement_config=StatementConfig(),
+    )
+    prepared = driver.prepare_statement(sql, ())
+    assert prepared.positional_parameters == [{"b": "first", "a": None}, {"a": 2, "b": "second"}]
+
+
 def test_required_present_passes(driver: _MockDriver) -> None:
     sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "int")))
     prepared = driver.prepare_statement(sql, ({"a": 1},))
@@ -89,6 +121,38 @@ def test_type_match_passes(driver: _MockDriver) -> None:
     )
     prepared = driver.prepare_statement(sql, ({"a": 1, "b": "x"},))
     assert prepared.named_parameters == {"a": 1, "b": "x"}
+
+
+def test_uuid_type_match_passes(driver: _MockDriver) -> None:
+    value = uuid4()
+    sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "uuid")))
+    prepared = driver.prepare_statement(sql, ({"a": value},))
+    assert prepared.named_parameters == {"a": value}
+
+
+def test_uuid_type_mismatch_raises(driver: _MockDriver) -> None:
+    sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "uuid")))
+    with pytest.raises(SQLSpecError, match="a"):
+        driver.prepare_statement(sql, ({"a": "not-a-uuid"},))
+
+
+def test_dict_type_match_passes(driver: _MockDriver) -> None:
+    sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "dict")))
+    prepared = driver.prepare_statement(sql, ({"a": {"ok": True}},))
+    assert prepared.named_parameters == {"a": {"ok": True}}
+
+
+def test_json_type_accepts_json_container_and_scalar_values(driver: _MockDriver) -> None:
+    for value in ({"ok": True}, ["ok"], "ok", 1, 1.5, True):
+        sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "json")))
+        prepared = driver.prepare_statement(sql, ({"a": value},))
+        assert prepared.named_parameters == {"a": value}
+
+
+def test_json_type_mismatch_raises(driver: _MockDriver) -> None:
+    sql = SQL("select :a", declared_parameters=_declared(ParameterDeclaration("a", "json")))
+    with pytest.raises(SQLSpecError, match="a"):
+        driver.prepare_statement(sql, ({"a": object()},))
 
 
 def test_none_value_allowed_when_present(driver: _MockDriver) -> None:

@@ -14,6 +14,10 @@ def test_declared_params(tmp_path: "Path") -> None:
         "-- name: get_team_by_name\n"
         "-- param: name str  The team name to look up\n"
         "select id, name from teams where name = :name\n"
+        "\n"
+        "-- name: list_teams\n"
+        "-- param: name str?  Optional team name filter\n"
+        "select id, name from teams where (:name is null or name = :name) order by id\n"
     )
 
     spec = SQLSpec()
@@ -37,6 +41,9 @@ def test_declared_params(tmp_path: "Path") -> None:
         # A declared query validates supplied parameters automatically.
         row = session.execute(query, {"name": "SQLSpec"}).one()
 
+        # Optional named parameters are bound as NULL when omitted.
+        optional_rows = session.execute(spec.get_sql("list_teams")).all()
+
         # Omitting a declared parameter raises before the query reaches the driver.
         try:
             session.execute(spec.get_sql("get_team_by_name"), {})
@@ -45,4 +52,5 @@ def test_declared_params(tmp_path: "Path") -> None:
     # end-example
 
     assert row["name"] == "SQLSpec"
+    assert [team["name"] for team in optional_rows] == ["Litestar", "SQLSpec"]
     assert "name" in missing_error

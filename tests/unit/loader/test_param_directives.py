@@ -10,21 +10,40 @@ from sqlspec.loader import PARAM_PATTERN, SQLFileLoader
 
 
 @pytest.mark.parametrize(
-    ("line", "name", "type_str", "description"),
+    ("line", "name", "type_str", "required", "description"),
     [
-        ("-- param: status_cd str The status code", "status_cd", "str", "The status code"),
-        ("-- param: limit int", "limit", "int", None),
-        ("-- param: offer_ids list[int] List of ids", "offer_ids", "list[int]", "List of ids"),
-        ("--param:x bool", "x", "bool", None),
-        ("-- PARAM: Y Decimal money", "Y", "Decimal", "money"),
+        ("-- param: status_cd str The status code", "status_cd", "str", True, "The status code"),
+        ("-- param: limit int", "limit", "int", True, None),
+        ("-- param: offer_ids list[int] List of ids", "offer_ids", "list[int]", True, "List of ids"),
+        ("-- param: status_cd str? Optional status filter", "status_cd", "str", False, "Optional status filter"),
+        ("-- param: payload dict[str, Any]? Optional payload", "payload", "dict[str, Any]", False, "Optional payload"),
+        ("--param:x bool", "x", "bool", True, None),
+        ("-- PARAM: Y Decimal money", "Y", "Decimal", True, "money"),
     ],
 )
-def test_param_pattern(line: str, name: str, type_str: str, description: "str | None") -> None:
+def test_param_pattern(line: str, name: str, type_str: str, required: bool, description: "str | None") -> None:
     m = PARAM_PATTERN.match(line)
     assert m is not None
     assert m.group("name") == name
     assert m.group("type") == type_str
+    assert (m.group("optional") != "?") is required
     assert m.group("desc") == description
+
+
+def test_parse_optional_declared_param_suffix() -> None:
+    content = "-- name: q\n-- param: status_cd str? Optional status filter\nselect :status_cd\n"
+    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    assert statements["q"].parameters == (
+        ParameterDeclaration("status_cd", "str", required=False, description="Optional status filter"),
+    )
+
+
+def test_parse_optional_declared_param_description_marker() -> None:
+    content = "-- name: q\n-- param: status_cd str Status filter (optional)\nselect :status_cd\n"
+    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    assert statements["q"].parameters == (
+        ParameterDeclaration("status_cd", "str", required=False, description="Status filter"),
+    )
 
 
 def test_parse_declared_params_interleaved_with_dialect() -> None:

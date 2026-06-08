@@ -78,7 +78,9 @@ self-validating -- without SQLSpec becoming an ORM.
    fetch first :limit rows only
 
 The grammar is ``-- param: <name> <type> [description]``, placed alongside
-``-- name:`` and ``-- dialect:`` in the leading comment block.
+``-- name:`` and ``-- dialect:`` in the leading comment block. Append ``?`` to
+the declared type, or end the description with ``(optional)``, to mark a named
+parameter as optional.
 
 .. literalinclude:: /examples/sql_files/declared_params.py
    :language: python
@@ -88,28 +90,36 @@ The grammar is ``-- param: <name> <type> [description]``, placed alongside
    :dedent: 4
    :no-upgrade:
 
-**Declaration is binary.** A query with **no** ``-- param:`` lines behaves
+**Declaration is opt-in.** A query with **no** ``-- param:`` lines behaves
 exactly as before -- same code path, zero overhead. Declaring a parameter opts
 *that* query into validation:
 
-- It must be **supplied** when the query executes.
+- Required declarations must be **supplied** when the query executes.
+- Missing optional named declarations are bound as ``None``, so SQL receives
+  ``NULL``. The query must still express the intended nullable behavior, for
+  example ``(:status_cd is null or status_cd = :status_cd)``.
+- Positional placeholders still rely on arity and cannot be omitted by name.
 - If its declared type resolves to a Python type, the supplied value must match
   (``isinstance``). Pass ``None`` for SQL ``NULL`` -- the key is still present and
   the type check is skipped.
 - Extra parameters are never rejected -- statement filters legitimately inject
   ``limit``/``offset``, so only *declared* names are checked.
 
-There is no optional marker: a loaded ``.sql`` file's placeholders are static and
-always bound, so a declared parameter is always required. Parameters that can
-genuinely be absent (filter-injected ``limit``/``offset``) are simply left
-undeclared.
+.. code-block:: sql
+
+   -- name: list_offers
+   -- param: status_cd str? Optional status filter
+   select offer_id, offer_name from offers
+   where (:status_cd is null or status_cd = :status_cd)
 
 **Type vocabulary.** Declared types resolve through a fixed allowlist --
 ``str``, ``int``, ``float``, ``bool``, ``bytes``, ``date``, ``datetime``,
-``time``, ``Decimal``, and the container forms ``list``, ``list[int]``,
-``list[str]``, ``list[float]``, ``list[bool]``, ``tuple``. The raw string is
-always stored and **never** evaluated. Register custom mappings with
-:func:`~sqlspec.register_param_type`:
+``time``, ``Decimal``, ``uuid`` / ``uuid.UUID``, ``dict``, ``dict[str, Any]``,
+``json`` / ``jsonb``, and the container forms ``list``, ``list[int]``,
+``list[str]``, ``list[float]``, ``list[bool]``, ``tuple``. ``json`` and
+``jsonb`` use SQLSpec's existing JSON serializer to validate that values can be
+encoded. The raw string is always stored and **never** evaluated. Register
+custom mappings with :func:`~sqlspec.register_param_type`:
 
 .. code-block:: python
 
@@ -128,7 +138,8 @@ type-checked.
   ``:placeholders`` (name drift), and declared count against placeholder count for
   positionally-bound queries. Mismatches raise :exc:`~sqlspec.exceptions.SQLSpecError`.
 - *Execute time* -- presence and type are enforced for every declared parameter,
-  uniformly across every adapter. ``execute_many`` checks the first row only.
+  uniformly across every adapter. ``execute_many`` binds missing optional named
+  values on each row, then checks the first row only.
 
 A **malformed** ``-- param:`` line (a typo or wrong arity) is a soft warning and
 the line is skipped, preserving backward compatibility. Pass
@@ -146,5 +157,5 @@ How Query Names Work
 - Name queries with ``-- name: query_name`` comments.
 - SQLSpec normalizes names to snake_case for Python access.
 - Add ``-- dialect: postgres`` on the first line of a block to bind SQL to a dialect.
-- Declare parameters with ``-- param: <name> <type> [description]`` (see `Declared Parameters`_).
+- Declare parameters with ``-- param: <name> <type>[?] [description]`` (see `Declared Parameters`_).
 - Directory structures become namespaces when you load directories (``reports/daily.sql`` -> ``reports.<query>``).

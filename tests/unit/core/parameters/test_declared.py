@@ -2,10 +2,16 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
 
-from sqlspec.core.parameters._declared import ParameterDeclaration, register_param_type, resolve_param_type
+from sqlspec.core.parameters._declared import (
+    ParameterDeclaration,
+    matches_param_type,
+    register_param_type,
+    resolve_param_type,
+)
 
 
 def test_declaration_fields() -> None:
@@ -20,12 +26,19 @@ def test_declaration_with_description() -> None:
     assert decl.description == "Max rows"
 
 
+def test_optional_declaration_marks_required_false() -> None:
+    decl = ParameterDeclaration("status_cd", "str", required=False)
+    assert decl.required is False
+
+
 def test_declaration_equality_and_hash() -> None:
     a = ParameterDeclaration("a", "int")
     b = ParameterDeclaration("a", "int")
     c = ParameterDeclaration("a", "int", description="differs")
+    d = ParameterDeclaration("a", "int", required=False)
     assert a == b
     assert a != c
+    assert a != d
     assert a != "not-a-declaration"
     assert hash(a) == hash(b)
 
@@ -41,6 +54,11 @@ def test_declaration_equality_and_hash() -> None:
         ("date", date),
         ("datetime", datetime),
         ("Decimal", Decimal),
+        ("uuid", UUID),
+        ("UUID", UUID),
+        ("uuid.UUID", UUID),
+        ("dict", dict),
+        ("dict[str, Any]", dict),
         ("list[int]", list),
         ("list[str]", list),
         ("list", list),
@@ -53,6 +71,13 @@ def test_resolve_known_types(type_str: str, expected: type) -> None:
 def test_resolve_is_case_and_whitespace_insensitive() -> None:
     assert resolve_param_type("  LIST[ INT ]  ") is list
     assert resolve_param_type("INT") is int
+
+
+def test_json_type_uses_serializer_backed_matcher() -> None:
+    assert matches_param_type("json", {"ok": ["nested"]})
+    assert matches_param_type("jsonb", ["ok"])
+    assert not matches_param_type("json", {"bad": object()})
+    assert not matches_param_type("json", object())
 
 
 def test_resolve_unknown_returns_none() -> None:
@@ -75,7 +100,9 @@ def test_register_param_type_adds_and_resolves() -> None:
 
 def test_public_exports() -> None:
     from sqlspec import ParameterDeclaration as TopDecl
+    from sqlspec import matches_param_type as top_matches
     from sqlspec import register_param_type as top_register
 
     assert TopDecl is ParameterDeclaration
+    assert top_matches is matches_param_type
     assert top_register is register_param_type

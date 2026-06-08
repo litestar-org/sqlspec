@@ -46,10 +46,12 @@ TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 PARAM_PATTERN = re.compile(
-    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?:\s+(?P<desc>.*\S))?\s*$", re.IGNORECASE
+    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?P<optional>\?)?(?:\s+(?P<desc>.*\S))?\s*$",
+    re.IGNORECASE,
 )
 
 PARAM_PREFIX_PATTERN = re.compile(r"^\s*--\s*param\s*:", re.IGNORECASE)
+PARAM_OPTIONAL_DESCRIPTION_PATTERN = re.compile(r"(?:^|\s)\(optional\)\s*$", re.IGNORECASE)
 
 
 DIALECT_ALIASES: Final = {
@@ -62,6 +64,18 @@ DIALECT_ALIASES: Final = {
 }
 
 MIN_QUERY_PARTS: Final = 3
+
+
+def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
+    """Build a parameter declaration from a matched ``-- param:`` line."""
+    description = param_match.group("desc")
+    required = param_match.group("optional") != "?"
+    if description is not None and PARAM_OPTIONAL_DESCRIPTION_PATTERN.search(description):
+        required = False
+        description = PARAM_OPTIONAL_DESCRIPTION_PATTERN.sub("", description).strip() or None
+    return ParameterDeclaration(
+        name=param_match.group("name"), type_str=param_match.group("type"), description=description, required=required
+    )
 
 
 class NamedStatement:
@@ -364,13 +378,7 @@ class SQLFileLoader:
                 continue
             param_match = PARAM_PATTERN.match(stripped)
             if param_match:
-                params.append(
-                    ParameterDeclaration(
-                        name=param_match.group("name"),
-                        type_str=param_match.group("type"),
-                        description=param_match.group("desc"),
-                    )
-                )
+                params.append(_parse_parameter_declaration(param_match))
                 continue
             if PARAM_PREFIX_PATTERN.match(stripped):
                 if strict:

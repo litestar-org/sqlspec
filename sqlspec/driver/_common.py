@@ -25,7 +25,7 @@ from sqlspec.core import (
     TypedParameter,
     get_cache,
     get_cache_config,
-    resolve_param_type,
+    matches_param_type,
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
@@ -336,13 +336,22 @@ def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
     return tuple(hashes)
 
 
+def _apply_declared_optional_defaults(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
+    """Bind missing optional named params as SQL NULL."""
+    for declaration in declared:
+        if not declaration.required and declaration.name not in supplied:
+            supplied[declaration.name] = None
+
+
 def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
     """Validate a single named-parameter mapping against declared params.
 
-    Each declared param must be present; a present non-``None`` value whose declared
-    type resolves via the registry must satisfy ``isinstance``. ``None`` is allowed
-    (SQL ``NULL``); unresolved types are documentation-only. Extra keys are ignored.
+    Required params must be present. Missing optional params are bound as
+    ``None`` so SQL receives ``NULL``. A present non-``None`` value whose
+    declared type resolves via the registry must satisfy that matcher.
+    Unresolved types are documentation-only. Extra keys are ignored.
     """
+    _apply_declared_optional_defaults(declared, supplied)
     for declaration in declared:
         name = declaration.name
         if name not in supplied:
@@ -351,8 +360,7 @@ def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supp
         value = supplied[name]
         if value is None:
             continue
-        resolved = resolve_param_type(declaration.type_str)
-        if resolved is not None and not isinstance(value, resolved):
+        if not matches_param_type(declaration.type_str, value):
             msg = f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
             raise SQLSpecError(msg)
 
@@ -371,6 +379,9 @@ def _validate_declared_parameters(sql_statement: "SQL") -> None:
     if sql_statement.is_many:
         rows = sql_statement.positional_parameters
         if rows and isinstance(rows[0], dict):
+            for row in rows:
+                if isinstance(row, dict):
+                    _apply_declared_optional_defaults(declared, row)
             _check_declared_named_row(declared, rows[0])
         return
     if sql_statement.positional_parameters:
