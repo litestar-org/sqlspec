@@ -10,21 +10,20 @@ from sqlspec.loader import PARAM_PATTERN, SQLFileLoader
 
 
 @pytest.mark.parametrize(
-    ("line", "name", "type_str", "required", "description"),
+    ("line", "name", "type_str", "description"),
     [
-        ("-- param: status_cd str The status code", "status_cd", "str", True, "The status code"),
-        ("-- param: limit int?", "limit", "int", False, None),
-        ("-- param: offer_ids list[int] List of ids", "offer_ids", "list[int]", True, "List of ids"),
-        ("--param:x bool", "x", "bool", True, None),
-        ("-- PARAM: Y Decimal? money", "Y", "Decimal", False, "money"),
+        ("-- param: status_cd str The status code", "status_cd", "str", "The status code"),
+        ("-- param: limit int", "limit", "int", None),
+        ("-- param: offer_ids list[int] List of ids", "offer_ids", "list[int]", "List of ids"),
+        ("--param:x bool", "x", "bool", None),
+        ("-- PARAM: Y Decimal money", "Y", "Decimal", "money"),
     ],
 )
-def test_param_pattern(line: str, name: str, type_str: str, required: bool, description: "str | None") -> None:
+def test_param_pattern(line: str, name: str, type_str: str, description: "str | None") -> None:
     m = PARAM_PATTERN.match(line)
     assert m is not None
     assert m.group("name") == name
     assert m.group("type") == type_str
-    assert (m.group("opt") is None) is required
     assert m.group("desc") == description
 
 
@@ -32,9 +31,9 @@ def test_parse_declared_params_interleaved_with_dialect() -> None:
     content = """
 -- name: get_offers
 -- dialect: oracle
--- param: status_cd str? The status code
+-- param: status_cd str The status code
 -- param: offer_ids list[int] List of offer IDs
--- param: limit int? Maximum rows
+-- param: limit int Maximum rows
 select offer_id from offers where status_cd = :status_cd and offer_id in (:offer_ids)
 fetch first :limit rows only
 """
@@ -42,9 +41,9 @@ fetch first :limit rows only
     stmt = statements["get_offers"]
     assert stmt.dialect == "oracle"
     assert stmt.parameters == (
-        ParameterDeclaration("status_cd", "str", required=False, description="The status code"),
-        ParameterDeclaration("offer_ids", "list[int]", required=True, description="List of offer IDs"),
-        ParameterDeclaration("limit", "int", required=False, description="Maximum rows"),
+        ParameterDeclaration("status_cd", "str", description="The status code"),
+        ParameterDeclaration("offer_ids", "list[int]", description="List of offer IDs"),
+        ParameterDeclaration("limit", "int", description="Maximum rows"),
     )
     assert stmt.sql.startswith("select offer_id from offers")
     assert "-- param" not in stmt.sql

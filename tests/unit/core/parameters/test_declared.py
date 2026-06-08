@@ -12,24 +12,22 @@ from sqlspec.core.parameters._declared import (
 )
 
 
-def test_declaration_defaults_to_required() -> None:
+def test_declaration_fields() -> None:
     decl = ParameterDeclaration(name="status_cd", type_str="str")
     assert decl.name == "status_cd"
     assert decl.type_str == "str"
-    assert decl.required is True
     assert decl.description is None
 
 
-def test_declaration_optional_with_description() -> None:
-    decl = ParameterDeclaration("limit", "int", required=False, description="Max rows")
-    assert decl.required is False
+def test_declaration_with_description() -> None:
+    decl = ParameterDeclaration("limit", "int", description="Max rows")
     assert decl.description == "Max rows"
 
 
 def test_declaration_equality_and_hash() -> None:
     a = ParameterDeclaration("a", "int")
     b = ParameterDeclaration("a", "int")
-    c = ParameterDeclaration("a", "int", required=False)
+    c = ParameterDeclaration("a", "int", description="differs")
     assert a == b
     assert a != c
     assert a != "not-a-declaration"

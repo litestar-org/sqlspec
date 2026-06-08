@@ -46,7 +46,7 @@ TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 PARAM_PATTERN = re.compile(
-    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?P<opt>\?)?(?:\s+(?P<desc>.*\S))?\s*$",
+    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?:\s+(?P<desc>.*\S))?\s*$",
     re.IGNORECASE,
 )
 
@@ -369,7 +369,6 @@ class SQLFileLoader:
                     ParameterDeclaration(
                         name=param_match.group("name"),
                         type_str=param_match.group("type"),
-                        required=param_match.group("opt") is None,
                         description=param_match.group("desc"),
                     )
                 )

@@ -1,7 +1,7 @@
 """Declared parameter metadata for SQL-file ``-- param:`` annotations.
 
-Carries the name, declared type string, required flag, and description parsed from
-``-- param: <name> <type>[?] [description]`` directives, plus an extensible registry
+Carries the name, declared type string, and description parsed from
+``-- param: <name> <type> [description]`` directives, plus an extensible registry
 that resolves declared type strings to Python types for validation. Resolution is a
 pure lookup; declared type strings are never evaluated.
 """
@@ -15,34 +15,23 @@ __all__ = ("ParameterDeclaration", "register_param_type", "resolve_param_type")
 class ParameterDeclaration:
     """A single parameter declared in a SQL file header."""
 
-    __slots__ = ("description", "name", "required", "type_str")
+    __slots__ = ("description", "name", "type_str")
 
-    def __init__(
-        self, name: str, type_str: str, required: bool = True, description: "str | None" = None
-    ) -> None:
+    def __init__(self, name: str, type_str: str, description: "str | None" = None) -> None:
         self.name = name
         self.type_str = type_str
-        self.required = required
         self.description = description
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ParameterDeclaration):
             return NotImplemented
-        return (
-            self.name == other.name
-            and self.type_str == other.type_str
-            and self.required == other.required
-            and self.description == other.description
-        )
+        return self.name == other.name and self.type_str == other.type_str and self.description == other.description
 
     def __hash__(self) -> int:
-        return hash((self.name, self.type_str, self.required, self.description))
+        return hash((self.name, self.type_str, self.description))
 
     def __repr__(self) -> str:
-        return (
-            f"ParameterDeclaration(name={self.name!r}, type_str={self.type_str!r}, "
-            f"required={self.required!r}, description={self.description!r})"
-        )
+        return f"ParameterDeclaration(name={self.name!r}, type_str={self.type_str!r}, description={self.description!r})"
 
 
 _TYPE_REGISTRY: "dict[str, type]" = {
