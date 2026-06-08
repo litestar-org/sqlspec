@@ -14,6 +14,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -35,6 +36,9 @@ class ArrowOdbcConnectionParams(TypedDict):
     pwd: NotRequired[str]
     user: NotRequired[str]
     password: NotRequired[str]
+    trusted_connection: NotRequired[bool | str]
+    trust_server_certificate: NotRequired[bool | str]
+    encrypt: NotRequired[bool | str]
     login_timeout: NotRequired[int]
     login_timeout_sec: NotRequired[int]
     packet_size: NotRequired[int]
@@ -53,6 +57,8 @@ class ArrowOdbcDriverFeatures(TypedDict):
     query_timeout_sec: NotRequired[int]
     connection_string: NotRequired[str]
     dbms_name: NotRequired[str]
+    json_serializer: "NotRequired[Callable[[Any], str]]"
+    json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
 
 
