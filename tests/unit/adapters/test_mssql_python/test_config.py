@@ -1,7 +1,7 @@
 """Unit tests for mssql_python adapter configuration."""
 
 import warnings
-from typing import Any, cast
+from typing import Any, cast, get_type_hints
 
 import pytest
 
@@ -9,6 +9,7 @@ import sqlspec.adapters.mssql_python.config as _mssql_config
 from sqlspec.adapters.mssql_python.config import (
     MssqlPythonAsyncConfig,
     MssqlPythonConfig,
+    MssqlPythonConnectionParams,
     MssqlPythonConnectionPool,
     _normalize_mssql_python_init,
 )
@@ -78,6 +79,109 @@ def test_config_create_pool_splits_connection_and_pool_options(monkeypatch: pyte
     assert pool.connection_string == "Server=localhost;Database=tempdb;"
     assert pool.connect_kwargs == {"timeout": 20}
     assert pooling_calls == [{"max_size": 3, "idle_timeout": 10, "enabled": True}]
+
+
+def test_connection_params_include_current_mssql_python_odbc_keywords() -> None:
+    """Typed connection params should cover the mssql-python ODBC keyword allowlist."""
+    annotations = get_type_hints(MssqlPythonConnectionParams, include_extras=True)
+
+    expected_keys = {
+        "addr",
+        "address",
+        "server",
+        "database",
+        "uid",
+        "pwd",
+        "authentication",
+        "trusted_connection",
+        "encrypt",
+        "trust_server_certificate",
+        "hostname_in_certificate",
+        "server_certificate",
+        "server_spn",
+        "multi_subnet_failover",
+        "application_intent",
+        "connect_retry_count",
+        "connect_retry_interval",
+        "keep_alive",
+        "keep_alive_interval",
+        "ip_address_preference",
+        "packet_size",
+        "timeout",
+        "connection_timeout",
+        "login_timeout",
+        "native_uuid",
+    }
+
+    assert expected_keys <= set(annotations)
+    assert "driver" not in annotations
+    assert "application_name" not in annotations
+    assert "workstation_id" not in annotations
+
+
+def test_config_create_pool_normalizes_current_odbc_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Current mssql-python ODBC aliases should become canonical connection fields."""
+    pooling_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+
+    def fake_pooling(**kwargs: Any) -> None:
+        pooling_calls.append(kwargs)
+
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
+
+    config = MssqlPythonConfig(
+        connection_config={
+            "address": "sql.example.test",
+            "port": 1433,
+            "db": "app",
+            "username": "sa",
+            "password": "secret",
+            "trust": True,
+            "trust_server_certificate": False,
+            "encrypt": True,
+            "authentication": "ActiveDirectoryMsi",
+            "hostname_in_certificate": "*.database.windows.net",
+            "server_certificate": "/certs/server.pem",
+            "server_spn": "MSSQLSvc/sql.example.test:1433",
+            "multi_subnet_failover": True,
+            "application_intent": "ReadOnly",
+            "connect_retry_count": 3,
+            "connect_retry_interval": 5,
+            "keep_alive": 30,
+            "keep_alive_interval": 10,
+            "ip_address_preference": "IPv4First",
+            "packet_size": 32767,
+            "connection_timeout": 15,
+            "driver": "ODBC Driver 17 for SQL Server",
+            "application_name": "ignored",
+        }
+    )
+
+    pool = config.create_pool()
+
+    assert pool.connection_string == (
+        "Server=sql.example.test,1433;Database=app;UID=sa;PWD=secret;"
+        "Authentication=ActiveDirectoryMsi;Encrypt=yes;TrustServerCertificate=no;"
+        "HostnameInCertificate=*.database.windows.net;ServerCertificate=/certs/server.pem;"
+        "ServerSPN=MSSQLSvc/sql.example.test:1433;MultiSubnetFailover=yes;ApplicationIntent=ReadOnly;"
+        "ConnectRetryCount=3;ConnectRetryInterval=5;KeepAlive=30;KeepAliveInterval=10;"
+        "IpAddressPreference=IPv4First;PacketSize=32767;"
+    )
+    assert pool.connect_kwargs == {"timeout": 15}
+    assert "Driver=" not in pool.connection_string
+    assert "APP=" not in pool.connection_string
+    assert "Application Name=" not in pool.connection_string
+    assert pooling_calls == [{"max_size": 100, "idle_timeout": 600, "enabled": True}]
+
+
+def test_config_create_pool_rejects_conflicting_server_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Conflicting canonical ODBC aliases should fail instead of silently choosing one."""
+    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+
+    config = MssqlPythonConfig(connection_config={"server": "srv1", "addr": "srv2"})
+
+    with pytest.raises(ValueError, match="server"):
+        config.create_pool()
 
 
 def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest.MonkeyPatch) -> None:

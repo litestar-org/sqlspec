@@ -24,6 +24,7 @@ from sqlspec.adapters.mssql_python.data_dictionary import (
 from sqlspec.adapters.mssql_python.driver import (
     MssqlPythonAsyncDriver,
     MssqlPythonAsyncExceptionHandler,
+    MssqlPythonBulkCopyResult,
     MssqlPythonDriver,
     MssqlPythonExceptionHandler,
 )
@@ -38,6 +39,7 @@ __all__ = (
     "MssqlPythonAsyncExceptionHandler",
     "MssqlPythonAsyncMigrationTracker",
     "MssqlPythonAsyncSessionContext",
+    "MssqlPythonBulkCopyResult",
     "MssqlPythonConfig",
     "MssqlPythonConnection",
     "MssqlPythonConnectionParams",

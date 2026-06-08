@@ -43,25 +43,37 @@ __all__ = (
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
-_CONNECTION_STRING_KEYS: Final[tuple[tuple[str, str], ...]] = (
-    ("server", "Server"),
-    ("database", "Database"),
-    ("uid", "UID"),
-    ("user", "UID"),
-    ("pwd", "PWD"),
-    ("password", "PWD"),
-    ("authentication", "Authentication"),
-    ("encrypt", "Encrypt"),
-    ("trust_server_certificate", "TrustServerCertificate"),
-    ("connection_timeout", "Connection Timeout"),
-    ("command_timeout", "Command Timeout"),
-    ("application_name", "Application Name"),
-    ("workstation_id", "Workstation ID"),
-    ("multiple_active_result_sets", "MultipleActiveResultSets"),
-    ("application_intent", "ApplicationIntent"),
+_CONNECTION_STRING_KEYS: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
+    (("server",), "Server", False),
+    (("database", "db"), "Database", False),
+    (("uid", "user", "username"), "UID", False),
+    (("pwd", "password"), "PWD", False),
+    (("authentication",), "Authentication", False),
+    (("trusted_connection",), "Trusted_Connection", False),
+    (("encrypt",), "Encrypt", False),
+    (("trust_server_certificate", "trust"), "TrustServerCertificate", False),
+    (("hostname_in_certificate", "hostnameincertificate"), "HostnameInCertificate", False),
+    (("server_certificate", "servercertificate"), "ServerCertificate", False),
+    (("server_spn", "serverspn"), "ServerSPN", False),
+    (("multi_subnet_failover", "multisubnetfailover"), "MultiSubnetFailover", False),
+    (("application_intent", "applicationintent"), "ApplicationIntent", False),
+    (("connect_retry_count", "connectretrycount"), "ConnectRetryCount", False),
+    (("connect_retry_interval", "connectretryinterval"), "ConnectRetryInterval", False),
+    (("keep_alive", "keepalive"), "KeepAlive", False),
+    (("keep_alive_interval", "keepaliveinterval"), "KeepAliveInterval", False),
+    (("ip_address_preference", "ipaddresspreference"), "IpAddressPreference", False),
+    (("packet_size", "packetsize", "packet size"), "PacketSize", False),
 )
-_CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "timeout", "native_uuid"}
+_CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "native_uuid"}
+_CONNECT_TIMEOUT_KEYS: Final[tuple[str, ...]] = ("timeout", "connection_timeout", "login_timeout", "command_timeout")
 _POOL_CONFIG_KEYS: Final[set[str]] = {"pool_size", "pool_idle_timeout", "pool_enabled"}
+_IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
+    "application_name",
+    "app",
+    "driver",
+    "multiple_active_result_sets",
+    "workstation_id",
+}
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
@@ -109,44 +121,34 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     """Build an ODBC connection string and mssql-python connect kwargs."""
     config = dict(params)
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
+    timeout = _pop_alias(config, _CONNECT_TIMEOUT_KEYS, "timeout", strict=False)
+    if timeout is not None:
+        connect_kwargs["timeout"] = timeout
     for key in _POOL_CONFIG_KEYS:
+        config.pop(key, None)
+    for key in _IGNORED_CONNECTION_CONFIG_KEYS:
         config.pop(key, None)
 
     connection_string = config.pop("connection_string", None)
     if connection_string is not None:
         return str(connection_string), connect_kwargs
 
-    server = config.get("server")
+    server = _pop_alias(config, ("server", "address", "addr"), "server")
     if not server:
         msg = "mssql-python connection_config requires 'server' or 'connection_string'."
         raise ValueError(msg)
     config["server"] = _append_port(str(server), config.pop("port", None))
 
     parts: list[str] = []
-    consumed: set[str] = set()
-    seen_odbc_keys: set[str] = set()
-    for key, option_name in _CONNECTION_STRING_KEYS:
-        if key not in config:
-            continue
-        value = config[key]
+    for keys, option_name, strict in _CONNECTION_STRING_KEYS:
+        value = _pop_alias(config, keys, option_name, strict=strict)
         if value is None:
             continue
-        if option_name in seen_odbc_keys:
-            consumed.add(key)
-            continue
         parts.append(f"{option_name}={_format_connection_value(value)}")
-        consumed.add(key)
-        seen_odbc_keys.add(option_name)
 
     extra = config.get("extra")
     if isinstance(extra, dict):
         parts.extend(f"{key}={_format_connection_value(value)}" for key, value in extra.items() if value is not None)
-        consumed.add("extra")
-
-    for key, value in config.items():
-        if key in consumed or value is None:
-            continue
-        parts.append(f"{key}={_format_connection_value(value)}")
 
     return ";".join(parts) + ";", connect_kwargs
 
@@ -201,6 +203,22 @@ def _format_connection_value(value: Any) -> str:
     if isinstance(value, bool):
         return "yes" if value else "no"
     return str(value)
+
+
+def _pop_alias(config: dict[str, Any], aliases: tuple[str, ...], option_name: str, *, strict: bool = True) -> Any:
+    found: list[tuple[str, Any]] = [(key, config[key]) for key in aliases if key in config and config[key] is not None]
+    if not found:
+        return None
+    if strict:
+        first_key, first_value = found[0]
+        for key, value in found[1:]:
+            if value != first_value:
+                msg = f"Conflicting mssql-python connection aliases for {option_name}: {first_key} and {key}."
+                raise ValueError(msg)
+    _, value = found[0]
+    for key, _ in found:
+        config.pop(key, None)
+    return value
 
 
 def _append_port(server: str, port: Any) -> str:
