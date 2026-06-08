@@ -23,7 +23,8 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
+    from ssl import SSLContext
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -32,26 +33,44 @@ if TYPE_CHECKING:
 
 __all__ = ("AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlDriverFeatures", "AiomysqlPoolParams")
 
+_POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
+
 
 class AiomysqlConnectionParams(TypedDict):
-    """aiomysql connection parameters."""
+    """aiomysql connection parameters.
+
+    PyMySQL-only flat TLS and read/write timeout kwargs are intentionally excluded
+    until aiomysql accepts them at runtime.
+    """
 
     host: NotRequired[str]
     user: NotRequired[str]
     password: NotRequired[str]
+    passwd: NotRequired[str]
     db: NotRequired[str]
+    database: NotRequired[str]
     port: NotRequired[int]
     unix_socket: NotRequired[str]
     charset: NotRequired[str]
-    connect_timeout: NotRequired[int]
+    connect_timeout: NotRequired[int | float | None]
     read_default_file: NotRequired[str]
     read_default_group: NotRequired[str]
-    autocommit: NotRequired[bool]
+    autocommit: NotRequired[bool | None]
+    echo: NotRequired[bool]
     local_infile: NotRequired[bool]
-    ssl: NotRequired[Any]
+    enable_local_infile: NotRequired[bool]
+    ssl: NotRequired["SSLContext"]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
+    conv: NotRequired["dict[int, Callable[[bytes], Any]] | dict[int, type[Any]] | Mapping[int, Any]"]
+    use_unicode: NotRequired[bool | None]
+    client_flag: NotRequired[int]
+    cursorclass: NotRequired[type["AiomysqlRawCursor"] | type["AiomysqlDictCursor"]]
     cursor_class: NotRequired[type["AiomysqlRawCursor"] | type["AiomysqlDictCursor"]]
+    auth_plugin: NotRequired[str]
+    program_name: NotRequired[str]
+    server_public_key: NotRequired[str | bytes]
+    loop: NotRequired[Any]
 
 
 class AiomysqlPoolParams(AiomysqlConnectionParams):
@@ -59,8 +78,34 @@ class AiomysqlPoolParams(AiomysqlConnectionParams):
 
     minsize: NotRequired[int]
     maxsize: NotRequired[int]
-    echo: NotRequired[bool]
     pool_recycle: NotRequired[int]
+
+
+def _normalize_aiomysql_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build aiomysql.connect-compatible kwargs from SQLSpec connection config."""
+    config = dict(connection_config)
+
+    for key in _POOL_ONLY_CONFIG_KEYS:
+        config.pop(key, None)
+
+    if "cursor_class" in config and "cursorclass" not in config:
+        config["cursorclass"] = config["cursor_class"]
+    config.pop("cursor_class", None)
+
+    if "database" in config and "db" not in config:
+        config["db"] = config["database"]
+    config.pop("database", None)
+
+    if "passwd" in config and "password" not in config:
+        config["password"] = config["passwd"]
+    config.pop("passwd", None)
+
+    if config.pop("enable_local_infile", False):
+        config["local_infile"] = True
+    else:
+        config.setdefault("local_infile", False)
+
+    return config
 
 
 class AiomysqlDriverFeatures(TypedDict):
@@ -224,7 +269,19 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
         """
-        return cast("AiomysqlPool", await aiomysql.create_pool(**dict(self.connection_config)))
+        return cast("AiomysqlPool", await aiomysql.create_pool(**self._get_pool_kwargs()))
+
+    def _get_connection_kwargs(self) -> "dict[str, Any]":
+        """Return aiomysql.connect-compatible kwargs without pool-only settings."""
+        return _normalize_aiomysql_connection_kwargs(self.connection_config)
+
+    def _get_pool_kwargs(self) -> "dict[str, Any]":
+        """Return aiomysql.create_pool kwargs with normalized connection settings."""
+        pool_kwargs = self._get_connection_kwargs()
+        for key in _POOL_ONLY_CONFIG_KEYS:
+            if key in self.connection_config:
+                pool_kwargs[key] = self.connection_config[key]
+        return pool_kwargs
 
     async def _ensure_connection_initialized(self, connection: "AiomysqlConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
