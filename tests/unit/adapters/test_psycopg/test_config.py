@@ -1,11 +1,16 @@
 """Psycopg configuration tests covering statement config builders."""
 
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from psycopg import AsyncCursor, Connection, Cursor
+from psycopg.abc import AdaptContext
+from psycopg.rows import dict_row
 
+import sqlspec.adapters.psycopg.config as psycopg_config
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncSessionContext, PsycopgSyncSessionContext
-from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgPoolParams, PsycopgSyncConfig
 from sqlspec.adapters.psycopg.core import (
     build_postgres_extension_probe_names,
     build_statement_config,
@@ -13,6 +18,64 @@ from sqlspec.adapters.psycopg.core import (
     resolve_postgres_extension_state,
 )
 from sqlspec.core import SQL, StatementConfig
+
+
+class _CapturedSyncPool:
+    """Capture psycopg pool constructor arguments without opening a database connection."""
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __init__(self, conninfo: str = "", **kwargs: Any) -> None:
+        self.conninfo = conninfo
+        self.kwargs = kwargs
+        self.calls.append((conninfo, kwargs))
+
+
+class _CapturedAsyncPool:
+    """Capture psycopg async pool constructor arguments without opening a database connection."""
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    open_calls: int = 0
+
+    def __init__(self, conninfo: str = "", **kwargs: Any) -> None:
+        self.conninfo = conninfo
+        self.kwargs = kwargs
+        self.calls.append((conninfo, kwargs))
+
+    async def open(self) -> None:
+        type(self).open_calls += 1
+
+
+def _configure_sync(_: object) -> None:
+    return None
+
+
+def _check_sync(_: object) -> None:
+    return None
+
+
+def _reset_sync(_: object) -> None:
+    return None
+
+
+def _reconnect_failed_sync(_: object) -> None:
+    return None
+
+
+async def _configure_async(_: object) -> None:
+    return None
+
+
+async def _check_async(_: object) -> None:
+    return None
+
+
+async def _reset_async(_: object) -> None:
+    return None
+
+
+async def _reconnect_failed_async(_: object) -> None:
+    return None
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -70,6 +133,126 @@ def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:
     assert "$1" not in compiled_sql
     assert compiled_sql.count("%s") == 3
     assert parameters == ["alpha", "beta", "gamma"]
+
+
+def test_psycopg_sync_pool_preserves_conninfo_with_explicit_connection_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync pool creation should pass conninfo and explicit connection kwargs together."""
+    context = cast("AdaptContext", object())
+    connection_config: PsycopgPoolParams = {
+        "conninfo": "postgresql://user:pass@localhost/db",
+        "user": "explicit_user",
+        "prepare_threshold": 0,
+        "context": context,
+        "row_factory": dict_row,
+        "cursor_factory": Cursor,
+    }
+
+    _CapturedSyncPool.calls.clear()
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
+
+    PsycopgSyncConfig(connection_config=connection_config)._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
+    assert conninfo == "postgresql://user:pass@localhost/db"
+    assert pool_kwargs["kwargs"] == {
+        "user": "explicit_user",
+        "prepare_threshold": 0,
+        "context": context,
+        "row_factory": dict_row,
+        "cursor_factory": Cursor,
+    }
+
+
+@pytest.mark.anyio
+async def test_psycopg_async_pool_preserves_conninfo_with_explicit_connection_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async pool creation should pass conninfo and explicit connection kwargs together."""
+    context = cast("AdaptContext", object())
+    connection_config: PsycopgPoolParams = {
+        "conninfo": "postgresql://user:pass@localhost/db",
+        "user": "explicit_user",
+        "prepare_threshold": None,
+        "context": context,
+        "row_factory": dict_row,
+        "cursor_factory": AsyncCursor,
+    }
+
+    _CapturedAsyncPool.calls.clear()
+    _CapturedAsyncPool.open_calls = 0
+    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
+
+    await PsycopgAsyncConfig(connection_config=connection_config)._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    conninfo, pool_kwargs = _CapturedAsyncPool.calls[-1]
+    assert conninfo == "postgresql://user:pass@localhost/db"
+    assert pool_kwargs["kwargs"] == {
+        "user": "explicit_user",
+        "prepare_threshold": None,
+        "context": context,
+        "row_factory": dict_row,
+        "cursor_factory": AsyncCursor,
+    }
+    assert _CapturedAsyncPool.open_calls == 1
+
+
+def test_psycopg_sync_pool_forwards_lifecycle_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync pool creation should route psycopg-pool lifecycle options to the pool."""
+    connection_config: PsycopgPoolParams = {
+        "dbname": "app",
+        "connection_class": Connection,
+        "configure": _configure_sync,
+        "check": _check_sync,
+        "reset": _reset_sync,
+        "close_returns": True,
+        "reconnect_failed": _reconnect_failed_sync,
+        "open": False,
+    }
+
+    _CapturedSyncPool.calls.clear()
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
+
+    PsycopgSyncConfig(connection_config=connection_config)._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    _conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
+    assert pool_kwargs["kwargs"] == {"dbname": "app"}
+    assert pool_kwargs["connection_class"] is Connection
+    assert pool_kwargs["configure"] is _configure_sync
+    assert pool_kwargs["check"] is _check_sync
+    assert pool_kwargs["reset"] is _reset_sync
+    assert pool_kwargs["close_returns"] is True
+    assert pool_kwargs["reconnect_failed"] is _reconnect_failed_sync
+    assert pool_kwargs["open"] is False
+
+
+@pytest.mark.anyio
+async def test_psycopg_async_pool_forwards_lifecycle_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async pool creation should route psycopg-pool lifecycle options to the pool."""
+    connection_config: PsycopgPoolParams = {
+        "dbname": "app",
+        "configure": _configure_async,
+        "check": _check_async,
+        "reset": _reset_async,
+        "close_returns": True,
+        "reconnect_failed": _reconnect_failed_async,
+        "open": False,
+    }
+
+    _CapturedAsyncPool.calls.clear()
+    _CapturedAsyncPool.open_calls = 0
+    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
+
+    await PsycopgAsyncConfig(connection_config=connection_config)._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    _conninfo, pool_kwargs = _CapturedAsyncPool.calls[-1]
+    assert pool_kwargs["kwargs"] == {"dbname": "app"}
+    assert pool_kwargs["configure"] is _configure_async
+    assert pool_kwargs["check"] is _check_async
+    assert pool_kwargs["reset"] is _reset_async
+    assert pool_kwargs["close_returns"] is True
+    assert pool_kwargs["reconnect_failed"] is _reconnect_failed_async
+    assert pool_kwargs["open"] is False
+    assert _CapturedAsyncPool.open_calls == 0
 
 
 def test_psycopg_sync_session_context_resolves_callable_statement_config() -> None:
