@@ -17,6 +17,7 @@ from sqlspec.builder import QueryBuilder
 from sqlspec.core import (
     SQL,
     CachedStatement,
+    ParameterDeclaration,
     ParameterStyle,
     SQLResult,
     Statement,
@@ -24,6 +25,7 @@ from sqlspec.core import (
     TypedParameter,
     get_cache,
     get_cache_config,
+    matches_param_type,
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
@@ -43,7 +45,13 @@ from sqlspec.driver._storage_helpers import (
     coerce_arrow_table,
     create_storage_job,
 )
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLFileNotFoundError, StorageCapabilityError
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    NotFoundError,
+    SQLFileNotFoundError,
+    SQLSpecError,
+    StorageCapabilityError,
+)
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
 from sqlspec.utils.dispatch import TypeDispatcher
@@ -326,6 +334,59 @@ def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
         digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
         hashes.append(digest[:16])
     return tuple(hashes)
+
+
+def _apply_declared_optional_defaults(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
+    """Bind missing optional named params as SQL NULL."""
+    for declaration in declared:
+        if not declaration.required and declaration.name not in supplied:
+            supplied[declaration.name] = None
+
+
+def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
+    """Validate a single named-parameter mapping against declared params.
+
+    Required params must be present. Missing optional params are bound as
+    ``None`` so SQL receives ``NULL``. A present non-``None`` value whose
+    declared type resolves via the registry must satisfy that matcher.
+    Unresolved types are documentation-only. Extra keys are ignored.
+    """
+    _apply_declared_optional_defaults(declared, supplied)
+    for declaration in declared:
+        name = declaration.name
+        if name not in supplied:
+            msg = f"Missing required parameter '{name}' for declared SQL statement."
+            raise SQLSpecError(msg)
+        value = supplied[name]
+        if value is None:
+            continue
+        if not matches_param_type(declaration.type_str, value):
+            msg = f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
+            raise SQLSpecError(msg)
+
+
+def _validate_declared_parameters(sql_statement: "SQL") -> None:
+    """Enforce declared-parameter contracts on the original user params.
+
+    No-op unless the statement carries declarations and is not a script. Runs before
+    driver style conversion, so declared names and raw values are intact. Named binding
+    is validated for presence and type; ``execute_many`` checks the first row only;
+    positional binding is skipped (arity is validated at load time).
+    """
+    declared = sql_statement.declared_parameters
+    if not declared or sql_statement.is_script:
+        return
+    if sql_statement.is_many:
+        rows = sql_statement.positional_parameters
+        if rows and isinstance(rows[0], dict):
+            for row in rows:
+                if isinstance(row, dict):
+                    _apply_declared_optional_defaults(declared, row)
+            _check_declared_named_row(declared, rows[0])
+        return
+    if sql_statement.positional_parameters:
+        return
+    _check_declared_named_row(declared, sql_statement.named_parameters)
 
 
 class StackExecutionObserver:
@@ -1017,6 +1078,7 @@ class CommonDriverAttributesMixin:
             if not filters and not kwargs and isinstance(statement, str):
                 self._statement_cache[statement] = sql_statement
 
+        _validate_declared_parameters(sql_statement)
         return self._apply_filters(sql_statement, filters)
 
     def split_script_statements(
@@ -1456,6 +1518,7 @@ class CommonDriverAttributesMixin:
         statement_config: "StatementConfig",
         kwargs: "dict[str, Any]",
     ) -> "SQL":
+        declared = sql_statement.declared_parameters
         if data_parameters or kwargs:
             merged_parameters = (
                 (*sql_statement.positional_parameters, *tuple(data_parameters))
@@ -1463,7 +1526,13 @@ class CommonDriverAttributesMixin:
                 else sql_statement.positional_parameters
             )
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
-            return SQL(statement_seed, *merged_parameters, statement_config=statement_config, **kwargs)
+            return SQL(
+                statement_seed,
+                *merged_parameters,
+                statement_config=statement_config,
+                declared_parameters=declared,
+                **kwargs,
+            )
 
         needs_rebuild = False
         if statement_config.dialect and (
@@ -1481,10 +1550,26 @@ class CommonDriverAttributesMixin:
         if needs_rebuild:
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
             if sql_statement.is_many and sql_statement.parameters:
-                return SQL(statement_seed, sql_statement.parameters, statement_config=statement_config, is_many=True)
+                return SQL(
+                    statement_seed,
+                    sql_statement.parameters,
+                    statement_config=statement_config,
+                    is_many=True,
+                    declared_parameters=declared,
+                )
             if sql_statement.named_parameters:
-                return SQL(statement_seed, statement_config=statement_config, **sql_statement.named_parameters)
-            return SQL(statement_seed, *sql_statement.positional_parameters, statement_config=statement_config)
+                return SQL(
+                    statement_seed,
+                    statement_config=statement_config,
+                    declared_parameters=declared,
+                    **sql_statement.named_parameters,
+                )
+            return SQL(
+                statement_seed,
+                *sql_statement.positional_parameters,
+                statement_config=statement_config,
+                declared_parameters=declared,
+            )
         return sql_statement
 
     def _prepare_from_string(

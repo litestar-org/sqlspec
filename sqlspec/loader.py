@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
 
-from sqlspec.core import SQL, get_cache, get_cache_config
+from sqlspec.core import SQL, ParameterDeclaration, ParameterValidator, get_cache, get_cache_config
 from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
@@ -31,6 +31,8 @@ from sqlspec.utils.text import slugify
 from sqlspec.utils.type_guards import is_local_path
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
@@ -42,6 +44,14 @@ QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.
 TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
+
+PARAM_PATTERN = re.compile(
+    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?P<optional>\?)?(?:\s+(?P<desc>.*\S))?\s*$",
+    re.IGNORECASE,
+)
+
+PARAM_PREFIX_PATTERN = re.compile(r"^\s*--\s*param\s*:", re.IGNORECASE)
+PARAM_OPTIONAL_DESCRIPTION_PATTERN = re.compile(r"(?:^|\s)\(optional\)\s*$", re.IGNORECASE)
 
 
 DIALECT_ALIASES: Final = {
@@ -56,6 +66,18 @@ DIALECT_ALIASES: Final = {
 MIN_QUERY_PARTS: Final = 3
 
 
+def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
+    """Build a parameter declaration from a matched ``-- param:`` line."""
+    description = param_match.group("desc")
+    required = param_match.group("optional") != "?"
+    if description is not None and PARAM_OPTIONAL_DESCRIPTION_PATTERN.search(description):
+        required = False
+        description = PARAM_OPTIONAL_DESCRIPTION_PATTERN.sub("", description).strip() or None
+    return ParameterDeclaration(
+        name=param_match.group("name"), type_str=param_match.group("type"), description=description, required=required
+    )
+
+
 class NamedStatement:
     """Represents a parsed SQL statement with metadata.
 
@@ -64,13 +86,21 @@ class NamedStatement:
     and line position for error reporting.
     """
 
-    __slots__ = ("dialect", "name", "sql", "start_line")
+    __slots__ = ("dialect", "name", "parameters", "sql", "start_line")
 
-    def __init__(self, name: str, sql: str, dialect: "str | None" = None, start_line: int = 0) -> None:
+    def __init__(
+        self,
+        name: str,
+        sql: str,
+        dialect: "str | None" = None,
+        start_line: int = 0,
+        parameters: "tuple[ParameterDeclaration, ...]" = (),
+    ) -> None:
         self.name = name
         self.sql = sql
         self.dialect = dialect
         self.start_line = start_line
+        self.parameters = parameters
 
 
 class SQLFile:
@@ -136,6 +166,7 @@ class SQLFileLoader:
         "_runtime",
         "encoding",
         "storage_registry",
+        "strict_parameter_annotations",
     )
 
     def __init__(
@@ -144,6 +175,7 @@ class SQLFileLoader:
         encoding: str = "utf-8",
         storage_registry: "StorageRegistry | None" = None,
         runtime: "ObservabilityRuntime | None" = None,
+        strict_parameter_annotations: bool = False,
     ) -> None:
         """Initialize the SQL file loader.
 
@@ -151,8 +183,11 @@ class SQLFileLoader:
             encoding: Text encoding for reading SQL files.
             storage_registry: Storage registry for handling file URIs.
             runtime: Observability runtime for instrumentation.
+            strict_parameter_annotations: When True, a malformed ``-- param:`` directive
+                raises instead of emitting a warning and skipping the line.
         """
         self.encoding = encoding
+        self.strict_parameter_annotations = strict_parameter_annotations
 
         self.storage_registry = storage_registry or default_storage_registry
         self._compiled_statements: dict[str, SQL] = {}
@@ -309,7 +344,100 @@ class SQLFileLoader:
         return "\n".join(lines[first_sql_line_index:]).strip()
 
     @staticmethod
-    def _parse_sql_content(content: str, file_path: str) -> "dict[str, NamedStatement]":
+    def _parse_directive_block(
+        statement_section: str, file_path: str, strict: bool
+    ) -> "tuple[str | None, tuple[ParameterDeclaration, ...], str]":
+        """Scan a statement's leading comment block for ``dialect``/``param`` directives.
+
+        Args:
+            statement_section: The statement body including any leading directive lines.
+            file_path: File path for error reporting.
+            strict: When True, a malformed ``-- param:`` line raises instead of warning.
+
+        Returns:
+            The resolved dialect, the declared parameters, and the SQL body with the
+            leading directive/comment lines removed.
+
+        Raises:
+            SQLFileParseError: If ``strict`` and a ``-- param:`` line is malformed.
+        """
+        dialect: str | None = None
+        params: list[ParameterDeclaration] = []
+        raw_lines = statement_section.split("\n")
+        body_start = len(raw_lines)
+        for idx, raw in enumerate(raw_lines):
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            if not stripped.startswith("--"):
+                body_start = idx
+                break
+            dialect_match = DIALECT_PATTERN.match(stripped)
+            if dialect_match:
+                dialect = _normalize_dialect(dialect_match.group("dialect").lower())
+                continue
+            param_match = PARAM_PATTERN.match(stripped)
+            if param_match:
+                params.append(_parse_parameter_declaration(param_match))
+                continue
+            if PARAM_PREFIX_PATTERN.match(stripped):
+                if strict:
+                    raise SQLFileParseError(
+                        file_path, file_path, ValueError(f"Malformed -- param: directive: {stripped}")
+                    )
+                log_with_context(
+                    logger, logging.WARNING, "sql.parse.param", file_path=file_path, line=stripped, status="malformed"
+                )
+        return dialect, tuple(params), "\n".join(raw_lines[body_start:])
+
+    @staticmethod
+    def _validate_declared_parameters(
+        clean_sql: str, declared: "tuple[ParameterDeclaration, ...]", statement_name: str, file_path: str
+    ) -> None:
+        """Validate declared parameters against the query's actual placeholders.
+
+        For named binding, every declared name must appear among the SQL placeholders
+        (declared names may be a subset; filters and undeclared params are allowed). For
+        positional binding, the declared count must equal the placeholder count.
+
+        Args:
+            clean_sql: The SQL body with directives/comments stripped.
+            declared: Declared parameters for the query.
+            statement_name: Raw query name for error messages.
+            file_path: File path for error reporting.
+
+        Raises:
+            SQLFileParseError: On name drift (named) or count mismatch (positional).
+        """
+        if not declared:
+            return
+        infos = ParameterValidator().extract_parameters(clean_sql)
+        named = {info.name for info in infos if info.name and not info.name.isdigit()}
+        if named:
+            for decl in declared:
+                if decl.name not in named:
+                    raise SQLFileParseError(
+                        file_path,
+                        file_path,
+                        ValueError(
+                            f"Declared parameter '{decl.name}' for query '{statement_name}' is not present in the "
+                            f"SQL placeholders {sorted(named)}"
+                        ),
+                    )
+        elif len(declared) != len(infos):
+            raise SQLFileParseError(
+                file_path,
+                file_path,
+                ValueError(
+                    f"Query '{statement_name}' declares {len(declared)} parameter(s) but the SQL has "
+                    f"{len(infos)} positional placeholder(s)"
+                ),
+            )
+
+    @staticmethod
+    def _parse_sql_content(
+        content: str, file_path: str, strict_parameter_annotations: bool = False
+    ) -> "dict[str, NamedStatement]":
         """Parse SQL content and extract named statements with dialect specifications.
 
         Files without any named statement markers are gracefully skipped by returning
@@ -319,6 +447,7 @@ class SQLFileLoader:
         Args:
             content: Raw SQL file content to parse.
             file_path: File path for error reporting.
+            strict_parameter_annotations: Raise on malformed parameter declarations instead of skipping them.
 
         Returns:
             Dictionary mapping normalized statement names to NamedStatement objects.
@@ -345,19 +474,9 @@ class SQLFileLoader:
             if not raw_statement_name or not statement_section:
                 continue
 
-            dialect = None
-            statement_sql = statement_section
-
-            section_lines = [line.strip() for line in statement_section.split("\n") if line.strip()]
-            if section_lines:
-                first_line = section_lines[0]
-                dialect_match = DIALECT_PATTERN.match(first_line)
-                if dialect_match:
-                    declared_dialect = dialect_match.group("dialect").lower()
-
-                    dialect = _normalize_dialect(declared_dialect)
-                    remaining_lines = section_lines[1:]
-                    statement_sql = "\n".join(remaining_lines)
+            dialect, declared_params, statement_sql = SQLFileLoader._parse_directive_block(
+                statement_section, file_path, strict_parameter_annotations
+            )
 
             clean_sql = SQLFileLoader._strip_leading_comments(statement_sql)
             if clean_sql:
@@ -367,8 +486,14 @@ class SQLFileLoader:
                         file_path, file_path, ValueError(f"Duplicate statement name: {raw_statement_name}")
                     )
 
+                SQLFileLoader._validate_declared_parameters(clean_sql, declared_params, raw_statement_name, file_path)
+
                 statements[normalized_name] = NamedStatement(
-                    name=normalized_name, sql=clean_sql, dialect=dialect, start_line=statement_start_line
+                    name=normalized_name,
+                    sql=clean_sql,
+                    dialect=dialect,
+                    start_line=statement_start_line,
+                    parameters=declared_params,
                 )
                 log_with_context(
                     logger, logging.DEBUG, "sql.parse", file_path=file_path, query_name=normalized_name, dialect=dialect
@@ -539,7 +664,7 @@ class SQLFileLoader:
         runtime = self._runtime
         if content is None:
             content = self._read_file_content(file_path)
-        statements = self._parse_sql_content(content, path_str)
+        statements = self._parse_sql_content(content, path_str, self.strict_parameter_annotations)
 
         if not statements:
             log_with_context(
@@ -569,13 +694,20 @@ class SQLFileLoader:
             runtime.increment_metric("loader.files.loaded")
             runtime.increment_metric("loader.statements.loaded", len(statements))
 
-    def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
+    def add_named_sql(
+        self,
+        name: str,
+        sql: str,
+        dialect: "str | None" = None,
+        parameters: "Sequence[ParameterDeclaration] | None" = None,
+    ) -> None:
         """Add a named SQL query directly without loading from a file.
 
         Args:
             name: Name for the SQL query.
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
+            parameters: Optional declared parameter metadata for the query.
 
         Raises:
             ValueError: If query name already exists.
@@ -591,9 +723,32 @@ class SQLFileLoader:
         if dialect is not None:
             dialect = _normalize_dialect(dialect)
 
-        statement = NamedStatement(name=normalized_name, sql=sql.strip(), dialect=dialect, start_line=0)
+        declared = tuple(parameters) if parameters else ()
+        clean_sql = sql.strip()
+        self._validate_declared_parameters(clean_sql, declared, name, "<directly added>")
+
+        statement = NamedStatement(
+            name=normalized_name, sql=clean_sql, dialect=dialect, start_line=0, parameters=declared
+        )
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"
+
+    def get_query_parameters(self, name: str) -> "tuple[ParameterDeclaration, ...]":
+        """Get declared parameter metadata for a query.
+
+        Args:
+            name: Query name (hyphens are converted to underscores).
+
+        Returns:
+            Tuple of declared parameters; empty if the query declares none.
+
+        Raises:
+            SQLStatementNotFoundError: If the query does not exist.
+        """
+        safe_name = _normalize_query_name(name)
+        if safe_name not in self._queries:
+            self._raise_statement_not_found(name, safe_name)
+        return self._queries[safe_name].parameters
 
     def get_file(self, path: str | Path) -> "SQLFile | None":
         """Get a loaded SQLFile object by path.
@@ -704,7 +859,7 @@ class SQLFileLoader:
         if parsed_statement.dialect:
             sqlglot_dialect = _normalize_dialect(parsed_statement.dialect)
 
-        sql = SQL(parsed_statement.sql, dialect=sqlglot_dialect)
+        sql = SQL(parsed_statement.sql, dialect=sqlglot_dialect, declared_parameters=parsed_statement.parameters)
         try:
             sql.compile()
         except Exception as exc:

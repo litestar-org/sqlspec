@@ -28,8 +28,8 @@ def test_sql_where_eq_where_eq_creates_equality_condition() -> None:
     modified = stmt.where_eq("status", "active")
     assert "WHERE" in modified.raw_sql
     assert "status" in modified.raw_sql
-    assert "parameter_status" in modified.named_parameters
-    assert modified.named_parameters["parameter_status"] == "active"
+    assert "param_status" in modified.named_parameters
+    assert modified.named_parameters["param_status"] == "active"
 
 
 def test_sql_where_eq_where_eq_preserves_original() -> None:
@@ -46,8 +46,8 @@ def test_sql_where_eq_where_eq_chains_with_and() -> None:
     stmt = SQL("SELECT * FROM users")
     modified = stmt.where_eq("status", "active").where_eq("role", "admin")
     assert "AND" in modified.raw_sql
-    assert "parameter_status" in modified.named_parameters
-    assert "parameter_role" in modified.named_parameters
+    assert "param_status" in modified.named_parameters
+    assert "param_role" in modified.named_parameters
 
 
 def test_sql_where_neq_where_neq_creates_not_equal_condition() -> None:
@@ -56,8 +56,8 @@ def test_sql_where_neq_where_neq_creates_not_equal_condition() -> None:
     modified = stmt.where_neq("status", "deleted")
     assert "WHERE" in modified.raw_sql
     assert "<>" in modified.raw_sql or "!=" in modified.raw_sql
-    assert "parameter_status" in modified.named_parameters
-    assert modified.named_parameters["parameter_status"] == "deleted"
+    assert "param_status" in modified.named_parameters
+    assert modified.named_parameters["param_status"] == "deleted"
 
 
 def test_sql_where_comparisons_where_lt() -> None:
@@ -66,7 +66,7 @@ def test_sql_where_comparisons_where_lt() -> None:
     modified = stmt.where_lt("price", 100)
     assert "WHERE" in modified.raw_sql
     assert "<" in modified.raw_sql
-    assert modified.named_parameters["parameter_price"] == 100
+    assert modified.named_parameters["param_price"] == 100
 
 
 def test_sql_where_comparisons_where_lte() -> None:
@@ -75,7 +75,7 @@ def test_sql_where_comparisons_where_lte() -> None:
     modified = stmt.where_lte("price", 100)
     assert "WHERE" in modified.raw_sql
     assert "<=" in modified.raw_sql
-    assert modified.named_parameters["parameter_price"] == 100
+    assert modified.named_parameters["param_price"] == 100
 
 
 def test_sql_where_comparisons_where_gt() -> None:
@@ -84,7 +84,7 @@ def test_sql_where_comparisons_where_gt() -> None:
     modified = stmt.where_gt("price", 50)
     assert "WHERE" in modified.raw_sql
     assert ">" in modified.raw_sql
-    assert modified.named_parameters["parameter_price"] == 50
+    assert modified.named_parameters["param_price"] == 50
 
 
 def test_sql_where_comparisons_where_gte() -> None:
@@ -93,7 +93,7 @@ def test_sql_where_comparisons_where_gte() -> None:
     modified = stmt.where_gte("price", 50)
     assert "WHERE" in modified.raw_sql
     assert ">=" in modified.raw_sql
-    assert modified.named_parameters["parameter_price"] == 50
+    assert modified.named_parameters["param_price"] == 50
 
 
 def test_sql_where_like_where_like() -> None:
@@ -102,7 +102,7 @@ def test_sql_where_like_where_like() -> None:
     modified = stmt.where_like("name", "%john%")
     assert "WHERE" in modified.raw_sql
     assert "LIKE" in modified.raw_sql
-    assert modified.named_parameters["parameter_name"] == "%john%"
+    assert modified.named_parameters["param_name"] == "%john%"
 
 
 def test_sql_where_like_where_ilike() -> None:
@@ -111,7 +111,7 @@ def test_sql_where_like_where_ilike() -> None:
     modified = stmt.where_ilike("name", "%john%")
     assert "WHERE" in modified.raw_sql
     assert "ILIKE" in modified.raw_sql
-    assert modified.named_parameters["parameter_name"] == "%john%"
+    assert modified.named_parameters["param_name"] == "%john%"
 
 
 def test_sql_where_null_where_is_null() -> None:
@@ -179,10 +179,10 @@ def test_sql_where_between_where_between_creates_between_condition() -> None:
     assert "WHERE" in modified.raw_sql
     assert "BETWEEN" in modified.raw_sql
     assert "AND" in modified.raw_sql
-    assert "parameter_total_low" in modified.named_parameters
-    assert "parameter_total_high" in modified.named_parameters
-    assert modified.named_parameters["parameter_total_low"] == 100
-    assert modified.named_parameters["parameter_total_high"] == 500
+    assert "param_total_low" in modified.named_parameters
+    assert "param_total_high" in modified.named_parameters
+    assert modified.named_parameters["param_total_low"] == 100
+    assert modified.named_parameters["param_total_high"] == 500
 
 
 def test_sql_limit_limit_adds_limit_clause() -> None:
@@ -284,23 +284,23 @@ def test_parameter_generation_params_dont_collide_with_user_params() -> None:
     modified = stmt.where_eq("status", "active")
     assert "status" in modified.named_parameters
     assert modified.named_parameters["status"] == 1
-    assert "parameter_status" in modified.named_parameters
+    assert "param_status" in modified.named_parameters
 
 
 def test_parameter_generation_avoids_generated_prefix_collision() -> None:
     """Test generated params append suffixes when the namespace already exists."""
-    stmt = SQL("SELECT * FROM users WHERE id = :parameter_status", {"parameter_status": 1})
+    stmt = SQL("SELECT * FROM users WHERE id = :param_status", {"param_status": 1})
     modified = stmt.where_eq("status", "active")
-    assert modified.named_parameters["parameter_status"] == 1
-    assert modified.named_parameters["parameter_status_1"] == "active"
+    assert modified.named_parameters["param_status"] == 1
+    assert modified.named_parameters["param_status_1"] == "active"
 
 
 def test_sql_where_in_uses_oracle_safe_generated_names() -> None:
     """Test where_in creates letter-leading generated parameters."""
     stmt = SQL("SELECT * FROM users")
     modified = stmt.where_in("status", ["active", "pending"])
-    assert "parameter_status_in_0" in modified.named_parameters
-    assert "parameter_status_in_1" in modified.named_parameters
+    assert "param_status_in_0" in modified.named_parameters
+    assert "param_status_in_1" in modified.named_parameters
     assert "_sqlspec_status_in_0" not in modified.named_parameters
 
 
@@ -309,9 +309,9 @@ def test_generated_parameter_names_are_safe_for_named_colon_placeholders() -> No
     stmt = SQL("SELECT * FROM users", statement_config=_named_colon_config())
     modified = stmt.where_eq("status", "active")
     compiled_sql, parameters = modified.compile()
-    assert ":parameter_status" in compiled_sql
+    assert ":param_status" in compiled_sql
     assert ":_sqlspec" not in compiled_sql
-    assert parameters == {"parameter_status": "active"}
+    assert parameters == {"param_status": "active"}
 
 
 def test_cte_preservation_where_eq_preserves_cte() -> None:

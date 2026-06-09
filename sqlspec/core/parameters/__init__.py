@@ -8,6 +8,13 @@ from sqlspec.core.parameters._alignment import (
     validate_parameter_alignment,
 )
 from sqlspec.core.parameters._converter import ParameterConverter
+from sqlspec.core.parameters._declared import (
+    ParameterDeclaration,
+    ParamTypeMatcher,
+    matches_param_type,
+    register_param_type,
+    resolve_param_type,
+)
 from sqlspec.core.parameters._processor import ParameterProcessor, structural_fingerprint, value_fingerprint
 from sqlspec.core.parameters._registry import (
     DRIVER_PARAMETER_PROFILES,
@@ -42,7 +49,9 @@ __all__ = (
     "EXECUTE_MANY_MIN_ROWS",
     "PARAMETER_REGEX",
     "DriverParameterProfile",
+    "ParamTypeMatcher",
     "ParameterConverter",
+    "ParameterDeclaration",
     "ParameterInfo",
     "ParameterMapping",
     "ParameterPayload",
@@ -61,10 +70,13 @@ __all__ = (
     "get_driver_profile",
     "is_iterable_parameters",
     "looks_like_execute_many",
+    "matches_param_type",
     "normalize_parameter_key",
     "register_driver_profile",
+    "register_param_type",
     "replace_null_parameters_with_literals",
     "replace_placeholders_with_literals",
+    "resolve_param_type",
     "structural_fingerprint",
     "validate_parameter_alignment",
     "value_fingerprint",

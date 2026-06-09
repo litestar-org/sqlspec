@@ -128,7 +128,7 @@ def test_named_statement_slots() -> None:
     stmt = NamedStatement("test", "SELECT 1")
 
     assert hasattr(stmt.__class__, "__slots__")
-    assert stmt.__class__.__slots__ == ("dialect", "name", "sql", "start_line")
+    assert stmt.__class__.__slots__ == ("dialect", "name", "parameters", "sql", "start_line")
 
     with pytest.raises(AttributeError):
         stmt.arbitrary_attr = "value"  # pyright: ignore[reportAttributeAccessIssue]

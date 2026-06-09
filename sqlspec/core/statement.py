@@ -19,6 +19,7 @@ from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
 from sqlspec.core.parameters import (
     ParameterConverter,
+    ParameterDeclaration,
     ParameterProcessor,
     ParameterProfile,
     ParameterStyle,
@@ -169,6 +170,7 @@ PROCESSED_STATE_SLOTS: Final = (
 
 SQL_SLOTS: Final = (
     "_compiled_from_cache",
+    "_declared_parameters",
     "_dialect",
     "_filters",
     "_hash",
@@ -309,6 +311,7 @@ class SQL:
         *parameters: "Any | StatementFilter | list[Any | StatementFilter]",
         statement_config: "StatementConfig | None" = None,
         is_many: bool | None = None,
+        declared_parameters: "tuple[ParameterDeclaration, ...]" = (),
         **kwargs: Any,
     ) -> None:
         """Initialize SQL statement.
@@ -318,6 +321,7 @@ class SQL:
             *parameters: Parameters and filters
             statement_config: Configuration
             is_many: Mark as execute_many operation
+            declared_parameters: Parameter declarations to validate against at execute time
             **kwargs: Additional parameters
         """
         config = statement_config or self._create_auto_config(statement, parameters, kwargs)
@@ -335,6 +339,7 @@ class SQL:
         self._is_script = False
         self._raw_expression: exp.Expr | None = None
         self._rebind_processor: ParameterProcessor | None = None
+        self._declared_parameters: tuple[ParameterDeclaration, ...] = declared_parameters
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement)
@@ -379,6 +384,7 @@ class SQL:
                 self._is_many,
                 self._is_script,
                 dict(self._named_parameters),
+                self._declared_parameters,
             ),
         )
 
@@ -443,6 +449,7 @@ class SQL:
         self._statement_config = get_default_config()
         self._dialect = self._normalize_dialect(self._statement_config.dialect)
         self._rebind_processor = None
+        self._declared_parameters = ()
 
     def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
@@ -480,6 +487,7 @@ class SQL:
         self._sql_param_counters = sql_obj._sql_param_counters.copy()
         self._is_many = sql_obj.is_many
         self._is_script = sql_obj.is_script
+        self._declared_parameters = sql_obj._declared_parameters
         if sql_obj.is_processed:
             self._processed_state = sql_obj.get_processed_state()
 
@@ -610,6 +618,11 @@ class SQL:
     def original_parameters(self) -> Any:
         """Get original parameters (public API)."""
         return self._original_parameters
+
+    @property
+    def declared_parameters(self) -> "tuple[ParameterDeclaration, ...]":
+        """Get declared parameter metadata carried with this statement (public API)."""
+        return self._declared_parameters
 
     @property
     def operation_type(self) -> "OperationType":
@@ -875,7 +888,13 @@ class SQL:
         config = self._statement_config
         is_many = self._is_many
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(statement_seed, *original_params, statement_config=config, is_many=is_many)
+        new_sql = SQL(
+            statement_seed,
+            *original_params,
+            statement_config=config,
+            is_many=is_many,
+            declared_parameters=self._declared_parameters,
+        )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
@@ -911,6 +930,7 @@ class SQL:
             new_sql._named_parameters.update(self._named_parameters)
             new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
+        new_sql._declared_parameters = self._declared_parameters
         return new_sql
 
     def _create_empty_copy(self) -> "SQL":
@@ -933,6 +953,7 @@ class SQL:
         new_sql._named_parameters = {}
         new_sql._positional_parameters = []
         new_sql._sql_param_counters = self._sql_param_counters.copy()
+        new_sql._declared_parameters = self._declared_parameters
 
         return new_sql
 
@@ -996,9 +1017,9 @@ class SQL:
     # ==========================================================================
 
     def _generate_sql_param_name(self, base_name: str) -> str:
-        """Generate unique parameter name with parameter_ prefix.
+        """Generate unique parameter name with param_ prefix.
 
-        Uses parameter_ prefix to avoid collision with user-provided parameters.
+        Uses param_ prefix to avoid collision with user-provided parameters.
         Auto-generated parameters are namespaced to prevent conflicts.
 
         Args:
@@ -1007,7 +1028,7 @@ class SQL:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
-        prefixed_base = f"parameter_{base_name}"
+        prefixed_base = f"param_{base_name}"
         current_index = self._sql_param_counters.get(prefixed_base, 0)
 
         if prefixed_base not in self._named_parameters:
@@ -1072,7 +1093,11 @@ class SQL:
             New SQL instance with the expression and copied state
         """
         new_sql = SQL(
-            new_expr, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
+            new_expr,
+            *self._original_parameters,
+            statement_config=self._statement_config,
+            is_many=self._is_many,
+            declared_parameters=self._declared_parameters,
         )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -1094,7 +1119,13 @@ class SQL:
         config = self._statement_config
         is_many = self._is_many
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(statement_seed, *original_params, statement_config=config, is_many=is_many)
+        new_sql = SQL(
+            statement_seed,
+            *original_params,
+            statement_config=config,
+            is_many=is_many,
+            declared_parameters=self._declared_parameters,
+        )
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._named_parameters[name] = value
         new_sql._positional_parameters = self._positional_parameters.copy()
@@ -1940,9 +1971,16 @@ def _rebuild_sql(
     is_many: bool,
     is_script: bool,
     named_parameters: "dict[str, Any]",
+    declared_parameters: "tuple[ParameterDeclaration, ...]",
 ) -> "SQL":
     """Reconstruct a SQL instance from pickled / deepcopied state."""
-    new_sql = SQL(raw_sql, *original_parameters, statement_config=statement_config, is_many=is_many)
+    new_sql = SQL(
+        raw_sql,
+        *original_parameters,
+        statement_config=statement_config,
+        is_many=is_many,
+        declared_parameters=declared_parameters,
+    )
     if filters:
         new_sql._filters.extend(filters)
     if named_parameters:

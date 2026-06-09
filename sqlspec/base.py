@@ -35,10 +35,11 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
     from types import TracebackType
 
-    from sqlspec.core import SQL
+    from sqlspec.core import SQL, ParameterDeclaration
     from sqlspec.typing import PoolT
 
 
@@ -512,16 +513,23 @@ class SQLSpec:
         loader.load_sql(*paths)
         logger.debug("Loaded SQL files: %s", paths)
 
-    def add_named_sql(self, name: str, sql: str, dialect: "str | None" = None) -> None:
+    def add_named_sql(
+        self,
+        name: str,
+        sql: str,
+        dialect: "str | None" = None,
+        parameters: "Sequence[ParameterDeclaration] | None" = None,
+    ) -> None:
         """Add a named SQL query directly.
 
         Args:
             name: Name for the SQL query.
             sql: Raw SQL content.
             dialect: Optional dialect for the SQL statement.
+            parameters: Optional declared parameter metadata for the query.
         """
         loader = self._ensure_loader()
-        loader.add_named_sql(name, sql, dialect)
+        loader.add_named_sql(name, sql, dialect, parameters)
         logger.debug("Added named SQL: %s", name)
 
     def get_sql(self, name: str) -> "SQL":
@@ -535,6 +543,18 @@ class SQLSpec:
             SQL object ready for execution.
         """
         return self._ensure_loader().get_sql(name)
+
+    def get_query_parameters(self, name: str) -> "tuple[ParameterDeclaration, ...]":
+        """Get declared parameter metadata for a query.
+
+        Args:
+            name: Name of the statement from SQL file comments.
+                Hyphens in names are converted to underscores.
+
+        Returns:
+            Tuple of declared parameters; empty if the query declares none.
+        """
+        return self._ensure_loader().get_query_parameters(name)
 
     def list_sql_queries(self) -> "list[str]":
         """List all available query names.
