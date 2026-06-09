@@ -44,6 +44,12 @@ __all__ = (
 default_statement_config = build_statement_config()
 
 
+def _validate_driver_features(driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None") -> None:
+    if driver_features and "prefer_uuid_keys" in driver_features:
+        msg = "CockroachDB psycopg driver_features no longer supports unused 'prefer_uuid_keys'."
+        raise ImproperConfigurationError(msg)
+
+
 class CockroachPsycopgConnectionConfig(TypedDict):
     """CockroachDB connection parameters."""
 
@@ -61,6 +67,10 @@ class CockroachPsycopgConnectionConfig(TypedDict):
     sslkey: NotRequired[str]
     sslrootcert: NotRequired[str]
     autocommit: NotRequired[bool]
+    prepare_threshold: NotRequired[int | None]
+    row_factory: NotRequired["Callable[..., Any]"]
+    cursor_factory: NotRequired["type[Any]"]
+    context: NotRequired[Any]
     cluster: NotRequired[str]
     extra: NotRequired["dict[str, Any]"]
 
@@ -76,8 +86,13 @@ class CockroachPsycopgPoolConfig(CockroachPsycopgConnectionConfig):
     max_lifetime: NotRequired[float]
     max_idle: NotRequired[float]
     reconnect_timeout: NotRequired[float]
+    reconnect_failed: NotRequired["Callable[..., Any]"]
     num_workers: NotRequired[int]
     configure: NotRequired["Callable[..., Any]"]
+    check: NotRequired["Callable[..., Any]"]
+    reset: NotRequired["Callable[..., Any]"]
+    open: NotRequired[bool | None]
+    close_returns: NotRequired[bool]
     kwargs: NotRequired["dict[str, Any]"]
 
 
@@ -97,7 +112,6 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     enable_retry_logging: NotRequired[bool]
     enable_follower_reads: NotRequired[bool]
     default_staleness: NotRequired[str]
-    prefer_uuid_keys: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[..., Any]]"
@@ -191,6 +205,7 @@ class CockroachPsycopgSyncConfig(
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
+        _validate_driver_features(driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
@@ -225,21 +240,26 @@ class CockroachPsycopgSyncConfig(
             "max_lifetime": all_config.pop("max_lifetime", 3600.0),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
             "num_workers": all_config.pop("num_workers", 3),
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "open": all_config.pop("open", True),
+            "close_returns": all_config.pop("close_returns", False),
         }
 
         pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
-        if conninfo:
-            return ConnectionPool(conninfo, open=True, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters)
-
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
-        return ConnectionPool(
-            "", kwargs=all_config, open=True, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
-        )
+        if conninfo:
+            return ConnectionPool(
+                conninfo, kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
+            )
+
+        return ConnectionPool("", kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters)
 
     def _configure_connection(self, conn: "CockroachSyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")
@@ -392,6 +412,7 @@ class CockroachPsycopgAsyncConfig(
     ) -> None:
         connection_config = normalize_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
+        _validate_driver_features(driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         driver_features.setdefault("enable_auto_retry", True)
@@ -426,25 +447,32 @@ class CockroachPsycopgAsyncConfig(
             "max_lifetime": all_config.pop("max_lifetime", 3600.0),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
             "num_workers": all_config.pop("num_workers", 3),
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "close_returns": all_config.pop("close_returns", False),
         }
+        open_pool = all_config.pop("open", True)
+        pool_parameters["open"] = False if open_pool is True else open_pool
 
         pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
+        kwargs = all_config.pop("kwargs", {})
+        all_config.update(kwargs)
         if conninfo:
             pool = AsyncConnectionPool(
-                conninfo, open=False, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+                conninfo, kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
             )
         else:
-            kwargs = all_config.pop("kwargs", {})
-            all_config.update(kwargs)
             pool = AsyncConnectionPool(
-                "", kwargs=all_config, open=False, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+                "", kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
             )
 
-        await pool.open()
+        if open_pool is True:
+            await pool.open()
         return cast("AsyncConnectionPool", pool)
 
     async def _configure_async_connection(self, conn: "CockroachAsyncConnection") -> None:
