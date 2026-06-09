@@ -96,8 +96,7 @@ def spanner_config(
             "database_id": spanner_service.database_name,
             "credentials": spanner_service.credentials,
             "client_options": {"api_endpoint": api_endpoint},
-            "min_sessions": 1,
-            "max_sessions": 5,
+            "size": 5,
         }
     )
     try:

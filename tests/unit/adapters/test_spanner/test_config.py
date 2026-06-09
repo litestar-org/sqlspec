@@ -1,10 +1,21 @@
-import pytest
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.spanner.config import SpannerSyncConfig
+import pytest
+from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
+
+from sqlspec.adapters.spanner import config as config_module
+from sqlspec.adapters.spanner.config import SpannerConnectionParams, SpannerPoolParams, SpannerSyncConfig
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
+
+if TYPE_CHECKING:
+    from google.api_core.client_info import ClientInfo
+    from google.auth.credentials import Credentials
+    from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest
+    from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
 
 pytestmark = requires_interpreted
 
@@ -37,8 +48,14 @@ def test_config_defaults() -> None:
     """Test default values."""
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     assert config.connection_config is not None
-    assert config.connection_config["min_sessions"] == 1
-    assert config.connection_config["max_sessions"] == 10
+    assert "min_sessions" not in config.connection_config
+    assert config.connection_config["size"] == 10
+
+
+def test_min_sessions_is_rejected() -> None:
+    """Spanner's current session pool classes do not support min_sessions."""
+    with pytest.raises(ImproperConfigurationError, match="min_sessions"):
+        SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d", "min_sessions": 1})
 
 
 def test_improper_configuration() -> None:
@@ -53,6 +70,254 @@ def test_driver_features_defaults() -> None:
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     assert config.driver_features["enable_uuid_conversion"] is True
     assert config.driver_features["json_serializer"] is not None
+
+
+def test_driver_feature_session_labels_are_routed_to_pool() -> None:
+    """Legacy driver feature session labels should configure pool session labels."""
+    labels = {"workload": "analytics"}
+    config = SpannerSyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        driver_features={"session_labels": labels},
+    )
+
+    pool = config.provide_pool()
+
+    assert pool.labels == labels
+    assert "session_labels" not in config.driver_features
+
+
+def test_fixed_size_pool_routes_current_session_controls() -> None:
+    """FixedSizePool should receive the declared Spanner session pool settings."""
+    labels = {"service": "api"}
+    config = SpannerSyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": FixedSizePool,
+            "size": 4,
+            "default_timeout": 6,
+            "session_labels": labels,
+            "database_role": "reader",
+            "max_age_minutes": 23,
+        }
+    )
+
+    pool = config.provide_pool()
+
+    assert isinstance(pool, FixedSizePool)
+    assert pool.size == 4
+    assert pool.default_timeout == 6
+    assert pool.labels == labels
+    assert pool.database_role == "reader"
+    assert pool._max_age == timedelta(minutes=23)
+
+
+def test_bursty_pool_uses_target_size() -> None:
+    """BurstyPool should receive target_size instead of the FixedSize size key."""
+    config = SpannerSyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": BurstyPool,
+            "target_size": 7,
+        }
+    )
+
+    pool = config.provide_pool()
+
+    assert isinstance(pool, BurstyPool)
+    assert pool.target_size == 7
+
+
+def test_get_database_routes_client_instance_and_database_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Current Google client, instance, and database settings should be forwarded."""
+
+    class _FakeDatabase:
+        def __init__(self, database_id: str, kwargs: dict[str, Any]) -> None:
+            self.database_id = database_id
+            self.kwargs = kwargs
+
+    class _FakeInstance:
+        def __init__(self, instance_id: str, kwargs: dict[str, Any]) -> None:
+            self.instance_id = instance_id
+            self.kwargs = kwargs
+            self.database_calls: list[tuple[str, dict[str, Any]]] = []
+
+        def database(self, database_id: str, **kwargs: Any) -> "_FakeDatabase":
+            self.database_calls.append((database_id, kwargs))
+            return _FakeDatabase(database_id, kwargs)
+
+    class _FakeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            self.instances: list[_FakeInstance] = []
+            created_clients.append(self)
+
+        def instance(self, instance_id: str, **kwargs: Any) -> _FakeInstance:
+            instance = _FakeInstance(instance_id, kwargs)
+            self.instances.append(instance)
+            return instance
+
+    created_clients: list[_FakeClient] = []
+    monkeypatch.setattr(config_module, "Client", _FakeClient)
+
+    client_info = object()
+    query_options = object()
+    directed_read_options = object()
+    observability_options = object()
+    default_transaction_options = object()
+    client_context = object()
+    client_options = {"api_endpoint": "spanner.example.test"}
+    credentials = object()
+    pool = cast(AbstractSessionPool, object())
+    logger = object()
+    encryption_config = {"kms_key_name": "projects/p/locations/l/keyRings/r/cryptoKeys/k"}
+
+    config = SpannerSyncConfig(
+        connection_config={
+            "project": "p",
+            "credentials": credentials,
+            "client_options": client_options,
+            "client_info": client_info,
+            "query_options": query_options,
+            "route_to_leader_enabled": False,
+            "directed_read_options": directed_read_options,
+            "observability_options": observability_options,
+            "default_transaction_options": default_transaction_options,
+            "disable_builtin_metrics": True,
+            "client_context": client_context,
+            "use_plain_text": True,
+            "ca_certificate": "ca",
+            "client_certificate": "cert",
+            "client_key": "key",
+            "instance_type": "cloud",
+            "instance_id": "instance",
+            "configuration_name": "regional-us-central1",
+            "display_name": "Instance",
+            "node_count": 1,
+            "instance_labels": {"env": "test"},
+            "database_id": "database",
+            "logger": logger,
+            "encryption_config": encryption_config,
+            "database_role": "reader",
+            "enable_drop_protection": True,
+            "enable_interceptors_in_tests": True,
+            "proto_descriptors": b"proto",
+        },
+        connection_instance=pool,
+    )
+
+    database = cast(_FakeDatabase, config.get_database())
+
+    client = created_clients[0]
+    assert client.kwargs == {
+        "project": "p",
+        "credentials": credentials,
+        "client_options": client_options,
+        "client_info": client_info,
+        "query_options": query_options,
+        "route_to_leader_enabled": False,
+        "directed_read_options": directed_read_options,
+        "observability_options": observability_options,
+        "default_transaction_options": default_transaction_options,
+        "disable_builtin_metrics": True,
+        "client_context": client_context,
+        "use_plain_text": True,
+        "ca_certificate": "ca",
+        "client_certificate": "cert",
+        "client_key": "key",
+        "instance_type": "cloud",
+    }
+    instance = client.instances[0]
+    assert instance.instance_id == "instance"
+    assert instance.kwargs == {
+        "configuration_name": "regional-us-central1",
+        "display_name": "Instance",
+        "node_count": 1,
+        "labels": {"env": "test"},
+    }
+    assert database.database_id == "database"
+    assert database.kwargs == {
+        "pool": pool,
+        "logger": logger,
+        "encryption_config": encryption_config,
+        "database_role": "reader",
+        "enable_drop_protection": True,
+        "enable_interceptors_in_tests": True,
+        "proto_descriptors": b"proto",
+    }
+
+
+def test_spanner_params_type_current_client_database_and_pool_settings() -> None:
+    """Static type check coverage for modern client, database, and pool options."""
+    connection_config: SpannerConnectionParams = {
+        "project": "p",
+        "credentials": cast("Credentials", object()),
+        "client_options": {"api_endpoint": "spanner.example.test"},
+        "client_info": cast("ClientInfo", object()),
+        "query_options": cast("ExecuteSqlRequest.QueryOptions", object()),
+        "route_to_leader_enabled": False,
+        "directed_read_options": cast("DirectedReadOptions", object()),
+        "observability_options": object(),
+        "default_transaction_options": cast("DefaultTransactionOptions", object()),
+        "disable_builtin_metrics": True,
+        "client_context": {"trace": "enabled"},
+        "use_plain_text": True,
+        "ca_certificate": "ca",
+        "client_certificate": "cert",
+        "client_key": "key",
+        "instance_type": "cloud",
+        "instance_id": "i",
+        "configuration_name": "regional-us-central1",
+        "display_name": "Instance",
+        "node_count": 1,
+        "instance_labels": {"env": "test"},
+        "database_id": "d",
+        "database_role": "reader",
+        "enable_drop_protection": True,
+        "enable_interceptors_in_tests": True,
+        "proto_descriptors": b"proto",
+    }
+    pool_config: SpannerPoolParams = {
+        "project": "p",
+        "credentials": cast("Credentials", object()),
+        "client_options": {"api_endpoint": "spanner.example.test"},
+        "client_info": cast("ClientInfo", object()),
+        "query_options": cast("ExecuteSqlRequest.QueryOptions", object()),
+        "route_to_leader_enabled": False,
+        "directed_read_options": cast("DirectedReadOptions", object()),
+        "observability_options": object(),
+        "default_transaction_options": cast("DefaultTransactionOptions", object()),
+        "disable_builtin_metrics": True,
+        "client_context": {"trace": "enabled"},
+        "use_plain_text": True,
+        "ca_certificate": "ca",
+        "client_certificate": "cert",
+        "client_key": "key",
+        "instance_type": "cloud",
+        "instance_id": "i",
+        "configuration_name": "regional-us-central1",
+        "display_name": "Instance",
+        "node_count": 1,
+        "instance_labels": {"env": "test"},
+        "database_id": "d",
+        "database_role": "reader",
+        "enable_drop_protection": True,
+        "enable_interceptors_in_tests": True,
+        "proto_descriptors": b"proto",
+        "pool_type": FixedSizePool,
+        "size": 4,
+        "target_size": 4,
+        "default_timeout": 6,
+        "session_labels": {"service": "api"},
+        "max_age_minutes": 23,
+        "ping_interval": 300,
+    }
+
+    assert connection_config["project"] == "p"
+    assert pool_config["size"] == 4
 
 
 def test_provide_connection_batch_and_snapshot() -> None:

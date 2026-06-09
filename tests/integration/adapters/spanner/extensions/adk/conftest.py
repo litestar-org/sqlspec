@@ -22,8 +22,7 @@ def spanner_adk_config(spanner_service: SpannerService, spanner_database: "Datab
             "database_id": spanner_service.database_name,
             "credentials": spanner_service.credentials,
             "client_options": {"api_endpoint": api_endpoint},
-            "min_sessions": 1,
-            "max_sessions": 5,
+            "size": 5,
         },
         extension_config={"adk": {"session_table": "adk_sessions", "events_table": "adk_events"}},
     )

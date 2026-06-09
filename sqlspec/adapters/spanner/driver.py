@@ -63,7 +63,11 @@ class _SpannerResultSetProtocol(Protocol):
 
 class _SpannerReadProtocol(Protocol):
     def execute_sql(
-        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
     ) -> _SpannerResultSetProtocol: ...
 
 
@@ -71,11 +75,15 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
     committed: "Any | None"
 
     def execute_update(
-        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
     ) -> int: ...
 
     def batch_update(
-        self, batch: "list[tuple[str, dict[str, Any] | None, dict[str, Any]]]"
+        self, batch: "list[tuple[str, dict[str, Any] | None, dict[str, Any]]]", **kwargs: Any
     ) -> "tuple[Any, list[int]]": ...
 
     def commit(self) -> None: ...
@@ -138,10 +146,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
+        execute_kwargs = self._execute_kwargs()
 
         if statement.returns_rows():
             reader = cast("_SpannerReadProtocol", cursor)
-            result_set = reader.execute_sql(sql, params=coerced_params, param_types=param_types_map)
+            result_set = reader.execute_sql(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             rows = list(result_set)
             try:
                 metadata = result_set.metadata
@@ -165,7 +174,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         if supports_write(cursor):
             writer = cast("_SpannerWriteProtocol", cursor)
-            row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map)
+            row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
         raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
@@ -183,6 +192,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         _coerce = self._coerce_params
         _infer = self._infer_param_types
+        execute_kwargs = self._execute_kwargs()
         param_types_cache: dict[tuple[tuple[str, type[Any]], ...], dict[str, Any]] = {}
         empty_param_types: dict[str, Any] = {}
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
@@ -200,7 +210,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             append_batch_arg((sql, coerced_params, param_types))
 
         writer = cast("_SpannerWriteProtocol", cursor)
-        _status, row_counts = writer.batch_update(batch_args)
+        _status, row_counts = writer.batch_update(batch_args, **execute_kwargs)
         total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
@@ -215,6 +225,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         script_params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(script_params)
         param_types_map = self._infer_param_types(coerced_params)
+        execute_kwargs = self._execute_kwargs()
         for stmt in statements:
             try:
                 parsed = _sqlglot.parse_one(stmt)
@@ -225,9 +236,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
-                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map)
+                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             else:
-                _ = list(reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map))
+                _ = list(reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map, **execute_kwargs))
             count += 1
 
         return self.create_execution_result(
@@ -258,6 +269,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def handle_database_exceptions(self) -> "SpannerExceptionHandler":
         return SpannerExceptionHandler()
+
+    def _execute_kwargs(self) -> dict[str, Any]:
+        return {key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # ARROW API METHODS

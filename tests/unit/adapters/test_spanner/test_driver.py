@@ -67,6 +67,25 @@ def test_execute_statement_select(mock_connection: MagicMock) -> None:
     assert result.selected_data[1] == (2, "Bob")
 
 
+def test_execute_statement_select_forwards_retry_and_timeout(mock_connection: MagicMock) -> None:
+    retry = object()
+    driver = SpannerSyncDriver(mock_connection, driver_features={"retry": retry, "timeout": 12.5})
+
+    mock_result = MagicMock(spec=StreamedResultSet)
+    field = Mock()
+    field.name = "id"
+    mock_result.metadata.row_type.fields = [field]
+    mock_result.__iter__.return_value = iter([(1,)])
+    mock_connection.execute_sql.return_value = mock_result
+
+    statement = driver.prepare_statement("SELECT id FROM users", statement_config=driver.statement_config)
+    driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]
+
+    mock_connection.execute_sql.assert_called_once_with(
+        "SELECT id FROM users", params=None, param_types={}, retry=retry, timeout=12.5
+    )
+
+
 def test_execute_statement_dml_in_transaction(mock_transaction: MagicMock) -> None:
     driver = SpannerSyncDriver(mock_transaction)
     mock_transaction.execute_update.return_value = 10
@@ -76,6 +95,19 @@ def test_execute_statement_dml_in_transaction(mock_transaction: MagicMock) -> No
 
     assert result.rowcount_override == 10
     mock_transaction.execute_update.assert_called_once()
+
+
+def test_execute_statement_dml_forwards_retry_and_timeout(mock_transaction: MagicMock) -> None:
+    retry = object()
+    driver = SpannerSyncDriver(mock_transaction, driver_features={"retry": retry, "timeout": 12.5})
+    mock_transaction.execute_update.return_value = 10
+
+    statement = driver.prepare_statement("UPDATE users SET name = 'Bob'", statement_config=driver.statement_config)
+    driver.dispatch_execute(mock_transaction, statement)  # type: ignore[protected-access]
+
+    mock_transaction.execute_update.assert_called_once_with(
+        "UPDATE users SET name = 'Bob'", params=None, param_types={}, retry=retry, timeout=12.5
+    )
 
 
 def test_insert_requires_transaction_or_update_method(mock_connection: MagicMock) -> None:

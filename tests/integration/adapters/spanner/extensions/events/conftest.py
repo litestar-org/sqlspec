@@ -26,8 +26,7 @@ def spanner_events_config(spanner_service: SpannerService, spanner_database: "Da
             "database_id": spanner_service.database_name,
             "credentials": spanner_service.credentials,
             "client_options": {"api_endpoint": api_endpoint},
-            "min_sessions": 1,
-            "max_sessions": 5,
+            "size": 5,
         },
         extension_config={"events": {"queue_table": "sqlspec_event_queue"}},
     )

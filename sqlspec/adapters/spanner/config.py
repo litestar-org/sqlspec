@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
-from google.cloud.spanner_v1.pool import AbstractSessionPool, FixedSizePool
+from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool, PingingPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
@@ -18,10 +18,17 @@ from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from logging import Logger
     from types import TracebackType
 
+    from google.api_core.client_info import ClientInfo
+    from google.api_core.client_options import ClientOptions
+    from google.api_core.retry import Retry
     from google.auth.credentials import Credentials
+    from google.cloud.spanner_admin_database_v1.types import DatabaseDialect, EncryptionConfig
+    from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest
     from google.cloud.spanner_v1.database import Database
+    from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
@@ -37,15 +44,73 @@ other sqlspec adapter. Read-only :class:`Snapshot` contexts are available via
 :meth:`SpannerSyncConfig.provide_read_session`. Pulled into a module-level
 constant so an eventual ``SpannerAsyncConfig`` can import the same default."""
 
+_CLIENT_CONFIG_FIELDS = frozenset({
+    "project",
+    "credentials",
+    "client_info",
+    "client_options",
+    "query_options",
+    "route_to_leader_enabled",
+    "directed_read_options",
+    "observability_options",
+    "default_transaction_options",
+    "experimental_host",
+    "disable_builtin_metrics",
+    "client_context",
+    "use_plain_text",
+    "ca_certificate",
+    "client_certificate",
+    "client_key",
+    "instance_type",
+})
+_INSTANCE_CONFIG_FIELDS = frozenset({"configuration_name", "display_name", "node_count", "processing_units"})
+_DATABASE_CONFIG_FIELDS = frozenset({
+    "ddl_statements",
+    "logger",
+    "encryption_config",
+    "database_dialect",
+    "database_role",
+    "enable_drop_protection",
+    "enable_interceptors_in_tests",
+    "proto_descriptors",
+})
+
 
 class SpannerConnectionParams(TypedDict):
     """Spanner connection parameters."""
 
     project: "NotRequired[str]"
-    instance_id: "NotRequired[str]"
-    database_id: "NotRequired[str]"
     credentials: "NotRequired[Credentials]"
-    client_options: "NotRequired[dict[str, Any]]"
+    client_info: "NotRequired[ClientInfo]"
+    client_options: "NotRequired[ClientOptions | dict[str, Any]]"
+    query_options: "NotRequired[ExecuteSqlRequest.QueryOptions]"
+    route_to_leader_enabled: "NotRequired[bool]"
+    directed_read_options: "NotRequired[DirectedReadOptions]"
+    observability_options: "NotRequired[Any]"
+    default_transaction_options: "NotRequired[DefaultTransactionOptions]"
+    experimental_host: "NotRequired[str]"
+    disable_builtin_metrics: "NotRequired[bool]"
+    client_context: "NotRequired[dict[str, str]]"
+    use_plain_text: "NotRequired[bool]"
+    ca_certificate: "NotRequired[str]"
+    client_certificate: "NotRequired[str]"
+    client_key: "NotRequired[str]"
+    instance_type: "NotRequired[str]"
+    instance_id: "NotRequired[str]"
+    configuration_name: "NotRequired[str]"
+    display_name: "NotRequired[str]"
+    node_count: "NotRequired[int]"
+    processing_units: "NotRequired[int]"
+    instance_labels: "NotRequired[dict[str, str]]"
+    database_id: "NotRequired[str]"
+    ddl_statements: "NotRequired[tuple[str, ...] | list[str]]"
+    logger: "NotRequired[Logger]"
+    encryption_config: "NotRequired[EncryptionConfig | dict[str, Any]]"
+    database_dialect: "NotRequired[DatabaseDialect]"
+    database_role: "NotRequired[str]"
+    enable_drop_protection: "NotRequired[bool]"
+    enable_interceptors_in_tests: "NotRequired[bool]"
+    proto_descriptors: "NotRequired[bytes]"
     extra: "NotRequired[dict[str, Any]]"
 
 
@@ -53,10 +118,14 @@ class SpannerPoolParams(SpannerConnectionParams):
     """Session pool configuration."""
 
     pool_type: "NotRequired[type[AbstractSessionPool]]"
-    min_sessions: "NotRequired[int]"
+    size: "NotRequired[int]"
+    target_size: "NotRequired[int]"
     max_sessions: "NotRequired[int]"
+    default_timeout: "NotRequired[int | float]"
+    session_labels: "NotRequired[dict[str, str]]"
     labels: "NotRequired[dict[str, str]]"
     ping_interval: "NotRequired[int]"
+    max_age_minutes: "NotRequired[int]"
 
 
 class SpannerDriverFeatures(TypedDict):
@@ -66,7 +135,10 @@ class SpannerDriverFeatures(TypedDict):
         enable_uuid_conversion: Enable automatic UUID string conversion.
         json_serializer: Custom JSON serializer for parameter conversion.
         json_deserializer: Custom JSON deserializer for result conversion.
-        session_labels: Labels to apply to Spanner sessions.
+        retry: Per-request retry policy passed to execute_sql(), execute_update(), and batch_update().
+        timeout: Per-request timeout in seconds passed to execute_sql(), execute_update(), and batch_update().
+        session_labels: Deprecated compatibility alias for pool session labels.
+            Prefer ``connection_config["session_labels"]``.
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
         events_backend: Backend type for event handling.
@@ -76,6 +148,8 @@ class SpannerDriverFeatures(TypedDict):
     enable_uuid_conversion: "NotRequired[bool]"
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    retry: "NotRequired[Retry | None]"
+    timeout: "NotRequired[float | None]"
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
     events_backend: "NotRequired[str]"
@@ -190,12 +264,23 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         **kwargs: Any,
     ) -> None:
         self.connection_config = normalize_connection_config(connection_config)
+        if "min_sessions" in self.connection_config:
+            msg = "Spanner session pools do not support 'min_sessions'; use 'size' or 'target_size'."
+            raise ImproperConfigurationError(msg)
 
-        self.connection_config.setdefault("min_sessions", 1)
-        self.connection_config.setdefault("max_sessions", 10)
+        raw_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+        legacy_session_labels = raw_driver_features.pop("session_labels", None)
+        if (
+            legacy_session_labels is not None
+            and "session_labels" not in self.connection_config
+            and "labels" not in self.connection_config
+        ):
+            self.connection_config["session_labels"] = legacy_session_labels
+
+        self.connection_config.setdefault("size", self.connection_config.pop("max_sessions", 10))
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
-        driver_features = apply_driver_features(driver_features)
+        driver_features = apply_driver_features(raw_driver_features)
 
         statement_config = statement_config or default_statement_config
 
@@ -216,11 +301,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
     def _get_client(self) -> Client:
         if self._client is None:
-            self._client = Client(
-                project=self.connection_config.get("project"),
-                credentials=self.connection_config.get("credentials"),
-                client_options=self.connection_config.get("client_options"),
-            )
+            client_kwargs = self._resolve_kwargs(_CLIENT_CONFIG_FIELDS)
+            self._client = Client(**client_kwargs)
         return self._client
 
     def get_database(self) -> "Database":
@@ -235,7 +317,15 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
         if self._database is None:
             client = self._get_client()
-            self._database = client.instance(instance_id).database(database_id, pool=self.connection_instance)  # type: ignore[no-untyped-call]
+            instance_kwargs = self._resolve_kwargs(_INSTANCE_CONFIG_FIELDS)
+            instance_labels = self.connection_config.get("instance_labels")
+            if instance_labels is not None:
+                instance_kwargs["labels"] = instance_labels
+            database_kwargs = self._resolve_kwargs(_DATABASE_CONFIG_FIELDS)
+            database_kwargs["pool"] = self.connection_instance
+            self._database = client.instance(instance_id, **instance_kwargs).database(  # type: ignore[no-untyped-call]
+                database_id, **database_kwargs
+            )
         return self._database
 
     def create_connection(self) -> SpannerConnection:
@@ -250,22 +340,37 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
         pool_type = cast("type[AbstractSessionPool]", self.connection_config.get("pool_type", FixedSizePool))
 
-        pool_kwargs: dict[str, Any] = {}
-        if pool_type is FixedSizePool:
-            if "size" in self.connection_config:
-                pool_kwargs["size"] = self.connection_config["size"]
-            elif "max_sessions" in self.connection_config:
-                pool_kwargs["size"] = self.connection_config["max_sessions"]
-            if "labels" in self.connection_config:
-                pool_kwargs["labels"] = self.connection_config["labels"]
+        labels = self.connection_config.get("session_labels", self.connection_config.get("labels"))
+        pool_kwargs: dict[str, Any] = self._resolve_pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
+        if issubclass(pool_type, PingingPool):
+            pool_kwargs.update(self._resolve_kwargs({"size", "default_timeout", "ping_interval"}))
+        elif issubclass(pool_type, FixedSizePool):
+            pool_kwargs.update(self._resolve_kwargs({"size", "default_timeout", "max_age_minutes"}))
+        elif issubclass(pool_type, BurstyPool):
+            target_size = self.connection_config.get("target_size", self.connection_config.get("size"))
+            if target_size is not None:
+                pool_kwargs["target_size"] = target_size
         else:
-            valid_pool_keys = {"size", "labels", "ping_interval"}
-            pool_kwargs = {k: v for k, v in self.connection_config.items() if k in valid_pool_keys and v is not None}
-            if "size" not in pool_kwargs and "max_sessions" in self.connection_config:
-                pool_kwargs["size"] = self.connection_config["max_sessions"]
+            pool_kwargs.update(
+                self._resolve_kwargs({"size", "target_size", "default_timeout", "ping_interval", "max_age_minutes"})
+            )
 
         pool_factory = cast("Callable[..., AbstractSessionPool]", pool_type)
         return pool_factory(**pool_kwargs)
+
+    def _resolve_pool_base_kwargs(self, *, labels: "dict[str, str] | None") -> dict[str, Any]:
+        pool_kwargs: dict[str, Any] = {}
+        if labels is not None:
+            pool_kwargs["labels"] = labels
+        database_role = self.connection_config.get("database_role")
+        if database_role is not None:
+            pool_kwargs["database_role"] = database_role
+        return pool_kwargs
+
+    def _resolve_kwargs(self, fields: "frozenset[str] | set[str]") -> dict[str, Any]:
+        return {
+            field: self.connection_config[field] for field in fields if self.connection_config.get(field) is not None
+        }
 
     def _close_pool(self) -> None:
         if self.connection_instance and supports_close(self.connection_instance):
