@@ -36,10 +36,11 @@ class ArrowCursor:
         table = pa.table({"x": [1, 2, 3]})
         return iter(table.to_batches(max_chunksize=batch_size))
 
-    def bulkcopy(self, target_table: str, rows: Any, **kwargs: Any) -> None:
+    def bulkcopy(self, target_table: str, rows: Any, **kwargs: Any) -> dict[str, Any]:
         rows = list(rows)
         self.bulkcopy_calls.append((target_table, rows, kwargs))
         self.rowcount = len(rows)
+        return {"rows_copied": len(rows), "batch_count": 1, "elapsed_time": 0.01}
 
     def close(self) -> None:
         self.closed = True
@@ -67,7 +68,7 @@ class ErrorArrowCursor(ArrowCursor):
     def arrow(self, batch_size: int = 8192) -> Any:
         raise mssql_python.Error("driver", "(2627)")
 
-    def bulkcopy(self, target_table: str, rows: Any, **kwargs: Any) -> None:
+    def bulkcopy(self, target_table: str, rows: Any, **kwargs: Any) -> dict[str, Any]:
         raise mssql_python.Error("driver", "(2627)")
 
 
@@ -137,12 +138,12 @@ def test_bulk_copy_forwards_options_to_cursor_bulkcopy() -> None:
     connection = ArrowConnection()
     driver = MssqlPythonDriver(cast("Any", connection))
 
-    inserted = driver.bulk_copy(
+    result = driver.bulk_copy(
         "dbo.target", [(1, "a"), (2, "b")], batch_size=1000, timeout=30, table_lock=True, keep_nulls=True
     )
 
     target_table, rows, options = connection.cursor_obj.bulkcopy_calls[0]
-    assert inserted == 2
+    assert result == {"rows_copied": 2, "batch_count": 1, "elapsed_time": 0.01}
     assert target_table == "dbo.target"
     assert rows == [(1, "a"), (2, "b")]
     assert options["batch_size"] == 1000
@@ -150,6 +151,20 @@ def test_bulk_copy_forwards_options_to_cursor_bulkcopy() -> None:
     assert options["table_lock"] is True
     assert options["keep_nulls"] is True
     assert connection.cursor_obj.closed is True
+
+
+def test_bulk_copy_defaults_match_mssql_python_runtime() -> None:
+    """BulkCopy defaults should match mssql-python 1.8 runtime defaults."""
+    connection = ArrowConnection()
+    driver = MssqlPythonDriver(cast("Any", connection))
+
+    result = driver.bulk_copy("dbo.target", [(1,)])
+
+    _, _, options = connection.cursor_obj.bulkcopy_calls[0]
+    assert result["rows_copied"] == 1
+    assert options["batch_size"] == 0
+    assert options["timeout"] == 30
+    assert options["check_constraints"] is False
 
 
 def test_bulk_copy_raises_mapped_driver_exception() -> None:
@@ -252,8 +267,8 @@ async def test_async_bulk_copy_offloads_bulkcopy(monkeypatch: pytest.MonkeyPatch
     connection = ArrowConnection()
     driver = MssqlPythonAsyncDriver(cast("Any", connection))
 
-    inserted = await driver.bulk_copy("dbo.target", [(1,), (2,)], batch_size=500)
+    result = await driver.bulk_copy("dbo.target", [(1,), (2,)], batch_size=500)
 
-    assert inserted == 2
+    assert result["rows_copied"] == 2
     assert "bulkcopy" in calls
     assert "close" in calls

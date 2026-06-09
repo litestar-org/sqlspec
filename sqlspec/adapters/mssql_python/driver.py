@@ -1,7 +1,9 @@
 """mssql-python sync and async drivers."""
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
+
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python._typing import (
     MSSQL_PYTHON_MODULE,
@@ -38,6 +40,7 @@ __all__ = (
     "MssqlPythonAsyncDriver",
     "MssqlPythonAsyncExceptionHandler",
     "MssqlPythonAsyncSessionContext",
+    "MssqlPythonBulkCopyResult",
     "MssqlPythonCursor",
     "MssqlPythonDriver",
     "MssqlPythonExceptionHandler",
@@ -46,6 +49,14 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.mssql_python")
 _MSSQL_ERROR = cast("type[BaseException]", getattr(MSSQL_PYTHON_MODULE, "Error", Exception))
+
+
+class MssqlPythonBulkCopyResult(TypedDict):
+    """BulkCopy statistics returned by mssql-python."""
+
+    rows_copied: int
+    batch_count: NotRequired[int]
+    elapsed_time: NotRequired[float]
 
 
 class MssqlPythonExceptionHandler(BaseSyncExceptionHandler):
@@ -213,21 +224,21 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         target_table: str,
         rows: "Iterable[tuple[Any, ...]]",
         *,
-        batch_size: int = 64_000,
-        timeout: int = 3600,
+        batch_size: int = 0,
+        timeout: int = 30,
         column_mappings: list[str] | list[tuple[int, str]] | None = None,
         keep_identity: bool = False,
-        check_constraints: bool = True,
+        check_constraints: bool = False,
         table_lock: bool = False,
         keep_nulls: bool = False,
         fire_triggers: bool = False,
         use_internal_transaction: bool = False,
-    ) -> int:
+    ) -> MssqlPythonBulkCopyResult:
         """Bulk insert rows via mssql-python cursor.bulkcopy()."""
-        rowcount = 0
+        result: MssqlPythonBulkCopyResult = {"rows_copied": 0}
         exc_handler = self.handle_database_exceptions()
         with exc_handler, self.with_cursor(self.connection) as cursor:
-            cursor.bulkcopy(
+            raw_result = cursor.bulkcopy(
                 target_table,
                 rows,
                 batch_size=batch_size,
@@ -240,9 +251,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 fire_triggers=fire_triggers,
                 use_internal_transaction=use_internal_transaction,
             )
-            rowcount = _cursor_rowcount(cursor)
+            result = _coerce_bulk_copy_result(raw_result, cursor)
         self._check_pending_exception(exc_handler)
-        return int(rowcount)
+        return result
 
 
 class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
@@ -381,21 +392,21 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         target_table: str,
         rows: "Iterable[tuple[Any, ...]]",
         *,
-        batch_size: int = 64_000,
-        timeout: int = 3600,
+        batch_size: int = 0,
+        timeout: int = 30,
         column_mappings: list[str] | list[tuple[int, str]] | None = None,
         keep_identity: bool = False,
-        check_constraints: bool = True,
+        check_constraints: bool = False,
         table_lock: bool = False,
         keep_nulls: bool = False,
         fire_triggers: bool = False,
         use_internal_transaction: bool = False,
-    ) -> int:
+    ) -> MssqlPythonBulkCopyResult:
         """Bulk insert rows via mssql-python cursor.bulkcopy()."""
         exc_handler = self.handle_database_exceptions()
-        rowcount = 0
+        result: MssqlPythonBulkCopyResult = {"rows_copied": 0}
         async with exc_handler, self.with_cursor(self.connection) as cursor:
-            await asyncio.to_thread(
+            raw_result = await asyncio.to_thread(
                 cursor.bulkcopy,
                 target_table,
                 rows,
@@ -409,9 +420,9 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
                 fire_triggers=fire_triggers,
                 use_internal_transaction=use_internal_transaction,
             )
-            rowcount = _cursor_rowcount(cursor)
+            result = _coerce_bulk_copy_result(raw_result, cursor)
         self._check_pending_exception(exc_handler)
-        return rowcount
+        return result
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:
@@ -424,6 +435,12 @@ def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -
 def _cursor_rowcount(cursor: "MssqlPythonRawCursor") -> int:
     rowcount = getattr(cursor, "rowcount", 0)
     return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+
+
+def _coerce_bulk_copy_result(result: Any, cursor: "MssqlPythonRawCursor") -> MssqlPythonBulkCopyResult:
+    if isinstance(result, dict):
+        return cast("MssqlPythonBulkCopyResult", dict(result))
+    return {"rows_copied": _cursor_rowcount(cursor)}
 
 
 register_driver_profile("mssql_python", driver_profile, allow_override=True)
