@@ -1,7 +1,8 @@
 """CockroachDB AsyncPG configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
+from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
@@ -26,6 +27,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from asyncio.events import AbstractEventLoop
     from collections.abc import Awaitable, Callable
 
     from sqlspec.core import StatementConfig
@@ -35,8 +37,14 @@ __all__ = (
     "CockroachAsyncpgConfig",
     "CockroachAsyncpgConnectionConfig",
     "CockroachAsyncpgDriverFeatures",
+    "CockroachAsyncpgGSSLib",
     "CockroachAsyncpgPoolConfig",
+    "CockroachAsyncpgTargetSessionAttrs",
 )
+
+
+CockroachAsyncpgTargetSessionAttrs = Literal["any", "primary", "standby", "read-write", "read-only", "prefer-standby"]
+CockroachAsyncpgGSSLib = Literal["gssapi", "sspi"]
 
 
 class CockroachAsyncpgConnectionConfig(TypedDict):
@@ -47,16 +55,22 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     port: NotRequired[int]
     user: NotRequired[str]
     password: NotRequired[str]
+    service: NotRequired[str]
+    servicefile: NotRequired[str]
     database: NotRequired[str]
     ssl: NotRequired[Any]
     passfile: NotRequired[str]
     direct_tls: NotRequired[bool]
+    timeout: NotRequired[float]
     connect_timeout: NotRequired[float]
     command_timeout: NotRequired[float]
     statement_cache_size: NotRequired[int]
     max_cached_statement_lifetime: NotRequired[int]
     max_cacheable_statement_size: NotRequired[int]
     server_settings: NotRequired["dict[str, str]"]
+    target_session_attrs: NotRequired[CockroachAsyncpgTargetSessionAttrs]
+    krbsrvname: NotRequired[str]
+    gsslib: NotRequired[CockroachAsyncpgGSSLib]
 
 
 class CockroachAsyncpgPoolConfig(CockroachAsyncpgConnectionConfig):
@@ -66,8 +80,13 @@ class CockroachAsyncpgPoolConfig(CockroachAsyncpgConnectionConfig):
     max_size: NotRequired[int]
     max_queries: NotRequired[int]
     max_inactive_connection_lifetime: NotRequired[float]
+    connect: NotRequired["Callable[..., Awaitable[CockroachAsyncpgConnection]]"]
     setup: NotRequired["Callable[[CockroachAsyncpgConnection], Awaitable[None]]"]
     init: NotRequired["Callable[[CockroachAsyncpgConnection], Awaitable[None]]"]
+    reset: NotRequired["Callable[[CockroachAsyncpgConnection], Awaitable[None]]"]
+    loop: NotRequired["AbstractEventLoop"]
+    connection_class: NotRequired[type["CockroachAsyncpgConnection"]]
+    record_class: NotRequired[type[Record]]
     extra: NotRequired["dict[str, Any]"]
 
 

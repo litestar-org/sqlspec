@@ -6,13 +6,17 @@ Tests cover:
 - Connection config normalization
 """
 
+from typing import Any, cast, get_args, get_origin
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,
+    CockroachAsyncpgConnectionConfig,
     CockroachAsyncpgDriverFeatures,
+    CockroachAsyncpgPoolConfig,
     CockroachAsyncpgRetryConfig,
 )
 from sqlspec.core import StatementConfig
@@ -87,6 +91,100 @@ def test_cockroach_asyncpg_config_bind_key_configuration() -> None:
     """Bind key should be stored for multi-database setups."""
     config = CockroachAsyncpgConfig(bind_key="cockroach_primary")
     assert config.bind_key == "cockroach_primary"
+
+
+def test_cockroach_asyncpg_connection_config_describes_current_asyncpg_connect_keys() -> None:
+    """Typed config should include current asyncpg connection keywords."""
+    annotations = CockroachAsyncpgConnectionConfig.__annotations__
+
+    assert annotations["service"] is not None
+    assert annotations["servicefile"] is not None
+    assert annotations["timeout"] is not None
+    assert annotations["target_session_attrs"] is not None
+    assert annotations["krbsrvname"] is not None
+    assert annotations["gsslib"] is not None
+
+    target_session_attrs_annotation = cast("Any", annotations["target_session_attrs"])
+    assert get_origin(target_session_attrs_annotation) is NotRequired
+    assert set(get_args(get_args(target_session_attrs_annotation)[0])) == {
+        "any",
+        "primary",
+        "standby",
+        "read-write",
+        "read-only",
+        "prefer-standby",
+    }
+
+    gsslib_annotation = cast("Any", annotations["gsslib"])
+    assert get_origin(gsslib_annotation) is NotRequired
+    assert set(get_args(get_args(gsslib_annotation)[0])) == {"gssapi", "sspi"}
+
+
+def test_cockroach_asyncpg_pool_config_describes_current_asyncpg_pool_keys() -> None:
+    """Typed pool config should include asyncpg pool-only keywords."""
+    annotations = CockroachAsyncpgPoolConfig.__annotations__
+
+    assert annotations["connect"] is not None
+    assert annotations["reset"] is not None
+    assert annotations["loop"] is not None
+    assert annotations["connection_class"] is not None
+    assert annotations["record_class"] is not None
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_create_pool_forwards_current_asyncpg_config_keys() -> None:
+    """Pool creation should pass through current asyncpg connection and pool keywords."""
+
+    async def reset(connection: object) -> None:
+        _ = connection
+
+    async def connect_factory(**_: Any) -> object:
+        return object()
+
+    loop = object()
+    connection_class = object()
+    record_class = object()
+    pool = object()
+    config = CockroachAsyncpgConfig(
+        connection_config={
+            "connect": connect_factory,
+            "host": "localhost",
+            "port": 26257,
+            "database": "defaultdb",
+            "service": "cockroach",
+            "servicefile": "/tmp/pg_service.conf",
+            "timeout": 3.5,
+            "target_session_attrs": "read-write",
+            "krbsrvname": "postgres",
+            "gsslib": "gssapi",
+            "reset": reset,
+            "loop": loop,
+            "connection_class": connection_class,
+            "record_class": record_class,
+        }
+    )
+
+    with patch(
+        "sqlspec.adapters.cockroach_asyncpg.config.asyncpg_create_pool", new=AsyncMock(return_value=pool)
+    ) as mock:
+        result = await config._create_pool()
+
+    assert result is pool
+    await_args = mock.await_args
+    assert await_args is not None
+    kwargs = await_args.kwargs
+    assert kwargs["service"] == "cockroach"
+    assert kwargs["servicefile"] == "/tmp/pg_service.conf"
+    assert kwargs["timeout"] == 3.5
+    assert kwargs["target_session_attrs"] == "read-write"
+    assert kwargs["krbsrvname"] == "postgres"
+    assert kwargs["gsslib"] == "gssapi"
+    assert kwargs["connect"] is connect_factory
+    assert kwargs["reset"] is reset
+    assert kwargs["loop"] is loop
+    assert kwargs["connection_class"] is connection_class
+    assert kwargs["record_class"] is record_class
+    assert kwargs["init"] == config._init_connection
 
 
 async def test_cockroach_asyncpg_config_init_connection_registers_json_codecs_before_user_hook() -> None:
