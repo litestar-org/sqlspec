@@ -22,8 +22,7 @@ def spanner_litestar_config(spanner_service: SpannerService, spanner_database: "
             "database_id": spanner_service.database_name,
             "credentials": spanner_service.credentials,
             "client_options": {"api_endpoint": api_endpoint},
-            "min_sessions": 1,
-            "max_sessions": 5,
+            "size": 5,
         },
         extension_config={"litestar": {"session_table": "litestar_sessions"}},
     )
