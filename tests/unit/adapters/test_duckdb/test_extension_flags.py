@@ -40,3 +40,16 @@ def test_duckdb_config_merges_existing_extension_flags() -> None:
 
     flags = config.driver_features.get("extension_flags")
     assert flags == {"custom": "value", "allow_community_extensions": True}
+
+
+def test_duckdb_sensitive_flags_absent_by_default() -> None:
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+
+    for flag in (
+        "allow_community_extensions",
+        "allow_unsigned_extensions",
+        "enable_external_access",
+        "allow_persistent_secrets",
+    ):
+        assert flag not in config.connection_config
+    assert "extension_flags" not in config.driver_features

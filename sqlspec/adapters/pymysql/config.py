@@ -13,7 +13,7 @@ from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import assert_sensitive_feature_enabled, normalize_connection_config
 
 if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
@@ -33,6 +33,7 @@ __all__ = (
 
 PyMysqlConverter = Mapping[int | type[Any], Callable[..., Any]]
 PyMysqlTimeout = int | float
+_PYMYSQL_LOCAL_INFILE_GATE = "allow_local_infile"
 
 
 class PyMysqlSslParams(TypedDict):
@@ -79,6 +80,7 @@ class PyMysqlConnectionParams(TypedDict):
     write_timeout: NotRequired[PyMysqlTimeout]
     autocommit: NotRequired[bool]
     local_infile: NotRequired[bool]
+    allow_local_infile: NotRequired[bool]
     max_allowed_packet: NotRequired[int]
     defer_connect: NotRequired[bool]
     auth_plugin_map: NotRequired[Mapping[str, type[Any]]]
@@ -166,7 +168,16 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         connection_config = normalize_connection_config(connection_config)
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
-        connection_config.setdefault("local_infile", False)
+        allow_local_infile = bool(connection_config.pop(_PYMYSQL_LOCAL_INFILE_GATE, False))
+        local_infile = bool(connection_config.get("local_infile", False))
+        assert_sensitive_feature_enabled(
+            "PyMySQL local_infile=True",
+            local_infile,
+            allow_local_infile,
+            flag_name=_PYMYSQL_LOCAL_INFILE_GATE,
+            risk="LOAD DATA LOCAL INFILE can read client files",
+        )
+        connection_config["local_infile"] = bool(local_infile and allow_local_infile)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

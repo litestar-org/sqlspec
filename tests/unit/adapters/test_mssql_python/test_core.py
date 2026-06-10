@@ -38,6 +38,19 @@ def test_build_connection_config_from_parts_formats_odbc_options() -> None:
     assert kwargs == {"autocommit": True}
 
 
+def test_mssql_python_connection_string_omits_trust_keys_by_default() -> None:
+    connection_string, _ = build_connection_config({
+        "server": "localhost",
+        "port": 1433,
+        "database": "app",
+        "uid": "sa",
+        "pwd": "secret",
+    })
+
+    assert "Trusted_Connection" not in connection_string
+    assert "TrustServerCertificate" not in connection_string
+
+
 def test_build_connection_config_no_duplicate_uid() -> None:
     """Passing both 'uid' and 'user' produces exactly one UID= option."""
     connection_string, _ = build_connection_config({"server": "srv", "uid": "user1", "user": "user2"})

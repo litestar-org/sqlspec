@@ -51,6 +51,35 @@ Key points:
 - ``ObservabilityConfig`` on the ``SQLSpec`` instance applies to all registered configs.
 - ``load_sql_files()`` accepts multiple paths and loads queries into a shared namespace.
 
+Sensitive Driver Features
+-------------------------
+
+Driver features that can read local files, load code, persist credentials, or
+relax TLS trust are disabled by default. Enabling one requires an explicit
+``allow_*`` flag in ``connection_config``; requesting the feature without the
+flag raises ``ImproperConfigurationError`` naming the exact flag to set.
+
+.. code-block:: python
+
+    from sqlspec.adapters.asyncmy import AsyncmyConfig
+
+    # Raises ImproperConfigurationError: local_infile requires allow_local_infile=True
+    AsyncmyConfig(connection_config={"local_infile": True})
+
+    # Explicit opt-in
+    AsyncmyConfig(connection_config={"allow_local_infile": True, "local_infile": True})
+
+Gated features:
+
+- MySQL family (``asyncmy``, ``aiomysql``, ``pymysql``, ``mysqlconnector``):
+  ``LOAD DATA LOCAL INFILE`` requires ``allow_local_infile=True``.
+- DuckDB: persistent secrets require ``allow_persistent_secrets=True``;
+  ``allow_community_extensions``, ``allow_unsigned_extensions``, and
+  ``enable_external_access`` are forwarded only when explicitly set.
+- SQL Server ODBC (``arrow_odbc``, ``mssql_python``): ``trusted_connection``
+  and ``trust_server_certificate`` are never added to the connection string
+  unless explicitly configured.
+
 Related Guides
 --------------
 

@@ -229,6 +229,17 @@ def test_arrow_odbc_build_connection_config_formats_security_fields_and_kwargs()
     assert kwargs == {"login_timeout_sec": 7, "packet_size": 8192, "autocommit": True}
 
 
+def test_arrow_odbc_build_connection_config_omits_trust_keys_by_default() -> None:
+    connection_string, _ = build_connection_config({
+        "driver": "ODBC Driver 18 for SQL Server",
+        "server": "localhost",
+        "database": "app",
+    })
+
+    assert "Trusted_Connection" not in connection_string
+    assert "TrustServerCertificate" not in connection_string
+
+
 def test_arrow_odbc_session_release_allows_connections_without_close(monkeypatch: Any) -> None:
     """arrow-odbc 10.4 Connection has no close() method, so release should be a no-op."""
     connection = NoCloseConnection()

@@ -20,7 +20,7 @@ from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHa
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import assert_sensitive_feature_enabled, normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlDriverFeatures", "AiomysqlPoolParams")
 
 _POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
+_AIOMYSQL_LOCAL_INFILE_GATE = "allow_local_infile"
 
 
 class AiomysqlConnectionParams(TypedDict):
@@ -58,7 +59,7 @@ class AiomysqlConnectionParams(TypedDict):
     autocommit: NotRequired[bool | None]
     echo: NotRequired[bool]
     local_infile: NotRequired[bool]
-    enable_local_infile: NotRequired[bool]
+    allow_local_infile: NotRequired[bool]
     ssl: NotRequired["SSLContext"]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
@@ -100,10 +101,7 @@ def _normalize_aiomysql_connection_kwargs(connection_config: "Mapping[str, Any]"
         config["password"] = config["passwd"]
     config.pop("passwd", None)
 
-    if config.pop("enable_local_infile", False):
-        config["local_infile"] = True
-    else:
-        config.setdefault("local_infile", False)
+    config.setdefault("local_infile", False)
 
     return config
 
@@ -235,6 +233,17 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             **kwargs: Additional keyword arguments
         """
         connection_config = normalize_connection_config(connection_config)
+
+        allow_local_infile = bool(connection_config.pop(_AIOMYSQL_LOCAL_INFILE_GATE, False))
+        local_infile = bool(connection_config.get("local_infile", False))
+        assert_sensitive_feature_enabled(
+            "Aiomysql local_infile=True",
+            local_infile,
+            allow_local_infile,
+            flag_name=_AIOMYSQL_LOCAL_INFILE_GATE,
+            risk="LOAD DATA LOCAL INFILE can read client files",
+        )
+        connection_config["local_infile"] = bool(local_infile and allow_local_infile)
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)

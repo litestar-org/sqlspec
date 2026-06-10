@@ -4,6 +4,7 @@ from typing import Any, get_type_hints
 from unittest.mock import patch
 
 import duckdb
+import pytest
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb.config import (
@@ -20,6 +21,7 @@ from sqlspec.adapters.duckdb.core import (
     default_statement_config,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -153,3 +155,33 @@ def test_driver_init_apply_driver_features_not_called_per_session_via_config() -
         with config.provide_session():
             pass
     assert mock_apply.call_count == 0
+
+
+def test_duckdb_persistent_secret_requires_explicit_security_gate() -> None:
+    with pytest.raises(ImproperConfigurationError, match="allow_persistent_secrets=True"):
+        DuckDBConfig(
+            connection_config={"database": ":memory:"},
+            driver_features={
+                "secrets": [{"secret_type": "s3", "name": "main", "persistent": True, "value": {"key_id": "k"}}]
+            },
+        )
+
+
+def test_duckdb_persistent_secret_allowed_with_gate() -> None:
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:", "allow_persistent_secrets": True},
+        driver_features={
+            "secrets": [{"secret_type": "s3", "name": "main", "persistent": True, "value": {"key_id": "k"}}]
+        },
+    )
+
+    assert config.connection_config["allow_persistent_secrets"] is True
+
+
+def test_duckdb_temporary_secret_needs_no_gate() -> None:
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"},
+        driver_features={"secrets": [{"secret_type": "s3", "name": "main", "value": {"key_id": "k"}}]},
+    )
+
+    assert "allow_persistent_secrets" not in config.connection_config

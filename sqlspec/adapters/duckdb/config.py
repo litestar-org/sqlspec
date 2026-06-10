@@ -17,7 +17,7 @@ from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import assert_sensitive_feature_enabled, normalize_connection_config
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -264,6 +264,17 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         self._user_connection_hook = cast(
             "Callable[[DuckDBConnection], DuckDBConnection | None] | None", features.pop("on_connection_create", None)
         )
+        secrets = features.get("secrets")
+        if secrets:
+            allow_persistent_secrets = bool(connection_config.get("allow_persistent_secrets", False))
+            for secret in secrets:
+                assert_sensitive_feature_enabled(
+                    f"DuckDB persistent secret {secret.get('name', '')!r}",
+                    bool(secret.get("persistent", False)),
+                    allow_persistent_secrets,
+                    flag_name="allow_persistent_secrets",
+                    risk="persistent secrets are written to the DuckDB secret directory on disk",
+                )
         features.setdefault("enable_uuid_conversion", True)
         serializer = features.setdefault("json_serializer", to_json)
 

@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 
 __all__ = (
+    "SENSITIVE_FLAG_PREFIX",
+    "assert_sensitive_feature_enabled",
     "discover_config_from_pyproject",
     "find_pyproject_toml",
     "normalize_connection_config",
@@ -312,3 +314,38 @@ def normalize_connection_config(
         raise ImproperConfigurationError(msg)
     normalized.update(extras)
     return normalized
+
+
+# =============================================================================
+# Sensitive Feature Gates
+# =============================================================================
+
+
+SENSITIVE_FLAG_PREFIX = "allow_"
+
+
+def assert_sensitive_feature_enabled(
+    feature: str, requested: bool, allowed: bool, *, flag_name: str, risk: str
+) -> None:
+    """Validate that a sensitive driver feature has been explicitly opted in.
+
+    Sensitive opt-in flags follow the ``allow_*`` naming convention
+    (see ``SENSITIVE_FLAG_PREFIX``). The flag is consumed by the adapter
+    config and never forwarded to the underlying driver unless the driver
+    natively defines it.
+
+    Args:
+        feature: Description of the requested feature, including the
+            requesting adapter (for example ``"Asyncmy local_infile=True"``).
+        requested: Whether the caller requested the feature.
+        allowed: Whether the matching ``allow_*`` flag was set.
+        flag_name: Exact name of the opt-in flag to include in the error.
+        risk: Statement of what the feature can do once enabled.
+
+    Raises:
+        ImproperConfigurationError: If the feature was requested without
+            the opt-in flag.
+    """
+    if requested and not allowed:
+        msg = f"{feature} requires {flag_name}=True because {risk}."
+        raise ImproperConfigurationError(msg)

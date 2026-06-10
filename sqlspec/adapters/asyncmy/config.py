@@ -22,7 +22,7 @@ from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import assert_sensitive_feature_enabled, normalize_connection_config
 
 if TYPE_CHECKING:
     import ssl
@@ -121,9 +121,13 @@ def _normalize_asyncmy_connection_config(connection_config: "Mapping[str, Any] |
 
     allow_local_infile = bool(config.pop(_ASYNCMY_LOCAL_INFILE_GATE, False))
     local_infile = bool(config.get("local_infile", False))
-    if local_infile and not allow_local_infile:
-        msg = "Asyncmy local_infile=True requires allow_local_infile=True because LOAD DATA LOCAL INFILE can read client files."
-        raise ImproperConfigurationError(msg)
+    assert_sensitive_feature_enabled(
+        "Asyncmy local_infile=True",
+        local_infile,
+        allow_local_infile,
+        flag_name=_ASYNCMY_LOCAL_INFILE_GATE,
+        risk="LOAD DATA LOCAL INFILE can read client files",
+    )
     config["local_infile"] = bool(local_infile and allow_local_infile)
 
     return config
