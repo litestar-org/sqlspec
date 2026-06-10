@@ -33,6 +33,9 @@ class DriverCase:
     table: ContractTable = DEFAULT_CONTRACT_TABLE
     table_fixture: str | None = None
     supports_arrow: bool = False
+    supports_arrow_streaming: bool = False
+    supports_native_arrow: bool = False
+    arrow_reader_honors_batch_size: bool = False
     supports_explain: bool = False
     supports_execute_many: bool = True
     supports_execute_script: bool = True
@@ -109,6 +112,9 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="duckdb-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
         fixture_name="contract_duckdb_driver",
         adapter="duckdb",
         dialect="duckdb",
@@ -228,6 +234,8 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="adbc-sqlite-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
         fixture_name="contract_adbc_sqlite_driver",
         adapter="adbc",
         dialect="sqlite",
@@ -242,6 +250,8 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="adbc-duckdb-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
         fixture_name="contract_adbc_duckdb_driver",
         adapter="adbc",
         dialect="duckdb",
@@ -256,6 +266,8 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="adbc-postgres-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
         fixture_name="contract_adbc_postgres_driver",
         adapter="adbc",
         dialect="postgres",
@@ -270,6 +282,9 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="oracledb-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
         fixture_name="contract_oracle_sync_driver",
         adapter="oracledb",
         dialect="oracle",
@@ -525,6 +540,9 @@ ASYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="oracledb-async",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
         fixture_name="contract_oracle_async_driver",
         adapter="oracledb",
         dialect="oracle",
