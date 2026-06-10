@@ -1312,33 +1312,118 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     # ROW STREAMING API
     # ─────────────────────────────────────────────────────────────────────────────
 
+    @overload
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         chunk_size: int = 1000,
-        allow_eager_fallback: bool = False,
+        native_only: bool = False,
         **kwargs: Any,
-    ) -> "AsyncRowStream":
-        """Execute a query and stream dict rows in bounded-memory chunks."""
+    ) -> "AsyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT] | AsyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks."""
+        if chunk_size < 1:
+            msg = "chunk_size must be greater than or equal to 1"
+            raise ValueError(msg)
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         stream = self.dispatch_select_stream(sql_statement, chunk_size)
         if stream is not None:
-            return stream
-        if not allow_eager_fallback:
+            return stream._with_schema_type(schema_type)
+        if native_only:
             msg = (
                 f"Adapter '{type(self).__name__}' does not support native row streaming. "
-                "Pass allow_eager_fallback=True to materialize the full result eagerly "
-                "(not bounded-memory)."
+                "Use native_only=False to allow eager fallback (not bounded-memory), "
+                "or switch to an adapter with native row streaming support."
             )
             raise ImproperConfigurationError(msg)
-        return AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size))
+        return AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
 
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream | None":
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT]": ...
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[dict[str, Any]]": ...
+
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT] | AsyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks.
+
+        This is an alias for :meth:`select_stream` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        See Also:
+            select_stream(): Primary method with identical behavior and full documentation
+        """
+        return self.select_stream(
+            statement,
+            *parameters,
+            schema_type=schema_type,
+            statement_config=statement_config,
+            chunk_size=chunk_size,
+            native_only=native_only,
+            **kwargs,
+        )
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         """Adapter hook returning a native row stream, or None when unsupported."""
         _ = (statement, chunk_size)
         return None

@@ -11,9 +11,11 @@ interpreted adapter sources can feed compiled stream classes):
 
 import builtins
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from typing_extensions import Self
+
+from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -22,6 +24,8 @@ __all__ = ("AsyncRowStream", "EagerAsyncRowSource", "EagerSyncRowSource", "SyncR
 
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
 _StopAsync = type("_StopAsync", (_StopAsyncBase,), {})
+RowT = TypeVar("RowT")
+SchemaRowT = TypeVar("SchemaRowT")
 
 
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
@@ -31,17 +35,28 @@ def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[st
     return [dict(zip(column_names, row, strict=False)) for row in rows]
 
 
-class SyncRowStream:
-    """Bounded-memory iterator of dict rows backed by a chunk source."""
+class SyncRowStream(Generic[RowT]):
+    """Bounded-memory iterator backed by a chunk source."""
 
-    __slots__ = ("_buffer", "_buffer_index", "_closed", "_source", "_started")
+    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
 
-    def __init__(self, source: Any) -> None:
+    def __init__(self, source: Any, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
-        self._buffer: list[dict[str, Any]] = []
+        self._schema_type: type[Any] | None = schema_type
+        self._buffer: list[RowT] = []
         self._buffer_index = 0
         self._closed = False
         self._started = False
+
+    @overload
+    def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "SyncRowStream[SchemaRowT]": ...
+
+    @overload
+    def _with_schema_type(self, schema_type: None = None) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def _with_schema_type(self, schema_type: "type[SchemaRowT] | None" = None) -> "SyncRowStream[Any]":
+        self._schema_type = schema_type
+        return cast("SyncRowStream[Any]", self)
 
     def __enter__(self) -> Self:
         return self
@@ -51,10 +66,10 @@ class SyncRowStream:
     ) -> None:
         self.close()
 
-    def __iter__(self) -> "SyncRowStream":
+    def __iter__(self) -> "SyncRowStream[RowT]":
         return self
 
-    def __next__(self) -> "dict[str, Any]":
+    def __next__(self) -> RowT:
         if self._closed:
             raise StopIteration
         if not self._started:
@@ -66,18 +81,24 @@ class SyncRowStream:
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
-                chunk = self._source.fetch_chunk()
+                chunk = cast("list[dict[str, Any]]", self._source.fetch_chunk())
             except BaseException:
                 self.close()
                 raise
             if not chunk:
                 self.close()
                 raise StopIteration
-            self._buffer = chunk
+            self._buffer = self._coerce_chunk(chunk)
             self._buffer_index = 0
         row = self._buffer[self._buffer_index]
         self._buffer_index += 1
         return row
+
+    def _coerce_chunk(self, chunk: "list[dict[str, Any]]") -> "list[RowT]":
+        schema_type = self._schema_type
+        if schema_type is None:
+            return cast("list[RowT]", chunk)
+        return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
 
     def close(self) -> None:
         if self._closed:
@@ -89,19 +110,30 @@ class SyncRowStream:
             self._source.close()
 
 
-class AsyncRowStream:
-    """Async bounded-memory iterator of dict rows backed by an async chunk source."""
+class AsyncRowStream(Generic[RowT]):
+    """Async bounded-memory iterator backed by an async chunk source."""
 
-    __slots__ = ("_buffer", "_buffer_index", "_closed", "_source", "_started")
+    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
 
-    def __init__(self, source: Any) -> None:
+    def __init__(self, source: Any, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
-        self._buffer: list[dict[str, Any]] = []
+        self._schema_type: type[Any] | None = schema_type
+        self._buffer: list[RowT] = []
         self._buffer_index = 0
         self._closed = False
         self._started = False
 
-    def __aiter__(self) -> "AsyncRowStream":
+    @overload
+    def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "AsyncRowStream[SchemaRowT]": ...
+
+    @overload
+    def _with_schema_type(self, schema_type: None = None) -> "AsyncRowStream[dict[str, Any]]": ...
+
+    def _with_schema_type(self, schema_type: "type[SchemaRowT] | None" = None) -> "AsyncRowStream[Any]":
+        self._schema_type = schema_type
+        return cast("AsyncRowStream[Any]", self)
+
+    def __aiter__(self) -> "AsyncRowStream[RowT]":
         return self
 
     async def __aenter__(self) -> Self:
@@ -112,7 +144,7 @@ class AsyncRowStream:
     ) -> None:
         await self.aclose()
 
-    async def __anext__(self) -> "dict[str, Any]":
+    async def __anext__(self) -> RowT:
         if self._closed:
             raise _StopAsync
         if not self._started:
@@ -124,18 +156,24 @@ class AsyncRowStream:
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
-                chunk = await self._source.fetch_chunk()
+                chunk = cast("list[dict[str, Any]]", await self._source.fetch_chunk())
             except BaseException:
                 await self.aclose()
                 raise
             if not chunk:
                 await self.aclose()
                 raise _StopAsync
-            self._buffer = chunk
+            self._buffer = self._coerce_chunk(chunk)
             self._buffer_index = 0
         row = self._buffer[self._buffer_index]
         self._buffer_index += 1
         return row
+
+    def _coerce_chunk(self, chunk: "list[dict[str, Any]]") -> "list[RowT]":
+        schema_type = self._schema_type
+        if schema_type is None:
+            return cast("list[RowT]", chunk)
+        return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
 
     async def aclose(self) -> None:
         if self._closed:
