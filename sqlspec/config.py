@@ -918,6 +918,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = False
+    supports_native_row_streaming: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False

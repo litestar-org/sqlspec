@@ -25,6 +25,7 @@ from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import stringify_storage_target
+from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -1306,6 +1307,41 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             arrow_schema=arrow_schema,
             **kwargs,
         )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ROW STREAMING API
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        allow_eager_fallback: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream":
+        """Execute a query and stream dict rows in bounded-memory chunks."""
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        stream = self.dispatch_select_stream(sql_statement, chunk_size)
+        if stream is not None:
+            return stream
+        if not allow_eager_fallback:
+            msg = (
+                f"Adapter '{type(self).__name__}' does not support native row streaming. "
+                "Pass allow_eager_fallback=True to materialize the full result eagerly "
+                "(not bounded-memory)."
+            )
+            raise ImproperConfigurationError(msg)
+        return AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size))
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream | None":
+        """Adapter hook returning a native row stream, or None when unsupported."""
+        _ = (statement, chunk_size)
+        return None
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STACK EXECUTION

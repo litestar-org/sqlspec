@@ -189,3 +189,28 @@ class EagerAsyncRowSource:
 
     async def close(self) -> None:
         self._rows = []
+
+
+class _LazyEagerAsyncRowSource:
+    """Async eager fallback source that materializes via the driver on first fetch."""
+
+    __slots__ = ("_chunk_size", "_driver", "_position", "_rows", "_statement")
+
+    def __init__(self, driver: Any, statement: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._statement = statement
+        self._chunk_size = chunk_size
+        self._rows: list[dict[str, Any]] = []
+        self._position = 0
+
+    async def start(self) -> None:
+        result = await self._driver.execute(self._statement)
+        self._rows = result.get_data()
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        chunk = self._rows[self._position : self._position + self._chunk_size]
+        self._position += len(chunk)
+        return chunk
+
+    async def close(self) -> None:
+        self._rows = []
