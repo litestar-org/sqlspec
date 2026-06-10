@@ -25,6 +25,7 @@ from sqlspec.storage import (
     SyncStoragePipeline,
 )
 from sqlspec.utils.arrow_helpers import (
+    arrow_reader_to_return_format,
     arrow_table_column_names,
     arrow_table_num_columns,
     arrow_table_num_rows,
@@ -1160,6 +1161,33 @@ def build_arrow_result_from_table(
     coerced_table = cast_arrow_table_schema(table, arrow_schema)
     arrow_data = arrow_table_to_return_format(coerced_table, return_format=return_format, batch_size=batch_size)
     rows_affected = arrow_table_num_rows(coerced_table)
+    return create_arrow_result(statement=statement, data=arrow_data, rows_affected=rows_affected)
+
+
+def build_arrow_result_from_reader(
+    statement: "SQL",
+    reader: Any,
+    *,
+    return_format: "ArrowReturnFormat" = "reader",
+    batch_size: "int | None" = None,
+    arrow_schema: Any = None,
+) -> ArrowResult:
+    """Create ArrowResult from a pyarrow RecordBatchReader without table materialization.
+
+    Args:
+        statement: SQL statement that produced the reader.
+        reader: RecordBatchReader to wrap or drain.
+        return_format: Output format for the Arrow data.
+        batch_size: Batch size hint for batch-based formats.
+        arrow_schema: Optional pyarrow.Schema for casting.
+
+    Returns:
+        ArrowResult instance. rows_affected is -1 for lazy reader payloads.
+    """
+
+    arrow_data, rows_affected = arrow_reader_to_return_format(
+        reader, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+    )
     return create_arrow_result(statement=statement, data=arrow_data, rows_affected=rows_affected)
 
 

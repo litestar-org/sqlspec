@@ -7,7 +7,8 @@ NOTE: This module is excluded from mypyc compilation to avoid segmentation fault
 when compiled drivers touch Arrow objects.
 """
 
-from collections.abc import Iterable
+import contextlib
+from collections.abc import Callable, Iterable
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 
 __all__ = (
+    "arrow_reader_to_return_format",
+    "arrow_reader_with_deferred_close",
     "arrow_table_column_names",
     "arrow_table_needs_parameter_preparation",
     "arrow_table_num_columns",
@@ -369,3 +372,72 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
         rows = 0
         bytes_processed = 0
     return {"rows_processed": rows, "bytes_processed": bytes_processed, "format": format_label}
+
+
+class _DeferredCloseBatchIterator:
+    """Iterate RecordBatches from a reader and invoke a callback on exhaustion or error."""
+
+    __slots__ = ("_close_callback", "_closed", "_reader")
+
+    def __init__(self, reader: Any, close_callback: "Callable[[], None]") -> None:
+        self._reader = reader
+        self._close_callback = close_callback
+        self._closed = False
+
+    def __iter__(self) -> "_DeferredCloseBatchIterator":
+        return self
+
+    def _finalize(self) -> None:
+        if not self._closed:
+            self._closed = True
+            with contextlib.suppress(Exception):
+                self._close_callback()
+
+    def __next__(self) -> Any:
+        try:
+            return self._reader.read_next_batch()
+        except StopIteration:
+            self._finalize()
+            raise
+        except Exception:
+            self._finalize()
+            raise
+
+
+def arrow_reader_with_deferred_close(reader: Any, close_callback: "Callable[[], None]") -> "ArrowRecordBatchReader":
+    """Wrap a RecordBatchReader so close_callback fires when it is exhausted or errors."""
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    return pa.RecordBatchReader.from_batches(reader.schema, _DeferredCloseBatchIterator(reader, close_callback))
+
+
+def arrow_reader_to_return_format(
+    reader: Any,
+    return_format: Literal["table", "reader", "batch", "batches"] = "reader",
+    batch_size: "int | None" = None,
+    arrow_schema: Any = None,
+) -> "tuple[Any, int]":
+    """Shape a RecordBatchReader into the requested Arrow payload and row count.
+
+    Returns -1 as the row count for lazily-streamed reader payloads.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if not isinstance(reader, pa.RecordBatchReader):
+        msg = f"Expected a pyarrow.RecordBatchReader, got {type(reader).__name__}"
+        raise TypeError(msg)
+    if arrow_schema is not None:
+        if not isinstance(arrow_schema, pa.Schema):
+            msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+            raise TypeError(msg)
+        reader = reader.cast(arrow_schema)
+    if return_format == "reader":
+        return reader, -1
+    if return_format == "batches":
+        batches = list(reader)
+        return batches, sum(batch.num_rows for batch in batches)
+    table = reader.read_all()
+    shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
+    return shaped, int(table.num_rows)
