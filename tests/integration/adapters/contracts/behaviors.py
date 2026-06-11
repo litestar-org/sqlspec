@@ -371,7 +371,8 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
     iterator = iter(stream)
     first = next(iterator)
     assert first["value"] == 0
-    assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
+    if "streaming-page-size-advisory" not in case.deviations:
+        assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
     remaining = list(iterator)
     assert len(remaining) == count - 1
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
@@ -406,7 +407,8 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
     iterator = aiter(stream)
     first = await anext(iterator)
     assert first["value"] == 0
-    assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
+    if "streaming-page-size-advisory" not in case.deviations:
+        assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
     remaining: list[dict[str, Any]] = [row async for row in iterator]
     assert len(remaining) == count - 1
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
@@ -569,6 +571,19 @@ async def _assert_oracledb_arraysize_async(driver: object, case: DriverCase) -> 
 
 register_sync_extra_assertion("streaming_native:oracledb", _STREAMING_SCOPE, _assert_oracledb_arraysize)
 register_async_extra_assertion("streaming_native:oracledb", _STREAMING_SCOPE, _assert_oracledb_arraysize_async)
+
+
+def _assert_bigquery_pages(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        next(iter(stream))
+        assert stream._source._pages is not None  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stream.close()
+
+
+register_sync_extra_assertion("streaming_native:bigquery", _STREAMING_SCOPE, _assert_bigquery_pages)
 
 
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)

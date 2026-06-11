@@ -330,14 +330,21 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_exception_translation=False,
         supports_connection_hook=True,
+        supports_native_row_streaming=True,
+        streaming_row_count=2_000,
         config_factory_fixture="lifecycle_config_bigquery",
         deviations=(
             "execute-rows-affected-unavailable",
             "emulator-no-grouped-subquery",
             "emulator-no-search-filter",
             "emulator-retries-invalid-sql",
+            "streaming-page-size-advisory",
         ),
-        extra_assertions=("param_codecs:bigquery", "driver_features:bigquery_sql_features"),
+        extra_assertions=(
+            "param_codecs:bigquery",
+            "driver_features:bigquery_sql_features",
+            "streaming_native:bigquery",
+        ),
     ),
 )
 

@@ -1,5 +1,6 @@
 """BigQuery adapter compiled helpers."""
 
+import contextlib
 import datetime
 import importlib
 import io
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageFormat, StorageTelemetry
 
 __all__ = (
+    "BigQueryStreamSource",
     "apply_driver_features",
     "build_dml_rowcount",
     "build_inlined_script",
@@ -582,6 +584,49 @@ def resolve_column_names(schema: Any | None, cache: "dict[int, tuple[Any, list[s
         cache.pop(next(iter(cache)))
     cache[cache_key] = (schema, column_names)
     return column_names
+
+
+class BigQueryStreamSource:
+    """Compiled chunk source streaming dict rows from a BigQuery ``RowIterator`` page by page."""
+
+    __slots__ = ("_chunk_size", "_driver", "_job", "_pages", "_parameters", "_sql")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._job: Any = None
+        self._pages: Any = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            job = self._driver._run_query_job(self._driver.connection, self._sql, self._parameters)
+            row_iterator = job.result(
+                page_size=self._chunk_size, job_retry=self._driver._job_retry, timeout=self._driver._job_result_timeout
+            )
+            self._job = job
+            self._pages = row_iterator.pages
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        page: Any = None
+        with handler:
+            page = next(self._pages, None)
+        self._driver._check_pending_exception(handler)
+        if page is None:
+            return []
+        return [dict(row.items()) for row in page]
+
+    def close(self) -> None:
+        job = self._job
+        self._job = None
+        self._pages = None
+        if job is not None and getattr(job, "state", None) in {"PENDING", "RUNNING"}:
+            with contextlib.suppress(Exception):
+                job.cancel()
 
 
 def collect_rows(

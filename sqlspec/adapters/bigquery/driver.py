@@ -13,6 +13,7 @@ from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
+    BigQueryStreamSource,
     build_dml_rowcount,
     build_inlined_script,
     build_load_job_config,
@@ -37,7 +38,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import MissingDependencyError, StorageCapabilityError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -289,6 +290,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
             BigQueryCursor: Cursor object for query execution
         """
         return BigQueryCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native BigQuery row stream backed by page-wise ``RowIterator`` iteration."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SyncRowStream(BigQueryStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""

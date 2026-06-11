@@ -148,6 +148,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supports_native_parquet_import: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_arrow_streaming: ClassVar[bool] = True
+    supports_native_row_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     requires_staging_for_load: ClassVar[bool] = True
     staging_protocols: "ClassVar[tuple[str, ...]]" = ("gs://",)
