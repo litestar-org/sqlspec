@@ -47,7 +47,7 @@ def test_oracle_sync_cursor_applies_arraysize_and_prefetchrows() -> None:
     )
 
     with cursor as active_cursor:
-        assert active_cursor is raw_cursor
+        assert id(active_cursor) == id(raw_cursor)
         assert raw_cursor.arraysize == 500
         assert raw_cursor.prefetchrows == 501
 
@@ -71,7 +71,7 @@ async def test_oracle_async_cursor_applies_arraysize_and_prefetchrows() -> None:
     )
 
     async with cursor as active_cursor:
-        assert active_cursor is raw_cursor
+        assert id(active_cursor) == id(raw_cursor)
         assert raw_cursor.arraysize == 700
         assert raw_cursor.prefetchrows == 701
 

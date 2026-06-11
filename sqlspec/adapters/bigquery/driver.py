@@ -357,9 +357,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 row_iterator = query_job.result(
                     page_size=batch_size, job_retry=self._job_retry, timeout=self._job_result_timeout
                 )
-                arrow_reader = _bigquery_arrow_reader_from_iterable(
-                    row_iterator.to_arrow_iterable(bqstorage_client=self._bqstorage_client_or_none())
-                )
+                arrow_batches = row_iterator.to_arrow_iterable(bqstorage_client=self._bqstorage_client_or_none())
+                arrow_reader = _bigquery_arrow_reader_from_iterable(arrow_batches)
                 if arrow_reader is not None:
                     streaming_result = build_arrow_result_from_reader(
                         prepared_statement,
@@ -443,12 +442,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         return arrow_result
 
-    def _bqstorage_client_or_none(self) -> object | None:
+    def _bqstorage_client_or_none(self) -> Any | None:
         ensure_client = getattr(self.connection, "_ensure_bqstorage_client", None)
         if not callable(ensure_client):
             return None
         try:
-            client: object = ensure_client()
+            client = ensure_client()
         except Exception:
             return None
         else:

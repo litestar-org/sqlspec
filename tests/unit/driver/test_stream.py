@@ -11,6 +11,14 @@ def _rows(start: int, stop: int) -> "list[dict[str, Any]]":
     return [{"id": i} for i in range(start, stop)]
 
 
+def _sync_stream(source: object) -> "SyncRowStream[dict[str, Any]]":
+    return SyncRowStream(source)
+
+
+def _async_stream(source: object) -> "AsyncRowStream[dict[str, Any]]":
+    return AsyncRowStream(source)
+
+
 class FakeSyncSource:
     """Records calls; serves predefined chunks then empty list to signal exhaustion."""
 
@@ -62,7 +70,7 @@ class FakeAsyncSource:
 
 def test_sync_iterates_all_rows_in_order_across_chunks() -> None:
     source = FakeSyncSource([_rows(0, 10), _rows(10, 20), _rows(20, 25)])
-    stream = SyncRowStream(source)
+    stream = _sync_stream(source)
 
     collected = list(stream)
 
@@ -73,7 +81,7 @@ def test_sync_iterates_all_rows_in_order_across_chunks() -> None:
 
 def test_sync_buffer_is_bounded_to_chunk_size() -> None:
     source = FakeSyncSource([_rows(0, 10), _rows(10, 20)])
-    stream = SyncRowStream(source)
+    stream = _sync_stream(source)
 
     iterator = iter(stream)
     first = next(iterator)
@@ -84,7 +92,7 @@ def test_sync_buffer_is_bounded_to_chunk_size() -> None:
 
 def test_sync_close_mid_iteration_is_idempotent_and_stops() -> None:
     source = FakeSyncSource([_rows(0, 5)])
-    stream = SyncRowStream(source)
+    stream = _sync_stream(source)
     iterator = iter(stream)
     next(iterator)
 
@@ -105,7 +113,7 @@ def test_sync_fetch_chunk_exception_propagates_and_closes() -> None:
             raise RuntimeError("fetch boom")
 
     source = RaisingFetch([])
-    stream = SyncRowStream(source)
+    stream = _sync_stream(source)
 
     with pytest.raises(RuntimeError, match="fetch boom"):
         list(stream)
@@ -120,7 +128,7 @@ def test_sync_start_exception_propagates_and_closes() -> None:
             raise RuntimeError("start boom")
 
     source = RaisingStart([_rows(0, 5)])
-    stream = SyncRowStream(source)
+    stream = _sync_stream(source)
 
     with pytest.raises(RuntimeError, match="start boom"):
         next(iter(stream))
@@ -130,14 +138,14 @@ def test_sync_start_exception_propagates_and_closes() -> None:
 
 def test_sync_context_manager_normal_exit_closes() -> None:
     source = FakeSyncSource([_rows(0, 5)])
-    with SyncRowStream(source) as stream:
+    with _sync_stream(source) as stream:
         assert next(iter(stream)) == {"id": 0}
     assert source.close_calls == 1
 
 
 def test_sync_context_manager_exception_exit_closes() -> None:
     source = FakeSyncSource([_rows(0, 5)])
-    with pytest.raises(ValueError, match="boom"), SyncRowStream(source):
+    with pytest.raises(ValueError, match="boom"), _sync_stream(source):
         raise ValueError("boom")
     assert source.close_calls == 1
 
@@ -149,7 +157,7 @@ def test_sync_context_manager_exception_exit_closes() -> None:
 
 async def test_async_iterates_all_rows_in_order_across_chunks() -> None:
     source = FakeAsyncSource([_rows(0, 10), _rows(10, 20), _rows(20, 25)])
-    stream = AsyncRowStream(source)
+    stream = _async_stream(source)
 
     collected = [row async for row in stream]
 
@@ -160,7 +168,7 @@ async def test_async_iterates_all_rows_in_order_across_chunks() -> None:
 
 async def test_async_buffer_is_bounded_to_chunk_size() -> None:
     source = FakeAsyncSource([_rows(0, 10), _rows(10, 20)])
-    stream = AsyncRowStream(source)
+    stream = _async_stream(source)
 
     iterator = stream.__aiter__()
     first = await iterator.__anext__()
@@ -171,7 +179,7 @@ async def test_async_buffer_is_bounded_to_chunk_size() -> None:
 
 async def test_async_aclose_mid_iteration_is_idempotent_and_stops() -> None:
     source = FakeAsyncSource([_rows(0, 5)])
-    stream = AsyncRowStream(source)
+    stream = _async_stream(source)
     iterator = stream.__aiter__()
     await iterator.__anext__()
 
@@ -192,7 +200,7 @@ async def test_async_fetch_chunk_exception_propagates_and_closes() -> None:
             raise RuntimeError("fetch boom")
 
     source = RaisingFetch([])
-    stream = AsyncRowStream(source)
+    stream = _async_stream(source)
 
     with pytest.raises(RuntimeError, match="fetch boom"):
         async for _ in stream:
@@ -208,7 +216,7 @@ async def test_async_start_exception_propagates_and_closes() -> None:
             raise RuntimeError("start boom")
 
     source = RaisingStart([_rows(0, 5)])
-    stream = AsyncRowStream(source)
+    stream = _async_stream(source)
 
     with pytest.raises(RuntimeError, match="start boom"):
         await stream.__aiter__().__anext__()
@@ -218,7 +226,7 @@ async def test_async_start_exception_propagates_and_closes() -> None:
 
 async def test_async_context_manager_normal_exit_closes() -> None:
     source = FakeAsyncSource([_rows(0, 5)])
-    async with AsyncRowStream(source) as stream:
+    async with _async_stream(source) as stream:
         assert await stream.__aiter__().__anext__() == {"id": 0}
     assert source.close_calls == 1
 
@@ -226,7 +234,7 @@ async def test_async_context_manager_normal_exit_closes() -> None:
 async def test_async_context_manager_exception_exit_closes() -> None:
     source = FakeAsyncSource([_rows(0, 5)])
     with pytest.raises(ValueError, match="boom"):
-        async with AsyncRowStream(source):
+        async with _async_stream(source):
             raise ValueError("boom")
     assert source.close_calls == 1
 
@@ -261,12 +269,12 @@ async def test_eager_async_source_chunks_then_signals_exhaustion() -> None:
 
 
 def test_eager_sync_source_drives_sync_stream_end_to_end() -> None:
-    stream = SyncRowStream(EagerSyncRowSource(_rows(0, 25), 10))
+    stream = _sync_stream(EagerSyncRowSource(_rows(0, 25), 10))
     assert list(stream) == _rows(0, 25)
 
 
 async def test_eager_async_source_drives_async_stream_end_to_end() -> None:
-    stream = AsyncRowStream(EagerAsyncRowSource(_rows(0, 25), 10))
+    stream = _async_stream(EagerAsyncRowSource(_rows(0, 25), 10))
     assert [row async for row in stream] == _rows(0, 25)
 
 
