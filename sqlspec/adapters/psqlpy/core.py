@@ -1,5 +1,6 @@
 """psqlpy adapter compiled helpers."""
 
+import contextlib
 import datetime
 import decimal
 import io
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL, ParameterStyleConfig, StatementConfig
 
 __all__ = (
+    "PsqlpyStreamSource",
     "apply_driver_features",
     "build_connection_config",
     "build_insert_statement",
@@ -284,6 +286,66 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     if not dict_rows:
         return [], []
     return dict_rows, list(dict_rows[0])
+
+
+class PsqlpyStreamSource:
+    """Compiled async chunk source streaming dict rows from a psqlpy server-side cursor.
+
+    The cursor is declared inside a stream-owned transaction and the transaction is
+    committed on close (rolled back on failure).
+    """
+
+    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._transaction: Any = None
+
+    async def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        async with handler:
+            transaction = self._driver.connection.transaction()
+            await transaction.begin()
+            self._transaction = transaction
+            try:
+                cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+                await cursor.start()
+                self._cursor = cursor
+            except BaseException:
+                self._transaction = None
+                with contextlib.suppress(Exception):
+                    await transaction.rollback()
+                raise
+        self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        query_result: Any = None
+        async with handler:
+            query_result = await self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if query_result is None:
+            return []
+        return cast("list[dict[str, Any]]", query_result.result())
+
+    async def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+        transaction = self._transaction
+        self._transaction = None
+        if transaction is not None:
+            try:
+                await transaction.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await transaction.rollback()
 
 
 def coerce_numeric_for_write(value: Any) -> Any:

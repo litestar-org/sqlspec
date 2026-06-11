@@ -534,6 +534,19 @@ register_async_extra_assertion(
 )
 
 
+async def _assert_psqlpy_cursor(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        await anext(aiter(stream))
+        assert type(stream._source._cursor).__name__ == "Cursor"  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await stream.aclose()
+
+
+register_async_extra_assertion("streaming_native:psqlpy", _STREAMING_SCOPE, _assert_psqlpy_cursor)
+
+
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)
 
 

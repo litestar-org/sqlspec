@@ -483,8 +483,14 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psqlpy",
+        supports_native_row_streaming=True,
         deviations=("execute-rows-affected-unavailable",),
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "param_codecs:psqlpy"),
+        extra_assertions=(
+            "explain_modifiers:postgres",
+            "arrow_specifics:postgres",
+            "param_codecs:psqlpy",
+            "streaming_native:psqlpy",
+        ),
     ),
     DriverCase(
         id="psycopg-async",
