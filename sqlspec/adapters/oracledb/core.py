@@ -44,9 +44,13 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = (
+    "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
+    "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "OracleAsyncStreamSource",
     "OracleSyncStreamSource",
     "apply_driver_features",
+    "build_arrow_fetch_kwargs",
+    "build_fetch_kwargs",
     "build_insert_statement",
     "build_pipeline_stack_result",
     "build_profile",
@@ -56,6 +60,7 @@ __all__ = (
     "coerce_large_parameters_sync",
     "collect_async_rows",
     "collect_sync_rows",
+    "connection_is_thin",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
@@ -64,6 +69,8 @@ __all__ = (
     "normalize_execute_many_parameters_sync",
     "resolve_row_metadata",
     "resolve_rowcount",
+    "supports_df_batches",
+    "supports_direct_path_load",
 )
 
 
@@ -136,6 +143,58 @@ def _resolve_oracledb_version() -> "tuple[int, int, int]":
 
 
 ORACLEDB_VERSION: "tuple[int, int, int]" = _resolve_oracledb_version()
+SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
+
+
+def _resolve_sparse_vector_support() -> bool:
+    """Return whether the installed python-oracledb exports SparseVector."""
+    try:
+        import oracledb
+    except ImportError:
+        return False
+    return getattr(oracledb, "SparseVector", None) is not None
+
+
+ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = _resolve_sparse_vector_support()
+
+
+def connection_is_thin(connection: object) -> bool:
+    """Return whether an Oracle connection is in Thin mode."""
+    thin = getattr(connection, "thin", None)
+    if thin is None:
+        return True
+    return bool(thin)
+
+
+def supports_direct_path_load(connection: object) -> bool:
+    """Return whether a connection exposes Thin-mode direct path load."""
+    return connection_is_thin(connection) and hasattr(connection, "direct_path_load")
+
+
+def supports_df_batches(connection: object) -> bool:
+    """Return whether a connection exposes DataFrame batch fetches."""
+    return hasattr(connection, "fetch_df_batches")
+
+
+def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
+    """Build per-statement Oracle fetch keyword arguments."""
+    fetch_kwargs: dict[str, object] = {}
+    fetch_lobs = driver_features.get("fetch_lobs")
+    if fetch_lobs is not None:
+        fetch_kwargs["fetch_lobs"] = fetch_lobs
+    fetch_decimals = driver_features.get("fetch_decimals")
+    if fetch_decimals is not None:
+        fetch_kwargs["fetch_decimals"] = fetch_decimals
+    return fetch_kwargs
+
+
+def build_arrow_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
+    """Build Oracle Arrow/DataFrame fetch keyword arguments."""
+    fetch_kwargs: dict[str, object] = {}
+    fetch_decimals = driver_features.get("fetch_decimals")
+    if fetch_decimals is not None:
+        fetch_kwargs["fetch_decimals"] = fetch_decimals
+    return fetch_kwargs
 
 
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":

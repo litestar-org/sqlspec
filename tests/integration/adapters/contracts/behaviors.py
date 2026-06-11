@@ -3,7 +3,7 @@
 import contextlib
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 
 import msgspec
@@ -24,6 +24,9 @@ from tests.integration.adapters.contracts._inputs import (
     StatementInputCase,
 )
 from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractRow, ContractTable
+
+if TYPE_CHECKING:
+    from sqlspec.typing import ArrowRecordBatch
 
 SyncExtraAssertion = Callable[[object, DriverCase], None]
 AsyncExtraAssertion = Callable[[object, DriverCase], Awaitable[None]]
@@ -3379,6 +3382,9 @@ def assert_sync_arrow_contract(driver: object, case: DriverCase) -> None:
     empty = sync_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
     assert empty.rows_affected == 0
 
+    _assert_sync_arrow_streaming_contract(sync_driver, case, table)
+    _assert_sync_arrow_native_only_contract(sync_driver, case, table)
+
 
 async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers return Arrow tables, batches, filtered, and empty results."""
@@ -3405,6 +3411,91 @@ async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
 
     empty = await async_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
     assert empty.rows_affected == 0
+
+    await _assert_async_arrow_streaming_contract(async_driver, case, table)
+    await _assert_async_arrow_native_only_contract(async_driver, case, table)
+
+
+def _assert_batch_rows(batches: "list[ArrowRecordBatch]", expected_rows: int, *, batch_size: int, exact: bool) -> None:
+    batch_sizes = [batch.num_rows for batch in batches]
+    assert sum(batch_sizes) == expected_rows
+    if exact:
+        assert batch_sizes
+        assert all(size <= batch_size for size in batch_sizes)
+        assert all(size == batch_size for size in batch_sizes[:-1])
+
+
+def _assert_reader_rows_affected(case: DriverCase, rows_affected: int, expected_rows: int) -> None:
+    if case.adapter == "oracledb":
+        assert rows_affected == expected_rows
+        return
+    assert rows_affected == -1
+
+
+def _assert_sync_arrow_streaming_contract(driver: SyncContractDriver, case: DriverCase, table: ContractTable) -> None:
+    """Assert native Arrow streaming formats for adapters that advertise them."""
+    if not case.supports_arrow_streaming:
+        return
+    import pyarrow as pa
+
+    batch_size = 2
+    reader_result = driver.select_to_arrow(table.select_ordered_sql, return_format="reader", batch_size=batch_size)
+    assert isinstance(reader_result.data, pa.RecordBatchReader)
+    _assert_reader_rows_affected(case, reader_result.rows_affected, 3)
+    assert reader_result.data.read_all().column("name").to_pylist() == ["a", "b", "c"]
+
+    batches_result = driver.select_to_arrow(table.select_ordered_sql, return_format="batches", batch_size=batch_size)
+    assert isinstance(batches_result.data, list)
+    _assert_batch_rows(batches_result.data, 3, batch_size=batch_size, exact=case.arrow_reader_honors_batch_size)
+
+
+async def _assert_async_arrow_streaming_contract(
+    driver: AsyncContractDriver, case: DriverCase, table: ContractTable
+) -> None:
+    """Assert native Arrow streaming formats for async adapters that advertise them."""
+    if not case.supports_arrow_streaming:
+        return
+    import pyarrow as pa
+
+    batch_size = 2
+    reader_result = await driver.select_to_arrow(
+        table.select_ordered_sql, return_format="reader", batch_size=batch_size
+    )
+    assert isinstance(reader_result.data, pa.RecordBatchReader)
+    _assert_reader_rows_affected(case, reader_result.rows_affected, 3)
+    assert reader_result.data.read_all().column("name").to_pylist() == ["a", "b", "c"]
+
+    batches_result = await driver.select_to_arrow(
+        table.select_ordered_sql, return_format="batches", batch_size=batch_size
+    )
+    assert isinstance(batches_result.data, list)
+    _assert_batch_rows(batches_result.data, 3, batch_size=batch_size, exact=case.arrow_reader_honors_batch_size)
+
+
+def _assert_sync_arrow_native_only_contract(driver: SyncContractDriver, case: DriverCase, table: ContractTable) -> None:
+    """Assert native_only direction for Arrow-capable sync adapters."""
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    if case.supports_native_arrow:
+        result = driver.select_to_arrow(table.select_ordered_sql, native_only=True)
+        assert result.rows_affected == 3
+        return
+    with pytest.raises(ImproperConfigurationError):
+        driver.select_to_arrow(table.select_ordered_sql, native_only=True)
+
+
+async def _assert_async_arrow_native_only_contract(
+    driver: AsyncContractDriver, case: DriverCase, table: ContractTable
+) -> None:
+    """Assert native_only direction for Arrow-capable async adapters."""
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    if case.supports_native_arrow:
+        result = await driver.select_to_arrow(table.select_ordered_sql, native_only=True)
+        assert result.rows_affected == 3
+        return
+    with pytest.raises(ImproperConfigurationError):
+        await driver.select_to_arrow(table.select_ordered_sql, native_only=True)
 
 
 _ARROW_LARGE_ROW_COUNT = 1000

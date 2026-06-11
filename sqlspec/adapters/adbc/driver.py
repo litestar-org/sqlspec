@@ -28,9 +28,17 @@ from sqlspec.adapters.adbc.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    StatementConfig,
+    build_arrow_result_from_reader,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -380,6 +388,49 @@ class AdbcDriver(SyncDriverAdapterBase):
         exc_handler = self.handle_database_exceptions()
         arrow_result: ArrowResult | None = None
 
+        if return_format in {"reader", "batches"}:
+            cursor_manager = self.with_cursor(self.connection)
+            cursor = None
+            reader: object | None = None
+            with exc_handler:
+                cursor = cursor_manager.__enter__()
+                try:
+                    sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+                    cursor.execute(sql, driver_params or ())
+                    fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
+                    if fetch_record_batch is None:
+                        arrow_table = cursor.fetch_arrow_table()
+                        cursor_manager.__exit__(None, None, None)
+                        cursor = None
+                        arrow_result = build_arrow_result_from_table(
+                            prepared_statement,
+                            arrow_table,
+                            return_format=return_format,
+                            batch_size=batch_size,
+                            arrow_schema=arrow_schema,
+                        )
+                    else:
+                        reader = fetch_record_batch()
+                except Exception:
+                    cursor_manager.__exit__(None, None, None)
+                    cursor = None
+                    raise
+
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+            if arrow_result is not None:
+                return arrow_result
+            if cursor is None or reader is None:
+                msg = "ADBC did not return an Arrow reader."
+                raise SQLSpecError(msg)
+            return build_arrow_result_from_reader(
+                prepared_statement,
+                arrow_reader_with_deferred_close(reader, cursor.close),
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+            )
+
         # Use ADBC cursor for native Arrow
         with self.with_cursor(self.connection) as cursor, exc_handler:
             if cursor is None:
@@ -452,9 +503,32 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Ingest an Arrow payload directly through the ADBC cursor."""
 
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        source_data = source.get_data() if hasattr(source, "get_data") else source
         ingest_mode: Literal["append", "create", "replace", "create_append"]
         ingest_mode = "replace" if overwrite else "create_append"
+        if isinstance(source_data, pa.RecordBatchReader):
+            row_count = 0
+            exc_handler = self.handle_database_exceptions()
+            with self.with_cursor(self.connection) as cursor, exc_handler:
+                ingest_result = cursor.adbc_ingest(table, source_data, mode=ingest_mode)
+                if isinstance(ingest_result, int) and ingest_result > 0:
+                    row_count = ingest_result
+
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+            telemetry_payload: StorageTelemetry = {
+                "rows_processed": row_count,
+                "bytes_processed": 0,
+                "format": "arrow",
+                "destination": table,
+            }
+            self._attach_partition_telemetry(telemetry_payload, partitioner)
+            return self._create_storage_job(telemetry_payload, telemetry)
+
+        arrow_table = self._coerce_arrow_table(source_data)
         exc_handler = self.handle_database_exceptions()
         with self.with_cursor(self.connection) as cursor, exc_handler:
             cursor.adbc_ingest(table, arrow_table, mode=ingest_mode)

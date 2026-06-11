@@ -17,6 +17,8 @@ from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     OracleAsyncStreamSource,
     OracleSyncStreamSource,
+    build_arrow_fetch_kwargs,
+    build_fetch_kwargs,
     build_insert_statement,
     build_pipeline_stack_result,
     build_truncate_statement,
@@ -32,6 +34,7 @@ from sqlspec.adapters.oracledb.core import (
     normalize_execute_many_parameters_sync,
     resolve_row_metadata,
     resolve_rowcount,
+    supports_df_batches,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
@@ -40,6 +43,7 @@ from sqlspec.core import (
     StatementConfig,
     StatementStack,
     build_arrow_result_from_table,
+    create_arrow_result,
     get_cache_config,
     register_driver_profile,
 )
@@ -70,7 +74,7 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, StatementParameters
 
 __all__ = (
     "OracleAsyncDriver",
@@ -337,7 +341,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
-        cursor.execute(sql, prepared_parameters or {})
+        cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
         # SELECT result processing for Oracle
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
@@ -470,7 +474,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Returns:
             Context manager for cursor operations
         """
-        return OracleSyncCursor(connection)
+        return OracleSyncCursor(
+            connection,
+            arraysize=self.driver_features.get("arraysize"),
+            prefetchrows=self.driver_features.get("prefetchrows"),
+        )
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native oracledb row stream backed by chunked ``fetchmany``."""
@@ -498,7 +506,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         batch_size: int | None = None,
         arrow_schema: Any = None,
         **kwargs: Any,
-    ) -> "Any":
+    ) -> "ArrowResult":
         """Execute query and return results as Apache Arrow format using Oracle native support.
 
         This implementation uses Oracle's native execute_df()/fetch_df_all() methods
@@ -530,6 +538,22 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
 
         try:
+            if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
+                import pyarrow as pa
+
+                record_batches, batch_schema = self._fetch_arrow_record_batches(
+                    sql, prepared_parameters, batch_size, arrow_schema
+                )
+                rows_affected = sum(batch.num_rows for batch in record_batches)
+                if batch_schema is None:
+                    batch_schema = pa.schema([])
+                arrow_data: object
+                if return_format == "reader":
+                    arrow_data = pa.RecordBatchReader.from_batches(batch_schema, record_batches)
+                else:
+                    arrow_data = record_batches
+                return create_arrow_result(prepared_statement, arrow_data, rows_affected=rows_affected)
+
             oracle_df = self._execute_arrow_dataframe(sql, prepared_parameters, batch_size)
         except AttributeError as exc:
             if native_only:
@@ -712,7 +736,38 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 return execute_df(sql, params, arraysize=batch_size or 1000)
             except TypeError:
                 return execute_df(sql, params)
-        return self.connection.fetch_df_all(statement=sql, parameters=params, arraysize=batch_size or 1000)
+        return self.connection.fetch_df_all(
+            statement=sql,
+            parameters=params,
+            arraysize=batch_size or 1000,
+            **build_arrow_fetch_kwargs(self.driver_features),
+        )
+
+    def _fetch_arrow_record_batches(
+        self,
+        sql: str,
+        parameters: "StatementParameters | None",
+        batch_size: int | None,
+        arrow_schema: "ArrowSchema | None",
+    ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
+        import pyarrow as pa
+
+        params = parameters if parameters is not None else []
+        record_batches: list[ArrowRecordBatch] = []
+        batch_schema: ArrowSchema | None = None
+        for oracle_df in self.connection.fetch_df_batches(
+            statement=sql, parameters=params, size=batch_size or 1000, **build_arrow_fetch_kwargs(self.driver_features)
+        ):
+            batch_table = pa.table(oracle_df)
+            column_names = normalize_column_names(batch_table.column_names, self.driver_features)
+            if column_names != batch_table.column_names:
+                batch_table = batch_table.rename_columns(column_names)
+            if arrow_schema is not None:
+                batch_table = batch_table.cast(arrow_schema)
+            if batch_schema is None:
+                batch_schema = batch_table.schema
+            record_batches.extend(batch_table.to_batches())
+        return record_batches, batch_schema
 
     def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
@@ -836,7 +891,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
-        await cursor.execute(sql, prepared_parameters or {})
+        await cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
         # SELECT result processing for Oracle
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
@@ -972,7 +1027,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Returns:
             Context manager for cursor operations
         """
-        return OracleAsyncCursor(connection)
+        return OracleAsyncCursor(
+            connection,
+            arraysize=self.driver_features.get("arraysize"),
+            prefetchrows=self.driver_features.get("prefetchrows"),
+        )
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         """Return a native oracledb row stream backed by chunked ``fetchmany``."""
@@ -1000,7 +1059,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         batch_size: int | None = None,
         arrow_schema: Any = None,
         **kwargs: Any,
-    ) -> "Any":
+    ) -> "ArrowResult":
         """Execute query and return results as Apache Arrow format using Oracle native support.
 
         This implementation uses Oracle's native execute_df()/fetch_df_all() methods
@@ -1032,6 +1091,22 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
 
         try:
+            if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
+                import pyarrow as pa
+
+                record_batches, batch_schema = await self._fetch_arrow_record_batches(
+                    sql, prepared_parameters, batch_size, arrow_schema
+                )
+                rows_affected = sum(batch.num_rows for batch in record_batches)
+                if batch_schema is None:
+                    batch_schema = pa.schema([])
+                arrow_data: object
+                if return_format == "reader":
+                    arrow_data = pa.RecordBatchReader.from_batches(batch_schema, record_batches)
+                else:
+                    arrow_data = record_batches
+                return create_arrow_result(prepared_statement, arrow_data, rows_affected=rows_affected)
+
             oracle_df = await self._execute_arrow_dataframe(sql, prepared_parameters, batch_size)
         except AttributeError as exc:
             if native_only:
@@ -1222,7 +1297,38 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 return await execute_df(sql, params, arraysize=batch_size or 1000)
             except TypeError:
                 return await execute_df(sql, params)
-        return await self.connection.fetch_df_all(statement=sql, parameters=params, arraysize=batch_size or 1000)
+        return await self.connection.fetch_df_all(
+            statement=sql,
+            parameters=params,
+            arraysize=batch_size or 1000,
+            **build_arrow_fetch_kwargs(self.driver_features),
+        )
+
+    async def _fetch_arrow_record_batches(
+        self,
+        sql: str,
+        parameters: "StatementParameters | None",
+        batch_size: int | None,
+        arrow_schema: "ArrowSchema | None",
+    ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
+        import pyarrow as pa
+
+        params = parameters if parameters is not None else []
+        record_batches: list[ArrowRecordBatch] = []
+        batch_schema: ArrowSchema | None = None
+        async for oracle_df in self.connection.fetch_df_batches(
+            statement=sql, parameters=params, size=batch_size or 1000, **build_arrow_fetch_kwargs(self.driver_features)
+        ):
+            batch_table = pa.table(oracle_df)
+            column_names = normalize_column_names(batch_table.column_names, self.driver_features)
+            if column_names != batch_table.column_names:
+                batch_table = batch_table.rename_columns(column_names)
+            if arrow_schema is not None:
+                batch_table = batch_table.cast(arrow_schema)
+            if batch_schema is None:
+                batch_schema = batch_table.schema
+            record_batches.extend(batch_table.to_batches())
+        return record_batches, batch_schema
 
     async def _execute_stack_native(
         self, stack: "StatementStack", *, continue_on_error: bool

@@ -17,7 +17,14 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
-from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_table, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    StatementConfig,
+    build_arrow_result_from_reader,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -289,6 +296,18 @@ class DuckDBDriver(SyncDriverAdapterBase):
             # Execute query
             cursor.execute(sql, driver_params or ())
 
+            if return_format in {"reader", "batches"}:
+                arrow_reader = (
+                    cursor.to_arrow_reader(batch_size) if batch_size is not None else cursor.to_arrow_reader()
+                )
+                return build_arrow_result_from_reader(
+                    prepared_statement,
+                    arrow_reader,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
+
             # DuckDB native Arrow (zero-copy!)
             arrow_table = cursor.to_arrow_table()
 
@@ -349,18 +368,40 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Load Arrow data into DuckDB using temporary table registration."""
 
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        source_data = source.get_data() if hasattr(source, "get_data") else source
+        arrow_table = None
+        arrow_source: object
+        if isinstance(source_data, pa.RecordBatchReader):
+            arrow_source = source_data
+        else:
+            arrow_table = self._coerce_arrow_table(source_data)
+            arrow_source = arrow_table
         temp_view = f"_sqlspec_arrow_{uuid4().hex}"
         if overwrite:
             self.connection.execute(f"TRUNCATE TABLE {table}")
-        self.connection.register(temp_view, arrow_table)
+        self.connection.register(temp_view, arrow_source)
+        inserted_rows = 0
         try:
-            self.connection.execute(f"INSERT INTO {table} SELECT * FROM {temp_view}")
+            insert_result = self.connection.execute(f"INSERT INTO {table} SELECT * FROM {temp_view}")
+            inserted_rows = _resolve_duckdb_inserted_rows(insert_result)
         finally:
             with contextlib.suppress(Exception):
                 self.connection.unregister(temp_view)
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        if isinstance(source_data, pa.RecordBatchReader):
+            telemetry_payload: StorageTelemetry = {
+                "rows_processed": inserted_rows,
+                "bytes_processed": 0,
+                "format": "arrow",
+            }
+        else:
+            if arrow_table is None:
+                msg = "DuckDB Arrow load did not resolve an Arrow table."
+                raise SQLSpecError(msg)
+            telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
@@ -416,6 +457,24 @@ class DuckDBDriver(SyncDriverAdapterBase):
             False - DuckDB requires explicit transaction management.
         """
         return False
+
+
+def _resolve_duckdb_inserted_rows(result: object) -> int:
+    fetchall = getattr(result, "fetchall", None)
+    if not callable(fetchall):
+        return 0
+    try:
+        rows = fetchall()
+    except Exception:
+        return 0
+    if not isinstance(rows, list) or not rows:
+        return 0
+    first_row = rows[0]
+    if isinstance(first_row, (tuple, list)) and first_row and isinstance(first_row[0], int):
+        return max(first_row[0], 0)
+    if isinstance(first_row, int):
+        return max(first_row, 0)
+    return 0
 
 
 register_driver_profile("duckdb", driver_profile)

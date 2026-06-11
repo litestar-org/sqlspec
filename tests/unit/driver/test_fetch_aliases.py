@@ -365,20 +365,11 @@ def test_sync_fetch_stream_delegates_to_select_stream() -> None:
     mock_driver.select_stream = Mock(return_value=mock_stream)
 
     result = SyncDriverAdapterBase.fetch_stream(
-        mock_driver,
-        "SELECT * FROM users",
-        schema_type=None,
-        statement_config=None,
-        chunk_size=25,
-        native_only=False,
+        mock_driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
     )
 
     mock_driver.select_stream.assert_called_once_with(
-        "SELECT * FROM users",
-        schema_type=None,
-        statement_config=None,
-        chunk_size=25,
-        native_only=False,
+        "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
     )
     assert result == mock_stream
 
@@ -513,20 +504,11 @@ def test_async_fetch_stream_delegates_to_select_stream() -> None:
     mock_driver.select_stream = Mock(return_value=mock_stream)
 
     result = AsyncDriverAdapterBase.fetch_stream(
-        mock_driver,
-        "SELECT * FROM users",
-        schema_type=None,
-        statement_config=None,
-        chunk_size=25,
-        native_only=False,
+        mock_driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
     )
 
     mock_driver.select_stream.assert_called_once_with(
-        "SELECT * FROM users",
-        schema_type=None,
-        statement_config=None,
-        chunk_size=25,
-        native_only=False,
+        "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
     )
     assert result == mock_stream
 

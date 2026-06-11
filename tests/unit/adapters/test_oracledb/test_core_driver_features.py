@@ -92,6 +92,22 @@ def test_apply_driver_features_preserves_user_raw_byte_limit() -> None:
     assert features["oracle_raw_byte_limit"] == 100
 
 
+def test_apply_driver_features_does_not_default_fetch_tuning_options() -> None:
+    """Absent fetch tuning keys should leave python-oracledb defaults untouched."""
+    features = apply_driver_features({})
+    assert "arraysize" not in features
+    assert "prefetchrows" not in features
+    assert "fetch_lobs" not in features
+    assert "fetch_decimals" not in features
+
+
+def test_apply_driver_features_preserves_user_fetch_tuning_options() -> None:
+    """User-supplied fetch tuning options survive the defaults pass."""
+    features = apply_driver_features({"arraysize": 5000, "fetch_decimals": True})
+    assert features["arraysize"] == 5000
+    assert features["fetch_decimals"] is True
+
+
 def test_oracle_driver_features_typeddict_advertises_varchar2_byte_limit() -> None:
     """``OracleDriverFeatures`` exposes ``oracle_varchar2_byte_limit``."""
     from sqlspec.adapters.oracledb.config import OracleDriverFeatures

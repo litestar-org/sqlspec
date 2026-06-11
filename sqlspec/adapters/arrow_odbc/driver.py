@@ -1,7 +1,8 @@
 """arrow-odbc sync driver."""
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable, Mapping
+from itertools import chain
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
 from sqlspec.adapters.arrow_odbc.core import (
@@ -11,7 +12,13 @@ from sqlspec.adapters.arrow_odbc.core import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.core import SQL, build_arrow_result_from_table, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    build_arrow_result_from_reader,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -20,7 +27,7 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.driver import ExecutionResult
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = ("ArrowOdbcCursor", "ArrowOdbcDriver", "ArrowOdbcExceptionHandler", "resolve_dialect_from_dbms_name")
 
@@ -196,6 +203,15 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         exc_handler = self.handle_database_exceptions()
         with exc_handler, self.with_cursor(self.connection):
             reader = self._read_arrow_batches(sql, _odbc_parameters(prepared_parameters), resolved_batch_size)
+            if return_format in {"reader", "batches"}:
+                arrow_reader = _to_pyarrow_reader(reader)
+                return build_arrow_result_from_reader(
+                    prepared_statement,
+                    arrow_reader,
+                    return_format=return_format,
+                    batch_size=resolved_batch_size,
+                    arrow_schema=arrow_schema,
+                )
             table = _reader_to_table(reader)
         self._check_pending_exception(exc_handler)
 
@@ -299,6 +315,28 @@ def _reader_to_table(reader: Any) -> Any:
     if not batches:
         return pa.table({})
     return pa.Table.from_batches(batches)
+
+
+def _to_pyarrow_reader(reader: object) -> "ArrowRecordBatchReader":
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if isinstance(reader, pa.RecordBatchReader):
+        return reader
+    if isinstance(reader, pa.Table):
+        return pa.RecordBatchReader.from_batches(reader.schema, reader.to_batches())
+    into_reader = getattr(reader, "into_pyarrow_record_batch_reader", None)
+    if callable(into_reader):
+        return cast("ArrowRecordBatchReader", into_reader())
+    schema = getattr(reader, "schema", None)
+    if isinstance(schema, pa.Schema):
+        return pa.RecordBatchReader.from_batches(schema, cast("Iterable[ArrowRecordBatch]", reader))
+    iterator = iter(cast("Iterable[ArrowRecordBatch]", reader))
+    try:
+        first_batch = next(iterator)
+    except StopIteration:
+        return pa.RecordBatchReader.from_batches(pa.schema([]), [])
+    return pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
 
 
 def _table_to_reader(table: Any, chunk_size: int) -> Any:

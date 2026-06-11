@@ -171,6 +171,14 @@ class OracleDriverFeatures(TypedDict):
     oracle_raw_byte_limit: Threshold (in bytes) above which ``bytes`` parameters
      are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
      RAW limit).
+    arraysize: Optional per-cursor row fetch buffer size. When absent, the
+     python-oracledb cursor default is left unchanged.
+    prefetchrows: Optional per-cursor prefetch row count. When absent, the
+     python-oracledb cursor default is left unchanged.
+    fetch_lobs: Optional per-statement LOB fetch mode. ``False`` returns
+     supported LOB values as ``str``/``bytes`` instead of LOB locators.
+    fetch_decimals: Optional per-statement NUMBER fetch mode. ``True`` returns
+     decimal values where python-oracledb supports them.
     on_connection_create: Callback executed when a connection is acquired from pool.
      For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
      For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
@@ -197,6 +205,10 @@ class OracleDriverFeatures(TypedDict):
     vector_return_format: NotRequired[OracleVectorReturnFormat]
     oracle_varchar2_byte_limit: NotRequired[int]
     oracle_raw_byte_limit: NotRequired[int]
+    arraysize: NotRequired[int]
+    prefetchrows: NotRequired[int]
+    fetch_lobs: NotRequired[bool]
+    fetch_decimals: NotRequired[bool]
     on_connection_create: NotRequired[Callable[..., Any]]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[OracleEventsBackend]
