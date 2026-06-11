@@ -74,21 +74,6 @@ Scalar Values and Pagination
    :dedent: 4
    :no-upgrade:
 
-Statement Stacks
-----------------
-
-Statement stacks bundle multiple SQL statements plus parameter sets. Drivers that
-support native pipelines or batch execution can send the stack in a single round
-trip, while others execute each statement sequentially.
-
-.. literalinclude:: /examples/querying/statement_stack.py
-   :language: python
-   :caption: ``statement stack``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
-
 Streaming Results
 -----------------
 
@@ -127,6 +112,21 @@ Lifetime and transaction rules:
 - An exception raised during iteration closes the stream and propagates; the
   connection remains usable afterwards (issue a rollback first on PostgreSQL
   drivers, whose transaction is aborted by the failed statement).
+
+Statement Stacks
+----------------
+
+Statement stacks bundle multiple SQL statements plus parameter sets. Drivers that
+support native pipelines or batch execution can send the stack in a single round
+trip, while others execute each statement sequentially.
+
+.. literalinclude:: /examples/querying/statement_stack.py
+   :language: python
+   :caption: ``statement stack``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
 
 Driver Configuration Examples
 -----------------------------
