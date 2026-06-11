@@ -203,12 +203,14 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psycopg_sync",
+        supports_native_row_streaming=True,
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
             "execute_many_specifics:postgres",
             "param_codecs:psycopg",
             "driver_features:psycopg_copy",
+            "streaming_native:psycopg",
         ),
     ),
     DriverCase(
@@ -232,8 +234,9 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_psycopg_sync",
+        supports_native_row_streaming=True,
         deviations=("cockroach-serializable-transactions",),
-        extra_assertions=("param_codecs:cockroach_psycopg",),
+        extra_assertions=("param_codecs:cockroach_psycopg", "streaming_native:psycopg"),
     ),
     DriverCase(
         id="adbc-sqlite-sync",
@@ -489,11 +492,13 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psycopg_async",
+        supports_native_row_streaming=True,
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
             "param_codecs:psycopg",
             "driver_features:psycopg_copy",
+            "streaming_native:psycopg",
         ),
     ),
     DriverCase(
@@ -542,8 +547,9 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_psycopg_async",
+        supports_native_row_streaming=True,
         deviations=("cockroach-serializable-transactions",),
-        extra_assertions=("param_codecs:cockroach_psycopg",),
+        extra_assertions=("param_codecs:cockroach_psycopg", "streaming_native:psycopg"),
     ),
     DriverCase(
         id="oracledb-async",

@@ -386,6 +386,8 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
     bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
     with pytest.raises(Exception):
         next(iter(bad_stream))
+    with contextlib.suppress(Exception):
+        sync_driver.rollback()
     assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
 
     dispatch_sync_extra_assertions(driver, case, _STREAMING_SCOPE)
@@ -419,6 +421,8 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
     bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
     with pytest.raises(Exception):
         await anext(aiter(bad_stream))
+    with contextlib.suppress(Exception):
+        await async_driver.rollback()
     assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
 
     await dispatch_async_extra_assertions(driver, case, _STREAMING_SCOPE)
@@ -456,9 +460,31 @@ async def _assert_asyncpg_stream_transaction(driver: object, case: DriverCase) -
     await async_driver.execute(case.table.select_count_sql)
 
 
+def _assert_psycopg_named_cursor(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        next(iter(stream))
+        assert stream._source._cursor.name  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stream.close()
+
+
+async def _assert_psycopg_named_cursor_async(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        await anext(aiter(stream))
+        assert stream._source._cursor.name  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await stream.aclose()
+
+
 register_sync_extra_assertion("streaming_native:sqlite", _STREAMING_SCOPE, _assert_sqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:aiosqlite", _STREAMING_SCOPE, _assert_aiosqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:asyncpg", _STREAMING_SCOPE, _assert_asyncpg_stream_transaction)
+register_sync_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_named_cursor)
+register_async_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_named_cursor_async)
 
 
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)

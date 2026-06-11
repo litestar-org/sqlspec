@@ -1,8 +1,10 @@
 """psycopg adapter compiled helpers."""
 
+import contextlib
 import datetime
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
+from uuid import uuid4
 
 from typing_extensions import LiteralString
 
@@ -19,7 +21,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.driver import ExecutionResult
+from sqlspec.driver import ExecutionResult, rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -54,6 +56,8 @@ if TYPE_CHECKING:
 __all__ = (
     "PipelineCursorEntry",
     "PreparedStackOperation",
+    "PsycopgAsyncStreamSource",
+    "PsycopgSyncStreamSource",
     "apply_driver_features",
     "build_async_pipeline_execution_result",
     "build_copy_from_command",
@@ -262,6 +266,128 @@ async def execute_with_optional_parameters_async(cursor: Any, sql: str, paramete
         await cursor.execute(sql, parameters)
     else:
         await cursor.execute(sql)
+
+
+class PsycopgSyncStreamSource:
+    """Compiled chunk source streaming dict rows from a psycopg server-side named cursor.
+
+    The server-side cursor is declared inside a stream-owned transaction (a savepoint
+    when one is already active, a transaction block under autocommit).
+    """
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._transaction: Any = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            transaction = self._driver.connection.transaction()
+            transaction.__enter__()
+            self._transaction = transaction
+            try:
+                cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+                cursor.itersize = self._chunk_size
+                execute_with_optional_parameters(cursor, self._sql, self._parameters)
+                self._cursor = cursor
+            except BaseException as exc:
+                self._transaction = None
+                with contextlib.suppress(Exception):
+                    transaction.__exit__(type(exc), exc, exc.__traceback__)
+                raise
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        with handler:
+            rows = self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        if self._column_names is None:
+            self._column_names = [column.name for column in self._cursor.description]
+        return rows_to_dicts(rows, self._column_names)
+
+    def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+        transaction = self._transaction
+        self._transaction = None
+        if transaction is not None:
+            with contextlib.suppress(Exception):
+                transaction.__exit__(None, None, None)
+
+
+class PsycopgAsyncStreamSource:
+    """Compiled async chunk source streaming dict rows from a psycopg server-side named cursor.
+
+    The server-side cursor is declared inside a stream-owned transaction (a savepoint
+    when one is already active, a transaction block under autocommit).
+    """
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._transaction: Any = None
+        self._column_names: list[str] | None = None
+
+    async def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        async with handler:
+            transaction = self._driver.connection.transaction()
+            await transaction.__aenter__()
+            self._transaction = transaction
+            try:
+                cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+                cursor.itersize = self._chunk_size
+                await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
+                self._cursor = cursor
+            except BaseException as exc:
+                self._transaction = None
+                with contextlib.suppress(Exception):
+                    await transaction.__aexit__(type(exc), exc, exc.__traceback__)
+                raise
+        self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        async with handler:
+            rows = await self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        if self._column_names is None:
+            self._column_names = [column.name for column in self._cursor.description]
+        return rows_to_dicts(rows, self._column_names)
+
+    async def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                await cursor.close()
+        transaction = self._transaction
+        self._transaction = None
+        if transaction is not None:
+            with contextlib.suppress(Exception):
+                await transaction.__aexit__(None, None, None)
 
 
 def resolve_rowcount(cursor: Any) -> int:
