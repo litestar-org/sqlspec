@@ -263,6 +263,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     supports_arrow_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_row_streaming: ClassVar[bool] = True
     _connection_context_class: "ClassVar[type[OracleSyncConnectionContext]]" = OracleSyncConnectionContext
     _session_factory_class: "ClassVar[type[_OracleSyncSessionConnectionHandler]]" = _OracleSyncSessionConnectionHandler
     _session_context_class: "ClassVar[type[OracleSyncSessionContext]]" = OracleSyncSessionContext
@@ -469,6 +470,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     supports_arrow_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_row_streaming: ClassVar[bool] = True
     _connection_context_class: "ClassVar[type[OracleAsyncConnectionContext]]" = OracleAsyncConnectionContext
     _session_factory_class: "ClassVar[type[_OracleAsyncSessionConnectionHandler]]" = (
         _OracleAsyncSessionConnectionHandler

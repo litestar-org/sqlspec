@@ -547,6 +547,30 @@ async def _assert_psqlpy_cursor(driver: object, case: DriverCase) -> None:
 register_async_extra_assertion("streaming_native:psqlpy", _STREAMING_SCOPE, _assert_psqlpy_cursor)
 
 
+def _assert_oracledb_arraysize(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        next(iter(stream))
+        assert stream._source._cursor.arraysize == 10  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stream.close()
+
+
+async def _assert_oracledb_arraysize_async(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        await anext(aiter(stream))
+        assert stream._source._cursor.arraysize == 10  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await stream.aclose()
+
+
+register_sync_extra_assertion("streaming_native:oracledb", _STREAMING_SCOPE, _assert_oracledb_arraysize)
+register_async_extra_assertion("streaming_native:oracledb", _STREAMING_SCOPE, _assert_oracledb_arraysize_async)
+
+
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)
 
 

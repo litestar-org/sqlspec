@@ -15,6 +15,8 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
+    OracleAsyncStreamSource,
+    OracleSyncStreamSource,
     build_insert_statement,
     build_pipeline_stack_result,
     build_truncate_statement,
@@ -43,10 +45,12 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    AsyncRowStream,
     BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
     StackExecutionObserver,
     SyncDriverAdapterBase,
+    SyncRowStream,
     describe_stack_statement,
     hash_stack_operations,
 )
@@ -467,6 +471,13 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             Context manager for cursor operations
         """
         return OracleSyncCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native oracledb row stream backed by chunked ``fetchmany``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SyncRowStream(OracleSyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "OracleSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -962,6 +973,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             Context manager for cursor operations
         """
         return OracleAsyncCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native oracledb row stream backed by chunked ``fetchmany``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return AsyncRowStream(OracleAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "OracleAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""

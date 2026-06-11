@@ -1,5 +1,6 @@
 """OracleDB adapter compiled helpers."""
 
+import contextlib
 import re
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
@@ -14,6 +15,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
     create_sql_result,
 )
+from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -42,6 +44,8 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = (
+    "OracleAsyncStreamSource",
+    "OracleSyncStreamSource",
     "apply_driver_features",
     "build_insert_statement",
     "build_pipeline_stack_result",
@@ -542,6 +546,96 @@ def resolve_row_metadata(
         cache.pop(next(iter(cache)))
     cache[cache_key] = (description, normalized_column_names, requires_lob_coercion)
     return normalized_column_names, requires_lob_coercion
+
+
+class OracleSyncStreamSource:
+    """Compiled chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            cursor = self._driver.connection.cursor()
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            cursor.execute(self._sql, self._parameters or {})
+            self._cursor = cursor
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        with handler:
+            rows = self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names, _ = self._driver._resolve_row_metadata(self._cursor.description)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+
+class OracleAsyncStreamSource:
+    """Compiled async chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._column_names: list[str] | None = None
+
+    async def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        async with handler:
+            cursor = self._driver.connection.cursor()
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            await cursor.execute(self._sql, self._parameters or {})
+            self._cursor = cursor
+        self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        async with handler:
+            rows = await self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names, _ = self._driver._resolve_row_metadata(self._cursor.description)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    async def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
 
 
 def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:

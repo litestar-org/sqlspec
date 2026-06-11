@@ -309,12 +309,14 @@ SYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_oracle_sync",
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
+        supports_native_row_streaming=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
             "param_codecs:oracle",
             "driver_features:oracle_sequence",
             "driver_features:oracle_json_native",
+            "streaming_native:oracledb",
         ),
     ),
     DriverCase(
@@ -593,6 +595,7 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_oracle_async",
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
+        supports_native_row_streaming=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
@@ -600,6 +603,7 @@ ASYNC_DRIVER_CASES = (
             "param_codecs:oracle",
             "driver_features:oracle_sequence",
             "driver_features:oracle_json_native",
+            "streaming_native:oracledb",
         ),
     ),
 )
