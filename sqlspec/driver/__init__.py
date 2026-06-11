@@ -17,7 +17,7 @@ from sqlspec.driver._common import (
 )
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._sql_helpers import convert_to_dialect
-from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
+from sqlspec.driver._stream import AsyncRowStream, SyncRowStream, rows_to_dicts
 from sqlspec.driver._sync import (
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
@@ -47,6 +47,7 @@ __all__ = (
     "convert_to_dialect",
     "describe_stack_statement",
     "hash_stack_operations",
+    "rows_to_dicts",
 )
 
 DriverAdapterProtocol = SyncDriverAdapterBase | AsyncDriverAdapterBase

@@ -100,6 +100,7 @@ SYNC_DRIVER_CASES = (
         mode="sync",
         marks=(SQLITE_XDIST_MARK,),
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -110,7 +111,7 @@ SYNC_DRIVER_CASES = (
         supports_connection_instance=True,
         supports_custom_json_serializer=True,
         supports_custom_type_adapters=True,
-        extra_assertions=("driver_basics:noop",),
+        extra_assertions=("driver_basics:noop", "streaming_native:sqlite"),
     ),
     DriverCase(
         id="duckdb-sync",
@@ -342,6 +343,7 @@ ASYNC_DRIVER_CASES = (
         mode="async",
         marks=(SQLITE_XDIST_MARK, pytest.mark.anyio),
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -350,7 +352,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_aiosqlite",
         supports_connection_instance=True,
-        extra_assertions=("driver_basics:noop", "arrow_specifics:sqlite"),
+        extra_assertions=("driver_basics:noop", "arrow_specifics:sqlite", "streaming_native:aiosqlite"),
     ),
     DriverCase(
         id="aiomysql-async",
