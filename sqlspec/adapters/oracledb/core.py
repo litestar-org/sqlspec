@@ -3,7 +3,7 @@
 import contextlib
 import re
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
@@ -40,7 +40,6 @@ from sqlspec.utils.type_guards import has_rowcount, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
-    from typing import Protocol
 
     from sqlspec.adapters.oracledb._typing import (
         OracleAsyncConnection,
@@ -51,23 +50,25 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
     from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
 
-    class _OracleSyncStreamDriver(Protocol):
-        connection: OracleSyncConnection
 
-        def handle_database_exceptions(self) -> SyncExceptionHandler: ...
+class _OracleSyncStreamDriver(Protocol):
+    connection: "OracleSyncConnection"
 
-        def _check_pending_exception(self, exc_handler: SyncExceptionHandler) -> None: ...
+    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
 
-        def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
 
-    class _OracleAsyncStreamDriver(Protocol):
-        connection: OracleAsyncConnection
+    def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 
-        def handle_database_exceptions(self) -> AsyncExceptionHandler: ...
 
-        def _check_pending_exception(self, exc_handler: AsyncExceptionHandler) -> None: ...
+class _OracleAsyncStreamDriver(Protocol):
+    connection: "OracleAsyncConnection"
 
-        def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+    def handle_database_exceptions(self) -> "AsyncExceptionHandler": ...
+
+    def _check_pending_exception(self, exc_handler: "AsyncExceptionHandler") -> None: ...
+
+    def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 
 
 __all__ = (

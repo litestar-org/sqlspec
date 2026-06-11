@@ -5,7 +5,7 @@ import datetime
 import importlib
 import io
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import sqlglot
@@ -40,28 +40,29 @@ from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
-    from typing import Protocol
 
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
     from sqlspec.driver._common import SyncExceptionHandler
     from sqlspec.storage import StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
-    class _BigQueryRow(Protocol):
-        def items(self) -> Iterable[tuple[str, object]]: ...
 
-    class _BigQueryStreamDriver(Protocol):
-        connection: BigQueryConnection
-        _job_retry: Retry
-        _job_result_timeout: float | object
+class _BigQueryRow(Protocol):
+    def items(self) -> "Iterable[tuple[str, object]]": ...
 
-        def _run_query_job(
-            self, connection: BigQueryConnection, sql: str, parameters: StatementParameters
-        ) -> QueryJob: ...
 
-        def handle_database_exceptions(self) -> SyncExceptionHandler: ...
+class _BigQueryStreamDriver(Protocol):
+    connection: "BigQueryConnection"
+    _job_retry: Retry
+    _job_result_timeout: float | object
 
-        def _check_pending_exception(self, exc_handler: SyncExceptionHandler) -> None: ...
+    def _run_query_job(
+        self, connection: "BigQueryConnection", sql: str, parameters: "StatementParameters"
+    ) -> "QueryJob": ...
+
+    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
+
+    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
 
 
 __all__ = (
