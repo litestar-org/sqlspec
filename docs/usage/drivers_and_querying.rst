@@ -89,6 +89,45 @@ trip, while others execute each statement sequentially.
    :dedent: 4
    :no-upgrade:
 
+Streaming Results
+-----------------
+
+``select_stream()`` returns a context-managed stream of dict rows fetched in
+bounded chunks using each driver's native streaming primitive. Adapters without
+a native path materialize the full result eagerly by default (not
+bounded-memory). Pass ``native_only=True`` to require a native stream and raise
+``ImproperConfigurationError`` when the adapter has no native path.
+
+.. literalinclude:: /examples/querying/streaming_results.py
+   :language: python
+   :caption: ``streaming rows``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Adapter capability is discoverable via ``Config.supports_native_row_streaming``.
+Native paths: psycopg and CockroachDB-psycopg (server-side named cursors),
+asyncpg and CockroachDB-asyncpg (cursors inside a stream-owned transaction),
+pymysql/aiomysql/asyncmy (``SSCursor``), mysql-connector (unbuffered cursors),
+sqlite/aiosqlite and oracledb (chunked ``fetchmany``), psqlpy (server-side
+cursor with ``array_size``), and BigQuery (page-wise result iteration).
+ADBC, DuckDB, mssql-python, arrow-odbc, and Spanner are eager-fallback only.
+
+Lifetime and transaction rules:
+
+- Close the stream (or exhaust it) before issuing other statements on the same
+  connection. ``close()`` mid-iteration releases the cursor and is idempotent.
+- psycopg, asyncpg, and psqlpy streams open their own transaction (a savepoint
+  when one is already active) and commit it on close, so they stream correctly
+  even on autocommit connections.
+- MySQL unbuffered cursors drain remaining rows when closed mid-iteration.
+- oracledb streaming returns raw driver values for LOB columns.
+- BigQuery ``page_size`` is advisory; pages may exceed the requested chunk size.
+- An exception raised during iteration closes the stream and propagates; the
+  connection remains usable afterwards (issue a rollback first on PostgreSQL
+  drivers, whose transaction is aborted by the failed statement).
+
 Driver Configuration Examples
 -----------------------------
 
