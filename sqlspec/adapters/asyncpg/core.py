@@ -1,5 +1,6 @@
 """AsyncPG adapter compiled helpers."""
 
+import contextlib
 import datetime
 import re
 from collections.abc import Sized
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL, ParameterStyleConfig, StackOperation
 
 __all__ = (
+    "AsyncpgStreamSource",
     "NormalizedStackOperation",
     "apply_driver_features",
     "build_connection_config",
@@ -480,3 +482,50 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
         return [], []
     column_names = list(records[0].keys())
     return records, column_names
+
+
+class AsyncpgStreamSource:
+    """Compiled async chunk source streaming dict rows from an asyncpg cursor in a stream-owned transaction."""
+
+    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+
+    def __init__(self, driver: Any, sql: str, parameters: "tuple[Any, ...]", chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._transaction: Any = None
+
+    async def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        async with handler:
+            transaction = self._driver.connection.transaction()
+            await transaction.start()
+            self._transaction = transaction
+            try:
+                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
+            except BaseException:
+                await transaction.rollback()
+                self._transaction = None
+                raise
+        self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        records: list[Any] = []
+        async with handler:
+            records = await self._cursor.fetch(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        return [dict(record) for record in records]
+
+    async def close(self) -> None:
+        self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        if transaction is not None:
+            try:
+                await transaction.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await transaction.rollback()

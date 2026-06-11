@@ -444,8 +444,21 @@ async def _assert_aiosqlite_stream_arraysize(driver: object, case: DriverCase) -
         await stream.aclose()
 
 
+async def _assert_asyncpg_stream_transaction(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    await anext(aiter(stream))
+    assert stream._source._transaction is not None  # pyright: ignore[reportPrivateUsage]
+    assert stream._source._cursor is not None  # pyright: ignore[reportPrivateUsage]
+    await stream.aclose()
+    assert stream._source._transaction is None  # pyright: ignore[reportPrivateUsage]
+    assert stream._source._cursor is None  # pyright: ignore[reportPrivateUsage]
+    await async_driver.execute(case.table.select_count_sql)
+
+
 register_sync_extra_assertion("streaming_native:sqlite", _STREAMING_SCOPE, _assert_sqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:aiosqlite", _STREAMING_SCOPE, _assert_aiosqlite_stream_arraysize)
+register_async_extra_assertion("streaming_native:asyncpg", _STREAMING_SCOPE, _assert_asyncpg_stream_transaction)
 
 
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)

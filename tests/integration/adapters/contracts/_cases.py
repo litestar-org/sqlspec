@@ -422,6 +422,7 @@ ASYNC_DRIVER_CASES = (
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
         table=POSTGRES_CONTRACT_TABLE,
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -440,6 +441,7 @@ ASYNC_DRIVER_CASES = (
             "arrow_specifics:postgres",
             "execute_many_specifics:postgres",
             "param_codecs:asyncpg",
+            "streaming_native:asyncpg",
         ),
     ),
     DriverCase(
@@ -503,6 +505,7 @@ ASYNC_DRIVER_CASES = (
         marks=(COCKROACH_XDIST_MARK, pytest.mark.anyio),
         table=POSTGRES_CONTRACT_TABLE,
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -516,7 +519,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_asyncpg",
         deviations=("cockroach-serializable-transactions",),
-        extra_assertions=("param_codecs:cockroach_asyncpg",),
+        extra_assertions=("param_codecs:cockroach_asyncpg", "streaming_native:asyncpg"),
     ),
     DriverCase(
         id="cockroach-psycopg-async",

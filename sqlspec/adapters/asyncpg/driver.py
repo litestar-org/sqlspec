@@ -10,6 +10,7 @@ import asyncpg
 from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
     PREPARED_STATEMENT_CACHE_SIZE,
+    AsyncpgStreamSource,
     NormalizedStackOperation,
     collect_rows,
     create_mapped_exception,
@@ -32,6 +33,7 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    AsyncRowStream,
     BaseAsyncExceptionHandler,
     StackExecutionObserver,
     describe_stack_statement,
@@ -263,6 +265,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         """Create context manager for AsyncPG cursor."""
         return AsyncpgCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native asyncpg row stream backed by a cursor in a stream-owned transaction."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
+        return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size))
 
     def handle_database_exceptions(self) -> "AsyncpgExceptionHandler":
         """Handle database exceptions with PostgreSQL error codes."""
