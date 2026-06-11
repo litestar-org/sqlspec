@@ -4,10 +4,12 @@
 # Intentional divergences: driver-name strings, error-code extraction strategy,
 # and private JSON helper names.
 
+import contextlib
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 __all__ = (
+    "MysqlConnectorAsyncStreamSource",
+    "MysqlConnectorSyncStreamSource",
     "apply_driver_features",
     "build_insert_statement",
     "build_profile",
@@ -137,6 +141,92 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
 def normalize_execute_parameters(parameters: Any) -> Any:
     """Normalize parameters for mysql-connector execute calls."""
     return parameters or None
+
+
+class MysqlConnectorSyncStreamSource:
+    """Compiled chunk source streaming dict rows from an unbuffered mysql-connector cursor."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            cursor = self._driver.connection.cursor(buffered=False)
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._cursor = cursor
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        with handler:
+            rows = self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        if self._column_names is None:
+            self._column_names = [description[0] for description in self._cursor.description]
+        return rows_to_dicts(rows, self._column_names)
+
+    def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.fetchall()
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+
+class MysqlConnectorAsyncStreamSource:
+    """Compiled async chunk source streaming dict rows from an unbuffered mysql-connector cursor."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor: Any = None
+        self._column_names: list[str] | None = None
+
+    async def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        async with handler:
+            cursor = await self._driver.connection.cursor(buffered=False)
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._cursor = cursor
+        self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        async with handler:
+            rows = await self._cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        if self._column_names is None:
+            self._column_names = [description[0] for description in self._cursor.description]
+        return rows_to_dicts(rows, self._column_names)
+
+    async def close(self) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                await cursor.fetchall()
+            with contextlib.suppress(Exception):
+                await cursor.close()
 
 
 def normalize_execute_many_parameters(parameters: Any) -> Any:

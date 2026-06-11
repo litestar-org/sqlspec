@@ -480,11 +480,58 @@ async def _assert_psycopg_named_cursor_async(driver: object, case: DriverCase) -
         await stream.aclose()
 
 
+def _assert_pymysql_sscursor(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        next(iter(stream))
+        assert type(stream._source._cursor).__name__ == "SSCursor"  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stream.close()
+
+
+async def _assert_async_sscursor(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        await anext(aiter(stream))
+        assert type(stream._source._cursor).__name__ == "SSCursor"  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await stream.aclose()
+
+
+def _assert_mysqlconnector_unbuffered(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        next(iter(stream))
+        assert getattr(stream._source._cursor, "_buffered", False) is False  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stream.close()
+
+
+async def _assert_mysqlconnector_unbuffered_async(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        await anext(aiter(stream))
+        assert getattr(stream._source._cursor, "_buffered", False) is False  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await stream.aclose()
+
+
 register_sync_extra_assertion("streaming_native:sqlite", _STREAMING_SCOPE, _assert_sqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:aiosqlite", _STREAMING_SCOPE, _assert_aiosqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:asyncpg", _STREAMING_SCOPE, _assert_asyncpg_stream_transaction)
 register_sync_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_named_cursor)
 register_async_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_named_cursor_async)
+register_sync_extra_assertion("streaming_native:pymysql", _STREAMING_SCOPE, _assert_pymysql_sscursor)
+register_async_extra_assertion("streaming_native:aiomysql", _STREAMING_SCOPE, _assert_async_sscursor)
+register_async_extra_assertion("streaming_native:asyncmy", _STREAMING_SCOPE, _assert_async_sscursor)
+register_sync_extra_assertion("streaming_native:mysqlconnector", _STREAMING_SCOPE, _assert_mysqlconnector_unbuffered)
+register_async_extra_assertion(
+    "streaming_native:mysqlconnector", _STREAMING_SCOPE, _assert_mysqlconnector_unbuffered_async
+)
 
 
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)
