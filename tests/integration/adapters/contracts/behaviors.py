@@ -12,7 +12,7 @@ import pytest
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -121,6 +121,8 @@ class SyncContractDriver(Protocol):
 
     def select_value(self, statement: object, /, *parameters: object, **kwargs: Any) -> object: ...
 
+    def select_stream(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
+
     def select_to_arrow(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
 
     def select_to_storage(
@@ -156,6 +158,8 @@ class AsyncContractDriver(Protocol):
     ) -> dict[str, Any] | None: ...
 
     async def select_value(self, statement: object, /, *parameters: object, **kwargs: Any) -> object: ...
+
+    def select_stream(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
 
     async def select_to_arrow(self, statement: object, /, *parameters: object, **kwargs: Any) -> Any: ...
 
@@ -295,6 +299,129 @@ async def assert_async_driver_basics_contract(driver: object, case: DriverCase) 
     assert await async_driver.select_value(table.select_count_sql) == 0
 
     await dispatch_async_extra_assertions(driver, case, DRIVER_BASICS_SCOPE)
+
+
+_STREAMING_SCOPE = "streaming"
+_STREAM_CHUNK_SIZE = 100
+_STREAMING_MISSING_TABLE_SQL = "SELECT * FROM sqlspec_streaming_missing_table"
+
+
+def _stream_seed_rows(count: int) -> "list[tuple[str, int, None]]":
+    return [(f"row-{i:06d}", i, None) for i in range(count)]
+
+
+def _seed_stream_table(driver: SyncContractDriver, table: ContractTable, count: int) -> None:
+    driver.execute(table.delete_sql)
+    driver.execute_many(table.insert_qmark_sql, _stream_seed_rows(count))
+    driver.commit()
+
+
+async def _seed_stream_table_async(driver: AsyncContractDriver, table: ContractTable, count: int) -> None:
+    await driver.execute(table.delete_sql)
+    await driver.execute_many(table.insert_qmark_sql, _stream_seed_rows(count))
+    await driver.commit()
+
+
+def assert_sync_streaming_unsupported_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers without native streaming raise under native_only and fall back eagerly."""
+    if case.supports_native_row_streaming:
+        pytest.skip(f"{case.adapter} supports native row streaming")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+
+    with pytest.raises(ImproperConfigurationError):
+        sync_driver.select_stream(table.select_ordered_sql, native_only=True)
+
+    with sync_driver.select_stream(table.select_ordered_sql, chunk_size=1) as stream:
+        rows = list(stream)
+    assert [row["value"] for row in rows] == [1, 2]
+
+
+async def assert_async_streaming_unsupported_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers without native streaming raise under native_only and fall back eagerly."""
+    if case.supports_native_row_streaming:
+        pytest.skip(f"{case.adapter} supports native row streaming")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+
+    with pytest.raises(ImproperConfigurationError):
+        async_driver.select_stream(table.select_ordered_sql, native_only=True)
+
+    async with async_driver.select_stream(table.select_ordered_sql, chunk_size=1) as stream:
+        rows = [row async for row in stream]
+    assert [row["value"] for row in rows] == [1, 2]
+
+
+def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers stream dict rows in bounded chunks with cleanup guarantees."""
+    if not case.supports_native_row_streaming:
+        pytest.skip(f"{case.adapter} has no native row streaming")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    count = case.streaming_row_count
+    _seed_stream_table(sync_driver, table, count)
+
+    stream = sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE)
+    iterator = iter(stream)
+    first = next(iterator)
+    assert first["value"] == 0
+    assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
+    remaining = list(iterator)
+    assert len(remaining) == count - 1
+    assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
+    assert remaining[-1]["value"] == count - 1
+
+    with sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
+        partial_iterator = iter(partial)
+        for _ in range(50):
+            next(partial_iterator)
+    assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
+
+    bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+    with pytest.raises(Exception):
+        next(iter(bad_stream))
+    assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
+
+    dispatch_sync_extra_assertions(driver, case, _STREAMING_SCOPE)
+
+
+async def assert_async_streaming_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers stream dict rows in bounded chunks with cleanup guarantees."""
+    if not case.supports_native_row_streaming:
+        pytest.skip(f"{case.adapter} has no native row streaming")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    count = case.streaming_row_count
+    await _seed_stream_table_async(async_driver, table, count)
+
+    stream = async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE)
+    iterator = aiter(stream)
+    first = await anext(iterator)
+    assert first["value"] == 0
+    assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
+    remaining: list[dict[str, Any]] = [row async for row in iterator]
+    assert len(remaining) == count - 1
+    assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
+    assert remaining[-1]["value"] == count - 1
+
+    async with async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
+        partial_iterator = aiter(partial)
+        for _ in range(50):
+            await anext(partial_iterator)
+    assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
+
+    bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+    with pytest.raises(Exception):
+        await anext(aiter(bad_stream))
+    assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
+
+    await dispatch_async_extra_assertions(driver, case, _STREAMING_SCOPE)
 
 
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)

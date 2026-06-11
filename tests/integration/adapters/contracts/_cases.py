@@ -34,6 +34,8 @@ class DriverCase:
     table_fixture: str | None = None
     supports_arrow: bool = False
     supports_arrow_streaming: bool = False
+    supports_native_row_streaming: bool = False
+    streaming_row_count: int = 10_000
     supports_native_arrow: bool = False
     arrow_reader_honors_batch_size: bool = False
     supports_explain: bool = False
