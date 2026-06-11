@@ -49,7 +49,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-    from google.cloud import bigquery_storage  # type: ignore[attr-defined]
+    from google.cloud import bigquery_storage  # type: ignore[attr-defined, unused-ignore]
     from google.cloud.bigquery import QueryJob, QueryJobConfig
 
     from sqlspec.builder import QueryBuilder
