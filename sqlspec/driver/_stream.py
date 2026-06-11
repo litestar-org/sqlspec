@@ -11,7 +11,7 @@ interpreted adapter sources can feed compiled stream classes):
 
 import builtins
 import contextlib
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast, overload
 
 from typing_extensions import Self
 
@@ -20,12 +20,40 @@ from sqlspec.utils.schema import to_schema
 if TYPE_CHECKING:
     from types import TracebackType
 
-__all__ = ("AsyncRowStream", "EagerAsyncRowSource", "EagerSyncRowSource", "SyncRowStream", "rows_to_dicts")
+__all__ = (
+    "AsyncRowSource",
+    "AsyncRowStream",
+    "EagerAsyncRowSource",
+    "EagerSyncRowSource",
+    "SyncRowSource",
+    "SyncRowStream",
+    "rows_to_dicts",
+)
 
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
 _StopAsync = type("_StopAsync", (_StopAsyncBase,), {})
 RowT = TypeVar("RowT")
 SchemaRowT = TypeVar("SchemaRowT")
+
+
+class SyncRowSource(Protocol):
+    """Protocol for synchronous row stream sources."""
+
+    def start(self) -> None: ...
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]": ...
+
+    def close(self) -> None: ...
+
+
+class AsyncRowSource(Protocol):
+    """Protocol for asynchronous row stream sources."""
+
+    async def start(self) -> None: ...
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]": ...
+
+    async def close(self) -> None: ...
 
 
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
@@ -40,7 +68,7 @@ class SyncRowStream(Generic[RowT]):
 
     __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
 
-    def __init__(self, source: Any, schema_type: "type[RowT] | None" = None) -> None:
+    def __init__(self, source: SyncRowSource, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
         self._schema_type: type[Any] | None = schema_type
         self._buffer: list[RowT] = []
@@ -54,9 +82,13 @@ class SyncRowStream(Generic[RowT]):
     @overload
     def _with_schema_type(self, schema_type: None = None) -> "SyncRowStream[dict[str, Any]]": ...
 
-    def _with_schema_type(self, schema_type: "type[SchemaRowT] | None" = None) -> "SyncRowStream[Any]":
+    def _with_schema_type(
+        self, schema_type: "type[SchemaRowT] | None" = None
+    ) -> "SyncRowStream[SchemaRowT] | SyncRowStream[dict[str, Any]]":
         self._schema_type = schema_type
-        return cast("SyncRowStream[Any]", self)
+        if schema_type is None:
+            return cast("SyncRowStream[dict[str, Any]]", self)
+        return cast("SyncRowStream[SchemaRowT]", self)
 
     def __enter__(self) -> Self:
         return self
@@ -81,7 +113,7 @@ class SyncRowStream(Generic[RowT]):
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
-                chunk = cast("list[dict[str, Any]]", self._source.fetch_chunk())
+                chunk = self._source.fetch_chunk()
             except BaseException:
                 self.close()
                 raise
@@ -115,7 +147,7 @@ class AsyncRowStream(Generic[RowT]):
 
     __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
 
-    def __init__(self, source: Any, schema_type: "type[RowT] | None" = None) -> None:
+    def __init__(self, source: AsyncRowSource, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
         self._schema_type: type[Any] | None = schema_type
         self._buffer: list[RowT] = []
@@ -129,9 +161,13 @@ class AsyncRowStream(Generic[RowT]):
     @overload
     def _with_schema_type(self, schema_type: None = None) -> "AsyncRowStream[dict[str, Any]]": ...
 
-    def _with_schema_type(self, schema_type: "type[SchemaRowT] | None" = None) -> "AsyncRowStream[Any]":
+    def _with_schema_type(
+        self, schema_type: "type[SchemaRowT] | None" = None
+    ) -> "AsyncRowStream[SchemaRowT] | AsyncRowStream[dict[str, Any]]":
         self._schema_type = schema_type
-        return cast("AsyncRowStream[Any]", self)
+        if schema_type is None:
+            return cast("AsyncRowStream[dict[str, Any]]", self)
+        return cast("AsyncRowStream[SchemaRowT]", self)
 
     def __aiter__(self) -> "AsyncRowStream[RowT]":
         return self
@@ -156,7 +192,7 @@ class AsyncRowStream(Generic[RowT]):
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
-                chunk = cast("list[dict[str, Any]]", await self._source.fetch_chunk())
+                chunk = await self._source.fetch_chunk()
             except BaseException:
                 await self.aclose()
                 raise

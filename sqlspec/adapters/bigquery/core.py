@@ -39,10 +39,30 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterable, Iterator, Mapping
+    from typing import Protocol
 
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
+    from sqlspec.driver._common import SyncExceptionHandler
     from sqlspec.storage import StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
+
+    class _BigQueryRow(Protocol):
+        def items(self) -> Iterable[tuple[str, object]]: ...
+
+    class _BigQueryStreamDriver(Protocol):
+        connection: BigQueryConnection
+        _job_retry: Retry
+        _job_result_timeout: float | object
+
+        def _run_query_job(
+            self, connection: BigQueryConnection, sql: str, parameters: StatementParameters
+        ) -> QueryJob: ...
+
+        def handle_database_exceptions(self) -> SyncExceptionHandler: ...
+
+        def _check_pending_exception(self, exc_handler: SyncExceptionHandler) -> None: ...
+
 
 __all__ = (
     "BigQueryStreamSource",
@@ -591,13 +611,15 @@ class BigQueryStreamSource:
 
     __slots__ = ("_chunk_size", "_driver", "_job", "_pages", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(
+        self, driver: "_BigQueryStreamDriver", sql: str, parameters: "StatementParameters", chunk_size: int
+    ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._job: Any = None
-        self._pages: Any = None
+        self._job: QueryJob | None = None
+        self._pages: Iterator[Iterable[_BigQueryRow]] | None = None
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -612,9 +634,12 @@ class BigQueryStreamSource:
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        page: Any = None
+        page: Iterable[_BigQueryRow] | None = None
+        pages = self._pages
+        if pages is None:
+            return []
         with handler:
-            page = next(self._pages, None)
+            page = next(pages, None)
         self._driver._check_pending_exception(handler)
         if page is None:
             return []

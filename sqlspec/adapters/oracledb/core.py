@@ -40,8 +40,35 @@ from sqlspec.utils.type_guards import has_rowcount, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+    from typing import Protocol
 
+    from sqlspec.adapters.oracledb._typing import (
+        OracleAsyncConnection,
+        OracleAsyncRawCursor,
+        OracleSyncConnection,
+        OracleSyncRawCursor,
+    )
     from sqlspec.core import SQL
+    from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
+
+    class _OracleSyncStreamDriver(Protocol):
+        connection: OracleSyncConnection
+
+        def handle_database_exceptions(self) -> SyncExceptionHandler: ...
+
+        def _check_pending_exception(self, exc_handler: SyncExceptionHandler) -> None: ...
+
+        def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+
+    class _OracleAsyncStreamDriver(Protocol):
+        connection: OracleAsyncConnection
+
+        def handle_database_exceptions(self) -> AsyncExceptionHandler: ...
+
+        def _check_pending_exception(self, exc_handler: AsyncExceptionHandler) -> None: ...
+
+        def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+
 
 __all__ = (
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
@@ -612,12 +639,18 @@ class OracleSyncStreamSource:
 
     __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(
+        self,
+        driver: "_OracleSyncStreamDriver",
+        sql: str,
+        parameters: "list[object] | tuple[object, ...] | dict[object, object] | None",
+        chunk_size: int,
+    ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._cursor: Any = None
+        self._cursor: OracleSyncRawCursor | None = None
         self._column_names: list[str] | None = None
 
     def start(self) -> None:
@@ -632,15 +665,18 @@ class OracleSyncStreamSource:
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
+        cursor = self._cursor
+        if cursor is None:
+            return []
         rows: list[Any] = []
         with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+            rows = cursor.fetchmany(self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names, _ = self._driver._resolve_row_metadata(self._cursor.description)
+            column_names, _ = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 
@@ -657,12 +693,18 @@ class OracleAsyncStreamSource:
 
     __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(
+        self,
+        driver: "_OracleAsyncStreamDriver",
+        sql: str,
+        parameters: "list[object] | tuple[object, ...] | dict[object, object] | None",
+        chunk_size: int,
+    ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._cursor: Any = None
+        self._cursor: OracleAsyncRawCursor | None = None
         self._column_names: list[str] | None = None
 
     async def start(self) -> None:
@@ -677,15 +719,18 @@ class OracleAsyncStreamSource:
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
+        cursor = self._cursor
+        if cursor is None:
+            return []
         rows: list[Any] = []
         async with handler:
-            rows = await self._cursor.fetchmany(self._chunk_size)
+            rows = await cursor.fetchmany(self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names, _ = self._driver._resolve_row_metadata(self._cursor.description)
+            column_names, _ = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 

@@ -4,18 +4,26 @@ from typing import Any
 
 import pytest
 
-from sqlspec.driver._stream import AsyncRowStream, EagerAsyncRowSource, EagerSyncRowSource, SyncRowStream, rows_to_dicts
+from sqlspec.driver._stream import (
+    AsyncRowSource,
+    AsyncRowStream,
+    EagerAsyncRowSource,
+    EagerSyncRowSource,
+    SyncRowSource,
+    SyncRowStream,
+    rows_to_dicts,
+)
 
 
 def _rows(start: int, stop: int) -> "list[dict[str, Any]]":
     return [{"id": i} for i in range(start, stop)]
 
 
-def _sync_stream(source: object) -> "SyncRowStream[dict[str, Any]]":
+def _sync_stream(source: SyncRowSource) -> "SyncRowStream[dict[str, Any]]":
     return SyncRowStream(source)
 
 
-def _async_stream(source: object) -> "AsyncRowStream[dict[str, Any]]":
+def _async_stream(source: AsyncRowSource) -> "AsyncRowStream[dict[str, Any]]":
     return AsyncRowStream(source)
 
 

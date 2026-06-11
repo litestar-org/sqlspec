@@ -485,7 +485,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        return SyncRowStream(OracleSyncStreamSource(self, sql, prepared_parameters, chunk_size))
+        stream_parameters = cast("list[object] | tuple[object, ...] | dict[object, object] | None", prepared_parameters)
+        return SyncRowStream(OracleSyncStreamSource(self, sql, stream_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "OracleSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -1038,7 +1039,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        return AsyncRowStream(OracleAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
+        stream_parameters = cast("list[object] | tuple[object, ...] | dict[object, object] | None", prepared_parameters)
+        return AsyncRowStream(OracleAsyncStreamSource(self, sql, stream_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "OracleAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""

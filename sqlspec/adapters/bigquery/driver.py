@@ -7,7 +7,7 @@ type coercion, error handling, and query job management.
 
 import io
 from itertools import chain
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE
 from google.cloud.exceptions import GoogleCloudError
@@ -49,6 +49,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+    from google.cloud import bigquery_storage  # type: ignore[attr-defined]
     from google.cloud.bigquery import QueryJob, QueryJobConfig
 
     from sqlspec.builder import QueryBuilder
@@ -442,7 +443,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         return arrow_result
 
-    def _bqstorage_client_or_none(self) -> Any | None:
+    def _bqstorage_client_or_none(self) -> "bigquery_storage.BigQueryReadClient | None":
         ensure_client = getattr(self.connection, "_ensure_bqstorage_client", None)
         if not callable(ensure_client):
             return None
@@ -451,7 +452,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         except Exception:
             return None
         else:
-            return client
+            return cast("bigquery_storage.BigQueryReadClient | None", client)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
