@@ -1,5 +1,6 @@
 """SQLite database configuration with thread-local connections."""
 
+import re
 import uuid
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
@@ -18,17 +19,25 @@ from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
 
 logger = get_logger("sqlspec.adapters.sqlite")
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
-__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteDriverFeatures")
+__all__ = (
+    "SqliteAggregateConfig",
+    "SqliteCollationConfig",
+    "SqliteConfig",
+    "SqliteConnectionParams",
+    "SqliteDriverFeatures",
+    "SqliteFunctionConfig",
+)
 
 
 class SqliteConnectionParams(TypedDict):
@@ -47,6 +56,30 @@ class SqliteConnectionParams(TypedDict):
     health_check_interval: NotRequired[float]
     enable_optimizations: NotRequired[bool]
     extra: NotRequired[dict[str, Any]]
+
+
+class SqliteFunctionConfig(TypedDict):
+    """User-defined SQLite function registration."""
+
+    name: str
+    narg: int
+    func: "Callable[..., Any]"
+    deterministic: NotRequired[bool]
+
+
+class SqliteCollationConfig(TypedDict):
+    """User-defined SQLite collation registration."""
+
+    name: str
+    func: "Callable[[str, str], int]"
+
+
+class SqliteAggregateConfig(TypedDict):
+    """User-defined SQLite aggregate registration."""
+
+    name: str
+    narg: int
+    aggregate_class: "type[Any]"
 
 
 class SqliteDriverFeatures(TypedDict):
@@ -72,6 +105,24 @@ class SqliteDriverFeatures(TypedDict):
      Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
      SQLite does not have native pub/sub, so table_queue is the only backend.
      Defaults to "table_queue".
+    custom_functions: Register SQL functions that run on the connection thread.
+     Each entry must include name, narg, and func.
+    custom_collations: Register SQL collations that compare two string values.
+     Each entry must include name and func.
+    custom_aggregates: Register SQL aggregates with step/finalize classes.
+     Each entry must include name, narg, and aggregate_class.
+    authorizer_callback: sqlite3 authorizer hook run during statement compilation.
+    trace_callback: sqlite3 trace hook run for executed statements.
+    progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
+    progress_handler_interval: Progress callback interval in SQLite virtual machine opcodes.
+     Must be a positive integer when provided.
+    row_factory: Row factory selector or callable used for raw sqlite3 connections.
+     "row" maps to sqlite3.Row, "dict" maps to a dict row adapter, "tuple" keeps tuple rows.
+     "dict" and custom callables can change raw connection result shapes seen by callers.
+    text_factory: Text factory used for raw sqlite3 connections.
+    pragmas: Additional PRAGMA settings applied after built-in optimization PRAGMAs.
+     User values override built-in defaults when the same PRAGMA appears in both places.
+    extensions: Shared-library extension paths loaded on each connection.
     """
 
     enable_custom_adapters: NotRequired[bool]
@@ -80,6 +131,95 @@ class SqliteDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[SqliteConnection], None]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    custom_functions: "NotRequired[Sequence[SqliteFunctionConfig]]"
+    custom_collations: "NotRequired[Sequence[SqliteCollationConfig]]"
+    custom_aggregates: "NotRequired[Sequence[SqliteAggregateConfig]]"
+    authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
+    trace_callback: "NotRequired[Callable[[str], None]]"
+    progress_handler: "NotRequired[Callable[[], int | None]]"
+    progress_handler_interval: NotRequired[int]
+    row_factory: "NotRequired[Literal['row', 'dict', 'tuple'] | Callable[..., Any]]"
+    text_factory: "NotRequired[Callable[[bytes], Any]]"
+    pragmas: "NotRequired[Mapping[str, str | int | bool]]"
+    extensions: "NotRequired[Sequence[str]]"
+
+
+_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_ROW_FACTORY_LITERALS = frozenset({"dict", "row", "tuple"})
+_RUNTIME_FEATURE_KEYS = (
+    "authorizer_callback",
+    "custom_aggregates",
+    "custom_collations",
+    "custom_functions",
+    "extensions",
+    "pragmas",
+    "progress_handler",
+    "progress_handler_interval",
+    "row_factory",
+    "text_factory",
+    "trace_callback",
+)
+
+
+def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+    rendered: list[tuple[str, str]] = []
+    for pragma_name, pragma_value in pragmas.items():
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(pragma_value, bool):
+            rendered_value = "1" if pragma_value else "0"
+        elif isinstance(pragma_value, int):
+            rendered_value = str(pragma_value)
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+            rendered_value = pragma_value
+        else:
+            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
+            raise ImproperConfigurationError(msg)
+        rendered.append((pragma_name, rendered_value))
+    return rendered
+
+
+def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
+    for entry in entries:
+        for required_key in required_keys:
+            if required_key not in entry:
+                msg = f"driver_features['{feature_name}'] entry is missing required key {required_key!r}"
+                raise ImproperConfigurationError(msg)
+
+
+def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
+    runtime_setup: dict[str, Any] = {}
+    for key in _RUNTIME_FEATURE_KEYS:
+        if key in features:
+            runtime_setup[key] = features.pop(key)
+    if not runtime_setup:
+        return None
+
+    if "pragmas" in runtime_setup:
+        runtime_setup["pragmas"] = _render_pragmas(runtime_setup["pragmas"])
+
+    row_factory = runtime_setup.get("row_factory")
+    if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):
+        msg = f"driver_features['row_factory'] must be 'row', 'dict', 'tuple', or a callable; got {row_factory!r}"
+        raise ImproperConfigurationError(msg)
+    if isinstance(row_factory, str) and row_factory not in _ROW_FACTORY_LITERALS:
+        msg = f"driver_features['row_factory'] must be 'row', 'dict', 'tuple', or a callable; got {row_factory!r}"
+        raise ImproperConfigurationError(msg)
+
+    _validate_entries(runtime_setup.get("custom_functions", ()), ("name", "narg", "func"), "custom_functions")
+    _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
+    _validate_entries(
+        runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
+    )
+
+    interval = runtime_setup.get("progress_handler_interval")
+    if interval is not None and (not isinstance(interval, int) or isinstance(interval, bool) or interval < 1):
+        msg = f"driver_features['progress_handler_interval'] must be a positive int; got {interval!r}"
+        raise ImproperConfigurationError(msg)
+
+    return runtime_setup
 
 
 class SqliteConnectionContext(SyncPoolConnectionContext):
@@ -156,6 +296,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         self._user_connection_hook: Callable[[SqliteConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._runtime_setup: dict[str, Any] | None = _build_runtime_setup(features_dict)
 
         super().__init__(
             bind_key=bind_key,
@@ -228,6 +369,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """
         namespace = super().get_signature_namespace()
         namespace.update({
+            "SqliteAggregateConfig": SqliteAggregateConfig,
+            "SqliteCollationConfig": SqliteCollationConfig,
             "PathLike": PathLike,
             "Literal": Literal,
             "SqliteConnectionContext": SqliteConnectionContext,
@@ -239,6 +382,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             "SqliteDriver": SqliteDriver,
             "SqliteDriverFeatures": SqliteDriverFeatures,
             "SqliteExceptionHandler": SqliteExceptionHandler,
+            "SqliteFunctionConfig": SqliteFunctionConfig,
             "SqliteSessionContext": SqliteSessionContext,
         })
         return namespace
