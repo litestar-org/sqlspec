@@ -285,6 +285,7 @@ def contract_bigquery_driver(
     except Exception as error:
         if is_emulator_wedge(error):
             _bigquery_wedge_reason = describe_wedge(error)
+            pytest.skip(f"BigQuery emulator wedged earlier in this session ({_bigquery_wedge_reason})")
         raise
     return _bigquery_contract_session
 
