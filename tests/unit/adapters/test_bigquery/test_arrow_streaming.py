@@ -1,6 +1,7 @@
 """Unit tests for BigQuery Arrow streaming export paths."""
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
@@ -43,6 +44,7 @@ class _FakeQueryJob:
 class _FakeBigQueryConnection:
     def __init__(self, job: _FakeQueryJob) -> None:
         self.job = job
+        self._connection = SimpleNamespace(API_BASE_URL="https://bigquery.googleapis.com")
         self.query_calls: list[tuple[str, dict[str, object]]] = []
 
     def query(self, sql: str, **kwargs: object) -> _FakeQueryJob:
@@ -73,3 +75,27 @@ def test_select_to_arrow_reader_uses_row_iterator_even_without_storage_api(monke
     assert result.get_data().read_all().to_pydict() == {"x": [1, 2, 3]}
     assert job.result_calls[0]["page_size"] == 2
     assert job.row_iterator.arrow_iterable_calls == [None]
+
+
+def test_select_to_arrow_table_uses_conversion_path_for_local_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    table = pa.table({"x": [1, 2, 3]})
+    job = _FakeQueryJob(table)
+    connection = _FakeBigQueryConnection(job)
+    connection._connection = SimpleNamespace(API_BASE_URL="http://127.0.0.1:9050")
+    driver = BigQueryDriver(cast("BigQueryConnection", connection))
+    fallback_result = object()
+    fallback_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    monkeypatch.setattr("sqlspec.adapters.bigquery.driver.storage_api_available", lambda: True)
+
+    def fallback(*args: object, **kwargs: object) -> object:
+        fallback_calls.append((args, kwargs))
+        return fallback_result
+
+    monkeypatch.setattr(SyncDriverAdapterBase, "select_to_arrow", fallback)
+
+    result = driver.select_to_arrow("SELECT 1 AS x", return_format="table")
+
+    assert result is fallback_result
+    assert fallback_calls
+    assert job.result_calls == []

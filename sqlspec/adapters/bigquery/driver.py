@@ -15,6 +15,7 @@ from google.cloud.exceptions import GoogleCloudError
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
     BigQueryStreamSource,
+    _uses_local_bigquery_endpoint,
     build_dml_rowcount,
     build_inlined_script,
     build_load_job_config,
@@ -383,13 +384,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        if not storage_api_available():
+        native_arrow_available = storage_api_available() and not _uses_local_bigquery_endpoint(self.connection)
+        if not native_arrow_available:
             if native_only:
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"
                     "1. Install: pip install google-cloud-bigquery-storage\n"
                     "2. Enable API: https://console.cloud.google.com/apis/library/bigquerystorage.googleapis.com\n"
-                    "3. Grant permissions: roles/bigquery.dataViewer"
+                    "3. Grant permissions: roles/bigquery.dataViewer\n"
+                    "4. Use a real BigQuery endpoint instead of the local emulator"
                 )
                 raise MissingDependencyError(
                     package="google-cloud-bigquery-storage", install_package="google-cloud-bigquery-storage"
