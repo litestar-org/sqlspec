@@ -297,6 +297,20 @@ def test_bigquery_driver_select_result_passes_job_result_kwargs() -> None:
     }
 
 
+def test_bigquery_driver_minimal_select_result_omits_paging_kwargs() -> None:
+    connection = _RecordingConnection()
+    connection.job = _RecordingSelectJob([{"id": 1}])
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 3.0})
+
+    result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("SELECT 1"))
+
+    assert result.is_select_result is True
+    assert connection.job.result_calls[0] == {
+        "job_retry": driver._job_retry,
+        "timeout": 3.0,
+    }
+
+
 def test_bigquery_driver_dml_and_script_do_not_pass_job_result_kwargs() -> None:
     connection = _RecordingConnection()
     driver = BigQueryDriver(

@@ -164,6 +164,25 @@ def test_oracle_sync_create_pool_merges_extra_and_drops_stale_threaded(monkeypat
     assert "threaded" not in seen_kwargs
 
 
+def test_oracle_sync_minimal_pool_omits_tuning_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Minimal pool config should not inject statement-cache or fetch tuning keys."""
+    seen_kwargs: dict[str, object] = {}
+
+    def fake_create_pool(**kwargs: object) -> object:
+        seen_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool", fake_create_pool)
+
+    OracleSyncConfig(connection_config={"user": "scott"})._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    assert seen_kwargs["user"] == "scott"
+    assert callable(seen_kwargs["session_callback"])
+    assert "stmtcachesize" not in seen_kwargs
+    assert "arraysize" not in seen_kwargs
+    assert "prefetchrows" not in seen_kwargs
+
+
 def test_oracle_sync_connection_config_session_callback_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
     """Native pool ``session_callback`` should run in addition to SQLSpec setup."""
     calls: list[str] = []

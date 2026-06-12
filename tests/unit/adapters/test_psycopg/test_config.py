@@ -163,6 +163,36 @@ def test_psycopg_sync_pool_preserves_conninfo_with_explicit_connection_kwargs(mo
     }
 
 
+def test_psycopg_sync_minimal_pool_omits_prepare_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Minimal sync pool config should not inject prepare_threshold."""
+    _CapturedSyncPool.calls.clear()
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
+
+    PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://user:pass@localhost/db"}
+    )._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
+    assert conninfo == "postgresql://user:pass@localhost/db"
+    assert pool_kwargs["kwargs"] == {}
+
+
+@pytest.mark.anyio
+async def test_psycopg_async_minimal_pool_omits_prepare_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Minimal async pool config should not inject prepare_threshold."""
+    _CapturedAsyncPool.calls.clear()
+    _CapturedAsyncPool.open_calls = 0
+    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
+
+    await PsycopgAsyncConfig(
+        connection_config={"conninfo": "postgresql://user:pass@localhost/db"}
+    )._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    conninfo, pool_kwargs = _CapturedAsyncPool.calls[-1]
+    assert conninfo == "postgresql://user:pass@localhost/db"
+    assert pool_kwargs["kwargs"] == {}
+
+
 @pytest.mark.anyio
 async def test_psycopg_async_pool_preserves_conninfo_with_explicit_connection_kwargs(
     monkeypatch: pytest.MonkeyPatch,
