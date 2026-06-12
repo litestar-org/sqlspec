@@ -1,5 +1,6 @@
 """Unit tests for BigQuery core performance helpers."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -8,6 +9,7 @@ from google.cloud.bigquery import QueryJobConfig
 
 from sqlspec.adapters.bigquery.core import (
     _COPY_JOB_FIELDS,
+    BigQueryStreamSource,
     build_profile,
     build_retry,
     collect_rows,
@@ -34,6 +36,33 @@ class _RecordingConnection:
 
 def _schema_field(name: str) -> SimpleNamespace:
     return SimpleNamespace(name=name)
+
+
+class _RecordingStreamJob:
+    def __init__(self) -> None:
+        self.result_kwargs: dict[str, Any] = {}
+
+    def result(self, **kwargs: Any) -> SimpleNamespace:
+        self.result_kwargs = kwargs
+        return SimpleNamespace(pages=iter(()))
+
+
+class _RecordingStreamDriver:
+    def __init__(self, api_base_url: str) -> None:
+        self.connection = SimpleNamespace(_connection=SimpleNamespace(API_BASE_URL=api_base_url))
+        self._job_retry = build_retry(2.0)
+        self._job_retry_deadline = 2.0
+        self._job_result_timeout: Any = 3.0
+        self.job = _RecordingStreamJob()
+
+    def _run_query_job(self, connection: Any, sql: str, parameters: Any) -> Any:
+        return self.job
+
+    def handle_database_exceptions(self) -> Any:
+        return nullcontext()
+
+    def _check_pending_exception(self, exc_handler: Any) -> None:
+        return None
 
 
 def test_resolve_column_names_reuses_cached_schema() -> None:
@@ -179,6 +208,28 @@ def test_bigquery_driver_does_not_pass_polling_sentinel_as_query_start_timeout()
 
     _, kwargs = connection.queries[0]
     assert "timeout" not in kwargs
+
+
+def test_stream_source_local_endpoint_uses_single_page_and_bounded_retry() -> None:
+    driver = _RecordingStreamDriver("http://127.0.0.1:9050")
+    source = BigQueryStreamSource(cast(Any, driver), "SELECT 1", None, 100)
+    source.start()
+
+    kwargs = driver.job.result_kwargs
+    assert kwargs["page_size"] is None
+    assert kwargs["retry"].timeout == driver._job_retry_deadline
+    assert kwargs["job_retry"] is driver._job_retry
+    assert kwargs["timeout"] == 3.0
+
+
+def test_stream_source_remote_endpoint_passes_chunk_page_size() -> None:
+    driver = _RecordingStreamDriver("https://bigquery.googleapis.com")
+    source = BigQueryStreamSource(cast(Any, driver), "SELECT 1", None, 100)
+    source.start()
+
+    kwargs = driver.job.result_kwargs
+    assert kwargs["page_size"] == 100
+    assert kwargs["retry"].timeout == driver._job_retry_deadline
 
 
 def test_type_converter_bigquery_output_converter_is_final() -> None:

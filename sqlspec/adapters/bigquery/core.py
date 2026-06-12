@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import sqlglot
 from google.api_core.retry import Retry
 from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
+from google.cloud.bigquery.retry import DEFAULT_RETRY
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
@@ -54,6 +55,7 @@ class _BigQueryRow(Protocol):
 class _BigQueryStreamDriver(Protocol):
     connection: "BigQueryConnection"
     _job_retry: Retry
+    _job_retry_deadline: float
     _job_result_timeout: float | object
 
     def _run_query_job(
@@ -683,9 +685,14 @@ class BigQueryStreamSource:
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
         with handler:
+            page_size = None if _uses_local_bigquery_endpoint(self._driver.connection) else self._chunk_size
+            page_retry = DEFAULT_RETRY.with_timeout(self._driver._job_retry_deadline)
             job = self._driver._run_query_job(self._driver.connection, self._sql, self._parameters)
             row_iterator = job.result(
-                page_size=self._chunk_size, job_retry=self._driver._job_retry, timeout=self._driver._job_result_timeout
+                page_size=page_size,
+                retry=page_retry,
+                job_retry=self._driver._job_retry,
+                timeout=self._driver._job_result_timeout,
             )
             self._job = job
             self._pages = row_iterator.pages
