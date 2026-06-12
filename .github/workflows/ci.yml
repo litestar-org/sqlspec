@@ -202,6 +202,36 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  test-sqlglot-c:
+    # The custom dialects extend sqlglot through TRANSFORMS/FACTOR patching and
+    # parser method hooks whose constraints only surface under the compiled
+    # sqlglotc overlay (sqlglot[c]). Run the dialect-adjacent unit tests with it.
+    needs: [ci-scope]
+    if: needs.ci-scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Test against compiled sqlglot
+        run: >-
+          uv run --with 'sqlglot[c]' pytest
+          tests/unit/dialects tests/unit/builder
+          -n auto --dist=loadgroup -p no:cacheprovider
+
   test-integration:
     needs: [ci-scope, test-unit]
     if: needs.ci-scope.outputs.ci_required == 'true'

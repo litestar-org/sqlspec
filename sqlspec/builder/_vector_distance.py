@@ -3,19 +3,12 @@
 # ruff: noqa: N802
 # pyright: ignore[reportConstantRedefinition]
 from collections.abc import Callable, MutableMapping
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.bigquery import BigQuery
-    from sqlglot.dialects.duckdb import DuckDB
-    from sqlglot.dialects.mysql import MySQL
-    from sqlglot.dialects.oracle import Oracle
-    from sqlglot.dialects.postgres import Postgres
     from sqlglot.generator import Generator
-
-    from sqlspec.dialects.spanner import Spangres, Spanner
 
 __all__ = (
     "VectorDistance",
@@ -30,8 +23,6 @@ __all__ = (
     "vector_distance_metric",
 )
 
-SupportedVectorDistanceDialect: TypeAlias = "BigQuery | DuckDB | MySQL | Oracle | Postgres | Spangres | Spanner"
-
 _VECTOR_DISTANCE_META_KEY: Final[str] = "sqlspec_vector_distance_metric"
 _OperatorTransform = Callable[[Any, exp.Operator], str]
 _SQLGLOT_VECTOR_DISTANCE_REGISTERED = False
@@ -41,8 +32,6 @@ _MYSQL_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _ORACLE_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _BIGQUERY_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _DUCKDB_OPERATOR_TRANSFORM: _OperatorTransform | None = None
-_SPANNER_OPERATOR_TRANSFORM: _OperatorTransform | None = None
-_SPANGRES_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 
 
 def is_vector_distance_expression(expression: object) -> bool:
@@ -230,18 +219,6 @@ def _operator_sql_duckdb(generator: "Generator", expression: exp.Operator) -> st
     return _require_operator_transform(_DUCKDB_OPERATOR_TRANSFORM)(generator, expression)
 
 
-def _operator_sql_spanner(generator: "Generator", expression: exp.Operator) -> str:
-    if is_vector_distance_expression(expression):
-        return _render_with_metric(generator, expression, "bigquery")
-    return _require_operator_transform(_SPANNER_OPERATOR_TRANSFORM)(generator, expression)
-
-
-def _operator_sql_spangres(generator: "Generator", expression: exp.Operator) -> str:
-    if is_vector_distance_expression(expression):
-        return _render_with_metric(generator, expression, "postgres")
-    return _require_operator_transform(_SPANGRES_OPERATOR_TRANSFORM)(generator, expression)
-
-
 def _require_operator_transform(transform: _OperatorTransform | None) -> _OperatorTransform:
     """Return a registered fallback transform or fail loudly."""
     if transform is None:
@@ -266,9 +243,7 @@ def _register_with_sqlglot() -> None:
         _MYSQL_OPERATOR_TRANSFORM, \
         _ORACLE_OPERATOR_TRANSFORM, \
         _BIGQUERY_OPERATOR_TRANSFORM, \
-        _DUCKDB_OPERATOR_TRANSFORM, \
-        _SPANNER_OPERATOR_TRANSFORM, \
-        _SPANGRES_OPERATOR_TRANSFORM
+        _DUCKDB_OPERATOR_TRANSFORM
 
     if _SQLGLOT_VECTOR_DISTANCE_REGISTERED:
         return
@@ -280,16 +255,14 @@ def _register_with_sqlglot() -> None:
     from sqlglot.dialects.postgres import Postgres
     from sqlglot.generator import Generator
 
-    from sqlspec.dialects.spanner import Spangres, Spanner
-
+    # The sqlspec Spanner and Spangres dialects alias the BigQuery and Postgres
+    # generator classes, so registering on the base TRANSFORMS dicts covers them.
     _BASE_OPERATOR_TRANSFORM = cast("_OperatorTransform", Generator.TRANSFORMS[exp.Operator])
     _POSTGRES_OPERATOR_TRANSFORM = cast("_OperatorTransform", Postgres.Generator.TRANSFORMS[exp.Operator])
     _MYSQL_OPERATOR_TRANSFORM = cast("_OperatorTransform", MySQL.Generator.TRANSFORMS[exp.Operator])
     _ORACLE_OPERATOR_TRANSFORM = cast("_OperatorTransform", Oracle.Generator.TRANSFORMS[exp.Operator])
     _BIGQUERY_OPERATOR_TRANSFORM = cast("_OperatorTransform", BigQuery.Generator.TRANSFORMS[exp.Operator])
     _DUCKDB_OPERATOR_TRANSFORM = cast("_OperatorTransform", DuckDB.Generator.TRANSFORMS[exp.Operator])
-    _SPANNER_OPERATOR_TRANSFORM = cast("_OperatorTransform", Spanner.Generator.TRANSFORMS[exp.Operator])
-    _SPANGRES_OPERATOR_TRANSFORM = cast("_OperatorTransform", Spangres.Generator.TRANSFORMS[exp.Operator])
 
     _register_operator_transform(Generator.TRANSFORMS, _operator_sql_base)
     _register_operator_transform(Postgres.Generator.TRANSFORMS, _operator_sql_postgres)
@@ -297,8 +270,6 @@ def _register_with_sqlglot() -> None:
     _register_operator_transform(Oracle.Generator.TRANSFORMS, _operator_sql_oracle)
     _register_operator_transform(BigQuery.Generator.TRANSFORMS, _operator_sql_bigquery)
     _register_operator_transform(DuckDB.Generator.TRANSFORMS, _operator_sql_duckdb)
-    _register_operator_transform(Spanner.Generator.TRANSFORMS, _operator_sql_spanner)
-    _register_operator_transform(Spangres.Generator.TRANSFORMS, _operator_sql_spangres)
 
     # sqlglot caches the dispatch table (built from TRANSFORMS) per Generator class
     # in _DISPATCH_CACHE. We must invalidate stale entries so the next instantiation
@@ -312,8 +283,6 @@ def _register_with_sqlglot() -> None:
         Oracle.Generator,
         BigQuery.Generator,
         DuckDB.Generator,
-        Spanner.Generator,
-        Spangres.Generator,
     ):
         _DISPATCH_CACHE.pop(gen_cls, None)
 

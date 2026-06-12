@@ -13,20 +13,12 @@ _warnings.filterwarnings(
 )
 del _warnings
 
-from sqlspec import (
-    adapters,
-    base,
-    builder,
-    core,
-    dialects,
-    driver,
-    exceptions,
-    extensions,
-    loader,
-    migrations,
-    typing,
-    utils,
-)
+from typing import TYPE_CHECKING, Any
+
+from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
+
+if TYPE_CHECKING:
+    from sqlspec import dialects
 from sqlspec.__metadata__ import __version__
 from sqlspec.base import SQLSpec
 from sqlspec.builder import (
@@ -175,3 +167,12 @@ __all__ = (
 )
 
 suppress_erroneous_sqlglot_log_messages()
+
+
+def __getattr__(name: str) -> "Any":
+    if name == "dialects":
+        import importlib
+
+        return importlib.import_module("sqlspec.dialects")
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)

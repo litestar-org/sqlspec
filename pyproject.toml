@@ -159,6 +159,12 @@ test = [
 [project.scripts]
 sqlspec = "sqlspec.__main__:run_cli"
 
+[project.entry-points."sqlglot.dialects"]
+paradedb = "sqlspec.dialects.postgres:ParadeDB"
+pgvector = "sqlspec.dialects.postgres:PGVector"
+spangres = "sqlspec.dialects.spanner:Spangres"
+spanner = "sqlspec.dialects.spanner:Spanner"
+
 [project.entry-points."pygments.styles"]
 sqlspec-dark = "tools.sphinx_ext.pygments_styles:SQLSpecDarkStyle"
 sqlspec-light = "tools.sphinx_ext.pygments_styles:SQLSpecLightStyle"
@@ -209,10 +215,10 @@ exclude = [
   "sqlspec/**/__init__.py",                 # Init files (usually just imports)
   "sqlspec/protocols.py",                   # Protocol definitions
   "sqlspec/migrations/commands.py",         # interpreted: inspect.signature/functools.wraps on coroutines
-  "sqlspec/dialects/postgres/_pgvector.py", # SQLGlot subclass/registration module stays interpreted
-  "sqlspec/dialects/postgres/_paradedb.py", # SQLGlot subclass/registration module stays interpreted
-  "sqlspec/dialects/spanner/_spanner.py",   # SQLGlot subclass/registration module stays interpreted
-  "sqlspec/dialects/spanner/_spangres.py",  # SQLGlot subclass/registration module stays interpreted
+  "sqlspec/dialects/postgres/_pgvector.py", # interpreted: Dialect subclass needs sqlglot's metaclass
+  "sqlspec/dialects/postgres/_paradedb.py", # interpreted: Dialect subclass needs sqlglot's metaclass
+  "sqlspec/dialects/spanner/_spanner.py",   # interpreted: Dialect subclass needs sqlglot's metaclass
+  "sqlspec/dialects/spanner/_spangres.py",  # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted
   "sqlspec/extensions/events/_channel.py",  # interpreted: importlib + async-generator iter_events
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
@@ -234,6 +240,7 @@ include = [
   "sqlspec/dialects/postgres/_generators.py",      # Postgres custom dialect render hooks
   "sqlspec/dialects/postgres/_operators.py",       # Postgres extension operator registry
   "sqlspec/dialects/spanner/_generators.py",       # Spanner custom dialect render hooks
+  "sqlspec/dialects/spanner/_parsers.py",          # Spanner PROPERTY_PARSERS entries (explicit-arg dict dispatch)
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling

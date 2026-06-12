@@ -23,25 +23,26 @@ def test_legacy_spanner_dialect_module_is_not_available() -> None:
         importlib.import_module("sqlspec.adapters.spanner.dialect")
 
 
-def test_importing_sqlspec_dialects_registers_postgres_and_spanner_dialects(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Top-level dialect import should register all documented sqlspec dialects."""
-    for module_name in (
-        "sqlspec.dialects",
-        "sqlspec.dialects.postgres",
-        "sqlspec.dialects.spanner",
-        "sqlspec.dialects.postgres._pgvector",
-        "sqlspec.dialects.postgres._paradedb",
-    ):
-        monkeypatch.delitem(sys.modules, module_name, raising=False)
-
-    Dialect.classes.pop("pgvector", None)
-    Dialect.classes.pop("paradedb", None)
-    Dialect.classes.pop("spanner", None)
-    Dialect.classes.pop("spangres", None)
-
-    importlib.import_module("sqlspec.dialects")
+def test_importing_dialect_subpackages_registers_dialects() -> None:
+    """Importing the dialect subpackages registers them via sqlglot's metaclass."""
+    importlib.import_module("sqlspec.dialects.postgres")
+    importlib.import_module("sqlspec.dialects.spanner")
 
     assert "pgvector" in Dialect.classes
     assert "paradedb" in Dialect.classes
     assert "spanner" in Dialect.classes
     assert "spangres" in Dialect.classes
+
+
+def test_dialect_names_resolve_through_entry_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sqlglot resolves sqlspec dialect names lazily via the entry-point group."""
+    for key in ("pgvector", "paradedb", "spanner", "spangres"):
+        Dialect.classes.pop(key, None)
+    for module_name in list(sys.modules):
+        if module_name.startswith("sqlspec.dialects"):
+            monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    assert Dialect.get("spanner") is not None
+    assert Dialect.get("pgvector") is not None
+    assert "spanner" in Dialect.classes
+    assert "pgvector" in Dialect.classes

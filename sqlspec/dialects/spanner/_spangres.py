@@ -1,73 +1,46 @@
-r"""Google Cloud Spanner PostgreSQL-interface dialect ("Spangres")."""
+r"""Google Cloud Spanner PostgreSQL-interface dialect ("Spangres").
 
-from typing import Any, Final, cast
+Extends the Postgres dialect with the Spanner PostgreSQL-interface DDL
+extensions: ``INTERLEAVE IN [PARENT]`` for interleaved tables and ``TTL
+INTERVAL ... ON`` for row-level time-to-live. The GoogleSQL ``ROW DELETION
+POLICY`` form is accepted on parse and normalized to the canonical policy
+node so generation always emits the valid PostgreSQL-dialect ``TTL`` form.
+"""
+
+from typing import Any
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
-from sqlglot.parsers.postgres import PostgresParser
-from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.dialects.spanner._generators import (  # noqa: F401
-    _INTERLEAVE_NAME,
-    _ROW_DELETION_NAME,
-    _TTL_MIN_COMPONENTS,
-    SpangresGenerator,
-    _normalize_interval_expression,
+from sqlspec.dialects.spanner._generators import SpangresGenerator
+from sqlspec.dialects.spanner._parsers import (
+    attach_create_property,
+    extract_interleave_property,
+    register_spanner_property_parsers,
 )
 
 __all__ = ("Spangres",)
 
-_ORIGINAL_PARSE_PROPERTY_ATTR: Final[str] = "_sqlspec_original_parse_property"
-_HOOKS_REGISTERED_ATTR: Final[str] = "_sqlspec_spangres_hooks_registered"
-
-
-def _is_spangres_dialect(parser: Any) -> bool:
-    dialect = getattr(parser, "dialect", None)
-    return dialect is not None and dialect.__class__.__name__ == "Spangres"
-
-
-def _original_postgres_parse_property() -> Any:
-    original = getattr(PostgresParser, _ORIGINAL_PARSE_PROPERTY_ATTR, None)
-    if callable(original):
-        return original
-    original = PostgresParser._parse_property
-    setattr(PostgresParser, _ORIGINAL_PARSE_PROPERTY_ATTR, original)
-    return original
-
-
-def _spangres_parse_property(self: Any) -> exp.Expr:
-    if _is_spangres_dialect(self) and self._match_text_seq("ROW", "DELETION", "POLICY"):
-        self._match(TokenType.L_PAREN)
-        self._match_text_seq("OLDER_THAN")
-        self._match(TokenType.L_PAREN)
-        column = cast("exp.Expr", self._parse_id_var())
-        self._match(TokenType.COMMA)
-        self._match_text_seq("INTERVAL")
-        interval = _normalize_interval_expression(cast("exp.Expr", self._parse_expression()))
-        self._match(TokenType.R_PAREN)
-        self._match(TokenType.R_PAREN)
-
-        return exp.Property(
-            this=exp.Literal.string(_ROW_DELETION_NAME), value=exp.Tuple(expressions=[column, interval])
-        )
-
-    return cast("exp.Expr", _original_postgres_parse_property()(self))
-
-
-def _register_postgres_spangres_parser_hooks() -> None:
-    if getattr(PostgresParser, _HOOKS_REGISTERED_ATTR, False):
-        return
-
-    _original_postgres_parse_property()
-    setattr(PostgresParser, "_parse_property", _spangres_parse_property)
-    setattr(PostgresParser, _HOOKS_REGISTERED_ATTR, True)
-
-
-_register_postgres_spangres_parser_hooks()
+register_spanner_property_parsers()
 
 
 class Spangres(Postgres):
     """Spanner PostgreSQL-compatible dialect."""
 
-    Parser = Postgres.Parser
     Generator = SpangresGenerator
+
+    def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
+        """Repair CREATE TABLE statements that sqlglot still falls back to Command for."""
+        expressions = super().parse(sql, **opts)
+        if len(expressions) != 1 or not isinstance(expressions[0], exp.Command):
+            return expressions
+
+        repaired_sql, interleave_property = extract_interleave_property(sql)
+        if interleave_property is None:
+            return expressions
+
+        reparsed = Postgres.parse(self, repaired_sql, **opts)
+        if len(reparsed) != 1 or not isinstance(reparsed[0], exp.Create):
+            return expressions
+
+        return [attach_create_property(reparsed[0], interleave_property)]

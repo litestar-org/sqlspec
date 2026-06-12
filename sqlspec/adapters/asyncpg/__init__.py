@@ -9,7 +9,6 @@ from sqlspec.adapters.asyncpg.config import (
 )
 from sqlspec.adapters.asyncpg.core import default_statement_config
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
-from sqlspec.dialects import postgres  # noqa: F401
 
 __all__ = (
     "AsyncpgConfig",

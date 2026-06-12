@@ -1,24 +1,21 @@
-"""ParadeDB dialect extending PGVector with pg_search BM25/search operators.
+"""ParadeDB dialect extending PGVector with pg_search operators.
 
-Adds support for ParadeDB search operators:
-    - @@@ : BM25 full-text search
-    - &&& : Boolean AND search
-    - ||| : Boolean OR search
-    - === : Exact term match
-    - ### : Score/rank retrieval
-    - ## : Snippet/highlight retrieval
-    - ##> : Snippet/highlight with options
+Adds support for ParadeDB pg_search operators (pg_search 0.18.0+):
+    - @@@ : Full-text search / complex query expressions (BM25)
+    - &&& : Match conjunction (all tokenized terms must match)
+    - ||| : Match disjunction (any tokenized term matches)
+    - === : Exact term match (no tokenization of the right-hand side)
+    - ### : Exact phrase match (token order and position enforced)
+    - ##  : Proximity match, any order (``'a' ## n ## 'b'``)
+    - ##> : Ordered proximity match (left term must appear first)
 
-Also inherits pgvector distance operators from PGVector:
-    - <-> : L2 (Euclidean) distance
-    - <#> : Negative inner product
-    - <=> : Cosine distance
-    - <+> : L1 (Taxicab/Manhattan) distance
-    - <~> : Hamming distance (binary vectors)
-    - <%> : Jaccard distance (binary vectors)
+Scoring and snippets are plain functions in ParadeDB (``pdb.score()``,
+``pdb.snippet()``), not operators, so they need no dialect support.
+
+Also inherits the pgvector distance operators from PGVector. Registered with
+sqlglot through the ``sqlglot.dialects`` entry-point group in
+``pyproject.toml`` and by the ``Dialect`` metaclass on import.
 """
-
-from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.dialects.postgres._generators import ParadeDBGenerator
 from sqlspec.dialects.postgres._operators import PARADEDB_OPERATOR_TOKENS, register_postgres_extension_operators
@@ -40,6 +37,3 @@ class ParadeDB(PGVector):
 
     Tokenizer = ParadeDBTokenizer
     Generator = ParadeDBGenerator
-
-
-Dialect.classes["paradedb"] = ParadeDB
