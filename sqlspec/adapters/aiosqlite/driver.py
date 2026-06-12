@@ -3,9 +3,10 @@
 import asyncio
 import random
 import sqlite3
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiosqlite
+from typing_extensions import Self
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import (
@@ -18,6 +19,7 @@ from sqlspec.adapters.aiosqlite.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    require_python_version,
     resolve_rowcount,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
@@ -26,18 +28,55 @@ from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExce
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable
+    from os import PathLike
+
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
+    "AiosqliteBlob",
     "AiosqliteCursor",
     "AiosqliteDriver",
     "AiosqliteExceptionHandler",
     "AiosqliteRawCursor",
     "AiosqliteSessionContext",
 )
+
+_WAL_CHECKPOINT_MODES = frozenset({"FULL", "PASSIVE", "RESTART", "TRUNCATE"})
+
+
+class AiosqliteBlob:
+    """Async wrapper for sqlite3.Blob bound to an aiosqlite worker thread."""
+
+    __slots__ = ("_blob", "_connection")
+
+    def __init__(self, connection: "AiosqliteConnection", blob: Any) -> None:
+        self._connection = connection
+        self._blob = blob
+
+    async def read(self, length: int = -1) -> bytes:
+        return cast("bytes", await self._connection._execute(self._blob.read, length))  # pyright: ignore[reportPrivateUsage]
+
+    async def write(self, data: bytes) -> None:
+        await self._connection._execute(self._blob.write, data)  # pyright: ignore[reportPrivateUsage]
+
+    async def seek(self, offset: int, origin: int = 0) -> None:
+        await self._connection._execute(self._blob.seek, offset, origin)  # pyright: ignore[reportPrivateUsage]
+
+    async def tell(self) -> int:
+        return cast("int", await self._connection._execute(self._blob.tell))  # pyright: ignore[reportPrivateUsage]
+
+    async def close(self) -> None:
+        await self._connection._execute(self._blob.close)  # pyright: ignore[reportPrivateUsage]
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.close()
 
 
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
@@ -187,6 +226,91 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
         """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # MAINTENANCE OPERATIONS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    async def backup(
+        self,
+        target: "AiosqliteConnection | sqlite3.Connection | str | PathLike[str]",
+        *,
+        pages: int = 0,
+        progress: "Callable[[int, int, int], None] | None" = None,
+        name: str = "main",
+        sleep: float = 0.250,
+    ) -> None:
+        """Copy the database into another connection or file path."""
+        if isinstance(target, (aiosqlite.Connection, sqlite3.Connection)):
+            await self.connection.backup(target, pages=pages, progress=progress, name=name, sleep=sleep)
+            return
+        target_connection = sqlite3.connect(str(target), check_same_thread=False)
+        try:
+            await self.connection.backup(target_connection, pages=pages, progress=progress, name=name, sleep=sleep)
+        finally:
+            target_connection.close()
+
+    def iterdump(self) -> "AsyncIterator[str]":
+        """Return an async iterator of SQL statements that recreate the database."""
+        return self.connection.iterdump()
+
+    async def serialize(self, *, name: str = "main") -> bytes:
+        """Return the named database as bytes. Requires Python 3.11+."""
+        require_python_version("sqlite3.Connection.serialize()", (3, 11))
+        raw_connection = self.connection._conn  # pyright: ignore[reportPrivateUsage]
+        return cast(
+            "bytes",
+            await self.connection._execute(raw_connection.serialize, name=name),  # pyright: ignore[reportPrivateUsage]
+        )
+
+    async def deserialize(self, data: bytes, *, name: str = "main") -> None:
+        """Replace the named database with serialized bytes. Requires Python 3.11+."""
+        require_python_version("sqlite3.Connection.deserialize()", (3, 11))
+        raw_connection = self.connection._conn  # pyright: ignore[reportPrivateUsage]
+        await self.connection._execute(  # pyright: ignore[reportPrivateUsage]
+            raw_connection.deserialize, data, name=name
+        )
+
+    async def blob_open(
+        self, table: str, column: str, rowid: int, *, readonly: bool = False, name: str = "main"
+    ) -> "AiosqliteBlob":
+        """Open incremental blob I/O on an existing BLOB cell. Requires Python 3.11+."""
+        require_python_version("sqlite3.Connection.blobopen()", (3, 11))
+        raw_connection = self.connection._conn  # pyright: ignore[reportPrivateUsage]
+        blob = await self.connection._execute(  # pyright: ignore[reportPrivateUsage]
+            raw_connection.blobopen, table, column, rowid, readonly=readonly, name=name
+        )
+        return AiosqliteBlob(self.connection, blob)
+
+    async def optimize(self) -> None:
+        """Run PRAGMA optimize."""
+        await self.connection.execute("PRAGMA optimize")
+
+    async def wal_checkpoint(
+        self, mode: Literal["PASSIVE", "FULL", "RESTART", "TRUNCATE"] = "PASSIVE"
+    ) -> tuple[int, int, int]:
+        """Run a WAL checkpoint and return (busy, log_pages, checkpointed_pages).
+
+        TRUNCATE and RESTART block writers while the checkpoint runs.
+        """
+        if mode not in _WAL_CHECKPOINT_MODES:
+            msg = f"Invalid WAL checkpoint mode {mode!r}; expected one of {sorted(_WAL_CHECKPOINT_MODES)}."
+            raise SQLSpecError(msg)
+        cursor = await self.connection.execute(f"PRAGMA wal_checkpoint({mode})")
+        try:
+            row = await cursor.fetchone()
+        finally:
+            await cursor.close()
+        return (int(row[0]), int(row[1]), int(row[2]))
+
+    async def integrity_check(self, *, max_errors: int = 100) -> list[str]:
+        """Run PRAGMA integrity_check and return reported messages (['ok'] when clean)."""
+        cursor = await self.connection.execute(f"PRAGMA integrity_check({int(max_errors)})")
+        try:
+            rows = await cursor.fetchall()
+        finally:
+            await cursor.close()
+        return [str(row[0]) for row in rows]
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
