@@ -704,6 +704,7 @@ class BigQueryStreamSource:
             return []
         while True:
             handler = self._driver.handle_database_exceptions()
+            page: Iterable[_BigQueryRow] | None = None
             with handler:
                 page = next(pages, None)
             self._driver._check_pending_exception(handler)
