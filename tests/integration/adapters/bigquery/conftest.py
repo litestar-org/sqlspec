@@ -39,7 +39,7 @@ def pytest_runtest_makereport(call: "pytest.CallInfo[None]") -> "Generator[None,
     """Record the first emulator wedge so remaining BigQuery tests skip fast."""
     outcome = yield
     report = outcome.get_result()
-    if _emulator_wedge_reason is None and call.excinfo is not None and is_emulator_wedge(call.excinfo.value):
+    if call.excinfo is not None and is_emulator_wedge(call.excinfo.value):
         _mark_report_skipped_for_emulator_wedge(report, call.excinfo.value)
 
 

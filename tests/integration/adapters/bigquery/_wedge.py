@@ -1,10 +1,10 @@
 """Detection helpers for a wedged BigQuery emulator.
 
 The goccy emulator executes query jobs synchronously inside the ``jobs.insert``
-HTTP handler and can wedge its internal lock, after which it accepts requests
-but never responds. With finite driver timeouts each call then fails fast, and
-these helpers let fixtures skip the remaining BigQuery tests instead of paying
-the timeout once per test.
+HTTP handler and can wedge its internal lock. Depending on where it wedges, it
+either accepts requests but never responds or starts returning HTTP 500
+``sql: connection is already closed`` errors. These helpers let fixtures skip
+the remaining BigQuery tests instead of failing every later contract test.
 """
 
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -22,6 +22,9 @@ _WEDGE_ERROR_TYPES = (
     requests.exceptions.ConnectionError,
 )
 
+_CLOSED_CONNECTION_MESSAGE = "sql: connection is already closed"
+_BIGQUERY_HTTP_500_MESSAGE = "BigQuery operational error [HTTP 500]"
+
 
 def is_emulator_wedge(error: BaseException) -> bool:
     """Return True when an exception chain indicates the emulator stopped responding."""
@@ -30,6 +33,9 @@ def is_emulator_wedge(error: BaseException) -> bool:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, _WEDGE_ERROR_TYPES):
+            return True
+        error_message = str(current)
+        if _CLOSED_CONNECTION_MESSAGE in error_message and _BIGQUERY_HTTP_500_MESSAGE in error_message:
             return True
         current = current.__cause__ or current.__context__
     return False
