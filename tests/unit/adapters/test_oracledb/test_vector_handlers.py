@@ -41,6 +41,12 @@ def _mock_metadata(type_code: object) -> Mock:
     return md
 
 
+def _sparse_vector() -> object:
+    import oracledb
+
+    return oracledb.SparseVector(8, [1, 3], [1.5, 2.25])
+
+
 def test_input_handler_claims_list_of_float() -> None:
     """``list[float]`` is auto-packed as float32 and bound to DB_TYPE_VECTOR."""
     from sqlspec.adapters.oracledb._vector_handlers import _input_type_handler  # pyright: ignore[reportPrivateUsage]
@@ -117,6 +123,20 @@ def test_input_handler_passes_array_array_through() -> None:
     cursor.var.assert_called_once()
     kwargs = cursor.var.call_args.kwargs
     assert "inconverter" not in kwargs
+
+
+def test_input_handler_rejects_sparse_vector() -> None:
+    """``oracledb.SparseVector`` is bound natively by python-oracledb."""
+    from sqlspec.adapters.oracledb._vector_handlers import _input_type_handler  # pyright: ignore[reportPrivateUsage]
+    from sqlspec.adapters.oracledb.core import ORACLEDB_SUPPORTS_SPARSE_VECTORS
+
+    if not ORACLEDB_SUPPORTS_SPARSE_VECTORS:
+        pytest.skip("python-oracledb does not provide SparseVector")
+
+    cursor = _mock_cursor()
+
+    assert _input_type_handler(cursor, _sparse_vector(), 1) is None
+    cursor.var.assert_not_called()
 
 
 @pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed")
@@ -196,6 +216,24 @@ def test_output_handler_returns_none_for_non_vector_column() -> None:
     metadata = _mock_metadata(oracledb.DB_TYPE_VARCHAR)
 
     assert _output_type_handler(cursor, metadata) is None
+
+
+def test_output_handler_returns_none_for_sparse_vector_column() -> None:
+    """Sparse VECTOR columns are fetched with python-oracledb's native value."""
+    import oracledb
+
+    from sqlspec.adapters.oracledb._vector_handlers import _output_type_handler  # pyright: ignore[reportPrivateUsage]
+    from sqlspec.adapters.oracledb.core import ORACLEDB_SUPPORTS_SPARSE_VECTORS
+
+    if not ORACLEDB_SUPPORTS_SPARSE_VECTORS:
+        pytest.skip("python-oracledb does not provide SparseVector")
+
+    cursor = _mock_cursor_with_format("list")
+    metadata = _mock_metadata(oracledb.DB_TYPE_VECTOR)
+    metadata.vector_is_sparse = True
+
+    assert _output_type_handler(cursor, metadata) is None
+    cursor.var.assert_not_called()
 
 
 @pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed")
