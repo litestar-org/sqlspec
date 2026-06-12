@@ -338,6 +338,7 @@ SYNC_DRIVER_CASES = (
             "emulator-no-grouped-subquery",
             "emulator-no-search-filter",
             "emulator-retries-invalid-sql",
+            "emulator-streaming-reopen-hangs",
             "streaming-page-size-advisory",
         ),
         extra_assertions=(

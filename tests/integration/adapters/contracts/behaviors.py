@@ -381,18 +381,20 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
     assert remaining[-1]["value"] == count - 1
 
-    with sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
-        partial_iterator = iter(partial)
-        for _ in range(50):
-            next(partial_iterator)
-    assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
+    if "emulator-streaming-reopen-hangs" not in case.deviations:
+        with sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
+            partial_iterator = iter(partial)
+            for _ in range(50):
+                next(partial_iterator)
+        assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
 
-    bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
-    with pytest.raises(Exception):
-        next(iter(bad_stream))
-    with contextlib.suppress(Exception):
-        sync_driver.rollback()
-    assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
+    if "emulator-retries-invalid-sql" not in case.deviations:
+        bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+        with pytest.raises(Exception):
+            next(iter(bad_stream))
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
 
     dispatch_sync_extra_assertions(driver, case, _STREAMING_SCOPE)
 
@@ -417,18 +419,20 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
     assert remaining[-1]["value"] == count - 1
 
-    async with async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
-        partial_iterator = aiter(partial)
-        for _ in range(50):
-            await anext(partial_iterator)
-    assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
+    if "emulator-streaming-reopen-hangs" not in case.deviations:
+        async with async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
+            partial_iterator = aiter(partial)
+            for _ in range(50):
+                await anext(partial_iterator)
+        assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
 
-    bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
-    with pytest.raises(Exception):
-        await anext(aiter(bad_stream))
-    with contextlib.suppress(Exception):
-        await async_driver.rollback()
-    assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
+    if "emulator-retries-invalid-sql" not in case.deviations:
+        bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+        with pytest.raises(Exception):
+            await anext(aiter(bad_stream))
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
 
     await dispatch_async_extra_assertions(driver, case, _STREAMING_SCOPE)
 
