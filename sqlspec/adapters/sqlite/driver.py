@@ -447,14 +447,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         filter_pattern filters dumped objects by LIKE pattern and requires Python 3.13+.
         """
         if filter_pattern is None:
-            return self.connection.iterdump()
+            return cast("Iterator[str]", self.connection.iterdump())
         require_python_version("sqlite3.Connection.iterdump(filter=...)", (3, 13))
-        return self.connection.iterdump(filter=filter_pattern)
+        return cast("Iterator[str]", self.connection.iterdump(filter=filter_pattern))
 
     def serialize(self, *, name: str = "main") -> bytes:
         """Return the named database as bytes. Requires Python 3.11+."""
         require_python_version("sqlite3.Connection.serialize()", (3, 11))
-        return self.connection.serialize(name=name)
+        return cast("bytes", self.connection.serialize(name=name))
 
     def deserialize(self, data: bytes, *, name: str = "main") -> None:
         """Replace the named database with serialized bytes. Requires Python 3.11+."""

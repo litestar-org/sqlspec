@@ -21,6 +21,7 @@ from sqlspec.adapters.aiosqlite.core import (
     normalize_execute_parameters,
     require_python_version,
     resolve_rowcount,
+    run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
@@ -58,19 +59,19 @@ class AiosqliteBlob:
         self._blob = blob
 
     async def read(self, length: int = -1) -> bytes:
-        return cast("bytes", await self._connection._execute(self._blob.read, length))  # pyright: ignore[reportPrivateUsage]
+        return cast("bytes", await run_on_worker_thread(self._connection, self._blob.read, length))
 
     async def write(self, data: bytes) -> None:
-        await self._connection._execute(self._blob.write, data)  # pyright: ignore[reportPrivateUsage]
+        await run_on_worker_thread(self._connection, self._blob.write, data)
 
     async def seek(self, offset: int, origin: int = 0) -> None:
-        await self._connection._execute(self._blob.seek, offset, origin)  # pyright: ignore[reportPrivateUsage]
+        await run_on_worker_thread(self._connection, self._blob.seek, offset, origin)
 
     async def tell(self) -> int:
-        return cast("int", await self._connection._execute(self._blob.tell))  # pyright: ignore[reportPrivateUsage]
+        return cast("int", await run_on_worker_thread(self._connection, self._blob.tell))
 
     async def close(self) -> None:
-        await self._connection._execute(self._blob.close)  # pyright: ignore[reportPrivateUsage]
+        await run_on_worker_thread(self._connection, self._blob.close)
 
     async def __aenter__(self) -> Self:
         return self
@@ -252,24 +253,19 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     def iterdump(self) -> "AsyncIterator[str]":
         """Return an async iterator of SQL statements that recreate the database."""
-        return self.connection.iterdump()
+        return cast("AsyncIterator[str]", self.connection.iterdump())
 
     async def serialize(self, *, name: str = "main") -> bytes:
         """Return the named database as bytes. Requires Python 3.11+."""
         require_python_version("sqlite3.Connection.serialize()", (3, 11))
         raw_connection = self.connection._conn  # pyright: ignore[reportPrivateUsage]
-        return cast(
-            "bytes",
-            await self.connection._execute(raw_connection.serialize, name=name),  # pyright: ignore[reportPrivateUsage]
-        )
+        return cast("bytes", await run_on_worker_thread(self.connection, raw_connection.serialize, name=name))
 
     async def deserialize(self, data: bytes, *, name: str = "main") -> None:
         """Replace the named database with serialized bytes. Requires Python 3.11+."""
         require_python_version("sqlite3.Connection.deserialize()", (3, 11))
         raw_connection = self.connection._conn  # pyright: ignore[reportPrivateUsage]
-        await self.connection._execute(  # pyright: ignore[reportPrivateUsage]
-            raw_connection.deserialize, data, name=name
-        )
+        await run_on_worker_thread(self.connection, raw_connection.deserialize, data, name=name)
 
     async def blob_open(
         self, table: str, column: str, rowid: int, *, readonly: bool = False, name: str = "main"
@@ -277,8 +273,8 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Open incremental blob I/O on an existing BLOB cell. Requires Python 3.11+."""
         require_python_version("sqlite3.Connection.blobopen()", (3, 11))
         raw_connection = self.connection._conn  # pyright: ignore[reportPrivateUsage]
-        blob = await self.connection._execute(  # pyright: ignore[reportPrivateUsage]
-            raw_connection.blobopen, table, column, rowid, readonly=readonly, name=name
+        blob = await run_on_worker_thread(
+            self.connection, raw_connection.blobopen, table, column, rowid, readonly=readonly, name=name
         )
         return AiosqliteBlob(self.connection, blob)
 

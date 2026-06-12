@@ -40,7 +40,9 @@ class _SumAggregate:
         return self.total
 
 
-def _deny_secrets_read(action: int, arg1: str | None, arg2: str | None, db_name: str | None, trigger_name: str | None) -> int:
+def _deny_secrets_read(
+    action: int, arg1: str | None, arg2: str | None, db_name: str | None, trigger_name: str | None
+) -> int:
     _ = arg2, db_name, trigger_name
     if action == sqlite3.SQLITE_READ and arg1 == "secrets":
         return sqlite3.SQLITE_DENY
@@ -138,7 +140,9 @@ def test_authorizer_blocks_table_read(tmp_path: Path) -> None:
     finally:
         config.close_pool()
 
-    config = SqliteConfig(connection_config={"database": db_path}, driver_features={"authorizer_callback": _deny_secrets_read})
+    config = SqliteConfig(
+        connection_config={"database": db_path}, driver_features={"authorizer_callback": _deny_secrets_read}
+    )
     try:
         with config.provide_session() as session:
             with pytest.raises(SQLSpecError):
@@ -150,9 +154,7 @@ def test_authorizer_blocks_table_read(tmp_path: Path) -> None:
 def test_progress_handler_fires() -> None:
     """Progress handlers should be invoked during long-running queries."""
     PROGRESS_CALLS.clear()
-    config = SqliteConfig(
-        driver_features={"progress_handler": _progress_handler, "progress_handler_interval": 10}
-    )
+    config = SqliteConfig(driver_features={"progress_handler": _progress_handler, "progress_handler_interval": 10})
 
     try:
         with config.provide_session() as session:

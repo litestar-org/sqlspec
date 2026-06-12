@@ -156,9 +156,7 @@ async def test_authorizer_blocks_table_read(tmp_path: Path) -> None:
 
 async def test_progress_handler_fires() -> None:
     PROGRESS_CALLS.clear()
-    config = AiosqliteConfig(
-        driver_features={"progress_handler": _progress_handler, "progress_handler_interval": 10}
-    )
+    config = AiosqliteConfig(driver_features={"progress_handler": _progress_handler, "progress_handler_interval": 10})
 
     try:
         async with config.provide_session() as session:
@@ -206,6 +204,7 @@ async def test_row_factory_row_literal_applies() -> None:
                 row = await cursor.fetchone()
             finally:
                 await cursor.close()
+            assert row is not None
             assert row["v"] == 1
 
         async with config.provide_session() as session:
@@ -226,6 +225,7 @@ async def test_text_factory_applies() -> None:
                 row = await cursor.fetchone()
             finally:
                 await cursor.close()
+            assert row is not None
             assert row[0] == b"hello"
     finally:
         await config.close_pool()
@@ -233,7 +233,9 @@ async def test_text_factory_applies() -> None:
 
 async def test_user_pragmas_override_optimizations(tmp_path: Path) -> None:
     db_path = tmp_path / "pragma.db"
-    config = AiosqliteConfig(connection_config={"database": db_path}, driver_features={"pragmas": {"synchronous": "FULL"}})
+    config = AiosqliteConfig(
+        connection_config={"database": db_path}, driver_features={"pragmas": {"synchronous": "FULL"}}
+    )
 
     try:
         async with config.provide_connection() as conn:
@@ -242,6 +244,7 @@ async def test_user_pragmas_override_optimizations(tmp_path: Path) -> None:
                 row = await cursor.fetchone()
             finally:
                 await cursor.close()
+            assert row is not None
             assert row[0] == 2
     finally:
         await config.close_pool()

@@ -4,7 +4,7 @@ import contextlib
 import sys
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -30,7 +30,11 @@ from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_co
 from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+
+    from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+
+_T = TypeVar("_T")
 
 __all__ = (
     "AiosqliteStreamSource",
@@ -48,6 +52,7 @@ __all__ = (
     "normalize_execute_parameters",
     "require_python_version",
     "resolve_rowcount",
+    "run_on_worker_thread",
 )
 
 
@@ -67,6 +72,17 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+
+
+async def run_on_worker_thread(
+    connection: "AiosqliteConnection", function: "Callable[..., _T]", *args: Any, **kwargs: Any
+) -> _T:
+    """Execute a sqlite3 callable on the aiosqlite worker thread."""
+    execute = cast(
+        "Callable[..., Awaitable[_T]]",
+        connection._execute,  # pyright: ignore[reportPrivateUsage]
+    )
+    return await execute(function, *args, **kwargs)
 
 
 def format_identifier(identifier: str) -> str:

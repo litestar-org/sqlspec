@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
+from sqlspec.adapters.aiosqlite.core import run_on_worker_thread
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -71,7 +72,8 @@ async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup:
 
     raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
     for aggregate_config in runtime_setup.get("custom_aggregates", ()):
-        await connection._execute(  # pyright: ignore[reportPrivateUsage]
+        await run_on_worker_thread(
+            connection,
             raw_connection.create_aggregate,
             aggregate_config["name"],
             aggregate_config["narg"],
@@ -79,10 +81,8 @@ async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup:
         )
 
     for collation_config in runtime_setup.get("custom_collations", ()):
-        await connection._execute(  # pyright: ignore[reportPrivateUsage]
-            raw_connection.create_collation,
-            collation_config["name"],
-            collation_config["func"],
+        await run_on_worker_thread(
+            connection, raw_connection.create_collation, collation_config["name"], collation_config["func"]
         )
 
     authorizer_callback = runtime_setup.get("authorizer_callback")
