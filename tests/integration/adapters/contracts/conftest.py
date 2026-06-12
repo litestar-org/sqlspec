@@ -270,7 +270,7 @@ def contract_bigquery_driver(
     _bigquery_contract_session: BigQueryDriver, bigquery_contract_table: ContractTable
 ) -> BigQueryDriver:
     """Provide the session BigQuery driver with an empty contract table per test."""
-    _bigquery_contract_session.execute(bigquery_contract_table.delete_sql)
+    _bigquery_contract_session.execute_script(bigquery_contract_table.create_sql)
     return _bigquery_contract_session
 
 
