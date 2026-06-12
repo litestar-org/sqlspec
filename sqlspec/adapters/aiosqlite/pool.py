@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import sqlite3
 import time
 from contextlib import suppress
 from inspect import isawaitable
@@ -31,6 +32,76 @@ __all__ = (
 logger = get_logger(POOL_LOGGER_NAME)
 
 _ADAPTER_NAME = "aiosqlite"
+
+
+def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":
+    return {description[0]: row[index] for index, description in enumerate(cursor.description)}
+
+
+def _resolve_row_factory(row_factory: Any) -> Any:
+    if row_factory == "row":
+        return sqlite3.Row
+    if row_factory == "dict":
+        return _dict_row_factory
+    if row_factory == "tuple":
+        return None
+    return row_factory
+
+
+async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup: "dict[str, Any]") -> None:
+    for pragma_name, pragma_value in runtime_setup.get("pragmas", ()):
+        await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
+
+    extensions = runtime_setup.get("extensions")
+    if extensions:
+        await connection.enable_load_extension(True)
+        try:
+            for extension_path in extensions:
+                await connection.load_extension(extension_path)
+        finally:
+            await connection.enable_load_extension(False)
+
+    for function_config in runtime_setup.get("custom_functions", ()):
+        await connection.create_function(
+            function_config["name"],
+            function_config["narg"],
+            function_config["func"],
+            deterministic=function_config.get("deterministic", False),
+        )
+
+    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    for aggregate_config in runtime_setup.get("custom_aggregates", ()):
+        await connection._execute(  # pyright: ignore[reportPrivateUsage]
+            raw_connection.create_aggregate,
+            aggregate_config["name"],
+            aggregate_config["narg"],
+            aggregate_config["aggregate_class"],
+        )
+
+    for collation_config in runtime_setup.get("custom_collations", ()):
+        await connection._execute(  # pyright: ignore[reportPrivateUsage]
+            raw_connection.create_collation,
+            collation_config["name"],
+            collation_config["func"],
+        )
+
+    authorizer_callback = runtime_setup.get("authorizer_callback")
+    if authorizer_callback is not None:
+        await connection.set_authorizer(authorizer_callback)
+
+    trace_callback = runtime_setup.get("trace_callback")
+    if trace_callback is not None:
+        await connection.set_trace_callback(trace_callback)
+
+    progress_handler = runtime_setup.get("progress_handler")
+    if progress_handler is not None:
+        await connection.set_progress_handler(progress_handler, runtime_setup.get("progress_handler_interval", 1000))
+
+    if "row_factory" in runtime_setup:
+        connection.row_factory = _resolve_row_factory(runtime_setup["row_factory"])
+
+    if "text_factory" in runtime_setup:
+        connection.text_factory = runtime_setup["text_factory"]
 
 
 class AiosqlitePoolClosedError(SQLSpecError):
@@ -424,6 +495,9 @@ class AiosqliteConnectionPool:
             await connection.commit()
 
         # Call user-provided callback after internal setup
+        if self._runtime_setup is not None:
+            await _apply_runtime_setup(connection, self._runtime_setup)
+
         if self._on_connection_create is not None:
             await self._on_connection_create(connection)
 
