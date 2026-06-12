@@ -345,6 +345,16 @@ def test_query_cache_lru_eviction_after_final() -> None:
     assert cache.get("SELECT 3") is not None
 
 
+def test_query_cache_zero_size_is_noop() -> None:
+    """Zero-sized caches should ignore inserts instead of raising."""
+    cache = QueryCache(max_size=0)
+
+    cache.set("SELECT 1", _make_cached("SELECT 1"))
+
+    assert len(cache) == 0
+    assert cache.get("SELECT 1") is None
+
+
 def test_release_pooled_statement_uses_direct_pooled_attribute(sqlite_sync_driver: Any) -> None:
     """_release_pooled_statement reads SQL._pooled directly."""
     statement = SQL("SELECT 1")
