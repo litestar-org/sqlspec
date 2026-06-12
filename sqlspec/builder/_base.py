@@ -14,7 +14,10 @@ import sqlglot
 from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
-from sqlglot.optimizer import optimize
+from sqlglot.optimizer import RULES, optimize
+from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
+from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
+from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor
@@ -702,12 +705,19 @@ class QueryBuilder(ABC):
         if cached_optimized:
             return cast("exp.Expr", cached_optimized)
 
+        excluded_rules = set()
+        if not self.optimize_joins:
+            excluded_rules.add(_optimize_joins_rule)
+        if not self.optimize_predicates:
+            excluded_rules.add(_pushdown_predicates_rule)
+        if not self.simplify_expressions:
+            excluded_rules.add(_simplify_rule)
+
+        rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
+
         try:
             optimized = optimize(
-                expression,
-                schema=cast("dict[str, object] | None", self.schema),
-                dialect=self.dialect_name,
-                optimizer_settings=optimizer_settings,
+                expression, schema=cast("dict[str, object] | None", self.schema), dialect=self.dialect_name, rules=rules
             )
             cache.put_optimized(cache_key, optimized)
         except Exception:
