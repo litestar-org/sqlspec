@@ -328,7 +328,7 @@ async def _seed_stream_table_async(driver: AsyncContractDriver, table: ContractT
 def assert_sync_streaming_unsupported_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers without native streaming raise under native_only and fall back eagerly."""
     if case.supports_native_row_streaming:
-        pytest.skip(f"{case.adapter} supports native row streaming")
+        pytest.skip(f"{case.adapter} is covered by the native row-streaming contract")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
     sync_driver.execute(table.delete_sql)
@@ -346,7 +346,7 @@ def assert_sync_streaming_unsupported_contract(driver: object, case: DriverCase)
 async def assert_async_streaming_unsupported_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers without native streaming raise under native_only and fall back eagerly."""
     if case.supports_native_row_streaming:
-        pytest.skip(f"{case.adapter} supports native row streaming")
+        pytest.skip(f"{case.adapter} is covered by the native row-streaming contract")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
     await async_driver.execute(table.delete_sql)

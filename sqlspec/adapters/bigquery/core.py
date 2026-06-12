@@ -699,17 +699,19 @@ class BigQueryStreamSource:
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
-        handler = self._driver.handle_database_exceptions()
-        page: Iterable[_BigQueryRow] | None = None
         pages = self._pages
         if pages is None:
             return []
-        with handler:
-            page = next(pages, None)
-        self._driver._check_pending_exception(handler)
-        if page is None:
-            return []
-        return [dict(row.items()) for row in page]
+        while True:
+            handler = self._driver.handle_database_exceptions()
+            with handler:
+                page = next(pages, None)
+            self._driver._check_pending_exception(handler)
+            if page is None:
+                return []
+            rows = [dict(row.items()) for row in page]
+            if rows:
+                return rows
 
     def close(self) -> None:
         job = self._job

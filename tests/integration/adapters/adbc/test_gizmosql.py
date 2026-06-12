@@ -13,10 +13,10 @@ from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 pytestmark = [pytest.mark.adbc, pytest.mark.xdist_group("gizmosql")]
 
 SQLITE_FLIGHTSQL_RESULT_XFAIL = (
-    "Tracked in sqlspec-z5q3.1: GizmoSQL SQLite FlightSQL result streams return inconsistent schemas with ADBC 1.11"
+    "GizmoSQL SQLite currently returns inconsistent Flight SQL ADBC result schemas for SELECT statements"
 )
 DUCKDB_DUPLICATE_KEY_XFAIL = (
-    "Tracked in sqlspec-z5q3.2: GizmoSQL DuckDB suppresses duplicate-key errors over FlightSQL ADBC 1.11"
+    "GizmoSQL DuckDB currently acknowledges duplicate-key writes without surfacing a constraint error"
 )
 
 GizmoSQLSessionCase: TypeAlias = tuple[AdbcDriver, str]

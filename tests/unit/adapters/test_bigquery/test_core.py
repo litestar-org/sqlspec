@@ -1,5 +1,6 @@
 """Unit tests for BigQuery core performance helpers."""
 
+from collections.abc import Iterable
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
@@ -34,26 +35,35 @@ class _RecordingConnection:
         return self.job
 
 
+class _RecordingRow:
+    def __init__(self, values: dict[str, object]) -> None:
+        self._values = values
+
+    def items(self) -> Iterable[tuple[str, object]]:
+        return self._values.items()
+
+
 def _schema_field(name: str) -> SimpleNamespace:
     return SimpleNamespace(name=name)
 
 
 class _RecordingStreamJob:
-    def __init__(self) -> None:
+    def __init__(self, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
         self.result_kwargs: dict[str, Any] = {}
+        self._pages = iter(pages or ())
 
     def result(self, **kwargs: Any) -> SimpleNamespace:
         self.result_kwargs = kwargs
-        return SimpleNamespace(pages=iter(()))
+        return SimpleNamespace(pages=self._pages)
 
 
 class _RecordingStreamDriver:
-    def __init__(self, api_base_url: str) -> None:
+    def __init__(self, api_base_url: str, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
         self.connection = SimpleNamespace(_connection=SimpleNamespace(API_BASE_URL=api_base_url))
         self._job_retry = build_retry(2.0)
         self._job_retry_deadline = 2.0
         self._job_result_timeout: Any = 3.0
-        self.job = _RecordingStreamJob()
+        self.job = _RecordingStreamJob(pages)
 
     def _run_query_job(self, connection: Any, sql: str, parameters: Any) -> Any:
         return self.job
@@ -230,6 +240,15 @@ def test_stream_source_remote_endpoint_passes_chunk_page_size() -> None:
     kwargs = driver.job.result_kwargs
     assert kwargs["page_size"] == 100
     assert kwargs["retry"].timeout == driver._job_retry_deadline
+
+
+def test_stream_source_skips_empty_pages_before_rows() -> None:
+    driver = _RecordingStreamDriver("https://bigquery.googleapis.com", pages=((), (_RecordingRow({"value": 1}),)))
+    source = BigQueryStreamSource(cast(Any, driver), "SELECT 1", None, 100)
+    source.start()
+
+    assert source.fetch_chunk() == [{"value": 1}]
+    assert source.fetch_chunk() == []
 
 
 def test_type_converter_bigquery_output_converter_is_final() -> None:
