@@ -232,21 +232,20 @@ def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generato
         config.close_pool()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def bigquery_contract_table(bigquery_service: BigQueryService) -> ContractTable:
-    """Resolve the fully-qualified BigQuery ContractTable for the running emulator."""
-    return build_bigquery_contract_table(f"`{bigquery_service.project}.{bigquery_service.dataset}.contract_items`")
+    """Resolve a unique fully-qualified BigQuery ContractTable for one contract test."""
+    table_name = f"contract_items_{uuid4().hex[:8]}"
+    return build_bigquery_contract_table(f"`{bigquery_service.project}.{bigquery_service.dataset}.{table_name}`")
 
 
 @pytest.fixture(scope="session")
-def _bigquery_contract_session(
-    bigquery_service: BigQueryService, bigquery_contract_table: ContractTable
-) -> "Generator[BigQueryDriver, None, None]":
-    """Session-scoped BigQuery driver; the contract table is created once.
+def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[BigQueryDriver, None, None]":
+    """Session-scoped BigQuery driver for contract tests.
 
     The emulator is unreliable under repeated DDL and hangs on default-dataset job
     config, so the client is reused across the xdist group, a dotted dataset_id keeps
-    the default dataset unset, and the table is referenced fully-qualified.
+    the default dataset unset, and tables are referenced fully-qualified.
     """
     config = BigQueryConfig(
         connection_config={
@@ -259,7 +258,6 @@ def _bigquery_contract_session(
     )
     try:
         with config.provide_session() as driver:
-            driver.execute_script(bigquery_contract_table.create_sql)
             yield driver
     finally:
         config.close_pool()
@@ -269,7 +267,7 @@ def _bigquery_contract_session(
 def contract_bigquery_driver(
     _bigquery_contract_session: BigQueryDriver, bigquery_contract_table: ContractTable
 ) -> BigQueryDriver:
-    """Provide the session BigQuery driver with an empty contract table per test."""
+    """Provide the session BigQuery driver with an isolated contract table per test."""
     _bigquery_contract_session.execute_script(bigquery_contract_table.create_sql)
     return _bigquery_contract_session
 
