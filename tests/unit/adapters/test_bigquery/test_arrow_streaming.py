@@ -117,7 +117,12 @@ def test_select_to_arrow_table_applies_query_result_kwargs(monkeypatch: pytest.M
     connection = _FakeBigQueryConnection(job)
     driver = BigQueryDriver(
         cast("BigQueryConnection", connection),
-        driver_features={"query_page_size": 13, "query_max_results": 4, "job_retry_deadline": 1.0, "job_result_timeout": 3.0},
+        driver_features={
+            "query_page_size": 13,
+            "query_max_results": 4,
+            "job_retry_deadline": 1.0,
+            "job_result_timeout": 3.0,
+        },
     )
 
     monkeypatch.setattr("sqlspec.adapters.bigquery.driver.storage_api_available", lambda: True)
@@ -125,10 +130,5 @@ def test_select_to_arrow_table_applies_query_result_kwargs(monkeypatch: pytest.M
     result = driver.select_to_arrow("SELECT 1 AS x", return_format="table")
 
     assert result.get_data().to_pydict() == {"x": [1, 2, 3]}
-    assert job.result_calls[0] == {
-        "page_size": 13,
-        "max_results": 4,
-        "job_retry": driver._job_retry,
-        "timeout": 3.0,
-    }
+    assert job.result_calls[0] == {"page_size": 13, "max_results": 4, "job_retry": driver._job_retry, "timeout": 3.0}
     assert job.to_arrow_calls == 1

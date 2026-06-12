@@ -283,7 +283,8 @@ def test_bigquery_driver_select_result_passes_job_result_kwargs() -> None:
     connection = _RecordingConnection()
     connection.job = _RecordingSelectJob([{"id": 1}])
     driver = BigQueryDriver(
-        cast(Any, connection), driver_features={"query_page_size": 17, "query_max_results": 11, "job_result_timeout": 3.0}
+        cast(Any, connection),
+        driver_features={"query_page_size": 17, "query_max_results": 11, "job_result_timeout": 3.0},
     )
 
     result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("SELECT 1"))
@@ -305,32 +306,31 @@ def test_bigquery_driver_minimal_select_result_omits_paging_kwargs() -> None:
     result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("SELECT 1"))
 
     assert result.is_select_result is True
-    assert connection.job.result_calls[0] == {
-        "job_retry": driver._job_retry,
-        "timeout": 3.0,
-    }
+    assert connection.job.result_calls[0] == {"job_retry": driver._job_retry, "timeout": 3.0}
 
 
 def test_bigquery_driver_dml_and_script_do_not_pass_job_result_kwargs() -> None:
     connection = _RecordingConnection()
     driver = BigQueryDriver(
-        cast(Any, connection), driver_features={"query_page_size": 17, "query_max_results": 11, "job_result_timeout": 3.0}
+        cast(Any, connection),
+        driver_features={"query_page_size": 17, "query_max_results": 11, "job_result_timeout": 3.0},
     )
 
     connection.job = _RecordingDmlJob(num_dml_affected_rows=1)
-    dml_result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("INSERT INTO t (id) VALUES (1)"))
+    dml_result = driver.dispatch_execute(
+        cast(Any, connection), driver.prepare_statement("INSERT INTO t (id) VALUES (1)")
+    )
 
     assert dml_result.is_select_result is False
     assert connection.job.result_calls == []
 
     connection.job = _RecordingScriptJob(num_dml_affected_rows=1)
-    script_result = driver.dispatch_execute_script(cast(Any, connection), driver.prepare_statement("INSERT INTO t (id) VALUES (1);"))
+    script_result = driver.dispatch_execute_script(
+        cast(Any, connection), driver.prepare_statement("INSERT INTO t (id) VALUES (1);")
+    )
 
     assert script_result.is_script_result is True
-    assert connection.job.result_calls[0] == {
-        "job_retry": driver._job_retry,
-        "timeout": 3.0,
-    }
+    assert connection.job.result_calls[0] == {"job_retry": driver._job_retry, "timeout": 3.0}
 
 
 def test_stream_source_local_endpoint_uses_single_page_and_bounded_retry() -> None:

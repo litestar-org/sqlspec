@@ -168,9 +168,7 @@ def test_psycopg_sync_minimal_pool_omits_prepare_threshold(monkeypatch: pytest.M
     _CapturedSyncPool.calls.clear()
     monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
 
-    PsycopgSyncConfig(
-        connection_config={"conninfo": "postgresql://user:pass@localhost/db"}
-    )._create_pool()  # pyright: ignore[reportPrivateUsage]
+    PsycopgSyncConfig(connection_config={"conninfo": "postgresql://user:pass@localhost/db"})._create_pool()  # pyright: ignore[reportPrivateUsage]
 
     conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
     assert conninfo == "postgresql://user:pass@localhost/db"
@@ -184,9 +182,7 @@ async def test_psycopg_async_minimal_pool_omits_prepare_threshold(monkeypatch: p
     _CapturedAsyncPool.open_calls = 0
     monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
 
-    await PsycopgAsyncConfig(
-        connection_config={"conninfo": "postgresql://user:pass@localhost/db"}
-    )._create_pool()  # pyright: ignore[reportPrivateUsage]
+    await PsycopgAsyncConfig(connection_config={"conninfo": "postgresql://user:pass@localhost/db"})._create_pool()  # pyright: ignore[reportPrivateUsage]
 
     conninfo, pool_kwargs = _CapturedAsyncPool.calls[-1]
     assert conninfo == "postgresql://user:pass@localhost/db"

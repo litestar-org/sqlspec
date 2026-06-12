@@ -189,8 +189,7 @@ def _run_arrow_odbc_variant(chunk_size: int, options: BenchmarkOptions) -> Bench
     connection_string = os.environ["SQLSPEC_BENCH_ARROW_ODBC_CONNECTION_STRING"]
     query = os.getenv("SQLSPEC_BENCH_ARROW_ODBC_QUERY", "SELECT 1 AS value")
     config = ArrowOdbcConfig(
-        connection_config={"connection_string": connection_string},
-        driver_features={"chunk_size": chunk_size},
+        connection_config={"connection_string": connection_string}, driver_features={"chunk_size": chunk_size}
     )
     with config.provide_session() as session:
         samples = _measure_sync(lambda: session.select_to_arrow(query, return_format="table"), options)
@@ -261,8 +260,7 @@ def _print_results(results: list[BenchmarkResult]) -> None:
             click.echo(f"{result.scenario:<20} {result.variant:<26} {'-':>8} {'-':>8} skipped: {result.message}")
             continue
         click.echo(
-            f"{result.scenario:<20} {result.variant:<26} "
-            f"{result.median_seconds:>8.6f} {result.min_seconds:>8.6f} ok"
+            f"{result.scenario:<20} {result.variant:<26} {result.median_seconds:>8.6f} {result.min_seconds:>8.6f} ok"
         )
 
 

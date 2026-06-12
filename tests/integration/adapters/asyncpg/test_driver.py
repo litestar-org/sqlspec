@@ -526,9 +526,7 @@ async def test_asyncpg_pool_concurrency(postgres_service: PostgresService) -> No
     assert all(p is first_pool for p in pools)
 
 
-async def test_asyncpg_statement_cache_size_zero_survives_ddl_shape_change(
-    postgres_service: PostgresService,
-) -> None:
+async def test_asyncpg_statement_cache_size_zero_survives_ddl_shape_change(postgres_service: PostgresService) -> None:
     """Disabling asyncpg's native statement cache avoids stale plans after DDL shape changes."""
     table_name = f"asyncpg_stmt_cache_shape_{random.randint(1000, 9999)}"
     dsn = (
@@ -537,11 +535,7 @@ async def test_asyncpg_statement_cache_size_zero_survives_ddl_shape_change(
     )
 
     async def run_shape_change(statement_cache_size: int | None) -> None:
-        connection_config: dict[str, object] = {
-            "dsn": dsn,
-            "min_size": 1,
-            "max_size": 1,
-        }
+        connection_config: dict[str, object] = {"dsn": dsn, "min_size": 1, "max_size": 1}
         if statement_cache_size is not None:
             connection_config["statement_cache_size"] = statement_cache_size
 
