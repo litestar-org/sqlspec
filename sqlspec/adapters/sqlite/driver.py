@@ -1,7 +1,7 @@
 """SQLite driver implementation."""
 
 import sqlite3
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
@@ -14,6 +14,7 @@ from sqlspec.adapters.sqlite.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    require_python_version,
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
@@ -23,7 +24,8 @@ from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, Sync
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Iterator, Sequence
+    from os import PathLike
 
     from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.builder import QueryBuilder
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
+
+_WAL_CHECKPOINT_MODES = frozenset({"FULL", "PASSIVE", "RESTART", "TRUNCATE"})
 
 
 class SqliteExceptionHandler(BaseSyncExceptionHandler):
@@ -413,6 +417,77 @@ class SqliteDriver(SyncDriverAdapterBase):
             Exception handler with deferred exception pattern for mypyc compatibility.
         """
         return SqliteExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # MAINTENANCE OPERATIONS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def backup(
+        self,
+        target: "SqliteConnection | str | PathLike[str]",
+        *,
+        pages: int = 0,
+        progress: "Callable[[int, int, int], None] | None" = None,
+        name: str = "main",
+        sleep: float = 0.250,
+    ) -> None:
+        """Copy the database into another connection or file path."""
+        if isinstance(target, sqlite3.Connection):
+            self.connection.backup(target, pages=pages, progress=progress, name=name, sleep=sleep)
+            return
+        target_connection = sqlite3.connect(str(target))
+        try:
+            self.connection.backup(target_connection, pages=pages, progress=progress, name=name, sleep=sleep)
+        finally:
+            target_connection.close()
+
+    def iterdump(self, *, filter_pattern: "str | None" = None) -> "Iterator[str]":
+        """Yield SQL statements that recreate the database.
+
+        filter_pattern filters dumped objects by LIKE pattern and requires Python 3.13+.
+        """
+        if filter_pattern is None:
+            return self.connection.iterdump()
+        require_python_version("sqlite3.Connection.iterdump(filter=...)", (3, 13))
+        return self.connection.iterdump(filter=filter_pattern)
+
+    def serialize(self, *, name: str = "main") -> bytes:
+        """Return the named database as bytes. Requires Python 3.11+."""
+        require_python_version("sqlite3.Connection.serialize()", (3, 11))
+        return self.connection.serialize(name=name)
+
+    def deserialize(self, data: bytes, *, name: str = "main") -> None:
+        """Replace the named database with serialized bytes. Requires Python 3.11+."""
+        require_python_version("sqlite3.Connection.deserialize()", (3, 11))
+        self.connection.deserialize(data, name=name)
+
+    def blob_open(self, table: str, column: str, rowid: int, *, readonly: bool = False, name: str = "main") -> Any:
+        """Open incremental blob I/O on an existing BLOB cell. Requires Python 3.11+."""
+        require_python_version("sqlite3.Connection.blobopen()", (3, 11))
+        return self.connection.blobopen(table, column, rowid, readonly=readonly, name=name)
+
+    def optimize(self) -> None:
+        """Run PRAGMA optimize."""
+        self.connection.execute("PRAGMA optimize")
+
+    def wal_checkpoint(
+        self, mode: Literal["PASSIVE", "FULL", "RESTART", "TRUNCATE"] = "PASSIVE"
+    ) -> tuple[int, int, int]:
+        """Run a WAL checkpoint and return (busy, log_pages, checkpointed_pages).
+
+        TRUNCATE and RESTART block writers while the checkpoint runs.
+        """
+        if mode not in _WAL_CHECKPOINT_MODES:
+            msg = f"Invalid WAL checkpoint mode {mode!r}; expected one of {sorted(_WAL_CHECKPOINT_MODES)}."
+            raise SQLSpecError(msg)
+        cursor = self.connection.execute(f"PRAGMA wal_checkpoint({mode})")
+        row = cursor.fetchone()
+        return (int(row[0]), int(row[1]), int(row[2]))
+
+    def integrity_check(self, *, max_errors: int = 100) -> list[str]:
+        """Run PRAGMA integrity_check and return reported messages (['ok'] when clean)."""
+        cursor = self.connection.execute(f"PRAGMA integrity_check({int(max_errors)})")
+        return [str(row[0]) for row in cursor.fetchall()]
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API

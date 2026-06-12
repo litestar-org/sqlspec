@@ -15,6 +15,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
@@ -46,6 +47,7 @@ __all__ = (
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
+    "require_python_version",
     "resolve_rowcount",
 )
 
@@ -123,6 +125,16 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int) and rowcount > 0:
         return rowcount
     return 0
+
+
+def require_python_version(feature: str, minimum: "tuple[int, int]") -> None:
+    """Raise when the running Python version does not provide a sqlite3 API."""
+    if sys.version_info < minimum:
+        msg = (
+            f"{feature} requires Python {minimum[0]}.{minimum[1]} or newer; "
+            f"running Python {sys.version_info[0]}.{sys.version_info[1]}."
+        )
+        raise ImproperConfigurationError(msg)
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:

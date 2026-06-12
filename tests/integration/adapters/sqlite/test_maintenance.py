@@ -1,6 +1,7 @@
 """Integration tests for SQLite runtime features and maintenance behavior."""
 
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 TRACE_STATEMENTS: list[str] = []
 PROGRESS_CALLS: list[int] = []
+BACKUP_PROGRESS_CALLS: list[tuple[int, int, int]] = []
 
 
 def _double(value: int) -> int:
@@ -52,6 +54,10 @@ def _progress_handler() -> int:
 
 def _trace_callback(statement: str) -> None:
     TRACE_STATEMENTS.append(statement)
+
+
+def _backup_progress(status: int, remaining: int, total: int) -> None:
+    BACKUP_PROGRESS_CALLS.append((status, remaining, total))
 
 
 def test_custom_function_visible_in_sql() -> None:
@@ -234,3 +240,164 @@ def test_extension_loading_attempts_paths(tmp_path: Path) -> None:
             pass
 
     config.close_pool()
+
+
+def test_backup_to_file_path(tmp_path: Path) -> None:
+    """The driver should back up a populated database to a file path."""
+    source_path = tmp_path / "source.db"
+    backup_path = tmp_path / "backup.db"
+    config = SqliteConfig(connection_config={"database": source_path})
+
+    try:
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO items (name) VALUES ('alpha');
+                INSERT INTO items (name) VALUES ('beta');
+            """)
+            session.commit()
+            session.backup(backup_path)
+    finally:
+        config.close_pool()
+
+    with sqlite3.connect(backup_path) as conn:
+        rows = conn.execute("SELECT name FROM items ORDER BY id").fetchall()
+    assert rows == [("alpha",), ("beta",)]
+
+
+def test_backup_to_connection_with_progress(tmp_path: Path) -> None:
+    """The driver should back up into another connection and call progress callbacks."""
+    BACKUP_PROGRESS_CALLS.clear()
+    source_path = tmp_path / "progress-source.db"
+    config = SqliteConfig(connection_config={"database": source_path})
+    target = sqlite3.connect(":memory:")
+
+    try:
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO items (name) VALUES ('alpha');
+            """)
+            session.commit()
+            session.backup(target, progress=_backup_progress)
+
+        assert target.execute("SELECT name FROM items").fetchone() == ("alpha",)
+        assert BACKUP_PROGRESS_CALLS
+    finally:
+        target.close()
+        config.close_pool()
+
+
+def test_iterdump_roundtrip() -> None:
+    """Database dumps should recreate schema and data on a fresh connection."""
+    config = SqliteConfig()
+
+    try:
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO items (name) VALUES ('alpha');
+                INSERT INTO items (name) VALUES ('beta');
+            """)
+            session.commit()
+            dump_sql = "\n".join(session.iterdump())
+    finally:
+        config.close_pool()
+
+    assert "CREATE TABLE items" in dump_sql
+    with sqlite3.connect(":memory:") as conn:
+        conn.executescript(dump_sql)
+        assert conn.execute("SELECT count(*) FROM items").fetchone() == (2,)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="sqlite3 serialize requires Python 3.11+")
+def test_serialize_deserialize_roundtrip() -> None:
+    """Serialized bytes should load into a second SQLite session."""
+    source_config = SqliteConfig()
+    target_config = SqliteConfig()
+
+    try:
+        with source_config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO items (name) VALUES ('alpha');
+                INSERT INTO items (name) VALUES ('beta');
+            """)
+            session.commit()
+            payload = session.serialize()
+
+        with target_config.provide_session() as session:
+            session.deserialize(payload)
+            rows = session.select("SELECT name FROM items ORDER BY id")
+            assert [row["name"] for row in rows] == ["alpha", "beta"]
+    finally:
+        source_config.close_pool()
+        target_config.close_pool()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="sqlite3 blobopen requires Python 3.11+")
+def test_blob_open_read_write() -> None:
+    """Incremental blob I/O should read and write an existing blob cell."""
+    config = SqliteConfig()
+
+    try:
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE blobs (data BLOB);
+                INSERT INTO blobs (data) VALUES (zeroblob(8));
+            """)
+            rowid = session.select_value("SELECT last_insert_rowid()")
+            with session.blob_open("blobs", "data", int(rowid)) as blob:
+                blob.write(b"abcd1234")
+
+            assert session.select_value("SELECT data FROM blobs WHERE rowid = :rowid", rowid=rowid) == b"abcd1234"
+    finally:
+        config.close_pool()
+
+
+def test_optimize_executes() -> None:
+    """PRAGMA optimize should execute on a populated database."""
+    config = SqliteConfig()
+
+    try:
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO items (name) VALUES ('alpha');
+            """)
+            session.commit()
+            session.optimize()
+    finally:
+        config.close_pool()
+
+
+def test_wal_checkpoint_truncate_on_file_database(tmp_path: Path) -> None:
+    """WAL checkpoint TRUNCATE should run against a file-backed database."""
+    db_path = tmp_path / "checkpoint.db"
+    config = SqliteConfig(connection_config={"database": db_path})
+
+    try:
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO items (name) VALUES ('alpha');
+                INSERT INTO items (name) VALUES ('beta');
+            """)
+            session.commit()
+            busy, _log_pages, _checkpointed_pages = session.wal_checkpoint("TRUNCATE")
+            assert busy == 0
+    finally:
+        config.close_pool()
+
+
+def test_integrity_check_ok() -> None:
+    """Clean databases should report ok from PRAGMA integrity_check."""
+    config = SqliteConfig()
+
+    try:
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+            session.commit()
+            assert session.integrity_check() == ["ok"]
+    finally:
+        config.close_pool()
