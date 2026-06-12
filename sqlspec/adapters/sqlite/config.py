@@ -328,7 +328,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             pool_kwargs["enable_optimizations"] = enable_optimizations
 
         pool = SqliteConnectionPool(
-            connection_parameters=config_dict, on_connection_create=self._user_connection_hook, **pool_kwargs
+            connection_parameters=config_dict,
+            on_connection_create=self._user_connection_hook,
+            runtime_setup=self._runtime_setup,
+            **pool_kwargs,
         )
 
         if self.driver_features.get("enable_custom_adapters", False):
