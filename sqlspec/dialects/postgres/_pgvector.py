@@ -1,15 +1,18 @@
 """PGVector dialect extending Postgres with vector distance operators.
 
-Adds support for pgvector distance operators:
+Adds support for pgvector distance operators (pgvector 0.7.0+ set; ``halfvec``
+and ``sparsevec`` reuse the first four, ``bit`` vectors use the last two):
     - <-> : L2 (Euclidean) distance (already in base Postgres)
     - <#> : Negative inner product
     - <=> : Cosine distance
     - <+> : L1 (Taxicab/Manhattan) distance
     - <~> : Hamming distance (binary vectors)
     - <%> : Jaccard distance (binary vectors)
+
+Registered with sqlglot through the ``sqlglot.dialects`` entry-point group in
+``pyproject.toml`` and by the ``Dialect`` metaclass on import.
 """
 
-from sqlglot.dialects.dialect import Dialect
 from sqlglot.dialects.postgres import Postgres
 
 from sqlspec.dialects.postgres._generators import PGVectorGenerator
@@ -31,6 +34,3 @@ class PGVector(Postgres):
 
     Tokenizer = PGVectorTokenizer
     Generator = PGVectorGenerator
-
-
-Dialect.classes["pgvector"] = PGVector

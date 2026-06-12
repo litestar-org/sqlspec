@@ -11,6 +11,8 @@ import mysql.connector
 from mysql.connector.constants import FieldType
 
 from sqlspec.adapters.mysqlconnector.core import (
+    MysqlConnectorAsyncStreamSource,
+    MysqlConnectorSyncStreamSource,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
@@ -32,9 +34,11 @@ from sqlspec.adapters.mysqlconnector.data_dictionary import (
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    AsyncRowStream,
     BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
     SyncDriverAdapterBase,
+    SyncRowStream,
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -191,6 +195,13 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: "MysqlConnectorSyncConnection") -> "MysqlConnectorSyncCursor":
         cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
         return MysqlConnectorSyncCursor(connection, dict(cursor_options))
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native mysql-connector row stream backed by an unbuffered cursor."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SyncRowStream(MysqlConnectorSyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "MysqlConnectorSyncExceptionHandler":
         return MysqlConnectorSyncExceptionHandler()
@@ -421,6 +432,13 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     def with_cursor(self, connection: "MysqlConnectorAsyncConnection") -> "MysqlConnectorAsyncCursor":
         cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
         return MysqlConnectorAsyncCursor(connection, dict(cursor_options))
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native mysql-connector row stream backed by an unbuffered cursor."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return AsyncRowStream(MysqlConnectorAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "MysqlConnectorAsyncExceptionHandler":
         return MysqlConnectorAsyncExceptionHandler()

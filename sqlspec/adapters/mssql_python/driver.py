@@ -16,7 +16,12 @@ from sqlspec.adapters.mssql_python._typing import (
 )
 from sqlspec.adapters.mssql_python.core import create_mapped_exception, default_statement_config, driver_profile
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonAsyncDataDictionary, MssqlPythonSyncDataDictionary
-from sqlspec.core import build_arrow_result_from_table, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    build_arrow_result_from_reader,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     BaseAsyncExceptionHandler,
@@ -24,6 +29,7 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
 )
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 
@@ -33,7 +39,7 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.driver import ExecutionResult
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = (
     "MssqlPythonAsyncCursor",
@@ -203,12 +209,60 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
-        arrow_kwargs = {"batch_size": batch_size} if batch_size is not None else {}
+        arrow_kwargs: dict[str, int] = {"batch_size": batch_size} if batch_size is not None else {}
         table: Any | None = None
+
+        if return_format == "reader":
+            cursor_manager = self.with_cursor(self.connection)
+            cursor = None
+            reader: object | None = None
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler:
+                cursor = cursor_manager.__enter__()
+                try:
+                    _execute_cursor(cursor, sql, prepared_parameters)
+                    reader = _cursor_arrow_reader(cursor, arrow_kwargs)
+                    if reader is None:
+                        table = cursor.arrow(**arrow_kwargs)
+                        cursor_manager.__exit__(None, None, None)
+                        cursor = None
+                except Exception:
+                    cursor_manager.__exit__(None, None, None)
+                    cursor = None
+                    raise
+            self._check_pending_exception(exc_handler)
+            if table is not None:
+                return build_arrow_result_from_table(
+                    prepared_statement,
+                    table,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
+            if cursor is None or reader is None:
+                msg = "mssql-python did not return an Arrow reader."
+                raise SQLSpecError(msg)
+            return build_arrow_result_from_reader(
+                prepared_statement,
+                arrow_reader_with_deferred_close(reader, cursor.close),
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+            )
 
         exc_handler = self.handle_database_exceptions()
         with exc_handler, self.with_cursor(self.connection) as cursor:
             _execute_cursor(cursor, sql, prepared_parameters)
+            if return_format == "batches":
+                reader = _cursor_arrow_reader(cursor, arrow_kwargs)
+                if reader is not None:
+                    return build_arrow_result_from_reader(
+                        prepared_statement,
+                        reader,
+                        return_format=return_format,
+                        batch_size=batch_size,
+                        arrow_schema=arrow_schema,
+                    )
             table = cursor.arrow(**arrow_kwargs)
         self._check_pending_exception(exc_handler)
 
@@ -372,11 +426,63 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
         sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
-        arrow_kwargs = {"batch_size": batch_size} if batch_size is not None else {}
+        arrow_kwargs: dict[str, int] = {"batch_size": batch_size} if batch_size is not None else {}
         table: Any | None = None
+
+        if return_format == "reader":
+            cursor_manager = self.with_cursor(self.connection)
+            cursor = None
+            reader: object | None = None
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler:
+                cursor = await cursor_manager.__aenter__()
+                try:
+                    await asyncio.to_thread(_execute_cursor, cursor, sql, prepared_parameters)
+                    arrow_reader = getattr(cursor, "arrow_reader", None)
+                    if callable(arrow_reader):
+                        reader = await asyncio.to_thread(arrow_reader, **arrow_kwargs)
+                    if reader is None:
+                        table = await asyncio.to_thread(cursor.arrow, **arrow_kwargs)
+                        await cursor_manager.__aexit__(None, None, None)
+                        cursor = None
+                except Exception:
+                    await cursor_manager.__aexit__(None, None, None)
+                    cursor = None
+                    raise
+            self._check_pending_exception(exc_handler)
+            if table is not None:
+                return build_arrow_result_from_table(
+                    prepared_statement,
+                    table,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
+            if cursor is None or reader is None:
+                msg = "mssql-python did not return an Arrow reader."
+                raise SQLSpecError(msg)
+            return build_arrow_result_from_reader(
+                prepared_statement,
+                arrow_reader_with_deferred_close(reader, cursor.close),
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+            )
+
         exc_handler = self.handle_database_exceptions()
         async with exc_handler, self.with_cursor(self.connection) as cursor:
             await asyncio.to_thread(_execute_cursor, cursor, sql, prepared_parameters)
+            if return_format == "batches":
+                arrow_reader = getattr(cursor, "arrow_reader", None)
+                reader = await asyncio.to_thread(arrow_reader, **arrow_kwargs) if callable(arrow_reader) else None
+                if reader is not None:
+                    return build_arrow_result_from_reader(
+                        prepared_statement,
+                        reader,
+                        return_format=return_format,
+                        batch_size=batch_size,
+                        arrow_schema=arrow_schema,
+                    )
             table = await asyncio.to_thread(cursor.arrow, **arrow_kwargs)
         self._check_pending_exception(exc_handler)
 
@@ -435,6 +541,15 @@ def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -
 def _cursor_rowcount(cursor: "MssqlPythonRawCursor") -> int:
     rowcount = getattr(cursor, "rowcount", 0)
     return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+
+
+def _cursor_arrow_reader(
+    cursor: "MssqlPythonRawCursor", arrow_kwargs: "dict[str, int]"
+) -> "ArrowRecordBatchReader | None":
+    arrow_reader = getattr(cursor, "arrow_reader", None)
+    if not callable(arrow_reader):
+        return None
+    return cast("ArrowRecordBatchReader", arrow_reader(**arrow_kwargs))
 
 
 def _coerce_bulk_copy_result(result: Any, cursor: "MssqlPythonRawCursor") -> MssqlPythonBulkCopyResult:

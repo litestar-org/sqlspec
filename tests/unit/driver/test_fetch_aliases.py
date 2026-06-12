@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Tests for fetch* method aliases in SyncDriverAdapterBase and AsyncDriverAdapterBase.
 
-Tests that all 14 fetch* methods (7 sync + 7 async) exist, have matching signatures,
+Tests that all 16 fetch* methods (8 sync + 8 async) exist, have matching signatures,
 and delegate correctly to their corresponding select* methods.
 
 Uses function-based pytest approach as per AGENTS.md requirements.
@@ -53,6 +53,12 @@ def test_sync_fetch_to_arrow_method_exists() -> None:
     assert callable(getattr(SyncDriverAdapterBase, "fetch_to_arrow"))
 
 
+def test_sync_fetch_stream_method_exists() -> None:
+    """Test that fetch_stream() method exists on SyncDriverAdapterBase."""
+    assert hasattr(SyncDriverAdapterBase, "fetch_stream")
+    assert callable(getattr(SyncDriverAdapterBase, "fetch_stream"))
+
+
 def test_sync_fetch_with_total_method_exists() -> None:
     """Test that fetch_with_total() method exists on SyncDriverAdapterBase."""
     assert hasattr(SyncDriverAdapterBase, "fetch_with_total")
@@ -93,6 +99,12 @@ def test_async_fetch_to_arrow_method_exists() -> None:
     """Test that fetch_to_arrow() method exists on AsyncDriverAdapterBase."""
     assert hasattr(AsyncDriverAdapterBase, "fetch_to_arrow")
     assert callable(getattr(AsyncDriverAdapterBase, "fetch_to_arrow"))
+
+
+def test_async_fetch_stream_method_exists() -> None:
+    """Test that fetch_stream() method exists on AsyncDriverAdapterBase."""
+    assert hasattr(AsyncDriverAdapterBase, "fetch_stream")
+    assert callable(getattr(AsyncDriverAdapterBase, "fetch_stream"))
 
 
 def test_async_fetch_with_total_method_exists() -> None:
@@ -153,6 +165,14 @@ def test_sync_fetch_to_arrow_signature_matches_select_to_arrow() -> None:
     assert fetch_sig.parameters == select_sig.parameters
 
 
+def test_sync_fetch_stream_signature_matches_select_stream() -> None:
+    """Test that fetch_stream() signature matches select_stream() signature."""
+    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_stream)
+    select_sig = inspect.signature(SyncDriverAdapterBase.select_stream)
+
+    assert fetch_sig.parameters == select_sig.parameters
+
+
 def test_sync_fetch_with_total_signature_matches_select_with_total() -> None:
     """Test that fetch_with_total() signature matches select_with_total() signature."""
     fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_with_total)
@@ -205,6 +225,14 @@ def test_async_fetch_to_arrow_signature_matches_select_to_arrow() -> None:
     """Test that async fetch_to_arrow() signature matches async select_to_arrow() signature."""
     fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_to_arrow)
     select_sig = inspect.signature(AsyncDriverAdapterBase.select_to_arrow)
+
+    assert fetch_sig.parameters == select_sig.parameters
+
+
+def test_async_fetch_stream_signature_matches_select_stream() -> None:
+    """Test that async fetch_stream() signature matches async select_stream() signature."""
+    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_stream)
+    select_sig = inspect.signature(AsyncDriverAdapterBase.select_stream)
 
     assert fetch_sig.parameters == select_sig.parameters
 
@@ -330,6 +358,23 @@ def test_sync_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
 
 
 @requires_interpreted
+def test_sync_fetch_stream_delegates_to_select_stream() -> None:
+    """Test that fetch_stream() delegates to select_stream() with identical arguments."""
+    mock_driver = Mock(spec=SyncDriverAdapterBase)
+    mock_stream = Mock()
+    mock_driver.select_stream = Mock(return_value=mock_stream)
+
+    result = SyncDriverAdapterBase.fetch_stream(
+        mock_driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
+    )
+
+    mock_driver.select_stream.assert_called_once_with(
+        "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
+    )
+    assert result == mock_stream
+
+
+@requires_interpreted
 def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
     """Test that fetch_with_total() delegates to select_with_total() with identical arguments."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)
@@ -449,6 +494,23 @@ async def test_async_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
         arrow_schema=None,
     )
     assert result == mock_arrow_result
+
+
+@requires_interpreted
+def test_async_fetch_stream_delegates_to_select_stream() -> None:
+    """Test that async fetch_stream() delegates to async select_stream() with identical arguments."""
+    mock_driver = Mock(spec=AsyncDriverAdapterBase)
+    mock_stream = Mock()
+    mock_driver.select_stream = Mock(return_value=mock_stream)
+
+    result = AsyncDriverAdapterBase.fetch_stream(
+        mock_driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
+    )
+
+    mock_driver.select_stream.assert_called_once_with(
+        "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
+    )
+    assert result == mock_stream
 
 
 @requires_interpreted

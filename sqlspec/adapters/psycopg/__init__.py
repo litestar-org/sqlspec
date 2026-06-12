@@ -18,7 +18,6 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
 )
-from sqlspec.dialects import postgres  # noqa: F401
 
 __all__ = (
     "PsycopgAsyncConfig",

@@ -124,7 +124,7 @@ class PsqlpyListenerHub:
             raise RuntimeError(msg)
         async with self._lock:
             if channel not in self._queues:
-                queue = await self._subscribe_locked(channel, consumer_task=task)
+                queue = await self._subscribe_locked(channel, consumer_task=task, ready_timeout=poll_interval)
             else:
                 queue = self._get_consumer_queue(channel, task=task)
         if queue is None:
@@ -178,7 +178,7 @@ class PsqlpyListenerHub:
         return queue
 
     async def _subscribe_locked(
-        self, channel: str, *, consumer_task: "asyncio.Task[Any] | None" = None
+        self, channel: str, *, consumer_task: "asyncio.Task[Any] | None" = None, ready_timeout: float = _READY_TIMEOUT
     ) -> "asyncio.Queue[str] | None":
         if self._shutting_down:
             msg = "PsqlpyListenerHub is shutting down"
@@ -203,7 +203,7 @@ class PsqlpyListenerHub:
             listener.abort_listen()
         listener.listen()
         self._listener_started = True
-        await self._wait_until_ready(channel)
+        await self._wait_until_ready(channel, timeout=ready_timeout)
         return consumer_queue
 
     async def _ensure_listener_locked(self) -> "PsqlpyListener":
@@ -226,7 +226,7 @@ class PsqlpyListenerHub:
     def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
         return self.shutdown()
 
-    async def _wait_until_ready(self, channel: str) -> None:
+    async def _wait_until_ready(self, channel: str, *, timeout: float) -> None:
         payload = f"{_READY_PAYLOAD_PREFIX}{uuid4().hex}"
         ready = asyncio.Event()
         self._ready_events.setdefault(channel, {})[payload] = ready
@@ -234,7 +234,9 @@ class PsqlpyListenerHub:
             async with self._config.provide_session() as driver:
                 await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, payload))
                 await driver.commit()
-            await asyncio.wait_for(ready.wait(), timeout=_READY_TIMEOUT)
+            await asyncio.wait_for(ready.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.debug("psqlpy listener ready probe timed out for channel %s", channel)
         finally:
             payloads = self._ready_events.get(channel)
             if payloads is not None:

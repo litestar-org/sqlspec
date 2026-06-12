@@ -12,6 +12,7 @@ from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: igno
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmySessionContext
 from sqlspec.adapters.asyncmy.core import (
+    AsyncmyStreamSource,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
@@ -28,7 +29,7 @@ from sqlspec.adapters.asyncmy.core import (
 )
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
+from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
@@ -252,6 +253,13 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             AsyncmyCursor: Context manager for cursor operations
         """
         return AsyncmyCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native asyncmy row stream backed by an unbuffered ``SSCursor``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return AsyncRowStream(AsyncmyStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "AsyncmyExceptionHandler":
         """Provide exception handling context manager.

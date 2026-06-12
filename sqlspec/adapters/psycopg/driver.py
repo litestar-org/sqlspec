@@ -21,6 +21,8 @@ from sqlspec.adapters.psycopg.core import (
     TRANSACTION_STATUS_IDLE,
     PipelineCursorEntry,
     PreparedStackOperation,
+    PsycopgAsyncStreamSource,
+    PsycopgSyncStreamSource,
     build_async_pipeline_execution_result,
     build_copy_from_command,
     build_pipeline_execution_result,
@@ -49,10 +51,12 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    AsyncRowStream,
     BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
     StackExecutionObserver,
     SyncDriverAdapterBase,
+    SyncRowStream,
     describe_stack_statement,
 )
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
@@ -377,6 +381,13 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         """Create context manager for PostgreSQL cursor."""
         return PsycopgSyncCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native psycopg row stream backed by a server-side named cursor."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SyncRowStream(PsycopgSyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -870,6 +881,13 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         """Create async context manager for PostgreSQL cursor."""
         return PsycopgAsyncCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native psycopg row stream backed by a server-side named cursor."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return AsyncRowStream(PsycopgAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""

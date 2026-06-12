@@ -11,6 +11,7 @@ import psqlpy.exceptions
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
+    PsqlpyStreamSource,
     build_insert_statement,
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
@@ -29,7 +30,7 @@ from sqlspec.adapters.psqlpy.core import (
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
+from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -255,6 +256,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             PsqlpyCursor context manager
         """
         return PsqlpyCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native psqlpy row stream backed by a server-side cursor in a transaction."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
+        return AsyncRowStream(PsqlpyStreamSource(self, sql, params, chunk_size))
 
     def handle_database_exceptions(self) -> "PsqlpyExceptionHandler":
         """Handle database-specific exceptions.

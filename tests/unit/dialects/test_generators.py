@@ -79,24 +79,22 @@ def test_spanner_row_deletion_policy() -> None:
     assert "OLDER_THAN(created_at" in rendered
 
 
-def test_spanner_ttl() -> None:
+def test_spanner_normalizes_pg_ttl_to_row_deletion_policy() -> None:
     sql = "\n    CREATE TABLE ttl_table (\n        id INT64,\n        expires_at TIMESTAMP,\n        PRIMARY KEY (id)\n    ) TTL INTERVAL '5 days' ON expires_at\n    "
     rendered = parse_one(sql, dialect="spanner").sql(dialect="spanner")
-    assert "TTL INTERVAL" in rendered
-    assert "expires_at" in rendered
+    assert "ROW DELETION POLICY (OLDER_THAN(expires_at, INTERVAL 5 DAY))" in rendered
 
 
-def test_spangres_row_deletion_policy() -> None:
-    sql = "\n    CREATE TABLE events (\n        id VARCHAR PRIMARY KEY,\n        created_at TIMESTAMP\n    ) ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL '30 days'))\n    "
+def test_spangres_renders_ttl() -> None:
+    sql = "\n    CREATE TABLE events (\n        id VARCHAR PRIMARY KEY,\n        created_at TIMESTAMP\n    ) TTL INTERVAL '30 days' ON created_at\n    "
     rendered = parse_one(sql, dialect="spangres").sql(dialect="spangres")
-    assert "ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL '30 days'))" in rendered
+    assert "TTL INTERVAL '30 days' ON created_at" in rendered
 
 
-def test_spangres_row_deletion_policy_round_trips_after_generator_helper_extraction() -> None:
+def test_spangres_normalizes_row_deletion_policy_to_ttl() -> None:
     sql = "\n    CREATE TABLE events (\n        id VARCHAR PRIMARY KEY,\n        created_at TIMESTAMP\n    ) ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 30 DAY))\n    "
     rendered = parse_one(sql, dialect="spangres").sql(dialect="spangres")
-    assert "ROW DELETION POLICY" in rendered
-    assert "OLDER_THAN(created_at, INTERVAL 30 DAY)" in rendered
+    assert "TTL INTERVAL '30 days' ON created_at" in rendered
 
 
 def test_compat_removed_dialects_compat_module_removed() -> None:

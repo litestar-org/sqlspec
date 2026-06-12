@@ -9,6 +9,7 @@ import aiosqlite
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import (
+    AiosqliteStreamSource,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
@@ -21,7 +22,7 @@ from sqlspec.adapters.aiosqlite.core import (
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, BaseAsyncExceptionHandler
+from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -175,6 +176,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
         return AiosqliteCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native aiosqlite row stream backed by chunked ``fetchmany``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return AsyncRowStream(AiosqliteStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
         """Handle AIOSQLite-specific exceptions."""

@@ -1,9 +1,10 @@
-"""Postgres dialect generators with sqlglot[c] compatibility.
+"""Postgres dialect generators for the PGVector and ParadeDB extensions.
 
-When sqlglot[c] is installed, generators are compiled and reject interpreted
-subclasses at instantiation. We detect this and use TRANSFORMS patching on
-the base generator. When running pure-Python sqlglot, we create real subclasses
-for cleaner isolation.
+Extension happens through ``TRANSFORMS`` entries on the base Postgres
+generator: sqlglot invokes those with explicit ``(generator, expression)``
+arguments, so the callables stay compilable and one code path serves both
+pure-Python sqlglot and sqlglot[c], whose compiled generator classes reject
+interpreted subclasses.
 """
 
 from sqlglot import exp

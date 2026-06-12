@@ -8,6 +8,7 @@ from pymysql.constants import FIELD_TYPE
 
 from sqlspec.adapters.pymysql._typing import PyMysqlCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import (
+    PymysqlStreamSource,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
@@ -24,7 +25,7 @@ from sqlspec.adapters.pymysql.core import (
 )
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
@@ -163,6 +164,13 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
     def with_cursor(self, connection: "PyMysqlConnection") -> "PyMysqlCursor":
         return PyMysqlCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native PyMySQL row stream backed by an unbuffered ``SSCursor``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SyncRowStream(PymysqlStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PyMysqlExceptionHandler":
         return PyMysqlExceptionHandler()

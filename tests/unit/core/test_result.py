@@ -882,3 +882,29 @@ def test_arrow_result_methods_with_none_data_raise() -> None:
         len(result)
     with pytest.raises(ValueError, match="No Arrow table available"):
         list(result)
+
+
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
+def test_build_arrow_result_from_reader_reader_format() -> None:
+    import pyarrow as pa
+
+    from sqlspec.core.result import build_arrow_result_from_reader
+
+    reader = pa.table({"id": pa.array([0, 1, 2])}).to_reader()
+    result = build_arrow_result_from_reader(SQL("select 1"), reader, return_format="reader")
+
+    assert isinstance(result.data, pa.RecordBatchReader)
+    assert result.rows_affected == -1
+
+
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
+def test_build_arrow_result_from_reader_batches_format() -> None:
+    import pyarrow as pa
+
+    from sqlspec.core.result import build_arrow_result_from_reader
+
+    reader = pa.table({"id": pa.array(range(5))}).to_reader()
+    result = build_arrow_result_from_reader(SQL("select 1"), reader, return_format="batches")
+
+    assert isinstance(result.data, list)
+    assert result.rows_affected == 5

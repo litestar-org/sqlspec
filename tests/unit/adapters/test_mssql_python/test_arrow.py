@@ -1,6 +1,7 @@
 """Unit tests for mssql_python Arrow and BulkCopy driver methods."""
 
-from typing import Any, cast
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -10,6 +11,9 @@ from sqlspec.exceptions import UniqueViolationError
 
 mssql_python = pytest.importorskip("mssql_python")
 
+if TYPE_CHECKING:
+    from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection
+
 
 class ArrowCursor:
     """Cursor stub for Arrow and BulkCopy tests."""
@@ -18,29 +22,29 @@ class ArrowCursor:
 
     def __init__(self) -> None:
         self.closed = False
-        self.executed: list[tuple[str, Any]] = []
-        self.bulkcopy_calls: list[tuple[str, Any, dict[str, Any]]] = []
+        self.executed: list[tuple[str, object]] = []
+        self.bulkcopy_calls: list[tuple[str, list[object], dict[str, object]]] = []
         self.rowcount = 0
 
-    def execute(self, sql: str, parameters: Any = None) -> None:
+    def execute(self, sql: str, parameters: object = None) -> None:
         self.executed.append((sql, parameters))
 
-    def arrow(self, batch_size: int = 8192) -> Any:
+    def arrow(self, batch_size: int = 8192) -> object:
         import pyarrow as pa
 
         return pa.table({"x": [1, 2, 3]})
 
-    def arrow_reader(self, batch_size: int = 8192) -> Any:
+    def arrow_reader(self, batch_size: int = 8192) -> object:
         import pyarrow as pa
 
         table = pa.table({"x": [1, 2, 3]})
-        return iter(table.to_batches(max_chunksize=batch_size))
+        return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=batch_size))
 
-    def bulkcopy(self, target_table: str, rows: Any, **kwargs: Any) -> dict[str, Any]:
-        rows = list(rows)
-        self.bulkcopy_calls.append((target_table, rows, kwargs))
-        self.rowcount = len(rows)
-        return {"rows_copied": len(rows), "batch_count": 1, "elapsed_time": 0.01}
+    def bulkcopy(self, target_table: str, rows: Iterable[object], **kwargs: object) -> dict[str, object]:
+        copied_rows = list(rows)
+        self.bulkcopy_calls.append((target_table, copied_rows, kwargs))
+        self.rowcount = len(copied_rows)
+        return {"rows_copied": len(copied_rows), "batch_count": 1, "elapsed_time": 0.01}
 
     def close(self) -> None:
         self.closed = True
@@ -65,10 +69,10 @@ class ArrowConnection:
 class ErrorArrowCursor(ArrowCursor):
     """Cursor stub that raises a mssql-python error from native methods."""
 
-    def arrow(self, batch_size: int = 8192) -> Any:
+    def arrow(self, batch_size: int = 8192) -> object:
         raise mssql_python.Error("driver", "(2627)")
 
-    def bulkcopy(self, target_table: str, rows: Any, **kwargs: Any) -> dict[str, Any]:
+    def bulkcopy(self, target_table: str, rows: Iterable[object], **kwargs: object) -> dict[str, object]:
         raise mssql_python.Error("driver", "(2627)")
 
 
@@ -82,7 +86,7 @@ class ErrorArrowConnection(ArrowConnection):
 def test_select_to_arrow_returns_arrow_result_from_native_cursor() -> None:
     """The sync driver should wrap cursor.arrow() in an ArrowResult."""
     connection = ArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     result = driver.select_to_arrow("SELECT 1 AS x")
 
@@ -95,7 +99,7 @@ def test_select_to_arrow_returns_arrow_result_from_native_cursor() -> None:
 
 def test_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = ArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
     original = MssqlPythonDriver._get_compiled_sql
     captured: list[bool] = []
 
@@ -113,7 +117,7 @@ def test_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.Monk
 def test_select_to_arrow_raises_mapped_driver_exception() -> None:
     """Native Arrow failures should use SQLSpec's deferred exception mapping."""
     connection = ErrorArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     with pytest.raises(UniqueViolationError):
         driver.select_to_arrow("SELECT 1 AS x")
@@ -124,7 +128,7 @@ def test_select_to_arrow_raises_mapped_driver_exception() -> None:
 def test_select_to_arrow_batches_returns_batches() -> None:
     """The sync driver should support SQLSpec's canonical batches return format."""
     connection = ArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     result = driver.select_to_arrow("SELECT 1 AS x", return_format="batches", batch_size=2)
     batches = result.get_data()
@@ -133,10 +137,23 @@ def test_select_to_arrow_batches_returns_batches() -> None:
     assert connection.cursor_obj.closed is True
 
 
+def test_select_to_arrow_reader_uses_arrow_reader_and_defers_cursor_close() -> None:
+    """The sync driver should keep the cursor alive for lazy RecordBatchReader results."""
+    connection = ArrowConnection()
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
+
+    result = driver.select_to_arrow("SELECT 1 AS x", return_format="reader", batch_size=2)
+
+    assert result.rows_affected == -1
+    assert connection.cursor_obj.closed is False
+    assert result.get_data().read_all().to_pydict() == {"x": [1, 2, 3]}
+    assert connection.cursor_obj.closed is True
+
+
 def test_bulk_copy_forwards_options_to_cursor_bulkcopy() -> None:
     """BulkCopy options should be forwarded without SQLSpec-side rewriting."""
     connection = ArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     result = driver.bulk_copy(
         "dbo.target", [(1, "a"), (2, "b")], batch_size=1000, timeout=30, table_lock=True, keep_nulls=True
@@ -156,7 +173,7 @@ def test_bulk_copy_forwards_options_to_cursor_bulkcopy() -> None:
 def test_bulk_copy_defaults_match_mssql_python_runtime() -> None:
     """BulkCopy defaults should match mssql-python 1.8 runtime defaults."""
     connection = ArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     result = driver.bulk_copy("dbo.target", [(1,)])
 
@@ -170,7 +187,7 @@ def test_bulk_copy_defaults_match_mssql_python_runtime() -> None:
 def test_bulk_copy_raises_mapped_driver_exception() -> None:
     """BulkCopy failures should not be swallowed by the deferred exception handler."""
     connection = ErrorArrowConnection()
-    driver = MssqlPythonDriver(cast("Any", connection))
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     with pytest.raises(UniqueViolationError):
         driver.bulk_copy("dbo.target", [(1,)])
@@ -183,14 +200,14 @@ async def test_async_select_to_arrow_offloads_cursor_work(monkeypatch: pytest.Mo
     """The async driver should offload blocking Arrow cursor work."""
     calls: list[str] = []
 
-    async def fake_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+    async def fake_to_thread(func: Callable[..., object], /, *args: object, **kwargs: object) -> object:
         calls.append(getattr(func, "__name__", repr(func)))
         return func(*args, **kwargs)
 
     monkeypatch.setattr(driver_module.asyncio, "to_thread", fake_to_thread)
 
     connection = ArrowConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", connection))
+    driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
 
     result = await driver.select_to_arrow("SELECT 1 AS x")
 
@@ -203,7 +220,7 @@ async def test_async_select_to_arrow_offloads_cursor_work(monkeypatch: pytest.Mo
 @pytest.mark.anyio
 async def test_async_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = ArrowConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", connection))
+    driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
     original = MssqlPythonAsyncDriver._get_compiled_sql
     captured: list[bool] = []
 
@@ -222,7 +239,7 @@ async def test_async_select_to_arrow_precompiles_prepared_statement(monkeypatch:
 async def test_async_select_to_arrow_raises_mapped_driver_exception() -> None:
     """Async native Arrow failures should use SQLSpec's deferred exception mapping."""
     connection = ErrorArrowConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", connection))
+    driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
 
     with pytest.raises(UniqueViolationError):
         await driver.select_to_arrow("SELECT 1 AS x")
@@ -235,22 +252,48 @@ async def test_async_select_to_arrow_batches_offloads_table_read(monkeypatch: py
     """The async driver should offload native Arrow reads for SQLSpec's batches format."""
     calls: list[str] = []
 
-    async def fake_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+    async def fake_to_thread(func: Callable[..., object], /, *args: object, **kwargs: object) -> object:
         calls.append(getattr(func, "__name__", repr(func)))
         return func(*args, **kwargs)
 
     monkeypatch.setattr(driver_module.asyncio, "to_thread", fake_to_thread)
 
     connection = ArrowConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", connection))
+    driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
 
     result = await driver.select_to_arrow("SELECT 1 AS x", return_format="batches", batch_size=2)
     batches = result.get_data()
 
     assert [batch.num_rows for batch in batches] == [2, 1]
     assert "_execute_cursor" in calls
-    assert "arrow" in calls
+    assert "arrow_reader" in calls
     assert "close" in calls
+
+
+@pytest.mark.anyio
+async def test_async_select_to_arrow_reader_uses_arrow_reader_and_defers_cursor_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The async driver should keep lazy RecordBatchReader cursors open until drained."""
+    calls: list[str] = []
+
+    async def fake_to_thread(func: Callable[..., object], /, *args: object, **kwargs: object) -> object:
+        calls.append(getattr(func, "__name__", repr(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(driver_module.asyncio, "to_thread", fake_to_thread)
+
+    connection = ArrowConnection()
+    driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
+
+    result = await driver.select_to_arrow("SELECT 1 AS x", return_format="reader", batch_size=2)
+
+    assert result.rows_affected == -1
+    assert connection.cursor_obj.closed is False
+    assert result.get_data().read_all().to_pydict() == {"x": [1, 2, 3]}
+    assert connection.cursor_obj.closed is True
+    assert "_execute_cursor" in calls
+    assert "arrow_reader" in calls
 
 
 @pytest.mark.anyio

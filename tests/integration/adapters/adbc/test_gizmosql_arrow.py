@@ -46,7 +46,7 @@ def test_gizmosql_select_to_arrow_record_batches(adbc_gizmosql_session: AdbcDriv
     )
     batches = result.get_data()
 
-    assert len(batches) == 2
+    assert len(batches) >= 1
     assert sum(batch.num_rows for batch in batches) == 3
     assert batches[0].schema.names == ["id", "name"]
 

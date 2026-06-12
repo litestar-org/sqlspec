@@ -61,6 +61,7 @@ __all__ = (
     "DB_TYPE_JSON",
     "DB_TYPE_RAW",
     "DB_TYPE_VECTOR",
+    "SPARSE_VECTOR_TYPE",
     "AQDequeueOptions",
     "DatabaseError",
     "OracleAsyncConnection",
@@ -80,19 +81,28 @@ AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
 AQMSG_VISIBLE: int | None = getattr(_oracledb, "AQMSG_VISIBLE", None)
 AQMSG_INVISIBLE: int | None = getattr(_oracledb, "AQMSG_INVISIBLE", None)
 AQMSG_PAYLOAD_TYPE_JSON: Any | None = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
+SPARSE_VECTOR_TYPE: type[object] | None = getattr(_oracledb, "SparseVector", None)
 
 
 class OracleSyncCursor:
     """Sync context manager for Oracle cursor management."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("arraysize", "connection", "cursor", "prefetchrows")
 
-    def __init__(self, connection: OracleSyncConnection) -> None:
+    def __init__(
+        self, connection: OracleSyncConnection, arraysize: "int | None" = None, prefetchrows: "int | None" = None
+    ) -> None:
         self.connection = connection
         self.cursor: OracleSyncRawCursor | None = None
+        self.arraysize = arraysize
+        self.prefetchrows = prefetchrows
 
     def __enter__(self) -> "OracleSyncRawCursor":
         self.cursor = self.connection.cursor()
+        if self.arraysize is not None:
+            self.cursor.arraysize = self.arraysize
+        if self.prefetchrows is not None:
+            self.cursor.prefetchrows = self.prefetchrows
         return self.cursor
 
     def __exit__(self, *_: object) -> None:
@@ -103,14 +113,22 @@ class OracleSyncCursor:
 class OracleAsyncCursor:
     """Async context manager for Oracle cursor management."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("arraysize", "connection", "cursor", "prefetchrows")
 
-    def __init__(self, connection: OracleAsyncConnection) -> None:
+    def __init__(
+        self, connection: OracleAsyncConnection, arraysize: "int | None" = None, prefetchrows: "int | None" = None
+    ) -> None:
         self.connection = connection
         self.cursor: OracleAsyncRawCursor | None = None
+        self.arraysize = arraysize
+        self.prefetchrows = prefetchrows
 
     async def __aenter__(self) -> "OracleAsyncRawCursor":
         self.cursor = self.connection.cursor()
+        if self.arraysize is not None:
+            self.cursor.arraysize = self.arraysize
+        if self.prefetchrows is not None:
+            self.cursor.prefetchrows = self.prefetchrows
         return self.cursor
 
     async def __aexit__(self, *_: object) -> None:

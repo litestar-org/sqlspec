@@ -33,6 +33,11 @@ class DriverCase:
     table: ContractTable = DEFAULT_CONTRACT_TABLE
     table_fixture: str | None = None
     supports_arrow: bool = False
+    supports_arrow_streaming: bool = False
+    supports_native_row_streaming: bool = False
+    streaming_row_count: int = 10_000
+    supports_native_arrow: bool = False
+    arrow_reader_honors_batch_size: bool = False
     supports_explain: bool = False
     supports_execute_many: bool = True
     supports_execute_script: bool = True
@@ -95,6 +100,7 @@ SYNC_DRIVER_CASES = (
         mode="sync",
         marks=(SQLITE_XDIST_MARK,),
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -105,10 +111,13 @@ SYNC_DRIVER_CASES = (
         supports_connection_instance=True,
         supports_custom_json_serializer=True,
         supports_custom_type_adapters=True,
-        extra_assertions=("driver_basics:noop",),
+        extra_assertions=("driver_basics:noop", "streaming_native:sqlite"),
     ),
     DriverCase(
         id="duckdb-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
         fixture_name="contract_duckdb_driver",
         adapter="duckdb",
         dialect="duckdb",
@@ -151,8 +160,9 @@ SYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_mysqlconnector_sync",
         supports_custom_json_serializer=True,
+        supports_native_row_streaming=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("param_codecs:mysql",),
+        extra_assertions=("param_codecs:mysql", "streaming_native:mysqlconnector"),
     ),
     DriverCase(
         id="pymysql-sync",
@@ -170,8 +180,9 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_pymysql",
+        supports_native_row_streaming=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("param_codecs:mysql",),
+        extra_assertions=("param_codecs:mysql", "streaming_native:pymysql"),
     ),
     DriverCase(
         id="psycopg-sync",
@@ -194,12 +205,14 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psycopg_sync",
+        supports_native_row_streaming=True,
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
             "execute_many_specifics:postgres",
             "param_codecs:psycopg",
             "driver_features:psycopg_copy",
+            "streaming_native:psycopg",
         ),
     ),
     DriverCase(
@@ -223,11 +236,14 @@ SYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_psycopg_sync",
+        supports_native_row_streaming=True,
         deviations=("cockroach-serializable-transactions",),
-        extra_assertions=("param_codecs:cockroach_psycopg",),
+        extra_assertions=("param_codecs:cockroach_psycopg", "streaming_native:psycopg"),
     ),
     DriverCase(
         id="adbc-sqlite-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
         fixture_name="contract_adbc_sqlite_driver",
         adapter="adbc",
         dialect="sqlite",
@@ -242,6 +258,8 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="adbc-duckdb-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
         fixture_name="contract_adbc_duckdb_driver",
         adapter="adbc",
         dialect="duckdb",
@@ -256,6 +274,8 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="adbc-postgres-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
         fixture_name="contract_adbc_postgres_driver",
         adapter="adbc",
         dialect="postgres",
@@ -270,6 +290,9 @@ SYNC_DRIVER_CASES = (
     ),
     DriverCase(
         id="oracledb-sync",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
         fixture_name="contract_oracle_sync_driver",
         adapter="oracledb",
         dialect="oracle",
@@ -286,12 +309,14 @@ SYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_oracle_sync",
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
+        supports_native_row_streaming=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
             "param_codecs:oracle",
             "driver_features:oracle_sequence",
             "driver_features:oracle_json_native",
+            "streaming_native:oracledb",
         ),
     ),
     DriverCase(
@@ -305,14 +330,22 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=True,
         supports_exception_translation=False,
         supports_connection_hook=True,
+        supports_native_row_streaming=True,
+        streaming_row_count=600,
         config_factory_fixture="lifecycle_config_bigquery",
         deviations=(
             "execute-rows-affected-unavailable",
             "emulator-no-grouped-subquery",
             "emulator-no-search-filter",
             "emulator-retries-invalid-sql",
+            "emulator-streaming-reopen-hangs",
+            "streaming-page-size-advisory",
         ),
-        extra_assertions=("param_codecs:bigquery", "driver_features:bigquery_sql_features"),
+        extra_assertions=(
+            "param_codecs:bigquery",
+            "driver_features:bigquery_sql_features",
+            "streaming_native:bigquery",
+        ),
     ),
 )
 
@@ -325,6 +358,7 @@ ASYNC_DRIVER_CASES = (
         mode="async",
         marks=(SQLITE_XDIST_MARK, pytest.mark.anyio),
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -333,7 +367,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_aiosqlite",
         supports_connection_instance=True,
-        extra_assertions=("driver_basics:noop", "arrow_specifics:sqlite"),
+        extra_assertions=("driver_basics:noop", "arrow_specifics:sqlite", "streaming_native:aiosqlite"),
     ),
     DriverCase(
         id="aiomysql-async",
@@ -352,8 +386,14 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_aiomysql",
         supports_custom_json_serializer=True,
+        supports_native_row_streaming=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("explain_modifiers:mysql", "arrow_specifics:mysql", "param_codecs:mysql"),
+        extra_assertions=(
+            "explain_modifiers:mysql",
+            "arrow_specifics:mysql",
+            "param_codecs:mysql",
+            "streaming_native:aiomysql",
+        ),
     ),
     DriverCase(
         id="asyncmy-async",
@@ -372,8 +412,14 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_asyncmy",
         supports_custom_json_serializer=True,
+        supports_native_row_streaming=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("explain_modifiers:mysql", "arrow_specifics:mysql", "param_codecs:mysql"),
+        extra_assertions=(
+            "explain_modifiers:mysql",
+            "arrow_specifics:mysql",
+            "param_codecs:mysql",
+            "streaming_native:asyncmy",
+        ),
     ),
     DriverCase(
         id="mysqlconnector-async",
@@ -391,8 +437,9 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_mysqlconnector_async",
         supports_custom_json_serializer=True,
+        supports_native_row_streaming=True,
         deviations=("no-returning", "autocommit-ddl"),
-        extra_assertions=("param_codecs:mysql",),
+        extra_assertions=("param_codecs:mysql", "streaming_native:mysqlconnector"),
     ),
     DriverCase(
         id="asyncpg-async",
@@ -403,6 +450,7 @@ ASYNC_DRIVER_CASES = (
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
         table=POSTGRES_CONTRACT_TABLE,
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -421,6 +469,7 @@ ASYNC_DRIVER_CASES = (
             "arrow_specifics:postgres",
             "execute_many_specifics:postgres",
             "param_codecs:asyncpg",
+            "streaming_native:asyncpg",
         ),
     ),
     DriverCase(
@@ -444,8 +493,14 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psqlpy",
+        supports_native_row_streaming=True,
         deviations=("execute-rows-affected-unavailable",),
-        extra_assertions=("explain_modifiers:postgres", "arrow_specifics:postgres", "param_codecs:psqlpy"),
+        extra_assertions=(
+            "explain_modifiers:postgres",
+            "arrow_specifics:postgres",
+            "param_codecs:psqlpy",
+            "streaming_native:psqlpy",
+        ),
     ),
     DriverCase(
         id="psycopg-async",
@@ -468,11 +523,13 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psycopg_async",
+        supports_native_row_streaming=True,
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
             "param_codecs:psycopg",
             "driver_features:psycopg_copy",
+            "streaming_native:psycopg",
         ),
     ),
     DriverCase(
@@ -484,6 +541,7 @@ ASYNC_DRIVER_CASES = (
         marks=(COCKROACH_XDIST_MARK, pytest.mark.anyio),
         table=POSTGRES_CONTRACT_TABLE,
         supports_arrow=True,
+        supports_native_row_streaming=True,
         supports_explain=True,
         supports_execute_many=True,
         supports_migrations=True,
@@ -497,7 +555,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_asyncpg",
         deviations=("cockroach-serializable-transactions",),
-        extra_assertions=("param_codecs:cockroach_asyncpg",),
+        extra_assertions=("param_codecs:cockroach_asyncpg", "streaming_native:asyncpg"),
     ),
     DriverCase(
         id="cockroach-psycopg-async",
@@ -520,11 +578,15 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_psycopg_async",
+        supports_native_row_streaming=True,
         deviations=("cockroach-serializable-transactions",),
-        extra_assertions=("param_codecs:cockroach_psycopg",),
+        extra_assertions=("param_codecs:cockroach_psycopg", "streaming_native:psycopg"),
     ),
     DriverCase(
         id="oracledb-async",
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
         fixture_name="contract_oracle_async_driver",
         adapter="oracledb",
         dialect="oracle",
@@ -541,6 +603,7 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_oracle_async",
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
+        supports_native_row_streaming=True,
         deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
@@ -548,6 +611,7 @@ ASYNC_DRIVER_CASES = (
             "param_codecs:oracle",
             "driver_features:oracle_sequence",
             "driver_features:oracle_json_native",
+            "streaming_native:oracledb",
         ),
     ),
 )

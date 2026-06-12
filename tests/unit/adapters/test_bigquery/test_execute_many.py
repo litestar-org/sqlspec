@@ -101,3 +101,83 @@ def test_try_bulk_insert_skips_local_bigquery_endpoint() -> None:
 
     assert rowcount is None
     assert not connection.load_called
+
+
+def _literal_inliner() -> Any:
+    from sqlspec.core import build_literal_inlining_transform
+    from sqlspec.utils.serializers import to_json
+
+    return build_literal_inlining_transform(json_serializer=to_json)
+
+
+def test_build_inlined_script_collapses_simple_insert_to_multi_row_values() -> None:
+    """Test that simple INSERT batches collapse into one multi-row VALUES statement."""
+    from sqlspec.adapters.bigquery.core import build_inlined_script
+
+    script = build_inlined_script(
+        "INSERT INTO contract_items (name, value, note) VALUES (@name, @value, @note)",
+        [
+            {"name": "alpha", "value": 1, "note": None},
+            {"name": "beta", "value": 2, "note": "b"},
+            {"name": "gamma", "value": 3, "note": None},
+        ],
+        literal_inliner=_literal_inliner(),
+    )
+
+    assert script.count("INSERT") == 1
+    assert ";" not in script
+    assert "'alpha'" in script
+    assert "'beta'" in script
+    assert "'gamma'" in script
+    assert script.index("'alpha'") < script.index("'beta'") < script.index("'gamma'")
+
+
+def test_build_inlined_script_chunks_multi_row_insert() -> None:
+    """Test that large INSERT batches split into bounded multi-row statements."""
+    from sqlspec.adapters.bigquery.core import build_inlined_script
+
+    rows: list[dict[str, Any]] = [{"name": f"row-{i:04d}", "value": i, "note": None} for i in range(1201)]
+    script = build_inlined_script(
+        "INSERT INTO contract_items (name, value, note) VALUES (@name, @value, @note)",
+        rows,
+        literal_inliner=_literal_inliner(),
+    )
+
+    statements = script.split(";\n")
+    assert len(statements) == 3
+    assert all(statement.count("INSERT") == 1 for statement in statements)
+    assert statements[0].count("row-") == 500
+    assert statements[1].count("row-") == 500
+    assert statements[2].count("row-") == 201
+    assert "'row-0000'" in statements[0]
+    assert "'row-1200'" in statements[2]
+
+
+def test_build_inlined_script_multi_row_with_synthetic_positional_params() -> None:
+    """Test multi-row collapse for compiled qmark statements with synthetic parameter keys."""
+    from sqlspec.adapters.bigquery.core import build_inlined_script
+
+    script = build_inlined_script(
+        "INSERT INTO contract_items (name, value, note) VALUES (@param_0, @param_1, @param_2)",
+        [{"param_0": "alpha", "param_1": 1, "param_2": None}, {"param_0": "beta", "param_1": 2, "param_2": None}],
+        literal_inliner=_literal_inliner(),
+    )
+
+    assert script.count("INSERT") == 1
+    assert "'alpha'" in script
+    assert "'beta'" in script
+
+
+def test_build_inlined_script_keeps_per_row_statements_for_update() -> None:
+    """Test that non-INSERT statements keep one inlined statement per parameter set."""
+    from sqlspec.adapters.bigquery.core import build_inlined_script
+
+    script = build_inlined_script(
+        "UPDATE contract_items SET value = @value WHERE name = @name",
+        [{"value": 1, "name": "alpha"}, {"value": 2, "name": "beta"}],
+        literal_inliner=_literal_inliner(),
+    )
+
+    statements = script.split(";\n")
+    assert len(statements) == 2
+    assert all(statement.startswith("UPDATE") for statement in statements)

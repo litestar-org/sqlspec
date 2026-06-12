@@ -1,22 +1,36 @@
-"""Centralized sqlglot dialect registration for sqlspec.
+"""Custom sqlglot dialects for sqlspec.
 
-All custom sqlglot dialects are registered here via manual ``Dialect.classes``
-assignment. Entry-point registration (``sqlglot.dialects`` group in
-``pyproject.toml``) provides automatic discovery for external consumers.
+Dialects are registered with sqlglot through the ``sqlglot.dialects``
+entry-point group declared in ``pyproject.toml``: sqlglot resolves names such
+as ``spanner`` or ``pgvector`` lazily on first use, in any environment where
+sqlspec is installed. Importing the subpackages directly also registers the
+dialects via sqlglot's ``Dialect`` metaclass.
 
-Import this module to ensure all sqlspec dialects are available::
-
- import sqlspec.dialects  # registers spanner, spangres, etc.
+This package intentionally avoids importing the dialect modules eagerly so
+``import sqlspec`` does not pay the sqlglot dialect-machinery cost.
 """
 
-from sqlglot.dialects.dialect import Dialect
+from typing import TYPE_CHECKING, Any
 
-from sqlspec.dialects.postgres import ParadeDB, PGVector
-from sqlspec.dialects.spanner import Spangres, Spanner
+if TYPE_CHECKING:
+    from sqlspec.dialects.postgres import ParadeDB, PGVector
+    from sqlspec.dialects.spanner import Spangres, Spanner
 
 __all__ = ("PGVector", "ParadeDB", "Spangres", "Spanner")
 
-Dialect.classes["pgvector"] = PGVector
-Dialect.classes["paradedb"] = ParadeDB
-Dialect.classes["spanner"] = Spanner
-Dialect.classes["spangres"] = Spangres
+_DIALECT_MODULES = {
+    "PGVector": "sqlspec.dialects.postgres",
+    "ParadeDB": "sqlspec.dialects.postgres",
+    "Spangres": "sqlspec.dialects.spanner",
+    "Spanner": "sqlspec.dialects.spanner",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _DIALECT_MODULES.get(name)
+    if module_name is None:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    import importlib
+
+    return getattr(importlib.import_module(module_name), name)

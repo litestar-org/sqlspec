@@ -6,13 +6,17 @@ type coercion, error handling, and query job management.
 """
 
 import io
-from typing import TYPE_CHECKING, Any
+from itertools import chain
+from typing import TYPE_CHECKING, Any, cast
 
 from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
+    DEFAULT_REQUEST_TIMEOUT,
+    BigQueryStreamSource,
+    _uses_local_bigquery_endpoint,
     build_dml_rowcount,
     build_inlined_script,
     build_load_job_config,
@@ -32,20 +36,23 @@ from sqlspec.adapters.bigquery.core import (
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.core import (
     StatementConfig,
+    build_arrow_result_from_reader,
     build_arrow_result_from_table,
     build_literal_inlining_transform,
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import MissingDependencyError, StorageCapabilityError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
+    from google.api_core.retry import Retry
+    from google.cloud import bigquery_storage  # type: ignore[attr-defined, unused-ignore]
     from google.cloud.bigquery import QueryJob, QueryJobConfig
 
     from sqlspec.builder import QueryBuilder
@@ -57,7 +64,7 @@ if TYPE_CHECKING:
         StorageTelemetry,
         SyncStoragePipeline,
     )
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
 
@@ -102,6 +109,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_job_retry_deadline",
         "_json_serializer",
         "_literal_inliner",
+        "_request_timeout",
     )
     dialect = "bigquery"
 
@@ -130,14 +138,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
-        self._job_retry = build_retry(self._job_retry_deadline)
+        self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
+        self._request_timeout = self._resolve_request_timeout(features)
 
-    def _job_request_timeout(self) -> float | None:
-        timeout = self._job_result_timeout
+    def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
+        timeout = features.get("request_timeout")
+        if timeout is None:
+            timeout = self._job_result_timeout
         if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
             return float(timeout)
-        return None
+        return DEFAULT_REQUEST_TIMEOUT
 
     def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
         return run_query_job(
@@ -148,7 +159,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config=None,
             json_serializer=self._json_serializer,
             retry=self._job_retry,
-            timeout=self._job_request_timeout(),
+            timeout=self._request_timeout,
             job_retry=self._job_retry,
         )
 
@@ -290,6 +301,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         return BigQueryCursor(connection)
 
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native BigQuery row stream backed by page-wise ``RowIterator`` iteration."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        return SyncRowStream(BigQueryStreamSource(self, sql, prepared_parameters, chunk_size))
+
     def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
@@ -335,13 +353,52 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        if not storage_api_available():
+        if return_format in {"reader", "batches"}:
+            config = statement_config or self.statement_config
+            prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+            sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+
+            exc_handler = self.handle_database_exceptions()
+            streaming_result: ArrowResult | None = None
+            with exc_handler:
+                query_job = self._run_query_job(self.connection, sql, driver_params)
+                row_iterator = query_job.result(
+                    page_size=batch_size, job_retry=self._job_retry, timeout=self._job_result_timeout
+                )
+                arrow_batches = row_iterator.to_arrow_iterable(bqstorage_client=self._bqstorage_client_or_none())
+                arrow_reader = _bigquery_arrow_reader_from_iterable(arrow_batches)
+                if arrow_reader is not None:
+                    streaming_result = build_arrow_result_from_reader(
+                        prepared_statement,
+                        arrow_reader,
+                        return_format=return_format,
+                        batch_size=batch_size,
+                        arrow_schema=arrow_schema,
+                    )
+
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+            if streaming_result is not None:
+                return streaming_result
+
+            return super().select_to_arrow(
+                prepared_statement,
+                statement_config=config,
+                return_format=return_format,
+                native_only=native_only,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+            )
+
+        native_arrow_available = storage_api_available() and not _uses_local_bigquery_endpoint(self.connection)
+        if not native_arrow_available:
             if native_only:
                 msg = (
                     "BigQuery native Arrow requires Storage API.\n"
                     "1. Install: pip install google-cloud-bigquery-storage\n"
                     "2. Enable API: https://console.cloud.google.com/apis/library/bigquerystorage.googleapis.com\n"
-                    "3. Grant permissions: roles/bigquery.dataViewer"
+                    "3. Grant permissions: roles/bigquery.dataViewer\n"
+                    "4. Use a real BigQuery endpoint instead of the local emulator"
                 )
                 raise MissingDependencyError(
                     package="google-cloud-bigquery-storage", install_package="google-cloud-bigquery-storage"
@@ -394,6 +451,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
             raise RuntimeError(msg)  # pragma: no cover
 
         return arrow_result
+
+    def _bqstorage_client_or_none(self) -> "bigquery_storage.BigQueryReadClient | None":
+        ensure_client = getattr(self.connection, "_ensure_bqstorage_client", None)
+        if not callable(ensure_client):
+            return None
+        try:
+            client = ensure_client()
+        except Exception:
+            return None
+        else:
+            return cast("bigquery_storage.BigQueryReadClient | None", client)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
@@ -515,3 +583,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
 
 register_driver_profile("bigquery", driver_profile)
+
+
+def _bigquery_arrow_reader_from_iterable(batches: "Iterable[ArrowRecordBatch]") -> "ArrowRecordBatchReader | None":
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    iterator = iter(batches)
+    try:
+        first_batch = next(iterator)
+    except StopIteration:
+        return None
+    return pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))

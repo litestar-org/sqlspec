@@ -171,6 +171,14 @@ class OracleDriverFeatures(TypedDict):
     oracle_raw_byte_limit: Threshold (in bytes) above which ``bytes`` parameters
      are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
      RAW limit).
+    arraysize: Optional per-cursor row fetch buffer size. When absent, the
+     python-oracledb cursor default is left unchanged.
+    prefetchrows: Optional per-cursor prefetch row count. When absent, the
+     python-oracledb cursor default is left unchanged.
+    fetch_lobs: Optional per-statement LOB fetch mode. ``False`` returns
+     supported LOB values as ``str``/``bytes`` instead of LOB locators.
+    fetch_decimals: Optional per-statement NUMBER fetch mode. ``True`` returns
+     decimal values where python-oracledb supports them.
     on_connection_create: Callback executed when a connection is acquired from pool.
      For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
      For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
@@ -197,6 +205,10 @@ class OracleDriverFeatures(TypedDict):
     vector_return_format: NotRequired[OracleVectorReturnFormat]
     oracle_varchar2_byte_limit: NotRequired[int]
     oracle_raw_byte_limit: NotRequired[int]
+    arraysize: NotRequired[int]
+    prefetchrows: NotRequired[int]
+    fetch_lobs: NotRequired[bool]
+    fetch_decimals: NotRequired[bool]
     on_connection_create: NotRequired[Callable[..., Any]]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[OracleEventsBackend]
@@ -260,8 +272,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
+    supports_arrow_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_row_streaming: ClassVar[bool] = True
     _connection_context_class: "ClassVar[type[OracleSyncConnectionContext]]" = OracleSyncConnectionContext
     _session_factory_class: "ClassVar[type[_OracleSyncSessionConnectionHandler]]" = _OracleSyncSessionConnectionHandler
     _session_context_class: "ClassVar[type[OracleSyncSessionContext]]" = OracleSyncSessionContext
@@ -465,8 +479,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
+    supports_arrow_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_row_streaming: ClassVar[bool] = True
     _connection_context_class: "ClassVar[type[OracleAsyncConnectionContext]]" = OracleAsyncConnectionContext
     _session_factory_class: "ClassVar[type[_OracleAsyncSessionConnectionHandler]]" = (
         _OracleAsyncSessionConnectionHandler

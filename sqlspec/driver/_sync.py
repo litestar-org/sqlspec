@@ -25,6 +25,7 @@ from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import stringify_storage_target
+from sqlspec.driver._stream import EagerSyncRowSource, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
@@ -1296,6 +1297,127 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             arrow_schema=arrow_schema,
             **kwargs,
         )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # ROW STREAMING API
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks."""
+        if chunk_size < 1:
+            msg = "chunk_size must be greater than or equal to 1"
+            raise ValueError(msg)
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        stream = self.dispatch_select_stream(sql_statement, chunk_size)
+        if stream is not None:
+            return stream._with_schema_type(schema_type)
+        if native_only:
+            msg = (
+                f"Adapter '{type(self).__name__}' does not support native row streaming. "
+                "Use native_only=False to allow eager fallback (not bounded-memory), "
+                "or switch to an adapter with native row streaming support."
+            )
+            raise ImproperConfigurationError(msg)
+        result = self.execute(sql_statement)
+        return SyncRowStream(EagerSyncRowSource(result.get_data(), chunk_size), schema_type=schema_type)
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks.
+
+        This is an alias for :meth:`select_stream` provided for users familiar
+        with asyncpg's fetch() naming convention.
+
+        See Also:
+            select_stream(): Primary method with identical behavior and full documentation
+        """
+        return self.select_stream(
+            statement,
+            *parameters,
+            schema_type=schema_type,
+            statement_config=statement_config,
+            chunk_size=chunk_size,
+            native_only=native_only,
+            **kwargs,
+        )
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Adapter hook returning a native row stream, or None when unsupported."""
+        _ = (statement, chunk_size)
+        return None
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STACK EXECUTION

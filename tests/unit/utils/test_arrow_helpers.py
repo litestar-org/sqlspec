@@ -161,3 +161,108 @@ def test_coerce_arrow_table_accepts_iterable_rows() -> None:
 
     assert table.num_rows == 2
     assert table.column_names == ["id"]
+
+
+def test_arrow_reader_with_deferred_close_fires_on_exhaustion() -> None:
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
+
+    batches = [pa.record_batch({"id": pa.array([i, i + 1])}) for i in (0, 2, 4)]
+    reader = pa.RecordBatchReader.from_batches(batches[0].schema, batches)
+    closed: list[bool] = []
+
+    wrapped = arrow_reader_with_deferred_close(reader, lambda: closed.append(True))
+    collected = list(wrapped)
+
+    assert sum(batch.num_rows for batch in collected) == 6
+    assert closed == [True]
+    assert wrapped.read_all().num_rows == 0
+    assert closed == [True]
+
+
+def test_arrow_reader_with_deferred_close_fires_on_error() -> None:
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
+
+    class _RaisingBatches:
+        def __init__(self, first: Any) -> None:
+            self._first = first
+            self._calls = 0
+
+        def __iter__(self) -> "_RaisingBatches":
+            return self
+
+        def __next__(self) -> Any:
+            self._calls += 1
+            if self._calls == 1:
+                return self._first
+            raise ValueError("batch boom")
+
+    first = pa.record_batch({"id": pa.array([0, 1])})
+    reader = pa.RecordBatchReader.from_batches(first.schema, _RaisingBatches(first))
+    closed: list[bool] = []
+
+    wrapped = arrow_reader_with_deferred_close(reader, lambda: closed.append(True))
+    with pytest.raises(Exception):
+        list(wrapped)
+
+    assert closed == [True]
+
+
+def test_arrow_reader_to_return_format_reader_returns_minus_one() -> None:
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import arrow_reader_to_return_format
+
+    reader = pa.table({"id": pa.array([0, 1, 2])}).to_reader()
+    data, rows = arrow_reader_to_return_format(reader, return_format="reader")
+
+    assert isinstance(data, pa.RecordBatchReader)
+    assert rows == -1
+
+
+def test_arrow_reader_to_return_format_batches_sums_rows() -> None:
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import arrow_reader_to_return_format
+
+    reader = pa.table({"id": pa.array(range(5))}).to_reader()
+    data, rows = arrow_reader_to_return_format(reader, return_format="batches")
+
+    assert isinstance(data, list)
+    assert all(isinstance(batch, pa.RecordBatch) for batch in data)
+    assert rows == 5
+
+
+def test_arrow_reader_to_return_format_table_materializes() -> None:
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import arrow_reader_to_return_format
+
+    reader = pa.table({"id": pa.array(range(4))}).to_reader()
+    data, rows = arrow_reader_to_return_format(reader, return_format="table")
+
+    assert isinstance(data, pa.Table)
+    assert data.num_rows == 4
+    assert rows == 4
+
+
+def test_arrow_reader_to_return_format_casts_schema() -> None:
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import arrow_reader_to_return_format
+
+    reader = pa.table({"id": pa.array([1, 2, 3], type=pa.int64())}).to_reader()
+    schema = pa.schema([pa.field("id", pa.int32())])
+    data, _ = arrow_reader_to_return_format(reader, return_format="reader", arrow_schema=schema)
+
+    assert data.schema.field("id").type == pa.int32()
+
+
+def test_arrow_reader_to_return_format_rejects_non_reader() -> None:
+    from sqlspec.utils.arrow_helpers import arrow_reader_to_return_format
+
+    with pytest.raises(TypeError):
+        arrow_reader_to_return_format(object(), return_format="reader")

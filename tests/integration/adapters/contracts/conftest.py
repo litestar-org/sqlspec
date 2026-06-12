@@ -78,6 +78,7 @@ from sqlspec.adapters.pymysql.litestar import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.adapters.sqlite.litestar import SQLiteStore
+from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
 from tests.integration.adapters.contracts._adk_cases import ADK_STORE_PARAMS, AdkStoreCase, AdkStoreCaseContext
 from tests.integration.adapters.contracts._cases import (
     ASYNC_DRIVER_PARAMS,
@@ -232,21 +233,20 @@ def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generato
         config.close_pool()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def bigquery_contract_table(bigquery_service: BigQueryService) -> ContractTable:
-    """Resolve the fully-qualified BigQuery ContractTable for the running emulator."""
-    return build_bigquery_contract_table(f"`{bigquery_service.project}.{bigquery_service.dataset}.contract_items`")
+    """Resolve a unique fully-qualified BigQuery ContractTable for one contract test."""
+    table_name = f"contract_items_{uuid4().hex[:8]}"
+    return build_bigquery_contract_table(f"`{bigquery_service.project}.{bigquery_service.dataset}.{table_name}`")
 
 
 @pytest.fixture(scope="session")
-def _bigquery_contract_session(
-    bigquery_service: BigQueryService, bigquery_contract_table: ContractTable
-) -> "Generator[BigQueryDriver, None, None]":
-    """Session-scoped BigQuery driver; the contract table is created once.
+def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[BigQueryDriver, None, None]":
+    """Session-scoped BigQuery driver for contract tests.
 
     The emulator is unreliable under repeated DDL and hangs on default-dataset job
     config, so the client is reused across the xdist group, a dotted dataset_id keeps
-    the default dataset unset, and the table is referenced fully-qualified.
+    the default dataset unset, and tables are referenced fully-qualified.
     """
     config = BigQueryConfig(
         connection_config={
@@ -255,22 +255,38 @@ def _bigquery_contract_session(
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         },
-        driver_features={"job_result_timeout": 30.0},
+        driver_features={"job_result_timeout": 30.0, "job_retry_deadline": 0.0, "request_timeout": 15.0},
     )
     try:
         with config.provide_session() as driver:
-            driver.execute_script(bigquery_contract_table.create_sql)
             yield driver
     finally:
         config.close_pool()
+
+
+_bigquery_wedge_reason: "str | None" = None
 
 
 @pytest.fixture
 def contract_bigquery_driver(
     _bigquery_contract_session: BigQueryDriver, bigquery_contract_table: ContractTable
 ) -> BigQueryDriver:
-    """Provide the session BigQuery driver with an empty contract table per test."""
-    _bigquery_contract_session.execute(bigquery_contract_table.delete_sql)
+    """Provide the session BigQuery driver with an isolated contract table per test.
+
+    Once the emulator wedges (accepts requests but never responds), every call
+    fails after the request timeout; skip the remaining BigQuery contract tests
+    instead of paying that timeout per test.
+    """
+    global _bigquery_wedge_reason
+    if _bigquery_wedge_reason is not None:
+        pytest.skip(f"BigQuery emulator wedged earlier in this session ({_bigquery_wedge_reason})")
+    try:
+        _bigquery_contract_session.execute_script(bigquery_contract_table.create_sql)
+    except Exception as error:
+        if is_emulator_wedge(error):
+            _bigquery_wedge_reason = describe_wedge(error)
+            pytest.skip(f"BigQuery emulator wedged earlier in this session ({_bigquery_wedge_reason})")
+        raise
     return _bigquery_contract_session
 
 

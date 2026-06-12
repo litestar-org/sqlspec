@@ -13,6 +13,9 @@ NEW_CAPABILITY_FLAGS = (
     "supports_pooling",
     "supports_multi_schema_migrations",
     "supports_data_dictionary",
+    "supports_arrow_streaming",
+    "supports_native_arrow",
+    "arrow_reader_honors_batch_size",
 )
 
 
@@ -48,6 +51,9 @@ def test_new_capability_flags_opt_in_independently() -> None:
         supports_pooling=True,
         supports_multi_schema_migrations=True,
         supports_data_dictionary=True,
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        arrow_reader_honors_batch_size=True,
     )
     for flag in NEW_CAPABILITY_FLAGS:
         assert getattr(case, flag) is True

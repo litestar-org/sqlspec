@@ -1,15 +1,17 @@
 """BigQuery adapter compiled helpers."""
 
+import contextlib
 import datetime
 import importlib
 import io
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import sqlglot
 from google.api_core.retry import Retry
 from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
+from google.cloud.bigquery.retry import DEFAULT_RETRY
 from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
@@ -38,12 +40,35 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterable, Iterator, Mapping
 
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
+    from sqlspec.driver._common import SyncExceptionHandler
     from sqlspec.storage import StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
+
+
+class _BigQueryRow(Protocol):
+    def items(self) -> "Iterable[tuple[str, object]]": ...
+
+
+class _BigQueryStreamDriver(Protocol):
+    connection: "BigQueryConnection"
+    _job_retry: "Retry | None"
+    _job_retry_deadline: float
+    _job_result_timeout: float | object
+
+    def _run_query_job(
+        self, connection: "BigQueryConnection", sql: str, parameters: "StatementParameters"
+    ) -> "QueryJob": ...
+
+    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
+
+    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
+
 
 __all__ = (
+    "BigQueryStreamSource",
     "apply_driver_features",
     "build_dml_rowcount",
     "build_inlined_script",
@@ -73,6 +98,16 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
+
+DEFAULT_REQUEST_TIMEOUT = 120.0
+"""Fallback per-request HTTP timeout (seconds) for job API calls.
+
+``google-cloud-bigquery`` defaults the transport timeout to ``None``, which
+waits on the socket indefinitely when a server accepts the request but never
+responds. Real BigQuery answers ``jobs.insert`` immediately, so a finite bound
+only converts hung servers (notably emulators that execute jobs synchronously
+inside the HTTP handler) into fast, retryable errors.
+"""
 LOCAL_BIGQUERY_ENDPOINT_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
 
 
@@ -180,6 +215,57 @@ def try_bulk_insert(
         return None
 
 
+_MAX_INLINED_INSERT_ROWS = 500
+
+
+def _build_multi_row_insert_script(
+    expression: "exp.Expr",
+    parameters: "list[dict[str, Any]]",
+    literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
+) -> "str | None":
+    """Collapse a single-tuple INSERT ... VALUES batch into chunked multi-row statements.
+
+    Args:
+        expression: Parsed statement expression.
+        parameters: Parameter dictionaries to inline.
+        literal_inliner: Callable used to inline literal values.
+
+    Returns:
+        Script SQL with one multi-row INSERT per chunk, or None when the statement
+        shape does not support multi-row collapsing.
+    """
+    if not isinstance(expression, exp.Insert):
+        return None
+    values = expression.args.get("expression")
+    if not isinstance(values, exp.Values):
+        return None
+    value_tuples = values.expressions
+    if len(value_tuples) != 1 or not isinstance(value_tuples[0], exp.Tuple):
+        return None
+
+    template_tuple = value_tuples[0]
+    inlined_tuples: list[exp.Expr] = []
+    for param_set in parameters:
+        tuple_copy: exp.Expr = template_tuple.copy()
+        if param_set:
+            transformed, _ = literal_inliner(tuple_copy, param_set, ParameterProfile.empty())
+            if not isinstance(transformed, exp.Tuple):
+                return None
+            tuple_copy = transformed
+        inlined_tuples.append(tuple_copy)
+
+    statements: list[str] = []
+    for start in range(0, len(inlined_tuples), _MAX_INLINED_INSERT_ROWS):
+        chunk = inlined_tuples[start : start + _MAX_INLINED_INSERT_ROWS]
+        statement = expression.copy()
+        statement_values = statement.args.get("expression")
+        if not isinstance(statement_values, exp.Values):
+            return None
+        statement_values.set("expressions", chunk)
+        statements.append(str(statement.sql(dialect="bigquery")))
+    return ";\n".join(statements)
+
+
 def build_inlined_script(
     sql: str,
     parameters: "list[dict[str, Any]]",
@@ -189,6 +275,9 @@ def build_inlined_script(
     literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
 ) -> str:
     """Build a BigQuery script with literal inlining.
+
+    Simple INSERT ... VALUES batches collapse into chunked multi-row INSERT
+    statements; other statements emit one inlined statement per parameter set.
 
     Args:
         sql: SQL statement to inline.
@@ -209,6 +298,10 @@ def build_inlined_script(
 
     if parsed_expression is None:
         return ";\n".join([sql] * len(parameters))
+
+    multi_row_script = _build_multi_row_insert_script(parsed_expression, parameters, literal_inliner)
+    if multi_row_script is not None:
+        return multi_row_script
 
     script_statements: list[str] = []
     for param_set in parameters:
@@ -453,8 +546,12 @@ def run_query_job(
         job_config: Optional job configuration override.
         json_serializer: JSON serializer for parameter values.
         retry: Retry policy for the API request that starts the query job.
-        timeout: Per-request HTTP timeout for the API request that starts the query job.
-        job_retry: Retry policy attached to the returned query job.
+            ``None`` disables API retries instead of using the client default.
+        timeout: Per-request HTTP timeout for the API request that starts the
+            query job. ``None`` waits on the transport indefinitely.
+        job_retry: Retry policy attached to the returned query job. ``None``
+            disables job retries and the client's built-in ``jobs.insert``
+            retry wrapper (which carries a fixed 600s deadline).
 
     Returns:
         QueryJob object representing the executed job.
@@ -466,13 +563,12 @@ def run_query_job(
         copy_job_config(job_config, final_job_config)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
-    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
-    if retry is not None:
-        query_kwargs["retry"] = retry
-    if timeout is not None:
-        query_kwargs["timeout"] = timeout
-    if job_retry is not None:
-        query_kwargs["job_retry"] = job_retry
+    query_kwargs: dict[str, Any] = {
+        "job_config": final_job_config,
+        "retry": retry,
+        "timeout": timeout,
+        "job_retry": job_retry,
+    }
     return connection.query(sql, **query_kwargs)
 
 
@@ -582,6 +678,63 @@ def resolve_column_names(schema: Any | None, cache: "dict[int, tuple[Any, list[s
         cache.pop(next(iter(cache)))
     cache[cache_key] = (schema, column_names)
     return column_names
+
+
+class BigQueryStreamSource:
+    """Compiled chunk source streaming dict rows from a BigQuery ``RowIterator`` page by page."""
+
+    __slots__ = ("_chunk_size", "_driver", "_job", "_pages", "_parameters", "_sql")
+
+    def __init__(
+        self, driver: "_BigQueryStreamDriver", sql: str, parameters: "StatementParameters", chunk_size: int
+    ) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._job: QueryJob | None = None
+        self._pages: Iterator[Iterable[_BigQueryRow]] | None = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            page_size = None if _uses_local_bigquery_endpoint(self._driver.connection) else self._chunk_size
+            deadline = self._driver._job_retry_deadline
+            page_retry = DEFAULT_RETRY.with_timeout(deadline) if deadline > 0 else None
+            job = self._driver._run_query_job(self._driver.connection, self._sql, self._parameters)
+            row_iterator = job.result(
+                page_size=page_size,
+                retry=page_retry,
+                job_retry=self._driver._job_retry,
+                timeout=self._driver._job_result_timeout,
+            )
+            self._job = job
+            self._pages = row_iterator.pages
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        pages = self._pages
+        if pages is None:
+            return []
+        while True:
+            handler = self._driver.handle_database_exceptions()
+            page: Iterable[_BigQueryRow] | None = None
+            with handler:
+                page = next(pages, None)
+            self._driver._check_pending_exception(handler)
+            if page is None:
+                return []
+            rows = [dict(row.items()) for row in page]
+            if rows:
+                return rows
+
+    def close(self) -> None:
+        job = self._job
+        self._job = None
+        self._pages = None
+        if job is not None and getattr(job, "state", None) in {"PENDING", "RUNNING"}:
+            with contextlib.suppress(Exception):
+                job.cancel()
 
 
 def collect_rows(
