@@ -69,8 +69,9 @@ class _AsyncpgConfig:
 
 
 class _PsqlpyListener:
-    def __init__(self, emit_on_add: str | None = None) -> None:
+    def __init__(self, emit_on_add: str | None = None, *, drop_ready_payloads: bool = False) -> None:
         self.emit_on_add = emit_on_add
+        self.drop_ready_payloads = drop_ready_payloads
         self.callbacks: dict[str, Any] = {}
         self.listen_called = False
         self.listen_count = 0
@@ -136,7 +137,7 @@ class _PsqlpyDriver:
 
     async def execute_script(self, statement: Any) -> None:
         channel, payload = statement.parameters
-        if self.listener.listen_called:
+        if self.listener.listen_called and not self.listener.drop_ready_payloads:
             await self.listener.emit(channel, payload)
 
     async def commit(self) -> None:
@@ -316,6 +317,18 @@ async def test_psqlpy_listener_hub_filters_ready_probe_payloads() -> None:
     assert listener.listen_called is True
     assert len(listener.emitted) == 1
     assert listener.emitted[0][0] == "alerts"
+    await hub.shutdown()
+
+
+async def test_psqlpy_listener_hub_treats_ready_probe_timeout_as_empty_poll() -> None:
+    listener = _PsqlpyListener(drop_ready_payloads=True)
+    hub = PsqlpyListenerHub(_PsqlpyConfig(listener))  # type: ignore[arg-type]
+
+    result = await hub.dequeue("alerts", 0.01)
+
+    assert result is None
+    assert listener.listen_called is True
+    assert listener.emitted == []
     await hub.shutdown()
 
 
