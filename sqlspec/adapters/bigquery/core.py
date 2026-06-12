@@ -203,6 +203,57 @@ def try_bulk_insert(
         return None
 
 
+_MAX_INLINED_INSERT_ROWS = 500
+
+
+def _build_multi_row_insert_script(
+    expression: "exp.Expr",
+    parameters: "list[dict[str, Any]]",
+    literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
+) -> "str | None":
+    """Collapse a single-tuple INSERT ... VALUES batch into chunked multi-row statements.
+
+    Args:
+        expression: Parsed statement expression.
+        parameters: Parameter dictionaries to inline.
+        literal_inliner: Callable used to inline literal values.
+
+    Returns:
+        Script SQL with one multi-row INSERT per chunk, or None when the statement
+        shape does not support multi-row collapsing.
+    """
+    if not isinstance(expression, exp.Insert):
+        return None
+    values = expression.args.get("expression")
+    if not isinstance(values, exp.Values):
+        return None
+    value_tuples = values.expressions
+    if len(value_tuples) != 1 or not isinstance(value_tuples[0], exp.Tuple):
+        return None
+
+    template_tuple = value_tuples[0]
+    inlined_tuples: list[exp.Expr] = []
+    for param_set in parameters:
+        tuple_copy: exp.Expr = template_tuple.copy()
+        if param_set:
+            transformed, _ = literal_inliner(tuple_copy, param_set, ParameterProfile.empty())
+            if not isinstance(transformed, exp.Tuple):
+                return None
+            tuple_copy = transformed
+        inlined_tuples.append(tuple_copy)
+
+    statements: list[str] = []
+    for start in range(0, len(inlined_tuples), _MAX_INLINED_INSERT_ROWS):
+        chunk = inlined_tuples[start : start + _MAX_INLINED_INSERT_ROWS]
+        statement = expression.copy()
+        statement_values = statement.args.get("expression")
+        if not isinstance(statement_values, exp.Values):
+            return None
+        statement_values.set("expressions", chunk)
+        statements.append(str(statement.sql(dialect="bigquery")))
+    return ";\n".join(statements)
+
+
 def build_inlined_script(
     sql: str,
     parameters: "list[dict[str, Any]]",
@@ -212,6 +263,9 @@ def build_inlined_script(
     literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
 ) -> str:
     """Build a BigQuery script with literal inlining.
+
+    Simple INSERT ... VALUES batches collapse into chunked multi-row INSERT
+    statements; other statements emit one inlined statement per parameter set.
 
     Args:
         sql: SQL statement to inline.
@@ -232,6 +286,10 @@ def build_inlined_script(
 
     if parsed_expression is None:
         return ";\n".join([sql] * len(parameters))
+
+    multi_row_script = _build_multi_row_insert_script(parsed_expression, parameters, literal_inliner)
+    if multi_row_script is not None:
+        return multi_row_script
 
     script_statements: list[str] = []
     for param_set in parameters:
