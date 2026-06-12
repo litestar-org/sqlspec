@@ -60,10 +60,7 @@ class _FakeStreamingDriver:
     def execute_many(self, statement: object, parameters: object, /, **kwargs: Any) -> object:
         del statement, kwargs
         rows = cast("list[tuple[str, int, object | None]]", parameters)
-        self.rows = [
-            {"name": name, "value": value, "note": note}
-            for name, value, note in rows
-        ]
+        self.rows = [{"name": name, "value": value, "note": note} for name, value, note in rows]
         return object()
 
     def commit(self) -> None:
@@ -94,11 +91,7 @@ def test_bigquery_streaming_deviation_avoids_emulator_reopen_paths() -> None:
         mode="sync",
         supports_native_row_streaming=True,
         streaming_row_count=60,
-        deviations=(
-            "emulator-retries-invalid-sql",
-            "emulator-streaming-reopen-hangs",
-            "streaming-page-size-advisory",
-        ),
+        deviations=("emulator-retries-invalid-sql", "emulator-streaming-reopen-hangs", "streaming-page-size-advisory"),
     )
 
     assert_sync_streaming_contract(driver, case)
