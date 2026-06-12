@@ -10,6 +10,7 @@ import sqlite3
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
+from typing_extensions import TypeAliasType
 
 _AiosqliteConnection = aiosqlite.Connection
 
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     AiosqliteConnection = _AiosqliteConnection
-    AiosqliteConnectionFactory = type[sqlite3.Connection]
+    AiosqliteConnectionFactory = TypeAliasType("AiosqliteConnectionFactory", type[sqlite3.Connection])
     AiosqliteRawCursor = aiosqlite.Cursor
 
 __all__ = (
