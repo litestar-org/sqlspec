@@ -186,6 +186,7 @@ class AiosqliteConnectionPool:
         "_pool_id",
         "_pool_size",
         "_queue_instance",
+        "_runtime_setup",
         "_wal_initialized",
         "_wal_initialized_event",
         "_warmed",
@@ -201,6 +202,7 @@ class AiosqliteConnectionPool:
         operation_timeout: float = 10.0,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[AiosqliteConnection], Awaitable[None]] | None" = None,
+        runtime_setup: "dict[str, Any] | None" = None,
     ) -> None:
         """Initialize connection pool.
 
@@ -213,6 +215,7 @@ class AiosqliteConnectionPool:
             operation_timeout: Maximum time for connection operations
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Async callback executed when connection is created
+            runtime_setup: Runtime feature setup to apply to new connections
         """
         self._connection_parameters = connection_parameters
         self._pool_size = pool_size
@@ -222,6 +225,7 @@ class AiosqliteConnectionPool:
         self._operation_timeout = operation_timeout
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
+        self._runtime_setup = runtime_setup
 
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
         self._wal_initialized = False
