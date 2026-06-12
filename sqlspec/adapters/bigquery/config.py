@@ -88,10 +88,16 @@ class BigQueryDriverFeatures(TypedDict):
             BigQuery does not have native pub/sub, so table_queue is the only backend.
             Defaults to "table_queue".
         job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
-        job_result_timeout: Per-request HTTP transport timeout (seconds) for starting query jobs and
-            polling ``QueryJob.result()``. Bounds each call before falling back to retry, so a stalled
-            server response raises instead of blocking indefinitely. Defaults to the client polling
-            default (waits indefinitely for the job using the API's per-call default timeouts).
+            Values <= 0 disable retries entirely: API requests are not retried and ``job_retry`` is
+            withheld from ``client.query()``, which also bypasses the client's built-in
+            ``jobs.insert`` retry wrapper (fixed 600s deadline, retries transport timeouts).
+        job_result_timeout: Timeout (seconds) for polling ``QueryJob.result()``. Defaults to the
+            client polling default (waits indefinitely for the job using the API's per-call default
+            timeouts). Also used as the per-request HTTP timeout when ``request_timeout`` is unset.
+        request_timeout: Per-request HTTP transport timeout (seconds) for the API calls that start
+            query jobs. Bounds each request so a server that accepts the request but never responds
+            (e.g. a wedged emulator) raises instead of blocking indefinitely. Defaults to
+            ``job_result_timeout`` when that is numeric, else 120.0.
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -102,6 +108,7 @@ class BigQueryDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
     job_retry_deadline: NotRequired[float]
     job_result_timeout: NotRequired[float]
+    request_timeout: NotRequired[float]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):

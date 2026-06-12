@@ -78,6 +78,7 @@ from sqlspec.adapters.pymysql.litestar import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.adapters.sqlite.litestar import SQLiteStore
+from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
 from tests.integration.adapters.contracts._adk_cases import ADK_STORE_PARAMS, AdkStoreCase, AdkStoreCaseContext
 from tests.integration.adapters.contracts._cases import (
     ASYNC_DRIVER_PARAMS,
@@ -254,7 +255,7 @@ def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         },
-        driver_features={"job_result_timeout": 30.0, "job_retry_deadline": 5.0},
+        driver_features={"job_result_timeout": 30.0, "job_retry_deadline": 0.0, "request_timeout": 15.0},
     )
     try:
         with config.provide_session() as driver:
@@ -263,12 +264,28 @@ def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[
         config.close_pool()
 
 
+_bigquery_wedge_reason: "str | None" = None
+
+
 @pytest.fixture
 def contract_bigquery_driver(
     _bigquery_contract_session: BigQueryDriver, bigquery_contract_table: ContractTable
 ) -> BigQueryDriver:
-    """Provide the session BigQuery driver with an isolated contract table per test."""
-    _bigquery_contract_session.execute_script(bigquery_contract_table.create_sql)
+    """Provide the session BigQuery driver with an isolated contract table per test.
+
+    Once the emulator wedges (accepts requests but never responds), every call
+    fails after the request timeout; skip the remaining BigQuery contract tests
+    instead of paying that timeout per test.
+    """
+    global _bigquery_wedge_reason
+    if _bigquery_wedge_reason is not None:
+        pytest.skip(f"BigQuery emulator wedged earlier in this session ({_bigquery_wedge_reason})")
+    try:
+        _bigquery_contract_session.execute_script(bigquery_contract_table.create_sql)
+    except Exception as error:
+        if is_emulator_wedge(error):
+            _bigquery_wedge_reason = describe_wedge(error)
+        raise
     return _bigquery_contract_session
 
 

@@ -10,6 +10,7 @@ from google.cloud.bigquery import QueryJobConfig
 
 from sqlspec.adapters.bigquery.core import (
     _COPY_JOB_FIELDS,
+    DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
     build_profile,
     build_retry,
@@ -60,7 +61,7 @@ class _RecordingStreamJob:
 class _RecordingStreamDriver:
     def __init__(self, api_base_url: str, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
         self.connection = SimpleNamespace(_connection=SimpleNamespace(API_BASE_URL=api_base_url))
-        self._job_retry = build_retry(2.0)
+        self._job_retry: Any = build_retry(2.0)
         self._job_retry_deadline = 2.0
         self._job_result_timeout: Any = 3.0
         self.job = _RecordingStreamJob(pages)
@@ -211,13 +212,34 @@ def test_bigquery_driver_applies_result_timeout_to_query_start_request() -> None
     assert kwargs["timeout"] == 3.0
 
 
-def test_bigquery_driver_does_not_pass_polling_sentinel_as_query_start_timeout() -> None:
+def test_bigquery_driver_defaults_to_finite_query_start_timeout() -> None:
+    """A missing timeout would reach the transport as None and wait on the socket forever."""
     connection = _RecordingConnection()
     driver = BigQueryDriver(cast(Any, connection))
     driver._run_query_job(cast(Any, connection), "SELECT 1", None)  # type: ignore[protected-access]
 
     _, kwargs = connection.queries[0]
-    assert "timeout" not in kwargs
+    assert kwargs["timeout"] == DEFAULT_REQUEST_TIMEOUT
+
+
+def test_bigquery_driver_request_timeout_feature_overrides_result_timeout() -> None:
+    connection = _RecordingConnection()
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 30.0, "request_timeout": 7.5})
+    driver._run_query_job(cast(Any, connection), "SELECT 1", None)  # type: ignore[protected-access]
+
+    _, kwargs = connection.queries[0]
+    assert kwargs["timeout"] == 7.5
+
+
+def test_bigquery_driver_zero_job_retry_deadline_disables_retries() -> None:
+    """job_retry=None is the only opt-out of the client's 600s jobs.insert retry wrapper."""
+    connection = _RecordingConnection()
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_retry_deadline": 0.0})
+    driver._run_query_job(cast(Any, connection), "SELECT 1", None)  # type: ignore[protected-access]
+
+    _, kwargs = connection.queries[0]
+    assert kwargs["retry"] is None
+    assert kwargs["job_retry"] is None
 
 
 def test_stream_source_local_endpoint_uses_single_page_and_bounded_retry() -> None:
@@ -230,6 +252,18 @@ def test_stream_source_local_endpoint_uses_single_page_and_bounded_retry() -> No
     assert kwargs["retry"].timeout == driver._job_retry_deadline
     assert kwargs["job_retry"] is driver._job_retry
     assert kwargs["timeout"] == 3.0
+
+
+def test_stream_source_disabled_retries_pass_none_page_retry() -> None:
+    driver = _RecordingStreamDriver("http://127.0.0.1:9050")
+    driver._job_retry = None
+    driver._job_retry_deadline = 0.0
+    source = BigQueryStreamSource(cast(Any, driver), "SELECT 1", None, 100)
+    source.start()
+
+    kwargs = driver.job.result_kwargs
+    assert kwargs["retry"] is None
+    assert kwargs["job_retry"] is None
 
 
 def test_stream_source_remote_endpoint_passes_chunk_page_size() -> None:

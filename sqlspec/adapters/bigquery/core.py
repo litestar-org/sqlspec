@@ -54,7 +54,7 @@ class _BigQueryRow(Protocol):
 
 class _BigQueryStreamDriver(Protocol):
     connection: "BigQueryConnection"
-    _job_retry: Retry
+    _job_retry: "Retry | None"
     _job_retry_deadline: float
     _job_result_timeout: float | object
 
@@ -98,6 +98,16 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
+
+DEFAULT_REQUEST_TIMEOUT = 120.0
+"""Fallback per-request HTTP timeout (seconds) for job API calls.
+
+``google-cloud-bigquery`` defaults the transport timeout to ``None``, which
+waits on the socket indefinitely when a server accepts the request but never
+responds. Real BigQuery answers ``jobs.insert`` immediately, so a finite bound
+only converts hung servers (notably emulators that execute jobs synchronously
+inside the HTTP handler) into fast, retryable errors.
+"""
 LOCAL_BIGQUERY_ENDPOINT_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
 
 
@@ -536,8 +546,12 @@ def run_query_job(
         job_config: Optional job configuration override.
         json_serializer: JSON serializer for parameter values.
         retry: Retry policy for the API request that starts the query job.
-        timeout: Per-request HTTP timeout for the API request that starts the query job.
-        job_retry: Retry policy attached to the returned query job.
+            ``None`` disables API retries instead of using the client default.
+        timeout: Per-request HTTP timeout for the API request that starts the
+            query job. ``None`` waits on the transport indefinitely.
+        job_retry: Retry policy attached to the returned query job. ``None``
+            disables job retries and the client's built-in ``jobs.insert``
+            retry wrapper (which carries a fixed 600s deadline).
 
     Returns:
         QueryJob object representing the executed job.
@@ -549,13 +563,12 @@ def run_query_job(
         copy_job_config(job_config, final_job_config)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
-    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
-    if retry is not None:
-        query_kwargs["retry"] = retry
-    if timeout is not None:
-        query_kwargs["timeout"] = timeout
-    if job_retry is not None:
-        query_kwargs["job_retry"] = job_retry
+    query_kwargs: dict[str, Any] = {
+        "job_config": final_job_config,
+        "retry": retry,
+        "timeout": timeout,
+        "job_retry": job_retry,
+    }
     return connection.query(sql, **query_kwargs)
 
 
@@ -686,7 +699,8 @@ class BigQueryStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             page_size = None if _uses_local_bigquery_endpoint(self._driver.connection) else self._chunk_size
-            page_retry = DEFAULT_RETRY.with_timeout(self._driver._job_retry_deadline)
+            deadline = self._driver._job_retry_deadline
+            page_retry = DEFAULT_RETRY.with_timeout(deadline) if deadline > 0 else None
             job = self._driver._run_query_job(self._driver.connection, self._sql, self._parameters)
             row_iterator = job.result(
                 page_size=page_size,

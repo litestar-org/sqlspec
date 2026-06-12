@@ -14,6 +14,7 @@ from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
 from sqlspec.adapters.bigquery.core import (
+    DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
     _uses_local_bigquery_endpoint,
     build_dml_rowcount,
@@ -50,6 +51,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+    from google.api_core.retry import Retry
     from google.cloud import bigquery_storage  # type: ignore[attr-defined, unused-ignore]
     from google.cloud.bigquery import QueryJob, QueryJobConfig
 
@@ -107,6 +109,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_job_retry_deadline",
         "_json_serializer",
         "_literal_inliner",
+        "_request_timeout",
     )
     dialect = "bigquery"
 
@@ -135,14 +138,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
-        self._job_retry = build_retry(self._job_retry_deadline)
+        self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
+        self._request_timeout = self._resolve_request_timeout(features)
 
-    def _job_request_timeout(self) -> float | None:
-        timeout = self._job_result_timeout
+    def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
+        timeout = features.get("request_timeout")
+        if timeout is None:
+            timeout = self._job_result_timeout
         if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
             return float(timeout)
-        return None
+        return DEFAULT_REQUEST_TIMEOUT
 
     def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
         return run_query_job(
@@ -153,7 +159,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config=None,
             json_serializer=self._json_serializer,
             retry=self._job_retry,
-            timeout=self._job_request_timeout(),
+            timeout=self._request_timeout,
             job_retry=self._job_retry,
         )
 
