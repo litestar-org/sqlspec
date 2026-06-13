@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from sqlglot.generator import Generator
 
+__all__ = ("invalidate_generator_dispatch",)
+
 
 def invalidate_generator_dispatch(*generator_classes: "type[object]") -> None:
     """Clear SQLGlot generator dispatch entries after transform registration.
