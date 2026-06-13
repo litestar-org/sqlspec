@@ -231,3 +231,49 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary
    :members:
    :show-inheritance:
+
+Native Metadata And Statistics
+==============================
+
+``AdbcDataDictionary`` prefers the standardized ADBC metadata APIs
+(``adbc_get_objects``, ``adbc_get_table_schema``) and falls back to
+dialect-specific SQL introspection when the underlying driver raises
+``NotSupportedError`` or ``OperationalError``. ``get_statistics`` wraps
+``adbc_get_statistics`` and has no SQL fallback: unsupported drivers raise
+:exc:`sqlspec.exceptions.OperationalError`.
+
+.. list-table:: ADBC native metadata support (driver manager 1.11.0)
+   :header-rows: 1
+
+   * - Backend
+     - GetObjects (tables/columns/foreign keys)
+     - GetStatistics
+   * - PostgreSQL
+     - Native
+     - Native (approximate; run ``ANALYZE`` for fresh estimates)
+   * - SQLite
+     - Native (type names populated; nullability unreliable)
+     - Unsupported (raises ``OperationalError``)
+   * - DuckDB
+     - Native for single tables (types filled from the Arrow table schema);
+       schema-wide column listings fall back to SQL
+     - Unsupported (raises ``OperationalError``)
+   * - Flight SQL / GizmoSQL
+     - Native (server dependent)
+     - Server dependent
+   * - BigQuery
+     - SQL fallback
+     - Unverified
+
+Precision limits:
+
+- ADBC name filters are SQL ``LIKE`` patterns; SQLSpec post-filters results by
+  exact table name, but schema filters containing ``_`` or ``%`` may match
+  more broadly on the server side.
+- The SQLite driver reports ``xdbc_is_nullable`` as ``YES`` even for
+  ``NOT NULL`` columns.
+- Index metadata always uses SQL introspection; ADBC GetObjects has no
+  portable index representation.
+- ``get_statistics`` maps the standard ADBC statistic keys 0-6 to their
+  canonical names (``adbc.statistic.row_count`` and friends); driver-specific
+  keys are reported numerically.
