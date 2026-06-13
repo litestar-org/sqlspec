@@ -1,6 +1,6 @@
 """Generic data dictionary for arrow-odbc connections."""
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from mypy_extensions import mypyc_attr
 
@@ -15,7 +15,7 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
-from sqlspec.utils.text import normalize_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
@@ -23,6 +23,39 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary._types import DialectConfig
 
 __all__ = ("ArrowOdbcDataDictionary",)
+
+_ARROW_DECIMAL_FORMAT: Final = "DECIMAL({precision},{scale})"
+
+
+def _arrow_type_to_sql(data_type: Any) -> str:
+    import pyarrow as pa
+
+    types = pa.types
+    if types.is_boolean(data_type):
+        return "BOOLEAN"
+    if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):
+        return "SMALLINT"
+    if types.is_int32(data_type) or types.is_uint32(data_type):
+        return "INTEGER"
+    if types.is_int64(data_type) or types.is_uint64(data_type):
+        return "BIGINT"
+    if types.is_float16(data_type) or types.is_float32(data_type):
+        return "REAL"
+    if types.is_float64(data_type):
+        return "DOUBLE"
+    if types.is_decimal(data_type):
+        return _ARROW_DECIMAL_FORMAT.format(precision=data_type.precision, scale=data_type.scale)
+    if types.is_string(data_type) or types.is_large_string(data_type):
+        return "VARCHAR"
+    if types.is_binary(data_type) or types.is_large_binary(data_type) or types.is_fixed_size_binary(data_type):
+        return "VARBINARY"
+    if types.is_date(data_type):
+        return "DATE"
+    if types.is_time(data_type):
+        return "TIME"
+    if types.is_timestamp(data_type):
+        return "TIMESTAMP"
+    return str(data_type).upper()
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -61,6 +94,29 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     def resolve_identifier(self, identifier: str) -> str:
         """Return a runtime-dialect-normalized identifier."""
         return normalize_identifier(identifier, self.get_dialect_config().name)
+
+    def _probe_columns(self, driver: "ArrowOdbcDriver", table: str, schema: "str | None") -> "list[ColumnMetadata]":
+        qualified = (
+            quote_identifier(table) if schema is None else f"{quote_identifier(schema)}.{quote_identifier(table)}"
+        )
+        probe_sql = f"SELECT * FROM {qualified} WHERE 1=0"
+        try:
+            reader = driver._read_arrow_batches(probe_sql, None, 1)  # pyright: ignore[reportPrivateUsage]
+        except Exception:
+            return []
+        columns: list[ColumnMetadata] = []
+        for position, field in enumerate(reader.schema, start=1):
+            entry: ColumnMetadata = {
+                "table_name": table,
+                "column_name": field.name,
+                "data_type": _arrow_type_to_sql(field.type),
+                "is_nullable": bool(field.nullable),
+                "ordinal_position": position,
+            }
+            if schema is not None:
+                entry["schema_name"] = schema
+            columns.append(entry)
+        return columns
 
     def get_version(self, driver: "ArrowOdbcDriver") -> VersionInfo | None:
         """Get database version information when the runtime dialect provides a query."""
@@ -116,13 +172,18 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     ) -> list[ColumnMetadata]:
         """Get column metadata for dialects with bundled catalog queries."""
         query_name = "columns_by_table" if table is not None else "columns_by_schema"
-        parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
+        resolved_schema = self.resolve_schema(schema)
+        resolved_table = self.resolve_identifier(table) if table is not None else None
+        parameters: dict[str, Any] = {"schema_name": resolved_schema}
         if table is not None:
-            parameters["table_name"] = self.resolve_identifier(table)
+            parameters["table_name"] = resolved_table
         try:
-            return driver.select(self.get_query(query_name), schema_type=ColumnMetadata, **parameters)
+            rows = driver.select(self.get_query(query_name), schema_type=ColumnMetadata, **parameters)
         except SQLFileNotFoundError:
-            return []
+            rows = []
+        if rows or resolved_table is None:
+            return rows
+        return self._probe_columns(driver, resolved_table, resolved_schema)
 
     def get_indexes(
         self, driver: "ArrowOdbcDriver", table: str | None = None, schema: str | None = None

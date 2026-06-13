@@ -13,6 +13,7 @@ __all__ = (
     "ForeignKeyMetadata",
     "IndexMetadata",
     "TableMetadata",
+    "TableStatisticsMetadata",
     "VersionCacheResult",
     "VersionInfo",
 )
@@ -239,6 +240,19 @@ class FeatureVersions(TypedDict, total=False):
     supports_returning: "VersionInfo"
     supports_upsert: "VersionInfo"
     supports_window_functions: "VersionInfo"
+
+
+class TableStatisticsMetadata(TypedDict, total=False):
+    """Native driver statistics for a table or column."""
+
+    catalog_name: str
+    schema_name: str
+    table_name: str
+    column_name: str | None
+    statistic_key: int
+    statistic_name: str
+    statistic_value: int | float | str | bytes | None
+    is_approximate: bool
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
