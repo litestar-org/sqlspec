@@ -5,6 +5,7 @@ passed as strings to builder methods.
 """
 
 import contextlib
+import re
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp, maybe_parse
@@ -33,6 +34,47 @@ __all__ = (
 )
 
 ALIAS_PARTS_EXPECTED_COUNT = 2
+QUALIFIED_IDENTIFIER_PARTS = 2
+_SIMPLE_IDENTIFIER_RE: Final["re.Pattern[str]"] = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$"
+)
+_BARE_KEYWORDS: Final[frozenset[str]] = frozenset({
+    "all",
+    "and",
+    "any",
+    "asc",
+    "between",
+    "case",
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "default",
+    "delete",
+    "desc",
+    "distinct",
+    "end",
+    "exists",
+    "false",
+    "from",
+    "in",
+    "insert",
+    "interval",
+    "is",
+    "like",
+    "localtime",
+    "localtimestamp",
+    "not",
+    "null",
+    "or",
+    "select",
+    "session_user",
+    "some",
+    "true",
+    "update",
+    "user",
+    "where",
+})
 _PARAMETER_VALIDATOR = ParameterValidator()
 
 
@@ -69,6 +111,23 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
         builder.add_parameter(param_value, name=param_name)
 
 
+def _is_simple_identifier(value: str) -> bool:
+    stripped = value.strip()
+    if not _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
+        return False
+    return "." in stripped or stripped.lower() not in _BARE_KEYWORDS
+
+
+def _simple_column_expression(value: str) -> exp.Column:
+    parts = value.strip().split(".")
+    identifiers = [exp.Identifier(this=part, quoted=False) for part in parts]
+    if len(parts) == 1:
+        return exp.Column(this=identifiers[0])
+    if len(parts) == QUALIFIED_IDENTIFIER_PARTS:
+        return exp.Column(this=identifiers[1], table=identifiers[0])
+    return exp.Column(this=identifiers[2], table=identifiers[1], db=identifiers[0])
+
+
 def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | None = None) -> exp.Expr:
     """Parse a column input that might be a complex expression.
 
@@ -92,6 +151,8 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
         return column_input
 
     if isinstance(column_input, str):
+        if _is_simple_identifier(column_input):
+            return _simple_column_expression(column_input)
         return exp.maybe_parse(column_input) or exp.column(column_input)
 
     if has_expression_and_sql(column_input):
@@ -126,6 +187,9 @@ def parse_table_expression(
             base_table, alias = parts
             return exp.to_table(base_table, alias=alias, dialect=dialect)
 
+    if _is_simple_identifier(table_input):
+        return exp.to_table(table_input, alias=explicit_alias, dialect=dialect)
+
     with contextlib.suppress(Exception):
         parsed: exp.Expr | None = exp.maybe_parse(f"SELECT * FROM {table_input}", dialect=dialect)
         if isinstance(parsed, exp.Select):
@@ -157,7 +221,17 @@ def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:
     if isinstance(order_input, exp.Expr):
         return order_input
 
-    parsed = maybe_parse(str(order_input), into=exp.Ordered)
+    order_value = str(order_input)
+    parts = order_value.rsplit(None, 1)
+    if len(parts) == ALIAS_PARTS_EXPECTED_COUNT and parts[1].lower() in {"asc", "desc"}:
+        base, direction = parts
+        if _is_simple_identifier(base):
+            column_expr = _simple_column_expression(base)
+            if direction.lower() == "desc":
+                return exp.Ordered(this=column_expr, desc=True, nulls_first=False)
+            return exp.Ordered(this=column_expr, desc=False, nulls_first=True)
+
+    parsed = maybe_parse(order_value, into=exp.Ordered)
     if parsed:
         return parsed
 

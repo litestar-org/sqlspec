@@ -114,6 +114,13 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   rules, so ``optimize_joins``, ``optimize_predicates``, and
   ``simplify_expressions`` now disable only their matching steps instead of
   always running the full default pipeline.
+* Passing a sqlglot ``Dialect`` class to EXPLAIN builders or
+  ``StatementConfig.dialect`` now resolves to the correct dialect name.
+* Avoided parser round-trips for simple builder identifiers and MERGE JSON
+  source construction while preserving rendered SQL.
+* Deferred temporal version-generator registration until temporal builder APIs
+  are used. Code that hand-builds ``exp.Version`` nodes should call
+  ``sqlspec.builder.register_version_generators()`` before rendering them.
 * Routed async pool teardown through the base config lifecycle path so
   ``on_pool_destroy`` and ``on_pool_destroying`` fire consistently across async
   adapters.

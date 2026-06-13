@@ -11,7 +11,6 @@ from decimal import Decimal
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, cast
 
-import sqlglot as sg
 from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
@@ -237,14 +236,32 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         alias_name = alias or "src"
         recordset_alias = f"{alias_name}_data"
 
-        column_type_spec = ", ".join([f"{col} {self._infer_postgres_type(sample_values.get(col))}" for col in columns])
-        column_selects = ", ".join(columns)
-        from_sql = (
-            f"SELECT {column_selects} FROM jsonb_to_recordset(:{json_param_name}::jsonb) AS "
-            f"{recordset_alias}({column_type_spec})"
+        recordset_table = exp.Table(
+            this=exp.Anonymous(
+                this="jsonb_to_recordset",
+                expressions=[
+                    exp.Cast(
+                        this=exp.Placeholder(this=json_param_name), to=exp.DataType.build("JSONB", dialect="postgres")
+                    )
+                ],
+            ),
+            alias=exp.TableAlias(
+                this=exp.to_identifier(recordset_alias),
+                columns=[
+                    exp.ColumnDef(
+                        this=exp.to_identifier(column),
+                        kind=exp.DataType.build(
+                            self._infer_postgres_type(sample_values.get(column)), dialect="postgres"
+                        ),
+                    )
+                    for column in columns
+                ],
+            ),
         )
 
-        parsed = sg.parse_one(from_sql, dialect="postgres")
+        parsed = exp.Select(
+            expressions=[exp.column(column) for column in columns], from_=exp.From(this=recordset_table)
+        )
         return exp.Subquery(
             this=parsed,
             alias=exp.TableAlias(
@@ -265,17 +282,26 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 if value is not None and column not in sample_values:
                     sample_values[column] = value
 
-        json_columns = [
-            f"{column} {self._infer_oracle_type(sample_values.get(column))} PATH '$.{column}'" for column in columns
-        ]
-
         alias_name = alias or "src"
-        column_selects = ", ".join(columns)
-        columns_clause = ", ".join(json_columns)
-
-        from_sql = f"SELECT {column_selects} FROM JSON_TABLE(:{json_param_name}, '$[*]' COLUMNS ({columns_clause}))"
-
-        parsed = sg.parse_one(from_sql, dialect="oracle")
+        json_table = exp.Table(
+            this=exp.JSONTable(
+                this=exp.Placeholder(this=json_param_name),
+                path=exp.Literal.string("$[*]"),
+                schema=exp.JSONSchema(
+                    expressions=[
+                        exp.JSONColumnDef(
+                            this=exp.to_identifier(column),
+                            kind=exp.DataType.build(
+                                self._infer_oracle_type(sample_values.get(column)), dialect="oracle"
+                            ),
+                            path=exp.Literal.string(f"$.{column}"),
+                        )
+                        for column in columns
+                    ]
+                ),
+            )
+        )
+        parsed = exp.Select(expressions=[exp.column(column) for column in columns], from_=exp.From(this=json_table))
         return exp.Subquery(this=parsed, alias=exp.TableAlias(this=exp.to_identifier(alias_name)))
 
     def _infer_postgres_type(self, value: "Any") -> str:
