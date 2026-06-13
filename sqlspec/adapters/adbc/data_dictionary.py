@@ -234,66 +234,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     def __init__(self) -> None:
         super().__init__()
 
-    def _normalize_dialect(self, driver: "AdbcDriver") -> str:
-        dialect_value = str(driver.dialect)
-        return normalize_dialect_name(dialect_value)
-
-    def _get_query(self, dialect: str, name: str) -> "SQL":
-        loader = get_data_dictionary_loader()
-        return loader.get_query(dialect, name)
-
-    def _get_query_text(self, dialect: str, name: str) -> str:
-        loader = get_data_dictionary_loader()
-        return loader.get_query_text(dialect, name)
-
-    def _get_query_text_or_none(self, dialect: str, name: str) -> "str | None":
-        try:
-            return self._get_query_text(dialect, name)
-        except SQLFileNotFoundError:
-            return None
-
-    def _resolve_schema(self, dialect: str, schema: "str | None") -> "str | None":
-        try:
-            config = get_dialect_config(dialect)
-        except ValueError:
-            return schema
-        if schema is not None:
-            return normalize_identifier(schema, config.name)
-        if config.default_schema is None:
-            return None
-        return normalize_identifier(config.default_schema, config.name)
-
-    def _resolve_identifier(self, dialect: str, identifier: str) -> str:
-        try:
-            config = get_dialect_config(dialect)
-        except ValueError:
-            return identifier
-        return normalize_identifier(identifier, config.name)
-
-    def _resolve_feature_flag(self, dialect: str, feature: str, version_info: "VersionInfo | None") -> bool:
-        try:
-            config = get_dialect_config(dialect)
-        except ValueError:
-            return False
-        flag = config.get_feature_flag(feature)
-        if flag is not None:
-            return flag
-        required_version = config.get_feature_version(feature)
-        if required_version is None or version_info is None:
-            return False
-        return bool(version_info >= required_version)
-
-    def list_available_features(self) -> "list[str]":
-        features = set(self.get_default_features())
-        for dialect in list_registered_dialects():
-            try:
-                config = get_dialect_config(dialect)
-            except ValueError:
-                continue
-            features.update(config.feature_flags.keys())
-            features.update(config.feature_versions.keys())
-        return sorted(features)
-
     def get_version(self, driver: "AdbcDriver") -> "VersionInfo | None":
         """Get database version information based on detected dialect."""
         dialect = self._normalize_dialect(driver)
@@ -365,6 +305,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 return "TEXT"
 
         return config.get_optimal_type(type_category)
+
+    def list_available_features(self) -> "list[str]":
+        features = set(self.get_default_features())
+        for dialect in list_registered_dialects():
+            try:
+                config = get_dialect_config(dialect)
+            except ValueError:
+                continue
+            features.update(config.feature_flags.keys())
+            features.update(config.feature_versions.keys())
+        return sorted(features)
 
     def get_tables(self, driver: "AdbcDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables for the current dialect."""
@@ -441,63 +392,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ColumnMetadata,
         )
-
-    def _native_object_filters(
-        self, dialect: str, schema_name: "str | None", table_name: "str | None"
-    ) -> "dict[str, str | None]":
-        catalog_filter: str | None = None
-        db_schema_filter: str | None = None
-        if schema_name:
-            if dialect == "sqlite":
-                catalog_filter = schema_name
-            else:
-                db_schema_filter = schema_name
-        return {"catalog_filter": catalog_filter, "db_schema_filter": db_schema_filter, "table_name_filter": table_name}
-
-    def _native_get_objects(
-        self, driver: "AdbcDriver", dialect: str, depth: str, schema_name: "str | None", table_name: "str | None"
-    ) -> "list[dict[str, Any]]":
-        filters = self._native_object_filters(dialect, schema_name, table_name)
-        reader = driver.connection.adbc_get_objects(
-            depth=depth,
-            catalog_filter=filters["catalog_filter"],
-            db_schema_filter=filters["db_schema_filter"],
-            table_name_filter=filters["table_name_filter"],
-        )
-        rows = reader.read_all().to_pylist()
-        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
-            raise _NativeMetadataIncompleteError
-        return cast("list[dict[str, Any]]", rows)
-
-    def _native_get_tables(
-        self, driver: "AdbcDriver", dialect: str, schema_name: "str | None"
-    ) -> "list[TableMetadata]":
-        rows = self._native_get_objects(driver, dialect, "tables", schema_name, None)
-        return _normalize_native_tables(rows)
-
-    def _native_get_columns(
-        self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
-    ) -> "list[ColumnMetadata]":
-        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
-        columns = _normalize_native_columns(rows, table_name_exact=table_name)
-        missing_types = [entry for entry in columns if "data_type" not in entry]
-        missing_nullability = any("is_nullable" not in entry for entry in columns)
-        if not missing_types and not missing_nullability:
-            return columns
-        if table_name is None or missing_nullability:
-            raise _NativeMetadataIncompleteError
-        filters = self._native_object_filters(dialect, schema_name, None)
-        arrow_schema = driver.connection.adbc_get_table_schema(
-            table_name, catalog_filter=filters["catalog_filter"], db_schema_filter=filters["db_schema_filter"]
-        )
-        type_by_name = {field.name: _arrow_type_to_sql(field.type) for field in arrow_schema}
-        for entry in missing_types:
-            resolved = type_by_name.get(entry["column_name"])
-            if resolved is not None:
-                entry["data_type"] = resolved
-        if any("data_type" not in entry or "is_nullable" not in entry for entry in columns):
-            raise _NativeMetadataIncompleteError
-        return columns
 
     def get_indexes(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -626,15 +520,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
-    def _native_get_foreign_keys(
-        self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
-    ) -> "list[ForeignKeyMetadata]":
-        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
-        foreign_keys = _normalize_native_foreign_keys(rows, table_name_exact=table_name)
-        if not foreign_keys:
-            raise _NativeMetadataIncompleteError
-        return foreign_keys
-
     def get_statistics(
         self, driver: "AdbcDriver", table: str, schema: "str | None" = None, *, approximate: bool = True
     ) -> "list[TableStatisticsMetadata]":
@@ -656,3 +541,118 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             raise OperationalError(msg) from exc
         rows = reader.read_all().to_pylist()
         return [entry for entry in _normalize_native_statistics(rows) if entry["table_name"] == table_name]
+
+    def _normalize_dialect(self, driver: "AdbcDriver") -> str:
+        dialect_value = str(driver.dialect)
+        return normalize_dialect_name(dialect_value)
+
+    def _get_query(self, dialect: str, name: str) -> "SQL":
+        loader = get_data_dictionary_loader()
+        return loader.get_query(dialect, name)
+
+    def _get_query_text(self, dialect: str, name: str) -> str:
+        loader = get_data_dictionary_loader()
+        return loader.get_query_text(dialect, name)
+
+    def _get_query_text_or_none(self, dialect: str, name: str) -> "str | None":
+        try:
+            return self._get_query_text(dialect, name)
+        except SQLFileNotFoundError:
+            return None
+
+    def _resolve_schema(self, dialect: str, schema: "str | None") -> "str | None":
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return schema
+        if schema is not None:
+            return normalize_identifier(schema, config.name)
+        if config.default_schema is None:
+            return None
+        return normalize_identifier(config.default_schema, config.name)
+
+    def _resolve_identifier(self, dialect: str, identifier: str) -> str:
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return identifier
+        return normalize_identifier(identifier, config.name)
+
+    def _resolve_feature_flag(self, dialect: str, feature: str, version_info: "VersionInfo | None") -> bool:
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return False
+        flag = config.get_feature_flag(feature)
+        if flag is not None:
+            return flag
+        required_version = config.get_feature_version(feature)
+        if required_version is None or version_info is None:
+            return False
+        return bool(version_info >= required_version)
+
+    def _native_object_filters(
+        self, dialect: str, schema_name: "str | None", table_name: "str | None"
+    ) -> "dict[str, str | None]":
+        catalog_filter: str | None = None
+        db_schema_filter: str | None = None
+        if schema_name:
+            if dialect == "sqlite":
+                catalog_filter = schema_name
+            else:
+                db_schema_filter = schema_name
+        return {"catalog_filter": catalog_filter, "db_schema_filter": db_schema_filter, "table_name_filter": table_name}
+
+    def _native_get_objects(
+        self, driver: "AdbcDriver", dialect: str, depth: str, schema_name: "str | None", table_name: "str | None"
+    ) -> "list[dict[str, Any]]":
+        filters = self._native_object_filters(dialect, schema_name, table_name)
+        reader = driver.connection.adbc_get_objects(
+            depth=depth,
+            catalog_filter=filters["catalog_filter"],
+            db_schema_filter=filters["db_schema_filter"],
+            table_name_filter=filters["table_name_filter"],
+        )
+        rows = reader.read_all().to_pylist()
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise _NativeMetadataIncompleteError
+        return cast("list[dict[str, Any]]", rows)
+
+    def _native_get_tables(
+        self, driver: "AdbcDriver", dialect: str, schema_name: "str | None"
+    ) -> "list[TableMetadata]":
+        rows = self._native_get_objects(driver, dialect, "tables", schema_name, None)
+        return _normalize_native_tables(rows)
+
+    def _native_get_columns(
+        self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
+    ) -> "list[ColumnMetadata]":
+        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
+        columns = _normalize_native_columns(rows, table_name_exact=table_name)
+        missing_types = [entry for entry in columns if "data_type" not in entry]
+        missing_nullability = any("is_nullable" not in entry for entry in columns)
+        if not missing_types and not missing_nullability:
+            return columns
+        if table_name is None or missing_nullability:
+            raise _NativeMetadataIncompleteError
+        filters = self._native_object_filters(dialect, schema_name, None)
+        arrow_schema = driver.connection.adbc_get_table_schema(
+            table_name, catalog_filter=filters["catalog_filter"], db_schema_filter=filters["db_schema_filter"]
+        )
+        type_by_name = {field.name: _arrow_type_to_sql(field.type) for field in arrow_schema}
+        for entry in missing_types:
+            resolved = type_by_name.get(entry["column_name"])
+            if resolved is not None:
+                entry["data_type"] = resolved
+        if any("data_type" not in entry or "is_nullable" not in entry for entry in columns):
+            raise _NativeMetadataIncompleteError
+        return columns
+
+    def _native_get_foreign_keys(
+        self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
+    ) -> "list[ForeignKeyMetadata]":
+        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
+        foreign_keys = _normalize_native_foreign_keys(rows, table_name_exact=table_name)
+        if not foreign_keys:
+            raise _NativeMetadataIncompleteError
+        return foreign_keys

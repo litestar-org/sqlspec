@@ -235,41 +235,49 @@ Data Dictionary
 Native Metadata And Statistics
 ==============================
 
-``AdbcDataDictionary`` prefers the standardized ADBC metadata APIs
-(``adbc_get_objects``, ``adbc_get_table_schema``) and falls back to
-dialect-specific SQL introspection when the underlying driver raises
-``NotSupportedError`` or ``OperationalError``. ``get_statistics`` wraps
-``adbc_get_statistics`` and has no SQL fallback: unsupported drivers raise
+``AdbcDataDictionary`` keeps SQLSpec's central dialect data-dictionary queries
+as the canonical fallback. It detects the database behind the ADBC connection
+and uses the same dialect query registry as the native adapter when ADBC
+metadata is unsupported, incomplete, or too broad. The standardized ADBC
+metadata APIs (``adbc_get_objects``, ``adbc_get_table_schema``) are an optional
+overlay when the driver returns complete table, column, and foreign-key
+payloads that can be normalized to SQLSpec's public metadata types.
+
+``get_statistics`` is separate from the shared data dictionary surface because
+SQLSpec does not define a portable SQL statistics contract. It wraps
+``adbc_get_statistics`` directly; unsupported drivers raise
 :exc:`sqlspec.exceptions.OperationalError`.
 
 .. list-table:: ADBC native metadata support (driver manager 1.11.0)
    :header-rows: 1
 
    * - Backend
-     - GetObjects (tables/columns/foreign keys)
-     - GetStatistics
+     - Metadata behavior
+     - Statistics behavior
    * - PostgreSQL
-     - Native
+     - Native overlay when available; central PostgreSQL SQL fallback
      - Native (approximate; run ``ANALYZE`` for fresh estimates)
    * - SQLite
-     - Native (type names populated; nullability unreliable)
+     - Native overlay when available; central SQLite SQL fallback
+       (type names populated; nullability unreliable)
      - Unsupported (raises ``OperationalError``)
    * - DuckDB
-     - Native for single tables (types filled from the Arrow table schema);
-       schema-wide column listings fall back to SQL
+     - Native overlay for single tables when schema enrichment succeeds;
+       schema-wide column listings use central DuckDB SQL
      - Unsupported (raises ``OperationalError``)
    * - Flight SQL / GizmoSQL
-     - Native (server dependent)
+     - Native overlay is server dependent; central dialect fallback applies
+       when the backend dialect is mapped
      - Server dependent
    * - BigQuery
-     - SQL fallback
+     - Central BigQuery SQL fallback
      - Unverified
 
 Precision limits:
 
-- ADBC name filters are SQL ``LIKE`` patterns; SQLSpec post-filters results by
-  exact table name, but schema filters containing ``_`` or ``%`` may match
-  more broadly on the server side.
+- ADBC native name filters are SQL ``LIKE`` patterns; SQLSpec post-filters
+  native results by exact table name, but schema filters containing ``_`` or
+  ``%`` may match more broadly on the server side before fallback.
 - The SQLite driver reports ``xdbc_is_nullable`` as ``YES`` even for
   ``NOT NULL`` columns.
 - Index metadata always uses SQL introspection; ADBC GetObjects has no
