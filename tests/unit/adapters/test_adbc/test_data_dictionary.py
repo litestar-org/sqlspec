@@ -208,7 +208,8 @@ def test_get_columns_single_table_enriched_from_table_schema() -> None:
     driver = Mock()
     driver.dialect = "duckdb"
     driver.connection.adbc_get_objects.return_value = _make_reader(DUCKDB_OBJECTS_PAYLOAD)
-    driver.connection.adbc_get_table_schema.return_value = pa.schema([("id", pa.int32()), ("val", pa.float64())])
+    schema_fields: list[pa.Field[Any]] = [pa.field("id", pa.int32()), pa.field("val", pa.float64())]
+    driver.connection.adbc_get_table_schema.return_value = pa.schema(schema_fields)
 
     result = AdbcDataDictionary().get_columns(driver, table="t2")
     by_name = {entry["column_name"]: entry for entry in result}
@@ -300,34 +301,32 @@ def test_get_statistics_filters_exact_table() -> None:
     """Native statistics should be filtered back to the exact requested table name."""
     driver = Mock()
     driver.dialect = "duckdb"
-    driver.connection.adbc_get_statistics.return_value = _make_reader(
-        [
-            {
-                "catalog_name": "memory",
-                "catalog_db_schemas": [
-                    {
-                        "db_schema_name": "main",
-                        "db_schema_statistics": [
-                            {
-                                "table_name": "items",
-                                "column_name": None,
-                                "statistic_key": 6,
-                                "statistic_value": 3,
-                                "statistic_is_approximate": True,
-                            },
-                            {
-                                "table_name": "items_archive",
-                                "column_name": None,
-                                "statistic_key": 6,
-                                "statistic_value": 7,
-                                "statistic_is_approximate": True,
-                            },
-                        ],
-                    }
-                ],
-            }
-        ]
-    )
+    driver.connection.adbc_get_statistics.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_statistics": [
+                        {
+                            "table_name": "items",
+                            "column_name": None,
+                            "statistic_key": 6,
+                            "statistic_value": 3,
+                            "statistic_is_approximate": True,
+                        },
+                        {
+                            "table_name": "items_archive",
+                            "column_name": None,
+                            "statistic_key": 6,
+                            "statistic_value": 7,
+                            "statistic_is_approximate": True,
+                        },
+                    ],
+                }
+            ],
+        }
+    ])
 
     statistics = AdbcDataDictionary().get_statistics(driver, "items")
 
