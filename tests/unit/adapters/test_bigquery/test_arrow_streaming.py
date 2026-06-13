@@ -41,6 +41,16 @@ class _FakeQueryJob:
         raise AssertionError(msg)
 
 
+class _FakeQueryJobWithTable(_FakeQueryJob):
+    def __init__(self, table: pa.Table) -> None:
+        super().__init__(table)
+        self.to_arrow_calls = 0
+
+    def to_arrow(self) -> pa.Table:
+        self.to_arrow_calls += 1
+        return self.row_iterator.table
+
+
 class _FakeBigQueryConnection:
     def __init__(self, job: _FakeQueryJob) -> None:
         self.job = job
@@ -99,3 +109,26 @@ def test_select_to_arrow_table_uses_conversion_path_for_local_endpoint(monkeypat
     assert result is fallback_result
     assert fallback_calls
     assert job.result_calls == []
+
+
+def test_select_to_arrow_table_applies_query_result_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    table = pa.table({"x": [1, 2, 3]})
+    job = _FakeQueryJobWithTable(table)
+    connection = _FakeBigQueryConnection(job)
+    driver = BigQueryDriver(
+        cast("BigQueryConnection", connection),
+        driver_features={
+            "query_page_size": 13,
+            "query_max_results": 4,
+            "job_retry_deadline": 1.0,
+            "job_result_timeout": 3.0,
+        },
+    )
+
+    monkeypatch.setattr("sqlspec.adapters.bigquery.driver.storage_api_available", lambda: True)
+
+    result = driver.select_to_arrow("SELECT 1 AS x", return_format="table")
+
+    assert result.get_data().to_pydict() == {"x": [1, 2, 3]}
+    assert job.result_calls[0] == {"page_size": 13, "max_results": 4, "job_retry": driver._job_retry, "timeout": 3.0}
+    assert job.to_arrow_calls == 1

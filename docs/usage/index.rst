@@ -84,6 +84,12 @@ Choose a topic
 
       Move data between databases with Arrow-based bulk transfer.
 
+   .. grid-item-card:: Performance Tuning
+      :link: performance
+      :link-type: doc
+
+      Choose cache and fetch controls by adapter and workload shape.
+
    .. grid-item-card:: Extensions
       :link: ../extensions/index
       :link-type: doc
@@ -115,4 +121,5 @@ Recommended Path
    filtering
    testing
    etl
+   performance
    ../extensions/index

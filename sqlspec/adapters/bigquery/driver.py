@@ -104,6 +104,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_job_result_kwargs",
         "_job_result_timeout",
         "_job_retry",
         "_job_retry_deadline",
@@ -137,6 +138,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._job_result_kwargs = self._build_job_result_kwargs(features)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
@@ -149,6 +151,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
             return float(timeout)
         return DEFAULT_REQUEST_TIMEOUT
+
+    def _build_job_result_kwargs(self, features: dict[str, Any]) -> dict[str, Any]:
+        """Build QueryJob.result keyword arguments for SELECT fetches."""
+        job_result_kwargs: dict[str, Any] = {}
+        query_page_size = features.get("query_page_size")
+        if query_page_size is not None:
+            job_result_kwargs["page_size"] = query_page_size
+        query_max_results = features.get("query_max_results")
+        if query_max_results is not None:
+            job_result_kwargs["max_results"] = query_max_results
+        return job_result_kwargs
 
     def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
         return run_query_job(
@@ -179,13 +192,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.job = self._run_query_job(cursor, sql, parameters)
-        job_result = cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
             statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
         )
 
         if is_select_like:
+            job_result = cursor.job.result(
+                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs
+            )
             job_schema = cursor.job.schema or getattr(job_result, "schema", None)
             column_names = resolve_column_names(job_schema, self._column_name_cache)
             rows_list, _ = collect_rows(job_result, job_schema, column_names=column_names)
@@ -430,7 +445,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         with exc_handler:
             query_job = self._run_query_job(self.connection, sql, driver_params)
-            query_job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)  # Wait for completion
+            query_job.result(
+                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs
+            )  # Wait for completion
 
             # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()

@@ -89,6 +89,8 @@ class QueryCache:
         return entry
 
     def set(self, sql: str, entry: "CachedQuery") -> None:
+        if self._max_size <= 0:
+            return
         if sql in self._cache:
             self._cache.move_to_end(sql)
         elif len(self._cache) >= self._max_size:

@@ -105,6 +105,39 @@ def test_psycopg_sync_connection(postgres_service: "PostgresService") -> None:
         another_config.close_pool()
 
 
+def test_psycopg_prepare_threshold_routes_to_pooled_connection(postgres_service: "PostgresService") -> None:
+    """Connection prepare_threshold should control server-side prepared statements."""
+    conninfo = (
+        f"postgres://{postgres_service.user}:{postgres_service.password}@"
+        f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+    query = "SELECT %s::int AS value"
+
+    def prepared_statement_count(prepare_threshold: int | None) -> int:
+        config = PsycopgSyncConfig(
+            connection_config={
+                "conninfo": conninfo,
+                "min_size": 1,
+                "max_size": 1,
+                "prepare_threshold": prepare_threshold,
+            }
+        )
+        try:
+            with config.provide_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DEALLOCATE ALL", prepare=False)
+                    cur.execute(query, (1,))
+                    cur.fetchone()
+                    cur.execute("SELECT COUNT(*) FROM pg_prepared_statements", prepare=False)
+                    row = cast("tuple[int]", cur.fetchone())
+                    return row[0]
+        finally:
+            config.close_pool()
+
+    assert prepared_statement_count(0) >= 1
+    assert prepared_statement_count(None) == 0
+
+
 def test_psycopg_statement_stack_continue_on_error(psycopg_session: "PsycopgSyncDriver") -> None:
     """Pipeline execution should continue when instructed to handle errors."""
 

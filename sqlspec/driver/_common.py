@@ -791,6 +791,7 @@ class CommonDriverAttributesMixin:
         "_statement_pool",
         "_stmt_cache",
         "_stmt_cache_enabled",
+        "_stmt_cache_max_size",
         "connection",
         "driver_features",
         "statement_config",
@@ -819,7 +820,8 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._statement_cache: dict[str, SQL] = {}
-        self._stmt_cache = QueryCache(STMT_CACHE_MAX_SIZE)
+        self._stmt_cache_max_size = self._resolve_stmt_cache_max_size()
+        self._stmt_cache = QueryCache(self._stmt_cache_max_size)
         self._stmt_cache_enabled = False
         self._statement_pool = get_sql_pool()
         self._processed_state_pool = get_processed_state_pool()
@@ -893,6 +895,15 @@ class CommonDriverAttributesMixin:
             is_many=False,
             apply_wrap_types=cached.applied_wrap_types,
         )
+
+    def _resolve_stmt_cache_max_size(self) -> int:
+        """Return the configured statement-cache capacity."""
+        cache_size = self.driver_features.get("sqlspec_statement_cache_size", STMT_CACHE_MAX_SIZE)
+        try:
+            resolved_size = int(cache_size)
+        except (TypeError, ValueError):
+            return STMT_CACHE_MAX_SIZE
+        return max(0, resolved_size)
 
     @overload
     @staticmethod
@@ -1187,7 +1198,9 @@ class CommonDriverAttributesMixin:
         return _find_filter_impl(filter_type, filters)
 
     def _update_stmt_cache_flag(self) -> None:
-        self._stmt_cache_enabled = bool(not self.statement_config._has_transformers and self.observability.is_idle)
+        self._stmt_cache_enabled = bool(
+            self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers and self.observability.is_idle
+        )
 
     def _require_capability(self, capability_flag: str) -> None:
         """Check that a storage capability is enabled.

@@ -169,6 +169,32 @@ async def test_async_driver_dispatch_uses_observability_slot(
     assert result.operation_type == "SELECT"
 
 
+async def test_async_driver_statement_cache_size_threads_through() -> None:
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(conn, driver_features={"sqlspec_statement_cache_size": 7})
+
+        assert driver._stmt_cache_max_size == 7
+        assert driver._stmt_cache_enabled is True
+    finally:
+        await conn.close()
+
+
+async def test_async_driver_zero_statement_cache_size_disables_fast_path() -> None:
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(conn, driver_features={"sqlspec_statement_cache_size": 0})
+
+        assert driver._stmt_cache_max_size == 0
+        assert driver._stmt_cache_enabled is False
+
+        result = await driver.execute("SELECT 1")
+
+        assert result.operation_type == "SELECT"
+    finally:
+        await conn.close()
+
+
 async def test_async_driver_dispatch_statement_execution_insert(aiosqlite_async_driver: AiosqliteDriver) -> None:
     """Test async dispatch_statement_execution with INSERT statement."""
     statement = SQL(

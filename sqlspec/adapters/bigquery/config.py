@@ -98,6 +98,9 @@ class BigQueryDriverFeatures(TypedDict):
             query jobs. Bounds each request so a server that accepts the request but never responds
             (e.g. a wedged emulator) raises instead of blocking indefinitely. Defaults to
             ``job_result_timeout`` when that is numeric, else 120.0.
+        query_page_size: Optional page size passed through ``QueryJob.result()`` for SELECT result fetching.
+            Non-positive values are ignored by the BigQuery client.
+        query_max_results: Optional total row limit passed through ``QueryJob.result()`` for SELECT result fetching.
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -109,6 +112,8 @@ class BigQueryDriverFeatures(TypedDict):
     job_retry_deadline: NotRequired[float]
     job_result_timeout: NotRequired[float]
     request_timeout: NotRequired[float]
+    query_page_size: NotRequired[int]
+    query_max_results: NotRequired[int]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):

@@ -63,6 +63,11 @@ def test_oracle_sync_cursor_leaves_defaults_when_options_absent() -> None:
         assert raw_cursor.prefetchrows == 2
 
 
+def test_oracle_fetch_kwargs_omit_absent_fetch_tuning_keys() -> None:
+    """Per-statement fetch kwargs should stay empty unless fetch tuning is explicit."""
+    assert build_fetch_kwargs({"arraysize": 100, "prefetchrows": 200}) == {}
+
+
 @pytest.mark.anyio
 async def test_oracle_async_cursor_applies_arraysize_and_prefetchrows() -> None:
     raw_cursor = _RawCursor()

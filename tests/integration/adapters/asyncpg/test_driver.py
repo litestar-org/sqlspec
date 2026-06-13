@@ -11,6 +11,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg import AsyncpgPool
@@ -523,3 +524,47 @@ async def test_asyncpg_pool_concurrency(postgres_service: PostgresService) -> No
 
     assert len(unique_pools) == 1, f"Race condition detected! {len(unique_pools)} unique pools created."
     assert all(p is first_pool for p in pools)
+
+
+async def test_asyncpg_statement_cache_size_zero_survives_ddl_shape_change(postgres_service: PostgresService) -> None:
+    """Disabling asyncpg's native statement cache avoids stale plans after DDL shape changes."""
+    table_name = f"asyncpg_stmt_cache_shape_{random.randint(1000, 9999)}"
+    dsn = (
+        f"postgres://{postgres_service.user}:{postgres_service.password}@"
+        f"{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+
+    async def run_shape_change(statement_cache_size: int | None) -> None:
+        connection_config: dict[str, object] = {"dsn": dsn, "min_size": 1, "max_size": 1}
+        if statement_cache_size is not None:
+            connection_config["statement_cache_size"] = statement_cache_size
+
+        config = AsyncpgConfig(connection_config=connection_config)
+        try:
+            async with config.provide_session() as session:
+                await session.execute_script(f"""
+                    DROP TABLE IF EXISTS {table_name};
+                    CREATE TABLE {table_name} (id INTEGER);
+                    INSERT INTO {table_name} (id) VALUES (1);
+                """)
+                await session.execute(f"SELECT * FROM {table_name} WHERE id = $1", (1,))
+                await session.begin()
+                try:
+                    await session.execute_script(f"""
+                        ALTER TABLE {table_name} ADD COLUMN name TEXT;
+                        UPDATE {table_name} SET name = 'changed' WHERE id = 1;
+                    """)
+                    await session.execute(f"SELECT * FROM {table_name} WHERE id = $1", (1,))
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+        finally:
+            async with config.provide_session() as cleanup:
+                await cleanup.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+            await config.close_pool()
+
+    with pytest.raises(SQLSpecError, match="cached statement plan is invalid"):
+        await run_shape_change(None)
+
+    await run_shape_change(0)
