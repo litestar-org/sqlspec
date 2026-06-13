@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
-from sqlglot import exp
+from sqlglot import Dialect, exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
@@ -464,7 +464,9 @@ class SQL:
             return None
         if isinstance(dialect, str):
             return dialect
-        return dialect.__class__.__name__.lower()
+        if isinstance(dialect, type) and issubclass(dialect, Dialect):
+            return dialect.__name__.lower()
+        return type(dialect).__name__.lower()
 
     def _get_raw_sql(self) -> str:
         """Return raw SQL, materializing deferred expression SQL when needed."""

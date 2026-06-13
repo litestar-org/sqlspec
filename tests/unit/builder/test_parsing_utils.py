@@ -5,10 +5,15 @@ specifically focusing on the parameter style conversion functionality that
 was added to fix QueryBuilder parameter handling issues.
 """
 
+import contextlib
+
+import pytest
 from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from sqlspec import sql
-from sqlspec.builder import parse_column_expression, parse_condition_expression
+from sqlspec.builder import parse_column_expression, parse_condition_expression, parse_order_expression, parse_table_expression
+import sqlspec.builder._parsing_utils as parsing_utils
 from sqlspec.core import get_cache
 
 
@@ -111,6 +116,117 @@ def test_parse_column_expression_qualified() -> None:
     expr = parse_column_expression(column)
     assert expr is not None
     assert isinstance(expr, exp.Expr)
+
+
+_PARSING_CORPUS = [
+    "name",
+    "users.name",
+    "db.users.name",
+    "col$1",
+    "_x",
+    "true",
+    "null",
+    "count",
+    "user",
+    "MAX(price)",
+    "name AS n",
+    "price * 2",
+    '"Quoted".col',
+    "name DESC",
+    "users.name asc",
+    "COUNT(*) DESC",
+    "name nulls first",
+]
+
+
+def _parse_column_oracle(value: str) -> exp.Expr:
+    return exp.maybe_parse(value) or exp.column(value)
+
+
+def _parse_order_oracle(value: str) -> exp.Expr:
+    parsed = parsing_utils.maybe_parse(str(value), into=exp.Ordered)
+    if parsed:
+        return parsed
+    return _parse_column_oracle(value)
+
+
+def _assert_matches_oracle(value: str, parser, oracle) -> None:
+    with contextlib.suppress(ParseError):
+        expected = oracle(value)
+        actual = parser(value)
+        assert type(actual) is type(expected)
+        assert actual.sql() == expected.sql()
+        return
+
+    with pytest.raises(ParseError):
+        parser(value)
+
+
+@pytest.mark.parametrize("value", _PARSING_CORPUS)
+def test_parse_column_expression_matches_parser_oracle(value: str) -> None:
+    """Column parser fast paths must preserve the previous parser-backed shape."""
+    _assert_matches_oracle(value, parse_column_expression, _parse_column_oracle)
+
+
+@pytest.mark.parametrize("value", _PARSING_CORPUS)
+def test_parse_order_expression_matches_parser_oracle(value: str) -> None:
+    """Order parser fast paths must preserve the previous parser-backed shape."""
+    _assert_matches_oracle(value, parse_order_expression, _parse_order_oracle)
+
+
+def test_parse_column_expression_simple_identifier_avoids_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simple column identifiers should avoid sqlglot parsing."""
+    calls = 0
+    original = exp.maybe_parse
+
+    def recorder(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(exp, "maybe_parse", recorder)
+
+    expr = parse_column_expression("users.name")
+
+    assert calls == 0
+    assert expr.sql() == "users.name"
+
+
+def test_parse_table_expression_simple_identifier_avoids_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simple table identifiers should avoid SELECT-wrapper parsing."""
+    calls = 0
+    original = exp.maybe_parse
+
+    def recorder(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(exp, "maybe_parse", recorder)
+
+    expr = parse_table_expression("schema.users", explicit_alias="u")
+
+    assert calls == 0
+    assert expr.sql() == "schema.users AS u"
+
+
+def test_parse_order_expression_directional_identifier_avoids_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Directional simple ORDER BY identifiers should avoid sqlglot parsing."""
+    calls = 0
+    original = parsing_utils.maybe_parse
+
+    def recorder(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(parsing_utils, "maybe_parse", recorder)
+
+    expr = parse_order_expression("users.name asc")
+
+    assert calls == 0
+    assert isinstance(expr, exp.Ordered)
+    assert expr.sql() == "users.name ASC"
 
 
 def test_parse_column_expression_sqlglot_passthrough() -> None:

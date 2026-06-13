@@ -12,6 +12,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import parse_table_expression
+from sqlspec.builder._temporal import register_version_generators
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
 
@@ -114,6 +115,8 @@ def _apply_lateral_modifier(join_expr: exp.Join) -> None:
 def _attach_as_of_version(
     table_expr: exp.Expr, alias: str | None, as_of: Any, as_of_type: str | None = None
 ) -> exp.Expr:
+    register_version_generators()
+
     inner_table = table_expr.copy()
     target_alias = alias
 

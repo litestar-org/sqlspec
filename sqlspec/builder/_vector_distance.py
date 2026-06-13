@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 
+from sqlspec.utils.sqlglot_compat import invalidate_generator_dispatch
+
 if TYPE_CHECKING:
     from sqlglot.generator import Generator
 
@@ -271,19 +273,13 @@ def _register_with_sqlglot() -> None:
     _register_operator_transform(BigQuery.Generator.TRANSFORMS, _operator_sql_bigquery)
     _register_operator_transform(DuckDB.Generator.TRANSFORMS, _operator_sql_duckdb)
 
-    # sqlglot caches the dispatch table (built from TRANSFORMS) per Generator class
-    # in _DISPATCH_CACHE. We must invalidate stale entries so the next instantiation
-    # picks up our new Operator transforms.
-    from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
-
-    for gen_cls in (
+    invalidate_generator_dispatch(
         Generator,
         Postgres.Generator,
         MySQL.Generator,
         Oracle.Generator,
         BigQuery.Generator,
         DuckDB.Generator,
-    ):
-        _DISPATCH_CACHE.pop(gen_cls, None)
+    )
 
     _SQLGLOT_VECTOR_DISTANCE_REGISTERED = True

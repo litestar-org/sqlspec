@@ -10,7 +10,7 @@ from typing import Any, Final
 
 from sqlglot import exp
 from sqlglot.parsers.postgres import PostgresParser
-from sqlglot.tokens import TokenType  # type: ignore[attr-defined]  # pyright: ignore[reportPrivateImportUsage]
+from sqlglot.tokenizer_core import TokenType
 
 __all__ = (
     "PARADEDB_OPERATOR_TOKENS",

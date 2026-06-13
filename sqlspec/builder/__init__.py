@@ -176,6 +176,3 @@ __all__ = (
     "sql",
     "to_expression",
 )
-
-# Register temporal query SQL generators on module import
-register_version_generators()

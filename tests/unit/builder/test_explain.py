@@ -20,6 +20,7 @@ Test Coverage:
 
 import pytest
 from sqlglot import exp
+from sqlglot.dialects.postgres import Postgres
 
 from sqlspec.builder import (
     Delete,
@@ -1144,6 +1145,28 @@ def testnormalize_dialect_name_uppercase_string():
 def testnormalize_dialect_name_mixed_case_string():
     """Test normalize_dialect_name converts mixed case to lowercase."""
     assert normalize_dialect_name("PostgreSQL") == "postgresql"
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("postgres", "postgres"),
+        ("POSTGRES", "postgres"),
+        (Postgres, "postgres"),
+        (Postgres(), "postgres"),
+        (None, None),
+    ],
+)
+def test_normalize_dialect_name_handles_postgres_dialect_inputs(dialect, expected):
+    """Test normalize_dialect_name handles dialect strings, classes, instances, and None."""
+    assert normalize_dialect_name(dialect) == expected
+
+
+def test_build_explain_sql_uses_postgres_builder_for_dialect_class():
+    """Dialect classes should dispatch to the concrete EXPLAIN builder."""
+    result = build_explain_sql("SELECT 1", ExplainOptions(analyze=True), Postgres)
+
+    assert result == "EXPLAIN (ANALYZE) SELECT 1"
 
 
 # -----------------------------------------------------------------------------

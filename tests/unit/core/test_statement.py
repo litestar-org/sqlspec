@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlglot import expressions as exp
+from sqlglot.dialects.postgres import Postgres
 
 import sqlspec.typing as public_typing
 from sqlspec.core import (
@@ -448,6 +449,22 @@ def test_sql_initialization_with_custom_config() -> None:
     stmt = SQL("SELECT * FROM users", statement_config=config)
     assert stmt.statement_config is config
     assert stmt.statement_config.dialect == "sqlite"
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("postgres", "postgres"),
+        (Postgres, "postgres"),
+        (Postgres(), "postgres"),
+        (None, None),
+    ],
+)
+def test_sql_normalizes_postgres_dialect_inputs(dialect, expected) -> None:
+    """StatementConfig.dialect should accept sqlglot dialect names, classes, and instances."""
+    stmt = SQL("SELECT 1", statement_config=StatementConfig(dialect=dialect))
+
+    assert stmt.dialect == expected
 
 
 def test_sql_initialization_from_sql_object() -> None:

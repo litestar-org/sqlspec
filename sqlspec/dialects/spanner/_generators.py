@@ -19,9 +19,10 @@ import re
 from typing import Any, Final, cast
 
 from sqlglot import exp
-from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
 from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.postgres import PostgresGenerator
+
+from sqlspec.utils.sqlglot_compat import invalidate_generator_dispatch
 
 __all__ = ("SpangresGenerator", "SpannerGenerator")
 
@@ -284,7 +285,7 @@ BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
 BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
 BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
 
-_DISPATCH_CACHE.pop(BigQueryGenerator, None)
+invalidate_generator_dispatch(BigQueryGenerator)
 
 SpannerGenerator = BigQueryGenerator  # pyright: ignore[reportAssignmentType]
 
@@ -315,6 +316,6 @@ def _pg_properties_transform(self: Any, expression: exp.Properties) -> str:
 PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
 PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
 
-_DISPATCH_CACHE.pop(PostgresGenerator, None)
+invalidate_generator_dispatch(PostgresGenerator)
 
 SpangresGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]
