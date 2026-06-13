@@ -110,6 +110,10 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   ``psqlpy``, and Oracle AQ to use persistent per-channel listeners, avoiding
   connection races, callback churn, dropped secondary subscriptions, and
   ignored Oracle ``poll_interval`` settings.
+* Honored builder optimization flags by wiring explicit sqlglot optimizer
+  rules, so ``optimize_joins``, ``optimize_predicates``, and
+  ``simplify_expressions`` now disable only their matching steps instead of
+  always running the full default pipeline.
 * Routed async pool teardown through the base config lifecycle path so
   ``on_pool_destroy`` and ``on_pool_destroying`` fire consistently across async
   adapters.

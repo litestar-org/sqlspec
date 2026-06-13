@@ -164,6 +164,7 @@ class OracleDriverFeatures(TypedDict):
      - "list": list[float|int], best for code that expects native Python sequences.
      - "array": array.array, zero-copy oracledb passthrough.
      Defaults to "numpy" when NumPy is installed, otherwise "list".
+     Sparse VECTOR columns always bind and return python-oracledb ``SparseVector`` values.
     oracle_varchar2_byte_limit: Threshold (in UTF-8 bytes) above which ``str``
      parameters are auto-coerced to ``DB_TYPE_CLOB``. Defaults to 4000 (the
      Oracle SQL VARCHAR2 limit). Databases with ``MAX_STRING_SIZE=EXTENDED``
