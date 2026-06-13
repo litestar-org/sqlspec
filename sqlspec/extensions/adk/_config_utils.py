@@ -28,6 +28,9 @@ class _ADKSessionStoreConfig(TypedDict):
 
     session_table: str
     events_table: str
+    app_state_table: str
+    user_state_table: str
+    metadata_table: str
     owner_id_column: NotRequired[str]
 
 
@@ -45,6 +48,7 @@ class _ADKArtifactStoreConfig(TypedDict):
     """Normalized ADK artifact store configuration."""
 
     artifact_table: str
+    storage_uri: NotRequired[str]
 
 
 class _ADKConfigSource(Protocol):
@@ -66,11 +70,12 @@ def _get_adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreC
     """Return normalized session store table settings."""
 
     adk_config = _get_adk_config_from_extension(config)
-    session_table = adk_config.get("session_table")
-    events_table = adk_config.get("events_table")
     result: _ADKSessionStoreConfig = {
-        "session_table": str(session_table) if session_table is not None else "adk_sessions",
-        "events_table": str(events_table) if events_table is not None else "adk_events",
+        "session_table": str(adk_config.get("session_table") or "adk_session"),
+        "events_table": str(adk_config.get("events_table") or "adk_event"),
+        "app_state_table": str(adk_config.get("app_state_table") or "adk_app_state"),
+        "user_state_table": str(adk_config.get("user_state_table") or "adk_user_state"),
+        "metadata_table": str(adk_config.get("metadata_table") or "adk_internal_metadata"),
     }
     owner_id = adk_config.get("owner_id_column")
     if owner_id is not None:
@@ -83,14 +88,11 @@ def _get_adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreCon
 
     adk_config = _get_adk_config_from_extension(config)
     enable_memory = adk_config.get("enable_memory")
-    memory_table = adk_config.get("memory_table")
-    use_fts = adk_config.get("memory_use_fts")
     max_results = adk_config.get("memory_max_results")
-
     result: _ADKMemoryStoreConfig = {
         "enable_memory": bool(enable_memory) if enable_memory is not None else True,
-        "memory_table": str(memory_table) if memory_table is not None else "adk_memory_entries",
-        "use_fts": bool(use_fts) if use_fts is not None else False,
+        "memory_table": str(adk_config.get("memory_table") or "adk_memory"),
+        "use_fts": bool(adk_config.get("memory_use_fts", False)),
         "max_results": int(max_results) if isinstance(max_results, int) else 20,
     }
     owner_id = adk_config.get("owner_id_column")
@@ -103,8 +105,11 @@ def _get_adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStor
     """Return normalized artifact store settings."""
 
     adk_config = _get_adk_config_from_extension(config)
-    artifact_table = adk_config.get("artifact_table")
-    return {"artifact_table": str(artifact_table) if artifact_table is not None else "adk_artifact_versions"}
+    result: _ADKArtifactStoreConfig = {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
+    storage_uri = adk_config.get("artifact_storage_uri")
+    if storage_uri is not None:
+        result["storage_uri"] = str(storage_uri)
+    return result
 
 
 def _resolve_adk_store_path(config: Any, store_suffix: str) -> str:
@@ -178,7 +183,8 @@ def _is_adk_memory_migration_enabled(config: Any) -> bool:
     include_memory = adk_config.get("include_memory_migration")
     if include_memory is not None:
         return bool(include_memory)
-    return bool(adk_config.get("enable_memory", True))
+    enable_memory = adk_config.get("enable_memory")
+    return bool(enable_memory) if enable_memory is not None else True
 
 
 def _validate_adk_store_registration(config: Any) -> None:

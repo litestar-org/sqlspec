@@ -31,15 +31,15 @@ def _build_record(*, session_id: str, event_id: str, content_text: str, inserted
     )
 
 
-async def _build_store(tmp_path: Path) -> DuckdbADKMemoryStore:
+def _build_store(tmp_path: Path) -> DuckdbADKMemoryStore:
     db_path = tmp_path / "test_adk_memory.duckdb"
     config = DuckDBConfig(connection_config={"database": str(db_path)})
     store = DuckdbADKMemoryStore(config)
-    await store.create_tables()
+    store.create_tables()
     return store
 
 
-async def _build_fts_store(tmp_path: Path) -> DuckdbADKMemoryStore:
+def _build_fts_store(tmp_path: Path) -> DuckdbADKMemoryStore:
     db_path = tmp_path / "test_adk_memory_fts.duckdb"
     config = DuckDBConfig(
         connection_config={"database": str(db_path)}, extension_config={"adk": {"memory_use_fts": True}}
@@ -48,74 +48,74 @@ async def _build_fts_store(tmp_path: Path) -> DuckdbADKMemoryStore:
     with config.provide_connection() as conn:
         if not store._ensure_fts_extension(conn):  # pyright: ignore[reportPrivateUsage]
             pytest.skip("DuckDB FTS extension is unavailable")
-    await store.create_tables()
+    store.create_tables()
     return store
 
 
-async def test_duckdb_memory_store_insert_search_dedup(tmp_path: Path) -> None:
+def test_duckdb_memory_store_insert_search_dedup(tmp_path: Path) -> None:
     """Insert memory entries, search by text, and skip duplicates."""
-    store = await _build_store(tmp_path)
+    store = _build_store(tmp_path)
 
     now = datetime.now(timezone.utc)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
     record2 = _build_record(session_id="s1", event_id="evt-2", content_text="latte", inserted_at=now)
 
-    inserted = await store.insert_memory_entries([record1, record2])
+    inserted = store.insert_memory_entries([record1, record2])
     assert inserted == 2
 
-    results = await store.search_entries(query="espresso", app_name="app", user_id="user")
+    results = store.search_entries(query="espresso", app_name="app", user_id="user")
     assert len(results) == 1
     assert results[0]["event_id"] == "evt-1"
 
-    deduped = await store.insert_memory_entries([record1])
+    deduped = store.insert_memory_entries([record1])
     assert deduped == 0
 
 
-async def test_duckdb_memory_store_delete_by_session(tmp_path: Path) -> None:
+def test_duckdb_memory_store_delete_by_session(tmp_path: Path) -> None:
     """Delete memory entries by session id."""
-    store = await _build_store(tmp_path)
+    store = _build_store(tmp_path)
 
     now = datetime.now(timezone.utc)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
     record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
-    await store.insert_memory_entries([record1, record2])
+    store.insert_memory_entries([record1, record2])
 
-    deleted = await store.delete_entries_by_session("s1")
+    deleted = store.delete_entries_by_session("s1")
     assert deleted == 1
 
-    remaining = await store.search_entries(query="latte", app_name="app", user_id="user")
+    remaining = store.search_entries(query="latte", app_name="app", user_id="user")
     assert len(remaining) == 1
     assert remaining[0]["session_id"] == "s2"
 
 
-async def test_duckdb_memory_store_delete_older_than(tmp_path: Path) -> None:
+def test_duckdb_memory_store_delete_older_than(tmp_path: Path) -> None:
     """Delete memory entries older than a cutoff."""
-    store = await _build_store(tmp_path)
+    store = _build_store(tmp_path)
 
     now = datetime.now(timezone.utc)
     old = now - timedelta(days=40)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="old", inserted_at=old)
     record2 = _build_record(session_id="s1", event_id="evt-2", content_text="new", inserted_at=now)
-    await store.insert_memory_entries([record1, record2])
+    store.insert_memory_entries([record1, record2])
 
-    deleted = await store.delete_entries_older_than(30)
+    deleted = store.delete_entries_older_than(30)
     assert deleted == 1
 
-    remaining = await store.search_entries(query="new", app_name="app", user_id="user")
+    remaining = store.search_entries(query="new", app_name="app", user_id="user")
     assert len(remaining) == 1
     assert remaining[0]["event_id"] == "evt-2"
 
 
-async def test_duckdb_memory_store_fts_search_uses_bm25_path(tmp_path: Path) -> None:
+def test_duckdb_memory_store_fts_search_uses_bm25_path(tmp_path: Path) -> None:
     """FTS-enabled DuckDB stores search through the BM25 index after insert refresh."""
-    store = await _build_fts_store(tmp_path)
+    store = _build_fts_store(tmp_path)
 
     now = datetime.now(timezone.utc)
     record1 = _build_record(session_id="s1", event_id="evt-fts-1", content_text="espresso roast", inserted_at=now)
     record2 = _build_record(session_id="s1", event_id="evt-fts-2", content_text="latte foam", inserted_at=now)
-    await store.insert_memory_entries([record1, record2])
+    store.insert_memory_entries([record1, record2])
 
-    results = await store.search_entries(query="espresso", app_name="app", user_id="user")
+    results = store.search_entries(query="espresso", app_name="app", user_id="user")
 
     assert len(results) == 1
     assert results[0]["event_id"] == "evt-fts-1"

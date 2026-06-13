@@ -17,6 +17,7 @@ from pytest_databases.docker.oracle import OracleService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+from sqlspec.adapters.adbc.adk import AdbcADKStore
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
@@ -35,6 +36,7 @@ from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgDriver,
     CockroachAsyncpgDriverFeatures,
 )
+from sqlspec.adapters.cockroach_asyncpg.adk import CockroachAsyncpgADKStore
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
     CockroachPsycopgAsyncDriver,
@@ -42,6 +44,7 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncConfig,
     CockroachPsycopgSyncDriver,
 )
+from sqlspec.adapters.cockroach_psycopg.adk import CockroachPsycopgAsyncADKStore, CockroachPsycopgSyncADKStore
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeatures
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.litestar import DuckdbStore
@@ -62,6 +65,7 @@ from sqlspec.adapters.oracledb import (
     OracleSyncConfig,
     OracleSyncDriver,
 )
+from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
@@ -72,8 +76,10 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncConfig,
     PsycopgSyncDriver,
 )
+from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore, PsycopgSyncADKStore
 from sqlspec.adapters.psycopg.litestar import PsycopgAsyncStore, PsycopgSyncStore
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, PyMysqlDriverFeatures
+from sqlspec.adapters.pymysql.adk import PyMysqlADKStore
 from sqlspec.adapters.pymysql.litestar import PyMysqlStore
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
@@ -1499,7 +1505,25 @@ async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator
 
 
 def _adk_extension_config(suffix: str) -> dict[str, Any]:
-    return {"adk": {"session_table": f"adk_s_{suffix}", "events_table": f"adk_e_{suffix}"}}
+    return {
+        "adk": {
+            "session_table": f"adk_s_{suffix}",
+            "events_table": f"adk_e_{suffix}",
+            "app_state_table": f"adk_app_{suffix}",
+            "user_state_table": f"adk_user_{suffix}",
+            "metadata_table": f"adk_meta_{suffix}",
+        }
+    }
+
+
+def _ensure_adbc_store_driver_available(config: AdbcConfig) -> None:
+    try:
+        with config.provide_session():
+            pass
+    except Exception as error:
+        if any(marker in str(error) for marker in _ADBC_DRIVER_MISSING_MARKERS):
+            pytest.skip(f"ADBC driver not available: {error}")
+        raise
 
 
 @pytest.fixture
@@ -1633,6 +1657,186 @@ def adk_store_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
             connection_config={"dsn": _psqlpy_dsn(postgres_service)}, extension_config=_adk_extension_config(suffix)
         )
         return config, PsqlpyADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build a fresh psycopg async ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = PsycopgAsyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service), "autocommit": True},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, PsycopgAsyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build a fresh psycopg sync ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = PsycopgSyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service), "autocommit": True},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, PsycopgSyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_oracle_async(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+    """Build a fresh Oracle async ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = OracleAsyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_adk_extension_config(suffix)
+        )
+        return config, OracleAsyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_oracle_sync(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+    """Build a fresh Oracle sync ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = OracleSyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_adk_extension_config(suffix)
+        )
+        return config, OracleSyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_pymysql(mysql_service: MySQLService) -> Callable[..., Any]:
+    """Build a fresh PyMySQL ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = PyMysqlConfig(
+            connection_config=_mysql_connection_config(mysql_service), extension_config=_adk_extension_config(suffix)
+        )
+        return config, PyMysqlADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_cockroach_asyncpg(cockroachdb_service: CockroachDBService) -> Callable[..., Any]:
+    """Build a fresh CockroachDB asyncpg ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = CockroachAsyncpgConfig(
+            connection_config={
+                "host": cockroachdb_service.host,
+                "port": cockroachdb_service.port,
+                "user": "root",
+                "password": "",
+                "database": cockroachdb_service.database,
+                "ssl": None,
+                "min_size": 1,
+                "max_size": 5,
+            },
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, CockroachAsyncpgADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_cockroach_psycopg_async(cockroachdb_service: CockroachDBService) -> Callable[..., Any]:
+    """Build a fresh CockroachDB psycopg async ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = CockroachPsycopgAsyncConfig(
+            connection_config={"conninfo": _cockroach_conninfo(cockroachdb_service)},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, CockroachPsycopgAsyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_cockroach_psycopg_sync(cockroachdb_service: CockroachDBService) -> Callable[..., Any]:
+    """Build a fresh CockroachDB psycopg sync ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = CockroachPsycopgSyncConfig(
+            connection_config={"conninfo": _cockroach_conninfo(cockroachdb_service)},
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, CockroachPsycopgSyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build a fresh ADBC SQLite ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": f"file:{tmp_path / f'adk_{suffix}.db'}"},
+            extension_config=_adk_extension_config(suffix),
+        )
+        _ensure_adbc_store_driver_available(config)
+        return config, AdbcADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_adbc_duckdb(tmp_path: Path) -> Callable[..., Any]:
+    """Build a fresh ADBC DuckDB ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AdbcConfig(
+            connection_config={"driver_name": "duckdb", "path": str(tmp_path / f"adk_{suffix}.duckdb")},
+            extension_config=_adk_extension_config(suffix),
+        )
+        _ensure_adbc_store_driver_available(config)
+        return config, AdbcADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_adbc_postgres(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build a fresh ADBC PostgreSQL ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = AdbcConfig(
+            connection_config={
+                "driver_name": "postgresql",
+                "uri": (
+                    f"postgresql://{postgres_service.user}:{postgres_service.password}"
+                    f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+                ),
+            },
+            extension_config=_adk_extension_config(suffix),
+        )
+        _ensure_adbc_store_driver_available(config)
+        return config, AdbcADKStore(config)
 
     return make
 

@@ -1,14 +1,14 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
 import contextlib
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
@@ -25,25 +25,31 @@ DIALECT_DUCKDB: Final = "duckdb"
 DIALECT_SNOWFLAKE: Final = "snowflake"
 DIALECT_GENERIC: Final = "generic"
 
-ADBC_TABLE_NOT_FOUND_PATTERNS: Final = ("no such table", "table or view does not exist", "relation does not exist")
+ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
+    "no such table",
+    "table or view does not exist",
+    "relation does not exist",
+    "does not exist",
+    "table with name",
+)
 
 
-class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
+class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     """ADBC synchronous ADK store for Arrow Database Connectivity.
 
     Implements session and event storage for Google Agent Development Kit
     using ADBC. ADBC provides a vendor-neutral API with Arrow-native data
     transfer across multiple databases (PostgreSQL, SQLite, DuckDB, etc.).
 
-    Events use the new 5-column contract: session_id, invocation_id, author,
-    timestamp, and event_json. The full ADK Event payload is stored as a
-    single JSON blob in event_json using a dialect-appropriate column type
+    Events use the clean-break contract: id, session_id, invocation_id,
+    timestamp, and event_data. The full ADK Event payload is stored as a
+    single JSON blob in event_data using a dialect-appropriate column type
     (JSONB for PostgreSQL, JSON for DuckDB, VARIANT for Snowflake, TEXT for
     SQLite and generic fallback).
 
     Provides:
         - Session state management with JSON serialization
-        - Event history tracking via single event_json blob
+        - Event history tracking via single event_data blob
         - Atomic event insert + session state update
         - Timezone-aware timestamps
         - Foreign key constraints with cascade delete
@@ -64,7 +70,97 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         super().__init__(config)
         self._dialect = self._detect_dialect()
 
-    @property
+    def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        self._create_tables()
+
+    def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return self._create_session(session_id, app_name, user_id, state, owner_id)
+
+    def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID."""
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        self._update_session_state(app_name, user_id, session_id, state)
+
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return self._list_sessions(app_name, user_id)
+
+    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and associated events."""
+        self._delete_session(app_name, user_id, session_id)
+
+    def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        self._append_event(event_record)
+
+    def append_event_and_update_state(
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state."""
+        return self._append_event_and_update_state(
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        )
+
+    def get_events(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+
+    def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than a timestamp."""
+        return self._delete_expired_events(before)
+
+    def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions older than a timestamp."""
+        return self._delete_idle_sessions(updated_before)
+
+    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state."""
+        return self._get_app_state(app_name)
+
+    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state."""
+        return self._get_user_state(app_name, user_id)
+
+    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state."""
+        self._upsert_app_state(app_name, state)
+
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state."""
+        self._upsert_user_state(app_name, user_id, state)
+
+    def get_metadata(self, key: str) -> "str | None":
+        """Return a metadata value."""
+        return self._get_metadata(key)
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set a metadata value."""
+        self._set_metadata(key, value)
+
     def dialect(self) -> str:
         """Return the detected database dialect."""
         return self._dialect
@@ -130,6 +226,22 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             return None
         return to_json(value)
 
+    def _json_storage_type(self) -> str:
+        if self._dialect == DIALECT_POSTGRESQL:
+            return "JSONB"
+        if self._dialect == DIALECT_DUCKDB:
+            return "JSON"
+        if self._dialect == DIALECT_SNOWFLAKE:
+            return "VARIANT"
+        return "TEXT"
+
+    def _timestamp_storage_type(self) -> str:
+        if self._dialect == DIALECT_POSTGRESQL:
+            return "TIMESTAMPTZ"
+        if self._dialect == DIALECT_SNOWFLAKE:
+            return "TIMESTAMP_TZ"
+        return "TIMESTAMP"
+
     def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
         """Deserialize optional JSON field from database.
 
@@ -143,7 +255,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             return None
         return from_json(str(data))  # type: ignore[no-any-return]
 
-    async def _get_create_sessions_table_sql(self) -> str:
+    def _get_create_sessions_table_sql(self) -> str:
         """Get CREATE TABLE SQL for sessions with dialect dispatch.
 
         Returns:
@@ -249,7 +361,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         )
         """
 
-    async def _get_create_events_table_sql(self) -> str:
+    def _get_create_events_table_sql(self) -> str:
         """Get CREATE TABLE SQL for events with dialect dispatch.
 
         Returns:
@@ -273,11 +385,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSONB NOT NULL,
+            event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
@@ -290,11 +402,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            invocation_id TEXT NOT NULL,
-            author TEXT NOT NULL,
+            invocation_id TEXT,
             timestamp REAL NOT NULL,
-            event_json TEXT NOT NULL,
+            event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
@@ -307,12 +419,12 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json JSON NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+            event_data JSON NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         )
         """
 
@@ -324,11 +436,11 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR PRIMARY KEY,
             session_id VARCHAR NOT NULL,
-            invocation_id VARCHAR NOT NULL,
-            author VARCHAR NOT NULL,
+            invocation_id VARCHAR,
             timestamp TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
-            event_json VARIANT NOT NULL,
+            event_data VARIANT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         )
         """
@@ -341,14 +453,70 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(256) NOT NULL,
+            invocation_id VARCHAR(256),
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_json TEXT NOT NULL,
+            event_data TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         )
         """
+
+    def _get_create_app_states_table_sql(self) -> str:
+        json_type = self._json_storage_type()
+        timestamp_type = self._timestamp_storage_type()
+        default = "DEFAULT CURRENT_TIMESTAMP()" if self._dialect == DIALECT_SNOWFLAKE else "DEFAULT CURRENT_TIMESTAMP"
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name VARCHAR(128) PRIMARY KEY,
+            state {json_type} NOT NULL,
+            update_time {timestamp_type} NOT NULL {default}
+        )
+        """
+
+    def _get_create_user_states_table_sql(self) -> str:
+        json_type = self._json_storage_type()
+        timestamp_type = self._timestamp_storage_type()
+        default = "DEFAULT CURRENT_TIMESTAMP()" if self._dialect == DIALECT_SNOWFLAKE else "DEFAULT CURRENT_TIMESTAMP"
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            state {json_type} NOT NULL,
+            update_time {timestamp_type} NOT NULL {default},
+            PRIMARY KEY (app_name, user_id)
+        )
+        """
+
+    def _get_create_metadata_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key VARCHAR(128) PRIMARY KEY,
+            value VARCHAR(512) NOT NULL
+        )
+        """
+
+    def _get_seed_metadata_sql(self) -> str:
+        if self._dialect in {DIALECT_POSTGRESQL, DIALECT_SQLITE, DIALECT_DUCKDB}:
+            return f"""
+            INSERT INTO {self._metadata_table} (key, value)
+            VALUES ('schema_version', '1')
+            ON CONFLICT(key) DO NOTHING
+            """
+        return f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        SELECT 'schema_version', '1'
+        WHERE NOT EXISTS (SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version')
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
     def _get_drop_tables_sql(self) -> "list[str]":
         """Get DROP TABLE SQL statements.
@@ -356,7 +524,13 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Returns:
             List of SQL statements to drop tables and indexes.
         """
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
     def _create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -365,7 +539,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             try:
                 self._enable_foreign_keys(cursor, conn)
 
-                cursor.execute(run_(self._get_create_sessions_table_sql)())
+                cursor.execute(self._get_create_sessions_table_sql())
                 conn.commit()
 
                 sessions_idx_app_user = (
@@ -382,7 +556,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.execute(sessions_idx_update)
                 conn.commit()
 
-                cursor.execute(run_(self._get_create_events_table_sql)())
+                cursor.execute(self._get_create_events_table_sql())
                 conn.commit()
 
                 events_idx = (
@@ -391,12 +565,20 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 )
                 cursor.execute(events_idx)
                 conn.commit()
+
+                cursor.execute(self._get_create_app_states_table_sql())
+                conn.commit()
+
+                cursor.execute(self._get_create_user_states_table_sql())
+                conn.commit()
+
+                cursor.execute(self._get_create_metadata_table_sql())
+                conn.commit()
+
+                cursor.execute(self._get_seed_metadata_sql())
+                conn.commit()
             finally:
                 cursor.close()
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
 
     def _enable_foreign_keys(self, cursor: Any, conn: Any) -> None:
         """Enable foreign key constraints for SQLite.
@@ -405,11 +587,36 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             cursor: Database cursor.
             conn: Database connection.
         """
+        if self._dialect != DIALECT_SQLITE:
+            return
         try:
             cursor.execute("PRAGMA foreign_keys = ON")
             conn.commit()
         except Exception:
             logger.debug("Foreign key enforcement not supported or already enabled")
+
+    def _format_sql(self, sql: str) -> str:
+        """Return SQL with dialect-appropriate positional placeholders."""
+        if self._dialect != DIALECT_POSTGRESQL:
+            return sql
+        index = 0
+
+        def replace_placeholder(_match: Any) -> str:
+            nonlocal index
+            index += 1
+            return f"${index}"
+
+        return re.sub(r"\?", replace_placeholder, sql)
+
+    def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
+        """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
+        return cursor.execute(self._format_sql(sql), params)
+
+    def _json_placeholder(self) -> str:
+        """Return a JSON parameter placeholder for the current dialect."""
+        if self._dialect == DIALECT_POSTGRESQL:
+            return "?::jsonb"
+        return "?"
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -427,62 +634,84 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             Created session record.
         """
         state_json = self._serialize_state(state)
+        state_placeholder = self._json_placeholder()
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
             (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, {state_placeholder}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, {state_placeholder}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
             params = (session_id, app_name, user_id, state_json)
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, params)
+                self._execute(cursor, sql, params)
                 conn.commit()
             finally:
                 cursor.close()
 
-        result = self._get_session(session_id)
+        result = self._get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
 
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
-
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
+            renew_for: If positive, touch the session update timestamp.
 
         Returns:
             Session record or None if not found.
         """
-        sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE id = ?
-        """
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            sql = f"""
+            UPDATE {self._session_table}
+            SET update_time = CURRENT_TIMESTAMP
+            WHERE app_name = ? AND user_id = ? AND id = ?
+            """
+            params: tuple[Any, ...] = (app_name, user_id, session_id)
+            select_after_update = True
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = ? AND user_id = ? AND id = ?
+            """
+            params = (app_name, user_id, session_id)
+            select_after_update = False
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, (session_id,))
+                    self._execute(cursor, sql, params)
+                    if select_after_update:
+                        conn.commit()
+                        self._execute(
+                            cursor,
+                            f"""
+                            SELECT id, app_name, user_id, state, create_time, update_time
+                            FROM {self._session_table}
+                            WHERE app_name = ? AND user_id = ? AND id = ?
+                            """,
+                            params,
+                        )
                     row = cursor.fetchone()
 
                     if row is None:
@@ -504,56 +733,52 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 return None
             raise
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID."""
-        return await async_(self._get_session)(session_id)
-
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
         """
         state_json = self._serialize_state(state)
         sql = f"""
         UPDATE {self._session_table}
-        SET state = ?, update_time = CURRENT_TIMESTAMP
-        WHERE id = ?
+        SET state = {self._json_placeholder()}, update_time = CURRENT_TIMESTAMP
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (state_json, session_id))
+                self._execute(cursor, sql, (state_json, app_name, user_id, session_id))
                 conn.commit()
             finally:
                 cursor.close()
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
-
-    def _delete_session(self, session_id: str) -> None:
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = ?"
+        delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = ?"
+        delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
                 self._enable_foreign_keys(cursor, conn)
-                cursor.execute(sql, (session_id,))
+                self._execute(cursor, delete_events_sql, (session_id,))
+                if self._dialect == DIALECT_DUCKDB:
+                    conn.commit()
+                self._execute(cursor, delete_session_sql, (app_name, user_id, session_id))
                 conn.commit()
             finally:
                 cursor.close()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app, optionally filtered by user.
@@ -586,7 +811,7 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, params)
+                    self._execute(cursor, sql, params)
                     rows = cursor.fetchall()
 
                     return [
@@ -608,34 +833,31 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 return []
             raise
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return await async_(self._list_sessions)(app_name, user_id)
-
     def _insert_event(self, event_record: "EventRecord") -> None:
         """Insert an event record into the events table.
 
         Args:
             event_record: Event record to store.
         """
-        event_json = self._serialize_json_field(event_record["event_json"])
+        event_data = self._serialize_json_field(event_record["event_data"])
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
-        ) VALUES (?, ?, ?, ?, ?)
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, {self._json_placeholder()})
         """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(
+                self._execute(
+                    cursor,
                     sql,
                     (
+                        event_record["id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
-                        event_record["author"],
                         event_record["timestamp"],
-                        event_json,
+                        event_data,
                     ),
                 )
                 conn.commit()
@@ -643,7 +865,15 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 cursor.close()
 
     def _append_event_and_update_state(
-        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: "EventRecord",
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically insert an event and update the session's durable state.
 
@@ -655,43 +885,72 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
 
         Args:
             event_record: Event record to store.
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier whose state should be updated.
             state: Post-append durable state snapshot (``temp:`` keys already
                 stripped by the service layer).
+            app_state: Optional app-scoped state snapshot.
+            user_state: Optional user-scoped state snapshot.
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
-        ) VALUES (?, ?, ?, ?, ?)
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, {self._json_placeholder()})
         """
         update_sql = f"""
         UPDATE {self._session_table}
-        SET state = ?, update_time = CURRENT_TIMESTAMP
-        WHERE id = ?
+        SET state = {self._json_placeholder()}, update_time = CURRENT_TIMESTAMP
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
+        """
+        delete_app_state_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
+        insert_app_state_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, {self._json_placeholder()}, ?)
+        """
+        delete_user_state_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
+        insert_user_state_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, {self._json_placeholder()}, ?)
         """
         state_json = self._serialize_state(state)
-        event_json = self._serialize_json_field(event_record["event_json"])
+        event_data = self._serialize_json_field(event_record["event_data"])
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(
+                self._execute(
+                    cursor,
                     insert_sql,
                     (
+                        event_record["id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
-                        event_record["author"],
                         event_record["timestamp"],
-                        event_json,
+                        event_data,
                     ),
                 )
-                cursor.execute(update_sql, (state_json, session_id))
-                cursor.execute(select_sql, (session_id,))
+                self._execute(cursor, update_sql, (state_json, app_name, user_id, session_id))
+                if app_state is not None:
+                    self._execute(cursor, delete_app_state_sql, (app_name,))
+                    self._execute(
+                        cursor,
+                        insert_app_state_sql,
+                        (app_name, self._serialize_state(app_state), datetime.now(timezone.utc)),
+                    )
+                if user_state is not None:
+                    self._execute(cursor, delete_user_state_sql, (app_name, user_id))
+                    self._execute(
+                        cursor,
+                        insert_user_state_sql,
+                        (app_name, user_id, self._serialize_state(user_state), datetime.now(timezone.utc)),
+                    )
+                self._execute(cursor, select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
                 conn.commit()
             except Exception:
@@ -714,18 +973,19 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
             update_time=row[5],
         )
 
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
-
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """List events for a session ordered by timestamp.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
             limit: Maximum number of events to return.
@@ -733,36 +993,42 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-        where_clauses = ["session_id = ?"]
-        params: list[Any] = [session_id]
+        if limit == 0:
+            return []
+
+        where_clauses = ["s.app_name = ?", "s.user_id = ?", "e.session_id = ?"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > ?")
+            where_clauses.append("e.timestamp > ?")
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit else ""
+        limit_clause = f" LIMIT {limit}" if limit is not None else ""
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
-        FROM {self._events_table}
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, params)
+                    self._execute(cursor, sql, params)
                     rows = cursor.fetchall()
 
                     return [
                         EventRecord(
-                            session_id=row[0],
-                            invocation_id=row[1],
-                            author=row[2],
+                            id=row[0],
+                            session_id=row[1],
+                            invocation_id=row[2] or "",
                             timestamp=row[3],
-                            event_json=self._deserialize_json_field(row[4]) or {},
+                            event_data=self._deserialize_json_field(row[4]) or {},
+                            app_name=row[5],
+                            user_id=row[6],
                         )
                         for row in rows
                     ]
@@ -774,22 +1040,156 @@ class AdbcADKStore(BaseAsyncADKStore["AdbcConfig"]):
                 return []
             raise
 
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+    def _delete_expired_events(self, before: datetime) -> int:
+        count_sql = f"SELECT COUNT(*) FROM {self._events_table} WHERE timestamp < ?"
+        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, count_sql, (before,))
+                    row = cursor.fetchone()
+                    count = int(row[0]) if row is not None else 0
+                    self._execute(cursor, delete_sql, (before,))
+                    conn.commit()
+                    return count
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return 0
+            raise
+
+    def _delete_idle_sessions(self, updated_before: datetime) -> int:
+        count_sql = f"SELECT COUNT(*) FROM {self._session_table} WHERE update_time < ?"
+        delete_events_sql = f"""
+        DELETE FROM {self._events_table}
+        WHERE session_id IN (SELECT id FROM {self._session_table} WHERE update_time < ?)
+        """
+        delete_sessions_sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, count_sql, (updated_before,))
+                    row = cursor.fetchone()
+                    count = int(row[0]) if row is not None else 0
+                    self._execute(cursor, delete_events_sql, (updated_before,))
+                    self._execute(cursor, delete_sessions_sql, (updated_before,))
+                    conn.commit()
+                    return count
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return 0
+            raise
+
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = ?"
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, sql, (app_name,))
+                    row = cursor.fetchone()
+                    return self._deserialize_state(row[0]) if row is not None else None
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return None
+            raise
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, sql, (app_name, user_id))
+                    row = cursor.fetchone()
+                    return self._deserialize_state(row[0]) if row is not None else None
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return None
+            raise
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
+        insert_sql = (
+            f"INSERT INTO {self._app_state_table} (app_name, state, update_time) "
+            f"VALUES (?, {self._json_placeholder()}, ?)"
+        )
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._execute(cursor, delete_sql, (app_name,))
+                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), datetime.now(timezone.utc)))
+                conn.commit()
+            finally:
+                cursor.close()
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        delete_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
+        insert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, {self._json_placeholder()}, ?)
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._execute(cursor, delete_sql, (app_name, user_id))
+                self._execute(
+                    cursor, insert_sql, (app_name, user_id, self._serialize_state(state), datetime.now(timezone.utc))
+                )
+                conn.commit()
+            finally:
+                cursor.close()
+
+    def _get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = ?"
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, sql, (key,))
+                    row = cursor.fetchone()
+                    return row[0] if row is not None else None
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return None
+            raise
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        delete_sql = f"DELETE FROM {self._metadata_table} WHERE key = ?"
+        insert_sql = f"INSERT INTO {self._metadata_table} (key, value) VALUES (?, ?)"
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._execute(cursor, delete_sql, (key,))
+                self._execute(cursor, insert_sql, (key, value))
+                conn.commit()
+            finally:
+                cursor.close()
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
 
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        await async_(self._append_event)(event_record)
 
-
-class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
+class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     """ADBC synchronous ADK memory store for Arrow Database Connectivity."""
 
     __slots__ = ("_dialect",)
@@ -801,6 +1201,28 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
     @property
     def dialect(self) -> str:
         return self._dialect
+
+    def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        self._create_tables()
+
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return self._insert_memory_entries(entries, owner_id)
+
+    def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return self._search_entries(query, app_name, user_id, limit)
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return self._delete_entries_by_session(session_id)
+
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return self._delete_entries_older_than(days)
 
     def _detect_dialect(self) -> str:
         driver_name = self._config.connection_config.get("driver_name", "").lower()
@@ -834,7 +1256,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
             return datetime.fromisoformat(value)
         return datetime.fromisoformat(str(value))
 
-    async def _get_create_memory_table_sql(self) -> str:
+    def _get_create_memory_table_sql(self) -> str:
         if self._dialect == DIALECT_POSTGRESQL:
             return self._get_memory_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
@@ -945,7 +1367,7 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(run_(self._get_create_memory_table_sql)())
+                cursor.execute(self._get_create_memory_table_sql())
                 conn.commit()
 
                 idx_app_user = (
@@ -962,10 +1384,6 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                 conn.commit()
             finally:
                 cursor.close()
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
 
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -1073,10 +1491,6 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
 
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -1117,12 +1531,6 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
 
         return self._rows_to_records(rows)
 
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
-
     def _delete_entries_by_session(self, session_id: str) -> int:
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         if use_returning:
@@ -1141,10 +1549,6 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
 
     def _delete_entries_older_than(self, days: int) -> int:
         cutoff = self._encode_timestamp(datetime.now(timezone.utc) - timedelta(days=days))
@@ -1165,10 +1569,6 @@ class AdbcADKMemoryStore(BaseAsyncADKMemoryStore["AdbcConfig"]):
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []
