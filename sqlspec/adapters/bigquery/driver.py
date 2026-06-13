@@ -16,6 +16,7 @@ from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor
 from sqlspec.adapters.bigquery.core import (
     DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
+    _run_query_and_wait,
     _uses_local_bigquery_endpoint,
     build_dml_rowcount,
     build_inlined_script,
@@ -29,7 +30,6 @@ from sqlspec.adapters.bigquery.core import (
     is_simple_insert,
     normalize_script_rowcount,
     resolve_column_names,
-    run_query_and_wait,
     run_query_job,
     storage_api_available,
     try_bulk_insert,
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
     from google.api_core.retry import Retry
     from google.cloud import bigquery_storage  # type: ignore[attr-defined, unused-ignore]
-    from google.cloud.bigquery import ExtractJob, ExtractJobConfig, QueryJob, QueryJobConfig
+    from google.cloud.bigquery import QueryJob, QueryJobConfig
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, Statement, StatementFilter
@@ -201,7 +201,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
         if self._use_query_and_wait:
-            row_iterator = run_query_and_wait(
+            row_iterator = _run_query_and_wait(
                 cursor,
                 sql,
                 parameters,
@@ -604,33 +604,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
-
-    def export_table_to_storage(
-        self,
-        table: str,
-        destination_uris: "str | list[str]",
-        *,
-        job_config: "ExtractJobConfig | None" = None,
-        job_id: "str | None" = None,
-        job_id_prefix: "str | None" = None,
-        location: "str | None" = None,
-    ) -> "ExtractJob":
-        """Export a BigQuery table to Cloud Storage via an extract job."""
-        job = cast(
-            "ExtractJob",
-            self.connection.extract_table(
-                table,
-                destination_uris,
-                job_config=job_config,
-                job_id=job_id,
-                job_id_prefix=job_id_prefix,
-                location=location,
-                retry=self._job_retry,
-                timeout=self._job_request_timeout(),
-            ),
-        )
-        job.result(timeout=self._job_request_timeout())
-        return job
 
     # ─────────────────────────────────────────────────────────────────────────────
     # UTILITY METHODS

@@ -87,7 +87,6 @@ __all__ = (
     "is_simple_insert",
     "normalize_script_rowcount",
     "resolve_column_names",
-    "run_query_and_wait",
     "run_query_job",
     "storage_api_available",
     "try_bulk_insert",
@@ -592,7 +591,7 @@ def run_query_job(
     return connection.query(sql, **query_kwargs)
 
 
-def run_query_and_wait(
+def _run_query_and_wait(
     connection: "BigQueryConnection",
     sql: str,
     parameters: Any,

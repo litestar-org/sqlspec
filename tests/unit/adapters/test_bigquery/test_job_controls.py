@@ -48,15 +48,6 @@ class _RecordingJob:
         return self.rows
 
 
-class _RecordingExtractJob:
-    def __init__(self) -> None:
-        self.result_calls: list[dict[str, Any]] = []
-        self.job_id = "extract_123"
-
-    def result(self, **kwargs: Any) -> None:
-        self.result_calls.append(kwargs)
-
-
 class _RecordingRowIterator:
     def __init__(
         self,
@@ -79,11 +70,9 @@ class _RecordingConnection:
         self.query_and_wait_calls: list[tuple[str, dict[str, Any]]] = []
         self.load_file_calls: list[tuple[Any, Any, dict[str, Any]]] = []
         self.load_uri_calls: list[tuple[Any, Any, dict[str, Any]]] = []
-        self.extract_calls: list[tuple[Any, Any, dict[str, Any]]] = []
         self.query_job = _RecordingJob()
         self.row_iterator = _RecordingRowIterator()
         self.load_job = _RecordingJob(statement_type="LOAD", schema=None)
-        self.extract_job = _RecordingExtractJob()
 
     def query(self, sql: str, **kwargs: Any) -> _RecordingJob:
         self.query_calls.append((sql, kwargs))
@@ -100,10 +89,6 @@ class _RecordingConnection:
     def load_table_from_uri(self, source_uris: Any, destination: Any, **kwargs: Any) -> _RecordingJob:
         self.load_uri_calls.append((source_uris, destination, kwargs))
         return self.load_job
-
-    def extract_table(self, source: Any, destination_uris: Any, **kwargs: Any) -> _RecordingExtractJob:
-        self.extract_calls.append((source, destination_uris, kwargs))
-        return self.extract_job
 
 
 def _schema(*names: str) -> list[SimpleNamespace]:
@@ -226,15 +211,17 @@ def test_load_job_config_fill_from_default_preserves_defaults() -> None:
     assert filled_job_config.labels == {"source": "default"}
 
 
-def test_export_table_to_storage_forwards_job_controls() -> None:
+def test_select_to_storage_uses_existing_export_surface_and_job_controls(tmp_path: Any) -> None:
     connection = _RecordingConnection()
-    driver = BigQueryDriver(cast(Any, connection))
+    cast(Any, connection)._connection = SimpleNamespace(API_BASE_URL="http://localhost")
+    connection.query_job = _RecordingJob(rows=[{"id": 1}], schema=_schema("id"))
+    driver = BigQueryDriver(
+        cast(Any, connection), driver_features={"job_result_timeout": 5.0, "storage_capabilities": CAPABILITIES}
+    )
 
-    job = driver.export_table_to_storage("dataset.table", "gs://bucket/object.csv")
+    job = driver.select_to_storage("SELECT 1 AS id", tmp_path / "result.parquet", format_hint="parquet")
 
-    assert cast(object, job) is connection.extract_job
-    assert connection.extract_calls[0][0] == "dataset.table"
-    assert connection.extract_calls[0][1] == "gs://bucket/object.csv"
-    assert connection.extract_calls[0][2]["retry"] is driver._job_retry
-    assert connection.extract_calls[0][2]["timeout"] == driver._job_request_timeout()
-    assert connection.extract_job.result_calls[0]["timeout"] == driver._job_request_timeout()
+    assert job.telemetry["rows_processed"] == 1
+    assert connection.query_calls[0][0] == "SELECT 1 AS id"
+    assert connection.query_calls[0][1]["timeout"] == driver._job_request_timeout()
+    assert connection.query_job.result_calls[0]["timeout"] == driver._job_result_timeout

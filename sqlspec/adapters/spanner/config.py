@@ -1,6 +1,5 @@
 """Spanner configuration."""
 
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
@@ -18,7 +17,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
     from logging import Logger
     from types import TracebackType
 
@@ -27,8 +26,8 @@ if TYPE_CHECKING:
     from google.api_core.retry import Retry
     from google.auth.credentials import Credentials
     from google.cloud.spanner_admin_database_v1.types import DatabaseDialect, EncryptionConfig
-    from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest
-    from google.cloud.spanner_v1.database import BatchSnapshot, Database
+    from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest, RequestOptions
+    from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
 
     from sqlspec.config import ExtensionConfigs
@@ -139,8 +138,9 @@ class SpannerDriverFeatures(TypedDict):
         retry: Per-request retry policy passed to execute_sql(), execute_update(), and batch_update().
         timeout: Per-request timeout in seconds passed to execute_sql(), execute_update(), and batch_update().
         request_options: Default RequestOptions forwarded to execute_sql(), execute_update(),
-            and batch_update(). Per-call overrides are available via
-            SpannerSyncDriver.execute_with_options().
+            and batch_update(). Per-call overrides are available through normal
+            driver execution methods.
+        directed_read_options: Default DirectedReadOptions forwarded to execute_sql().
         session_labels: Deprecated compatibility alias for pool session labels.
             Prefer ``connection_config["session_labels"]``.
         enable_events: Enable database event channel support.
@@ -154,7 +154,8 @@ class SpannerDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     retry: "NotRequired[Retry | None]"
     timeout: "NotRequired[float | None]"
-    request_options: "NotRequired[Any]"
+    request_options: "NotRequired[RequestOptions | dict[str, Any] | None]"
+    directed_read_options: "NotRequired[DirectedReadOptions | None]"
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
     events_backend: "NotRequired[str]"
@@ -404,6 +405,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         *args: Any,
         statement_config: "StatementConfig | None" = None,
         transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
+        request_options: "RequestOptions | dict[str, Any] | None" = None,
+        directed_read_options: "DirectedReadOptions | None" = None,
+        retry: "Retry | None" = None,
+        timeout: "float | None" = None,
         **kwargs: Any,
     ) -> "SpannerSessionContext":
         """Provide a Spanner driver session context manager.
@@ -417,6 +422,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             statement_config: Optional statement configuration override.
             transaction: Whether to use a Transaction (True, default) or
                 Snapshot (False).
+            request_options: Session-scoped RequestOptions for Spanner statements.
+            directed_read_options: Session-scoped DirectedReadOptions for reads.
+            retry: Session-scoped retry policy for Spanner statement calls.
+            timeout: Session-scoped timeout for Spanner statement calls.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -424,45 +433,88 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         """
         connection_ctx = SpannerConnectionContext(self, transaction=transaction)
         handler = _SpannerSessionConnectionHandler(self, connection_ctx)
-        session_driver_features: dict[str, Any] = dict(self.driver_features)
-        session_driver_features["database_provider"] = self.get_database
 
         return SpannerSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=session_driver_features,
+            driver_features=self._session_driver_features(
+                request_options=request_options,
+                directed_read_options=directed_read_options,
+                retry=retry,
+                timeout=timeout,
+            ),
             prepare_driver=self._prepare_driver,
         )
 
     def provide_write_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        request_options: "RequestOptions | dict[str, Any] | None" = None,
+        directed_read_options: "DirectedReadOptions | None" = None,
+        retry: "Retry | None" = None,
+        timeout: "float | None" = None,
+        **kwargs: Any,
     ) -> "SpannerSessionContext":
         """Provide a write-capable Spanner session (alias for :meth:`provide_session`)."""
-        return self.provide_session(*args, statement_config=statement_config, transaction=True, **kwargs)
+        return self.provide_session(
+            *args,
+            statement_config=statement_config,
+            transaction=True,
+            request_options=request_options,
+            directed_read_options=directed_read_options,
+            retry=retry,
+            timeout=timeout,
+            **kwargs,
+        )
 
     def provide_read_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        request_options: "RequestOptions | dict[str, Any] | None" = None,
+        directed_read_options: "DirectedReadOptions | None" = None,
+        retry: "Retry | None" = None,
+        timeout: "float | None" = None,
+        **kwargs: Any,
     ) -> "SpannerSessionContext":
         """Provide a read-only Snapshot Spanner session.
 
         Use for query workloads that benefit from Spanner's snapshot reads.
         For DDL/DML, use :meth:`provide_session` (write-capable by default).
         """
-        return self.provide_session(*args, statement_config=statement_config, transaction=False, **kwargs)
-
-    @contextmanager
-    def provide_batch_snapshot(
-        self, *, read_timestamp: "Any | None" = None, exact_staleness: "Any | None" = None
-    ) -> "Iterator[BatchSnapshot]":
-        """Yield a BatchSnapshot for partitioned reads across parallel workers."""
-        snapshot = self.get_database().batch_snapshot(  # type: ignore[no-untyped-call]
-            read_timestamp=read_timestamp, exact_staleness=exact_staleness
+        return self.provide_session(
+            *args,
+            statement_config=statement_config,
+            transaction=False,
+            request_options=request_options,
+            directed_read_options=directed_read_options,
+            retry=retry,
+            timeout=timeout,
+            **kwargs,
         )
-        try:
-            yield snapshot
-        finally:
-            snapshot.close()
+
+    def _session_driver_features(
+        self,
+        *,
+        request_options: "RequestOptions | dict[str, Any] | None",
+        directed_read_options: "DirectedReadOptions | None",
+        retry: "Retry | None",
+        timeout: "float | None",
+    ) -> "dict[str, Any]":
+        if request_options is None and directed_read_options is None and retry is None and timeout is None:
+            return self.driver_features
+        driver_features = dict(self.driver_features)
+        if request_options is not None:
+            driver_features["request_options"] = request_options
+        if directed_read_options is not None:
+            driver_features["directed_read_options"] = directed_read_options
+        if retry is not None:
+            driver_features["retry"] = retry
+        if timeout is not None:
+            driver_features["timeout"] = timeout
+        return driver_features
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerSyncConfig types.
