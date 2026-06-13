@@ -1,0 +1,70 @@
+"""Unit tests for DuckDB Arrow streaming paths."""
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+import pyarrow as pa
+import pytest
+
+from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.exceptions import MissingDependencyError
+
+
+@contextmanager
+def _seed_driver() -> Iterator[DuckDBDriver]:
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute_script("""
+            CREATE OR REPLACE TABLE arrow_streaming (id INTEGER, name VARCHAR);
+            INSERT INTO arrow_streaming VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma'), (4, 'delta'), (5, 'epsilon');
+        """)
+        yield driver
+
+
+def test_select_to_arrow_reader_honors_batch_size() -> None:
+    with _seed_driver() as driver:
+        result = driver.select_to_arrow(
+            "SELECT id, name FROM arrow_streaming ORDER BY id", return_format="reader", batch_size=2
+        )
+
+    assert result.rows_affected == -1
+    assert isinstance(result.data, pa.RecordBatchReader)
+    batches = list(result.data)
+    assert [batch.num_rows for batch in batches] == [2, 2, 1]
+
+
+def test_select_to_arrow_batches_uses_reader_batch_boundaries() -> None:
+    with _seed_driver() as driver:
+        result = driver.select_to_arrow(
+            "SELECT id, name FROM arrow_streaming ORDER BY id", return_format="batches", batch_size=2
+        )
+
+    batches = result.get_data()
+    assert [batch.num_rows for batch in batches] == [2, 2, 1]
+    assert result.rows_affected == 5
+
+
+def test_load_from_arrow_registers_record_batch_reader() -> None:
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE reader_target (id INTEGER, name VARCHAR)")
+        table = pa.table({"id": [10, 11], "name": ["ten", "eleven"]})
+        reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=1))
+
+        job = driver.load_from_arrow("reader_target", reader)
+
+        assert job.telemetry["rows_processed"] == 2
+        result = driver.execute("SELECT id, name FROM reader_target ORDER BY id")
+        assert result.data == [(10, "ten"), (11, "eleven")]
+
+
+def test_missing_pyarrow_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _seed_driver() as driver:
+
+        def raise_missing_pyarrow() -> None:
+            raise MissingDependencyError("pyarrow")
+
+        monkeypatch.setattr("sqlspec.adapters.duckdb.driver.ensure_pyarrow", raise_missing_pyarrow)
+
+        with pytest.raises(MissingDependencyError):
+            driver.select_to_arrow("SELECT id FROM arrow_streaming", return_format="reader")
