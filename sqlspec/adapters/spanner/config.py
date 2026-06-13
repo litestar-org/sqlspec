@@ -18,7 +18,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from logging import Logger
     from types import TracebackType
 
@@ -28,10 +28,8 @@ if TYPE_CHECKING:
     from google.auth.credentials import Credentials
     from google.cloud.spanner_admin_database_v1.types import DatabaseDialect, EncryptionConfig
     from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest
-    from google.cloud.spanner_v1.database import Database
-    from google.cloud.spanner_v1.database import BatchSnapshot
+    from google.cloud.spanner_v1.database import BatchSnapshot, Database
     from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
-    from collections.abc import Iterator
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
@@ -458,9 +456,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self, *, read_timestamp: "Any | None" = None, exact_staleness: "Any | None" = None
     ) -> "Iterator[BatchSnapshot]":
         """Yield a BatchSnapshot for partitioned reads across parallel workers."""
-        snapshot = self.get_database().batch_snapshot(
-            read_timestamp=read_timestamp,
-            exact_staleness=exact_staleness,
+        snapshot = self.get_database().batch_snapshot(  # type: ignore[no-untyped-call]
+            read_timestamp=read_timestamp, exact_staleness=exact_staleness
         )
         try:
             yield snapshot

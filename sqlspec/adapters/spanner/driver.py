@@ -37,8 +37,7 @@ _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -329,10 +328,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         config = statement_config or self.statement_config
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         self._pending_execute_options = _PerCallExecuteOptions(
-            request_options=request_options,
-            directed_read_options=directed_read_options,
-            retry=retry,
-            timeout=timeout,
+            request_options=request_options, directed_read_options=directed_read_options, retry=retry, timeout=timeout
         )
         try:
             return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
@@ -342,10 +338,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _require_database(self) -> "Any":
         provider = self.driver_features.get("database_provider")
         if provider is None:
-            msg = (
-                "Spanner database-level operations require a session created via "
-                "SpannerSyncConfig.provide_session()."
-            )
+            msg = "Spanner database-level operations require a session created via SpannerSyncConfig.provide_session()."
             raise ImproperConfigurationError(msg)
         return provider()
 
@@ -404,24 +397,26 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             raise ImproperConfigurationError(msg)
 
         database = self._require_database()
-        resolved_request_options = request_options if request_options is not None else self.driver_features.get(
-            "request_options"
+        resolved_request_options = (
+            request_options if request_options is not None else self.driver_features.get("request_options")
         )
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
-            with database.batch(request_options=resolved_request_options, max_commit_delay=max_commit_delay) as batch:
-                if insert is not None:
-                    batch.insert(table, columns, insert)
-                if update is not None:
-                    batch.update(table, columns, update)
-                if insert_or_update is not None:
-                    batch.insert_or_update(table, columns, insert_or_update)
-                if replace is not None:
-                    batch.replace(table, columns, replace)
-                if delete_all:
-                    batch.delete(table, KeySet(all_=True))
-                elif delete_keys is not None:
-                    batch.delete(table, KeySet(keys=list(delete_keys)))
+        with (
+            exc_handler,
+            database.batch(request_options=resolved_request_options, max_commit_delay=max_commit_delay) as batch,
+        ):
+            if insert is not None:
+                batch.insert(table, columns, insert)
+            if update is not None:
+                batch.update(table, columns, update)
+            if insert_or_update is not None:
+                batch.insert_or_update(table, columns, insert_or_update)
+            if replace is not None:
+                batch.replace(table, columns, replace)
+            if delete_all:
+                batch.delete(table, KeySet(all_=True))  # type: ignore[no-untyped-call]
+            elif delete_keys is not None:
+                batch.delete(table, KeySet(keys=list(delete_keys)))  # type: ignore[no-untyped-call]
         self._check_pending_exception(exc_handler)
 
     # ─────────────────────────────────────────────────────────────────────────────

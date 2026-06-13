@@ -72,6 +72,7 @@ def test_driver_feature_request_options_forwarded_to_select() -> None:
     connection.execute_sql.assert_called_once_with(
         "SELECT id FROM users", params=None, param_types={}, request_options=request_options
     )
+    assert result.selected_data is not None
     assert result.selected_data[0] == (1,)
 
 
@@ -172,13 +173,11 @@ def test_execute_partitioned_dml_forwards_to_database() -> None:
     database = MagicMock()
     database.execute_partitioned_dml.return_value = 7
     driver = SpannerSyncDriver(
-        MagicMock(),
-        driver_features={"request_options": request_options, "database_provider": lambda: database},
+        MagicMock(), driver_features={"request_options": request_options, "database_provider": lambda: database}
     )
 
     row_count = driver.execute_partitioned_dml(
-        "UPDATE users SET name = 'Bob' WHERE TRUE",
-        request_options=request_options,
+        "UPDATE users SET name = 'Bob' WHERE TRUE", request_options=request_options
     )
 
     assert row_count == 7
@@ -223,7 +222,7 @@ def test_apply_mutations_routes_each_group() -> None:
     batch.update.assert_called_once_with("users", ("id", "name"), [(2, "bob")])
     batch.insert_or_update.assert_called_once_with("users", ("id", "name"), [(3, "carol")])
     batch.replace.assert_called_once_with("users", ("id", "name"), [(4, "dave")])
-    batch.delete.assert_called_once_with("users", KeySet(keys=[(5,)]))
+    batch.delete.assert_called_once_with("users", KeySet(keys=[(5,)]))  # type: ignore[no-untyped-call]
 
 
 def test_apply_mutations_delete_all_wins_over_delete_keys() -> None:
@@ -236,7 +235,7 @@ def test_apply_mutations_delete_all_wins_over_delete_keys() -> None:
 
     driver.apply_mutations("users", delete_keys=[(5,)], delete_all=True)
 
-    batch.delete.assert_called_once_with("users", KeySet(all_=True))
+    batch.delete.assert_called_once_with("users", KeySet(all_=True))  # type: ignore[no-untyped-call]
 
 
 def test_provide_batch_snapshot_closes_on_normal_exit(monkeypatch: pytest.MonkeyPatch) -> None:

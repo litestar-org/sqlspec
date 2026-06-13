@@ -29,8 +29,8 @@ from sqlspec.adapters.bigquery.core import (
     is_simple_insert,
     normalize_script_rowcount,
     resolve_column_names,
-    run_query_job,
     run_query_and_wait,
+    run_query_job,
     storage_api_available,
     try_bulk_insert,
 )
@@ -236,7 +236,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
         if is_select_like:
-            job_result = cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs())
+            job_result = cursor.job.result(
+                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
+            )
             job_schema = cursor.job.schema or getattr(job_result, "schema", None)
             column_names = resolve_column_names(job_schema, self._column_name_cache)
             rows_list, _ = collect_rows(job_result, job_schema, column_names=column_names)
@@ -570,10 +572,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         buffer.seek(0)
         job_config = build_load_job_config("parquet", overwrite)
         job = self.connection.load_table_from_file(
-            buffer,
-            table,
-            job_config=job_config,
-            timeout=self._job_request_timeout(),
+            buffer, table, job_config=job_config, timeout=self._job_request_timeout()
         )
         job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label="parquet")
@@ -599,11 +598,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             raise StorageCapabilityError(msg, capability="parquet_import_enabled")
         job_config = build_load_job_config(file_format, overwrite)
         job = self.connection.load_table_from_uri(
-            source,
-            table,
-            job_config=job_config,
-            retry=self._job_retry,
-            timeout=self._job_request_timeout(),
+            source, table, job_config=job_config, retry=self._job_retry, timeout=self._job_request_timeout()
         )
         job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
@@ -621,15 +616,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
         location: "str | None" = None,
     ) -> "ExtractJob":
         """Export a BigQuery table to Cloud Storage via an extract job."""
-        job = self.connection.extract_table(
-            table,
-            destination_uris,
-            job_config=job_config,
-            job_id=job_id,
-            job_id_prefix=job_id_prefix,
-            location=location,
-            retry=self._job_retry,
-            timeout=self._job_request_timeout(),
+        job = cast(
+            "ExtractJob",
+            self.connection.extract_table(
+                table,
+                destination_uris,
+                job_config=job_config,
+                job_id=job_id,
+                job_id_prefix=job_id_prefix,
+                location=location,
+                retry=self._job_retry,
+                timeout=self._job_request_timeout(),
+            ),
         )
         job.result(timeout=self._job_request_timeout())
         return job

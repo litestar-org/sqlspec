@@ -179,10 +179,7 @@ def test_try_bulk_insert_bounds_result_timeout() -> None:
     connection.load_job = _RecordingJob(statement_type="LOAD")
 
     rowcount = try_bulk_insert(
-        cast(Any, connection),
-        "INSERT INTO dataset.table (id) VALUES (@id)",
-        [{"id": 1}],
-        result_timeout=5.0,
+        cast(Any, connection), "INSERT INTO dataset.table (id) VALUES (@id)", [{"id": 1}], result_timeout=5.0
     )
 
     assert rowcount == 1
@@ -209,11 +206,7 @@ def test_load_from_storage_forwards_retry_and_bounds_result_timeout() -> None:
     connection.load_job = _RecordingJob(statement_type="LOAD")
     driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 5.0})
 
-    result = driver.load_from_storage(
-        "dataset.table",
-        "gs://bucket/object.parquet",
-        file_format="parquet",
-    )
+    result = driver.load_from_storage("dataset.table", "gs://bucket/object.parquet", file_format="parquet")
 
     assert result.telemetry["rows_processed"] == 0
     assert connection.load_uri_calls[0][2]["retry"] is driver._job_retry
@@ -224,7 +217,9 @@ def test_load_from_storage_forwards_retry_and_bounds_result_timeout() -> None:
 def test_load_job_config_fill_from_default_preserves_defaults() -> None:
     default_job_config = LoadJobConfig(labels={"source": "default"})
 
-    filled_job_config = build_load_job_config("parquet", overwrite=False)._fill_from_default(default_job_config)
+    filled_job_config = build_load_job_config("parquet", overwrite=False)._fill_from_default(  # type: ignore[no-untyped-call]
+        default_job_config
+    )
 
     assert filled_job_config.source_format == "PARQUET"
     assert filled_job_config.write_disposition == "WRITE_APPEND"
@@ -237,7 +232,7 @@ def test_export_table_to_storage_forwards_job_controls() -> None:
 
     job = driver.export_table_to_storage("dataset.table", "gs://bucket/object.csv")
 
-    assert job is connection.extract_job
+    assert cast(object, job) is connection.extract_job
     assert connection.extract_calls[0][0] == "dataset.table"
     assert connection.extract_calls[0][1] == "gs://bucket/object.csv"
     assert connection.extract_calls[0][2]["retry"] is driver._job_retry
