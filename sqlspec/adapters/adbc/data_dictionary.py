@@ -481,9 +481,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
         columns = _normalize_native_columns(rows, table_name_exact=table_name)
         missing_types = [entry for entry in columns if "data_type" not in entry]
-        if not missing_types:
+        missing_nullability = any("is_nullable" not in entry for entry in columns)
+        if not missing_types and not missing_nullability:
             return columns
-        if table_name is None:
+        if table_name is None or missing_nullability:
             raise _NativeMetadataIncompleteError
         filters = self._native_object_filters(dialect, schema_name, None)
         arrow_schema = driver.connection.adbc_get_table_schema(
@@ -494,6 +495,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             resolved = type_by_name.get(entry["column_name"])
             if resolved is not None:
                 entry["data_type"] = resolved
+        if any("data_type" not in entry or "is_nullable" not in entry for entry in columns):
+            raise _NativeMetadataIncompleteError
         return columns
 
     def get_indexes(
@@ -627,7 +630,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
     ) -> "list[ForeignKeyMetadata]":
         rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
-        return _normalize_native_foreign_keys(rows, table_name_exact=table_name)
+        foreign_keys = _normalize_native_foreign_keys(rows, table_name_exact=table_name)
+        if not foreign_keys:
+            raise _NativeMetadataIncompleteError
+        return foreign_keys
 
     def get_statistics(
         self, driver: "AdbcDriver", table: str, schema: "str | None" = None, *, approximate: bool = True

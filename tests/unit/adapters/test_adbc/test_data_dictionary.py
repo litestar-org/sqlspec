@@ -189,6 +189,32 @@ def test_get_tables_falls_back_to_sql_on_not_supported() -> None:
     driver.select.assert_called_once()
 
 
+def test_get_foreign_keys_empty_native_result_falls_back() -> None:
+    """Native foreign-key discovery should fall back when drivers omit constraint metadata."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_objects.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_tables": [
+                        {"table_name": "t2", "table_type": "table", "table_columns": [], "table_constraints": []}
+                    ],
+                }
+            ],
+        }
+    ])
+    fallback: list[Any] = [Mock()]
+    driver.select.return_value = fallback
+
+    result = AdbcDataDictionary().get_foreign_keys(driver, table="t2")
+
+    assert result == fallback
+    driver.select.assert_called_once()
+
+
 def test_get_columns_schema_wide_incomplete_falls_back() -> None:
     """Schema-wide native column discovery should fall back when type names are incomplete."""
     driver = Mock()
@@ -197,6 +223,37 @@ def test_get_columns_schema_wide_incomplete_falls_back() -> None:
     driver.select.return_value = [{"column_name": "fallback"}]
 
     result = AdbcDataDictionary().get_columns(driver)
+
+    assert result == [{"column_name": "fallback"}]
+    driver.connection.adbc_get_table_schema.assert_not_called()
+    driver.select.assert_called_once()
+
+
+def test_get_columns_missing_native_nullability_falls_back() -> None:
+    """Native column discovery should fall back when nullability metadata is incomplete."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_objects.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_tables": [
+                        {
+                            "table_name": "t2",
+                            "table_type": "table",
+                            "table_columns": [{"column_name": "id", "xdbc_type_name": "INTEGER"}],
+                            "table_constraints": [],
+                        }
+                    ],
+                }
+            ],
+        }
+    ])
+    driver.select.return_value = [{"column_name": "fallback"}]
+
+    result = AdbcDataDictionary().get_columns(driver, table="t2")
 
     assert result == [{"column_name": "fallback"}]
     driver.connection.adbc_get_table_schema.assert_not_called()
