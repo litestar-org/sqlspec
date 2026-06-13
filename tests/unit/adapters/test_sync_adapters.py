@@ -94,6 +94,32 @@ def test_sync_driver_fast_path_flag_disabled_by_observability() -> None:
         conn.close()
 
 
+def test_sync_driver_statement_cache_size_threads_through() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(conn, driver_features={"sqlspec_statement_cache_size": 7})
+
+        assert driver._stmt_cache_max_size == 7
+        assert driver._stmt_cache_enabled is True
+    finally:
+        conn.close()
+
+
+def test_sync_driver_zero_statement_cache_size_disables_fast_path() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(conn, driver_features={"sqlspec_statement_cache_size": 0})
+
+        assert driver._stmt_cache_max_size == 0
+        assert driver._stmt_cache_enabled is False
+
+        result = driver.execute("SELECT 1")
+
+        assert result.operation_type == "SELECT"
+    finally:
+        conn.close()
+
+
 def test_sync_driver_with_cursor(sqlite_sync_driver: SqliteDriver) -> None:
     """Test cursor context manager functionality."""
     with sqlite_sync_driver.with_cursor(sqlite_sync_driver.connection) as cursor:

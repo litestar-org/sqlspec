@@ -36,6 +36,43 @@ class _RecordingConnection:
         return self.job
 
 
+class _RecordingSelectJob:
+    statement_type = "SELECT"
+    schema = [SimpleNamespace(name="id")]
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+        self.result_calls: list[dict[str, Any]] = []
+
+    def result(self, **kwargs: Any) -> list[dict[str, object]]:
+        self.result_calls.append(kwargs)
+        return self.rows
+
+
+class _RecordingDmlJob:
+    statement_type = "INSERT"
+
+    def __init__(self, *, num_dml_affected_rows: int = 1) -> None:
+        self.num_dml_affected_rows = num_dml_affected_rows
+        self.result_calls: list[dict[str, Any]] = []
+
+    def result(self, **kwargs: Any) -> None:
+        self.result_calls.append(kwargs)
+        msg = "DML job.result() should not be called in this test"
+        raise AssertionError(msg)
+
+
+class _RecordingScriptJob:
+    statement_type = "SCRIPT"
+
+    def __init__(self, *, num_dml_affected_rows: int = 1) -> None:
+        self.num_dml_affected_rows = num_dml_affected_rows
+        self.result_calls: list[dict[str, Any]] = []
+
+    def result(self, **kwargs: Any) -> None:
+        self.result_calls.append(kwargs)
+
+
 class _RecordingRow:
     def __init__(self, values: dict[str, object]) -> None:
         self._values = values
@@ -240,6 +277,60 @@ def test_bigquery_driver_zero_job_retry_deadline_disables_retries() -> None:
     _, kwargs = connection.queries[0]
     assert kwargs["retry"] is None
     assert kwargs["job_retry"] is None
+
+
+def test_bigquery_driver_select_result_passes_job_result_kwargs() -> None:
+    connection = _RecordingConnection()
+    connection.job = _RecordingSelectJob([{"id": 1}])
+    driver = BigQueryDriver(
+        cast(Any, connection),
+        driver_features={"query_page_size": 17, "query_max_results": 11, "job_result_timeout": 3.0},
+    )
+
+    result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("SELECT 1"))
+
+    assert result.is_select_result is True
+    assert connection.job.result_calls[0] == {
+        "page_size": 17,
+        "max_results": 11,
+        "job_retry": driver._job_retry,
+        "timeout": 3.0,
+    }
+
+
+def test_bigquery_driver_minimal_select_result_omits_paging_kwargs() -> None:
+    connection = _RecordingConnection()
+    connection.job = _RecordingSelectJob([{"id": 1}])
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 3.0})
+
+    result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("SELECT 1"))
+
+    assert result.is_select_result is True
+    assert connection.job.result_calls[0] == {"job_retry": driver._job_retry, "timeout": 3.0}
+
+
+def test_bigquery_driver_dml_and_script_do_not_pass_job_result_kwargs() -> None:
+    connection = _RecordingConnection()
+    driver = BigQueryDriver(
+        cast(Any, connection),
+        driver_features={"query_page_size": 17, "query_max_results": 11, "job_result_timeout": 3.0},
+    )
+
+    connection.job = _RecordingDmlJob(num_dml_affected_rows=1)
+    dml_result = driver.dispatch_execute(
+        cast(Any, connection), driver.prepare_statement("INSERT INTO t (id) VALUES (1)")
+    )
+
+    assert dml_result.is_select_result is False
+    assert connection.job.result_calls == []
+
+    connection.job = _RecordingScriptJob(num_dml_affected_rows=1)
+    script_result = driver.dispatch_execute_script(
+        cast(Any, connection), driver.prepare_statement("INSERT INTO t (id) VALUES (1);")
+    )
+
+    assert script_result.is_script_result is True
+    assert connection.job.result_calls[0] == {"job_retry": driver._job_retry, "timeout": 3.0}
 
 
 def test_stream_source_local_endpoint_uses_single_page_and_bounded_retry() -> None:

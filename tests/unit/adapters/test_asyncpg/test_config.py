@@ -133,6 +133,27 @@ async def test_asyncpg_create_pool_routes_current_connect_and_pool_kwargs(monkey
     assert "reset" not in captured_connect_kwargs
 
 
+async def test_asyncpg_minimal_create_pool_omits_tuning_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Minimal pool config should not forward optional cache tuning keys."""
+    import sqlspec.adapters.asyncpg.config as config_mod
+
+    captured_connect_kwargs: dict[str, Any] = {}
+    captured_pool_kwargs: dict[str, Any] = {}
+
+    async def fake_create_pool(*, init: Any = None, **kwargs: Any) -> object:
+        captured_pool_kwargs.update({"init": init})
+        captured_connect_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(config_mod, "asyncpg_create_pool", fake_create_pool)
+
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    await config._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    assert captured_pool_kwargs["init"].__func__ is config._init_connection.__func__  # pyright: ignore[reportPrivateUsage]
+    assert captured_connect_kwargs == {"dsn": "postgresql://localhost/test"}
+
+
 def test_asyncpg_build_postgres_extension_probe_names_filters_disabled_features() -> None:
     """Only enabled extension probes should be returned."""
     assert build_postgres_extension_probe_names({"enable_pgvector": True, "enable_paradedb": False}) == ["vector"]
