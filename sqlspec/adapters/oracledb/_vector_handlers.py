@@ -1,8 +1,9 @@
 """Oracle vector type handlers for the DB_TYPE_VECTOR data type.
 
 Provides automatic conversion between Python sequence-of-numbers
-(``numpy.ndarray``, ``array.array``, ``list``, ``tuple``) and Oracle VECTOR
-columns. Requires Oracle Database 23ai or higher.
+(``numpy.ndarray``, ``array.array``, ``list``, ``tuple``) and dense Oracle
+VECTOR columns. Sparse VECTOR values use python-oracledb's native
+``SparseVector`` type. Requires Oracle Database 23ai or higher.
 
 Public symbols keep the historical ``numpy_*`` prefix for backwards-compat with
 sqlspec ``__all__`` consumers; the user-facing rename to ``vector_*`` is tracked
@@ -12,7 +13,7 @@ as a follow-up.
 import array
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
+from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, SPARSE_VECTOR_TYPE
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 
@@ -117,6 +118,8 @@ def _is_vector_payload(value: Any) -> bool:
     JSON handler owns. ``bool`` is excluded explicitly because it is a subclass
     of ``int`` but is owned by the JSON path.
     """
+    if SPARSE_VECTOR_TYPE is not None and isinstance(value, SPARSE_VECTOR_TYPE):
+        return False
     if isinstance(value, array.array):
         return True
     if NUMPY_INSTALLED:
@@ -185,6 +188,8 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     still get sensible behavior.
     """
     if metadata.type_code is not DB_TYPE_VECTOR:
+        return None
+    if getattr(metadata, "vector_is_sparse", False) is True:
         return None
 
     fmt = getattr(cursor.connection, "_sqlspec_vector_return_format", None)
