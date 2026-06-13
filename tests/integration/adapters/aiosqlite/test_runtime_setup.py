@@ -1,7 +1,6 @@
-"""Integration tests for aiosqlite runtime features and maintenance behavior."""
+"""Integration tests for aiosqlite runtime setup behavior."""
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import aiosqlite
@@ -15,7 +14,6 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 TRACE_STATEMENTS: list[str] = []
 PROGRESS_CALLS: list[int] = []
-BACKUP_PROGRESS_CALLS: list[tuple[int, int, int]] = []
 
 
 def _double(value: int) -> int:
@@ -58,10 +56,6 @@ def _progress_handler() -> int:
 
 def _trace_callback(statement: str) -> None:
     TRACE_STATEMENTS.append(statement)
-
-
-def _backup_progress(status: int, remaining: int, total: int) -> None:
-    BACKUP_PROGRESS_CALLS.append((status, remaining, total))
 
 
 async def test_custom_function_visible_in_sql() -> None:
@@ -258,160 +252,3 @@ async def test_extension_loading_attempts_paths(tmp_path: Path) -> None:
             pass
 
     await config.close_pool()
-
-
-async def test_backup_to_file_path(tmp_path: Path) -> None:
-    source_path = tmp_path / "source.db"
-    backup_path = tmp_path / "backup.db"
-    config = AiosqliteConfig(connection_config={"database": source_path})
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO items (name) VALUES ('alpha');
-                INSERT INTO items (name) VALUES ('beta');
-            """)
-            await session.commit()
-            await session.backup(backup_path)
-    finally:
-        await config.close_pool()
-
-    with sqlite3.connect(backup_path) as conn:
-        rows = conn.execute("SELECT name FROM items ORDER BY id").fetchall()
-    assert rows == [("alpha",), ("beta",)]
-
-
-async def test_backup_to_connection_with_progress(tmp_path: Path) -> None:
-    BACKUP_PROGRESS_CALLS.clear()
-    source_path = tmp_path / "progress-source.db"
-    config = AiosqliteConfig(connection_config={"database": source_path})
-    target = sqlite3.connect(":memory:", check_same_thread=False)
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO items (name) VALUES ('alpha');
-            """)
-            await session.commit()
-            await session.backup(target, progress=_backup_progress)
-
-        assert target.execute("SELECT name FROM items").fetchone() == ("alpha",)
-        assert BACKUP_PROGRESS_CALLS
-    finally:
-        target.close()
-        await config.close_pool()
-
-
-async def test_iterdump_roundtrip() -> None:
-    config = AiosqliteConfig()
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO items (name) VALUES ('alpha');
-                INSERT INTO items (name) VALUES ('beta');
-            """)
-            await session.commit()
-            dump_sql = "\n".join([line async for line in session.iterdump()])
-    finally:
-        await config.close_pool()
-
-    assert "CREATE TABLE items" in dump_sql
-    with sqlite3.connect(":memory:") as conn:
-        conn.executescript(dump_sql)
-        assert conn.execute("SELECT count(*) FROM items").fetchone() == (2,)
-
-
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="sqlite3 serialize requires Python 3.11+")
-async def test_serialize_deserialize_roundtrip() -> None:
-    source_config = AiosqliteConfig()
-    target_config = AiosqliteConfig()
-
-    try:
-        async with source_config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO items (name) VALUES ('alpha');
-                INSERT INTO items (name) VALUES ('beta');
-            """)
-            await session.commit()
-            payload = await session.serialize()
-
-        async with target_config.provide_session() as session:
-            await session.deserialize(payload)
-            result = await session.execute("SELECT name FROM items ORDER BY id")
-            assert isinstance(result, SQLResult)
-            assert [row["name"] for row in result.get_data()] == ["alpha", "beta"]
-    finally:
-        await source_config.close_pool()
-        await target_config.close_pool()
-
-
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="sqlite3 blobopen requires Python 3.11+")
-async def test_blob_open_read_write() -> None:
-    config = AiosqliteConfig()
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE blobs (data BLOB);
-                INSERT INTO blobs (data) VALUES (zeroblob(8));
-            """)
-            result = await session.execute("SELECT last_insert_rowid() AS rowid")
-            rowid = int(result.get_data()[0]["rowid"])
-
-            async with await session.blob_open("blobs", "data", rowid) as blob:
-                await blob.write(b"abcd1234")
-
-            result = await session.execute("SELECT data FROM blobs WHERE rowid = ?", (rowid,))
-            assert result.get_data()[0]["data"] == b"abcd1234"
-    finally:
-        await config.close_pool()
-
-
-async def test_optimize_executes() -> None:
-    config = AiosqliteConfig()
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO items (name) VALUES ('alpha');
-            """)
-            await session.commit()
-            await session.optimize()
-    finally:
-        await config.close_pool()
-
-
-async def test_wal_checkpoint_truncate_on_file_database(tmp_path: Path) -> None:
-    db_path = tmp_path / "checkpoint.db"
-    config = AiosqliteConfig(connection_config={"database": db_path})
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute_script("""
-                CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO items (name) VALUES ('alpha');
-                INSERT INTO items (name) VALUES ('beta');
-            """)
-            await session.commit()
-            busy, _log_pages, _checkpointed_pages = await session.wal_checkpoint("TRUNCATE")
-            assert busy == 0
-    finally:
-        await config.close_pool()
-
-
-async def test_integrity_check_ok() -> None:
-    config = AiosqliteConfig()
-
-    try:
-        async with config.provide_session() as session:
-            await session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
-            await session.commit()
-            assert await session.integrity_check() == ["ok"]
-    finally:
-        await config.close_pool()

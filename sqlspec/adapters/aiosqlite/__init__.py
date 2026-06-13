@@ -9,7 +9,7 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqlitePoolParams,
 )
 from sqlspec.adapters.aiosqlite.core import default_statement_config
-from sqlspec.adapters.aiosqlite.driver import AiosqliteBlob, AiosqliteDriver, AiosqliteExceptionHandler
+from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
     AiosqliteConnectTimeoutError,
@@ -19,7 +19,6 @@ from sqlspec.adapters.aiosqlite.pool import (
 
 __all__ = (
     "AiosqliteAggregateConfig",
-    "AiosqliteBlob",
     "AiosqliteCollationConfig",
     "AiosqliteConfig",
     "AiosqliteConnectTimeoutError",

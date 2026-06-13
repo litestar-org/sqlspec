@@ -1,10 +1,9 @@
 import asyncio
 import sqlite3
-import sys
 import time
 from collections.abc import Iterator
 from threading import Thread
-from typing import Any, cast
+from typing import Any
 
 import aiosqlite
 import pytest
@@ -16,10 +15,8 @@ from sqlspec.adapters.aiosqlite.core import (
     default_statement_config,
     driver_profile,
 )
-from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import ParameterStyle
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 async def test_cursor_lifecycle_cursor_closed_after_normal_exit() -> None:
@@ -224,37 +221,6 @@ def test_profile_aiosqlite_profile_parity_with_sqlite_profile() -> None:
     assert aio_profile.supported_execution_styles == sqlite_profile.supported_execution_styles
     assert aio_profile.default_style == sqlite_profile.default_style
     assert aio_profile.default_execution_style == sqlite_profile.default_execution_style
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 11), reason="gate only raises below 3.11")
-async def test_serialize_gate_below_311() -> None:
-    driver = AiosqliteDriver(cast(Any, object()))
-
-    with pytest.raises(ImproperConfigurationError, match=r"3\.11"):
-        await driver.serialize()
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 11), reason="gate only raises below 3.11")
-async def test_deserialize_gate_below_311() -> None:
-    driver = AiosqliteDriver(cast(Any, object()))
-
-    with pytest.raises(ImproperConfigurationError, match=r"3\.11"):
-        await driver.deserialize(b"")
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 11), reason="gate only raises below 3.11")
-async def test_blob_open_gate_below_311() -> None:
-    driver = AiosqliteDriver(cast(Any, object()))
-
-    with pytest.raises(ImproperConfigurationError, match=r"3\.11"):
-        await driver.blob_open("t", "c", 1)
-
-
-async def test_wal_checkpoint_invalid_mode_raises() -> None:
-    driver = AiosqliteDriver(cast(Any, object()))
-
-    with pytest.raises(SQLSpecError, match="Invalid WAL checkpoint mode"):
-        await driver.wal_checkpoint(cast(Any, "BOGUS"))
 
 
 def test_profile_aiosqlite_statement_config_parity_with_sqlite() -> None:
