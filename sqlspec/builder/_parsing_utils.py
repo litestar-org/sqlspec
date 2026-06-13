@@ -34,6 +34,7 @@ __all__ = (
 )
 
 ALIAS_PARTS_EXPECTED_COUNT = 2
+QUALIFIED_IDENTIFIER_PARTS = 2
 _SIMPLE_IDENTIFIER_RE: Final["re.Pattern[str]"] = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$"
 )
@@ -122,7 +123,7 @@ def _simple_column_expression(value: str) -> exp.Column:
     identifiers = [exp.Identifier(this=part, quoted=False) for part in parts]
     if len(parts) == 1:
         return exp.Column(this=identifiers[0])
-    if len(parts) == 2:
+    if len(parts) == QUALIFIED_IDENTIFIER_PARTS:
         return exp.Column(this=identifiers[1], table=identifiers[0])
     return exp.Column(this=identifiers[2], table=identifiers[1], db=identifiers[0])
 

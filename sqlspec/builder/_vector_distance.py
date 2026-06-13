@@ -274,12 +274,7 @@ def _register_with_sqlglot() -> None:
     _register_operator_transform(DuckDB.Generator.TRANSFORMS, _operator_sql_duckdb)
 
     invalidate_generator_dispatch(
-        Generator,
-        Postgres.Generator,
-        MySQL.Generator,
-        Oracle.Generator,
-        BigQuery.Generator,
-        DuckDB.Generator,
+        Generator, Postgres.Generator, MySQL.Generator, Oracle.Generator, BigQuery.Generator, DuckDB.Generator
     )
 
     _SQLGLOT_VECTOR_DISTANCE_REGISTERED = True

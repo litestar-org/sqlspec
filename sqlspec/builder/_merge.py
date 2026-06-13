@@ -241,8 +241,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 this="jsonb_to_recordset",
                 expressions=[
                     exp.Cast(
-                        this=exp.Placeholder(this=json_param_name),
-                        to=exp.DataType.build("JSONB", dialect="postgres"),
+                        this=exp.Placeholder(this=json_param_name), to=exp.DataType.build("JSONB", dialect="postgres")
                     )
                 ],
             ),
@@ -251,7 +250,9 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 columns=[
                     exp.ColumnDef(
                         this=exp.to_identifier(column),
-                        kind=exp.DataType.build(self._infer_postgres_type(sample_values.get(column)), dialect="postgres"),
+                        kind=exp.DataType.build(
+                            self._infer_postgres_type(sample_values.get(column)), dialect="postgres"
+                        ),
                     )
                     for column in columns
                 ],
@@ -259,8 +260,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         )
 
         parsed = exp.Select(
-            expressions=[exp.column(column) for column in columns],
-            from_=exp.From(this=recordset_table),
+            expressions=[exp.column(column) for column in columns], from_=exp.From(this=recordset_table)
         )
         return exp.Subquery(
             this=parsed,
@@ -291,7 +291,9 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     expressions=[
                         exp.JSONColumnDef(
                             this=exp.to_identifier(column),
-                            kind=exp.DataType.build(self._infer_oracle_type(sample_values.get(column)), dialect="oracle"),
+                            kind=exp.DataType.build(
+                                self._infer_oracle_type(sample_values.get(column)), dialect="oracle"
+                            ),
                             path=exp.Literal.string(f"$.{column}"),
                         )
                         for column in columns

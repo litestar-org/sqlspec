@@ -145,12 +145,7 @@ def register_version_generators() -> None:
     Postgres.Generator.TRANSFORMS[exp.Version] = _cockroachdb_version_sql
 
     invalidate_generator_dispatch(
-        Generator,
-        BigQuery.Generator,
-        Oracle.Generator,
-        Snowflake.Generator,
-        DuckDB.Generator,
-        Postgres.Generator,
+        Generator, BigQuery.Generator, Oracle.Generator, Snowflake.Generator, DuckDB.Generator, Postgres.Generator
     )
 
     _VERSION_GENERATORS_REGISTERED = True

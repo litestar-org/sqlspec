@@ -1,6 +1,11 @@
 """Compatibility helpers for sqlglot integration."""
 
+from typing import TYPE_CHECKING, cast
+
 __all__ = ("invalidate_generator_dispatch",)
+
+if TYPE_CHECKING:
+    from sqlglot.generator import Generator
 
 
 def invalidate_generator_dispatch(*generator_classes: "type[object]") -> None:
@@ -15,4 +20,4 @@ def invalidate_generator_dispatch(*generator_classes: "type[object]") -> None:
         return
 
     for generator_class in generator_classes:
-        _DISPATCH_CACHE.pop(generator_class, None)
+        _DISPATCH_CACHE.pop(cast("type[Generator]", generator_class), None)

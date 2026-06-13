@@ -44,7 +44,9 @@ def test_invalidate_generator_dispatch_missing_cache_is_noop(monkeypatch) -> Non
     """Missing private sqlglot cache imports should degrade silently."""
     original_import = builtins.__import__
 
-    def raising_import(name: str, globals_: Any = None, locals_: Any = None, fromlist: tuple[str, ...] = (), level: int = 0):
+    def raising_import(
+        name: str, globals_: Any = None, locals_: Any = None, fromlist: tuple[str, ...] = (), level: int = 0
+    ):
         if name == "sqlglot.generator" and "_DISPATCH_CACHE" in fromlist:
             raise ImportError("cache moved")
         return original_import(name, globals_, locals_, fromlist, level)

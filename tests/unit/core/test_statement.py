@@ -452,13 +452,7 @@ def test_sql_initialization_with_custom_config() -> None:
 
 
 @pytest.mark.parametrize(
-    ("dialect", "expected"),
-    [
-        ("postgres", "postgres"),
-        (Postgres, "postgres"),
-        (Postgres(), "postgres"),
-        (None, None),
-    ],
+    ("dialect", "expected"), [("postgres", "postgres"), (Postgres, "postgres"), (Postgres(), "postgres"), (None, None)]
 )
 def test_sql_normalizes_postgres_dialect_inputs(dialect, expected) -> None:
     """StatementConfig.dialect should accept sqlglot dialect names, classes, and instances."""

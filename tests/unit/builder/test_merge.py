@@ -2,8 +2,8 @@
 
 import pytest
 
-from sqlspec import sql
 import sqlspec.builder._merge as merge_module
+from sqlspec import sql
 from sqlspec.builder import Merge
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 
@@ -595,7 +595,9 @@ def test_merge_postgres_json_source_golden_sql_and_parameters() -> None:
         "price DOUBLE PRECISION, active BOOLEAN, meta JSONB, missing DECIMAL)) AS "
         "src(id, name, price, active, meta, missing)"
     )
-    assert stmt.sql == """MERGE INTO products AS "t"
+    assert (
+        stmt.sql
+        == """MERGE INTO products AS "t"
 USING (
   SELECT
     "id",
@@ -620,6 +622,7 @@ WHEN NOT MATCHED THEN INSERT ("id", "name", "price", "active", "meta", "missing"
   "src"."meta",
   "src"."missing"
 )"""
+    )
 
 
 def test_merge_oracle_json_source_golden_sql_and_parameters() -> None:
@@ -646,7 +649,9 @@ def test_merge_oracle_json_source_golden_sql_and_parameters() -> None:
         "COLUMNS(id NUMBER PATH '$.id', name VARCHAR2(4000) PATH '$.name', price NUMBER PATH '$.price', "
         "active NUMBER(1) PATH '$.active', meta JSON PATH '$.meta', missing VARCHAR2(4000) PATH '$.missing'))) src"
     )
-    assert stmt.sql == """MERGE INTO products t
+    assert (
+        stmt.sql
+        == """MERGE INTO products t
 USING (
   SELECT
     id,
@@ -671,6 +676,7 @@ WHEN MATCHED THEN UPDATE SET
   name = src.name,
   price = src.price
 WHEN NOT MATCHED THEN INSERT (id, name, price, active, meta, missing) VALUES (src.id, src.name, src.price, src.active, src.meta, src.missing)"""
+    )
 
 
 @pytest.mark.parametrize("dialect", ["postgres", "oracle"])

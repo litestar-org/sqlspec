@@ -11,9 +11,14 @@ import pytest
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from sqlspec import sql
-from sqlspec.builder import parse_column_expression, parse_condition_expression, parse_order_expression, parse_table_expression
 import sqlspec.builder._parsing_utils as parsing_utils
+from sqlspec import sql
+from sqlspec.builder import (
+    parse_column_expression,
+    parse_condition_expression,
+    parse_order_expression,
+    parse_table_expression,
+)
 from sqlspec.core import get_cache
 
 
