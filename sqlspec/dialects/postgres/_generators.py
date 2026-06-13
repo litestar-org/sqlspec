@@ -11,13 +11,13 @@ from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.generators.postgres import PostgresGenerator
 
+from sqlspec.builder._generation import invalidate_generator_dispatch
 from sqlspec.builder._vector_distance import (
     is_vector_distance_expression,
     render_vector_distance_postgres,
     vector_distance_metric,
 )
 from sqlspec.dialects.postgres._operators import is_postgres_extension_operator, postgres_extension_operator
-from sqlspec.utils.sqlglot_compat import invalidate_generator_dispatch
 
 __all__ = ("PGVectorGenerator", "ParadeDBGenerator")
 

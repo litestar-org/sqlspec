@@ -22,7 +22,7 @@ from sqlglot import exp
 from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.postgres import PostgresGenerator
 
-from sqlspec.utils.sqlglot_compat import invalidate_generator_dispatch
+from sqlspec.builder._generation import invalidate_generator_dispatch
 
 __all__ = ("SpangresGenerator", "SpannerGenerator")
 

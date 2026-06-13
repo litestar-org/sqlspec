@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 
-from sqlspec.utils.sqlglot_compat import invalidate_generator_dispatch
+from sqlspec.builder._generation import invalidate_generator_dispatch
 
 if TYPE_CHECKING:
     from sqlglot.generator import Generator

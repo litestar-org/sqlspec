@@ -1,4 +1,4 @@
-"""Tests for sqlglot compatibility helpers."""
+"""Tests for SQLGlot generator registration helpers."""
 
 import builtins
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 from sqlglot import exp
 from sqlglot.generator import Generator
 
-from sqlspec.utils.sqlglot_compat import invalidate_generator_dispatch
+from sqlspec.builder._generation import invalidate_generator_dispatch
 
 
 def test_invalidate_generator_dispatch_refreshes_transform_cache() -> None:
