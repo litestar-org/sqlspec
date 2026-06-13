@@ -87,8 +87,8 @@ __all__ = (
     "is_simple_insert",
     "normalize_script_rowcount",
     "resolve_column_names",
-    "run_query_job",
     "run_query_and_wait",
+    "run_query_job",
     "storage_api_available",
     "try_bulk_insert",
 )
@@ -181,6 +181,7 @@ def try_bulk_insert(
         parameters: Parameter dictionaries for the insert.
         expression: Optional parsed expression to reuse.
         allow_parse: Whether to parse SQL when expression is unavailable.
+        result_timeout: Timeout forwarded to the load job request and result wait.
 
     Returns:
         Inserted row count if bulk insert succeeds, otherwise None.
@@ -558,6 +559,11 @@ def run_query_job(
         job_retry: Retry policy attached to the returned query job. ``None``
             disables job retries and the client's built-in ``jobs.insert``
             retry wrapper (which carries a fixed 600s deadline).
+        api_method: Optional query API method override.
+        timestamp_precision: Optional timestamp precision override.
+        job_id: Explicit BigQuery job ID.
+        job_id_prefix: Prefix used by BigQuery to generate a job ID when
+            ``job_id`` is not provided.
 
     Returns:
         QueryJob object representing the executed job.

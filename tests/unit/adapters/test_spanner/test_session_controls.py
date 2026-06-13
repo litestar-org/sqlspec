@@ -9,6 +9,7 @@ from google.cloud.spanner_v1 import Transaction
 from google.cloud.spanner_v1.keyset import KeySet
 from google.cloud.spanner_v1.streamed import StreamedResultSet
 
+import sqlspec.adapters.spanner.config as spanner_config
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.exceptions import ImproperConfigurationError
@@ -41,7 +42,7 @@ def test_provide_session_injects_database_provider(monkeypatch: pytest.MonkeyPat
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     sentinel_database = object()
     config.get_database = lambda: sentinel_database  # type: ignore[assignment]
-    monkeypatch.setattr("sqlspec.adapters.spanner.config.SpannerSessionContext", _SessionContext)
+    monkeypatch.setattr(spanner_config, "SpannerSessionContext", _SessionContext)
 
     context = config.provide_session()
 
