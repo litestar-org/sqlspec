@@ -1,6 +1,6 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 from adbc_driver_manager import OperationalError as AdbcOperationalError
@@ -374,7 +374,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         try:
             return self._native_get_tables(driver, dialect, schema_name)
-        except _NATIVE_FALLBACK_ERRORS as exc:
+        except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             logger.debug("ADBC native get_objects unavailable for tables: %s", exc)
 
         if dialect == "bigquery":
@@ -464,7 +464,10 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             db_schema_filter=filters["db_schema_filter"],
             table_name_filter=filters["table_name_filter"],
         )
-        return reader.read_all().to_pylist()  # type: ignore[no-any-return]
+        rows = reader.read_all().to_pylist()
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise _NativeMetadataIncompleteError
+        return cast("list[dict[str, Any]]", rows)
 
     def _native_get_tables(
         self, driver: "AdbcDriver", dialect: str, schema_name: "str | None"
@@ -577,7 +580,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         resolved_table = self._resolve_identifier(dialect, table) if table is not None else None
         try:
             return self._native_get_foreign_keys(driver, dialect, resolved_table, schema_name)
-        except _NATIVE_FALLBACK_ERRORS as exc:
+        except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             logger.debug("ADBC native get_objects unavailable for foreign keys: %s", exc)
 
         if dialect == "bigquery":
