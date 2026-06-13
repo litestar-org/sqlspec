@@ -12,7 +12,7 @@ import pytest
 from sqlspec import SQL, SQLResult, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
-from sqlspec.exceptions import ImproperConfigurationError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -23,7 +23,12 @@ from tests.integration.adapters.contracts._inputs import (
     ParameterStyleCase,
     StatementInputCase,
 )
-from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractRow, ContractTable
+from tests.integration.adapters.contracts._schema import (
+    DEFAULT_CONTRACT_TABLE,
+    DUCKDB_CONTRACT_TABLE,
+    ContractRow,
+    ContractTable,
+)
 
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch
@@ -4092,3 +4097,49 @@ async def assert_async_exception_contract(driver: object, violation: ExceptionVi
         with contextlib.suppress(Exception):
             await async_driver.execute_script(violation.teardown_script)
             await async_driver.commit()
+
+
+def assert_sync_native_metadata_contract(driver: object, case: DriverCase) -> None:
+    """Assert native metadata discovery returns the contract table and its columns."""
+    if not case.supports_native_metadata:
+        pytest.skip(f"{case.adapter} has no native metadata support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+    tables = data_dictionary.get_tables(sync_driver)
+    table_names = {entry.get("table_name") for entry in tables}
+    assert case.table.name in table_names
+    columns = data_dictionary.get_columns(sync_driver, table=case.table.name)
+    column_names = {entry["column_name"] for entry in columns}
+    expected_columns = (
+        {"name", "value", "note"} if case.table is DUCKDB_CONTRACT_TABLE else {"id", "name", "value", "note"}
+    )
+    assert expected_columns <= column_names
+    typed = [entry for entry in columns if entry.get("data_type")]
+    assert typed
+
+
+async def assert_async_native_metadata_contract(driver: object, case: DriverCase) -> None:
+    """Assert async native metadata discovery (no async adapter currently opts in)."""
+    if not case.supports_native_metadata:
+        pytest.skip(f"{case.adapter} has no native metadata support")
+    pytest.fail("async native metadata behavior must be implemented when an async adapter opts in")
+
+
+def assert_sync_native_statistics_contract(driver: object, case: DriverCase) -> None:
+    """Assert native statistics succeed where supported and fail clearly elsewhere."""
+    if not case.supports_native_metadata:
+        pytest.skip(f"{case.adapter} has no native metadata support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+    if not hasattr(data_dictionary, "get_statistics"):
+        pytest.skip(f"{case.adapter} data dictionary exposes no get_statistics")
+    if not case.supports_native_statistics:
+        with pytest.raises(OperationalError):
+            data_dictionary.get_statistics(sync_driver, case.table.name)
+        return
+    statistics = data_dictionary.get_statistics(sync_driver, case.table.name)
+    assert isinstance(statistics, list)
+    for entry in statistics:
+        assert entry["table_name"] == case.table.name
+        assert isinstance(entry["statistic_name"], str)
+        assert isinstance(entry["is_approximate"], bool)

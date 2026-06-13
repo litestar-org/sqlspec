@@ -140,3 +140,54 @@ def test_adbc_data_dictionary_consistency(adbc_sync_driver: "AdbcDriver") -> Non
         assert version1.major == version2.major
         assert version1.minor == version2.minor
         assert version1.patch == version2.patch
+
+
+@pytest.mark.adbc
+def test_adbc_native_metadata_postgres(adbc_sync_driver: "AdbcDriver") -> None:
+    """Native GetObjects lists tables, typed columns, and foreign keys on PostgreSQL."""
+    adbc_sync_driver.execute_script("DROP TABLE IF EXISTS dd_native_child")
+    adbc_sync_driver.execute_script("DROP TABLE IF EXISTS dd_native_parent")
+    adbc_sync_driver.execute_script("CREATE TABLE dd_native_parent (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+    adbc_sync_driver.execute_script(
+        "CREATE TABLE dd_native_child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES dd_native_parent(id))"
+    )
+    adbc_sync_driver.commit()
+    data_dict = adbc_sync_driver.data_dictionary
+    try:
+        tables = data_dict.get_tables(adbc_sync_driver)
+        table_names = {entry.get("table_name") for entry in tables}
+        assert {"dd_native_parent", "dd_native_child"} <= table_names
+
+        columns = data_dict.get_columns(adbc_sync_driver, table="dd_native_parent")
+        by_name = {entry["column_name"]: entry for entry in columns}
+        assert set(by_name) >= {"id", "label"}
+        assert all(entry.get("data_type") for entry in by_name.values())
+
+        foreign_keys = data_dict.get_foreign_keys(adbc_sync_driver, table="dd_native_child")
+        assert any(
+            key.column_name == "parent_id" and key.referenced_table == "dd_native_parent" for key in foreign_keys
+        )
+    finally:
+        adbc_sync_driver.execute_script("DROP TABLE IF EXISTS dd_native_child")
+        adbc_sync_driver.execute_script("DROP TABLE IF EXISTS dd_native_parent")
+        adbc_sync_driver.commit()
+
+
+@pytest.mark.adbc
+def test_adbc_native_statistics_postgres(adbc_sync_driver: "AdbcDriver") -> None:
+    """Native GetStatistics returns normalized entries on PostgreSQL."""
+    adbc_sync_driver.execute_script("DROP TABLE IF EXISTS dd_native_stats")
+    adbc_sync_driver.execute_script("CREATE TABLE dd_native_stats (id INTEGER PRIMARY KEY, payload TEXT)")
+    adbc_sync_driver.execute_script("INSERT INTO dd_native_stats (id, payload) VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+    adbc_sync_driver.execute_script("ANALYZE dd_native_stats")
+    adbc_sync_driver.commit()
+    try:
+        statistics = adbc_sync_driver.data_dictionary.get_statistics(adbc_sync_driver, "dd_native_stats")
+        assert isinstance(statistics, list)
+        for entry in statistics:
+            assert entry["table_name"] == "dd_native_stats"
+            assert isinstance(entry["statistic_key"], int)
+            assert isinstance(entry["is_approximate"], bool)
+    finally:
+        adbc_sync_driver.execute_script("DROP TABLE IF EXISTS dd_native_stats")
+        adbc_sync_driver.commit()
