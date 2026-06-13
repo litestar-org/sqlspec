@@ -2,9 +2,12 @@ import sqlite3
 from pathlib import Path
 from typing import get_args, get_type_hints
 
+import pytest
+
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams, AiosqliteDriverFeatures
 from sqlspec.adapters.aiosqlite.core import build_connection_config
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 class CustomConnection(sqlite3.Connection):
@@ -111,3 +114,106 @@ def test_config_accepts_pathlike_database_without_coercing_connection_value(tmp_
 
     assert config.connection_config["database"] == db_path
     assert isinstance(config.connection_config["database"], Path)
+
+
+def test_driver_features_runtime_keys_declared() -> None:
+    annotations = AiosqliteDriverFeatures.__annotations__
+
+    assert {
+        "custom_functions",
+        "custom_collations",
+        "custom_aggregates",
+        "authorizer_callback",
+        "trace_callback",
+        "progress_handler",
+        "progress_handler_interval",
+        "row_factory",
+        "text_factory",
+        "pragmas",
+        "extensions",
+    } <= set(annotations)
+    assert "allow_extension_loading" not in annotations
+
+
+def test_runtime_setup_exposes_extensions_without_gate() -> None:
+    config = AiosqliteConfig(driver_features={"extensions": ["/tmp/ext.so"]})
+
+    assert config._runtime_setup is not None
+    assert config._runtime_setup["extensions"] == ["/tmp/ext.so"]
+
+
+def test_pragma_name_rejects_injection() -> None:
+    with pytest.raises(ImproperConfigurationError, match="PRAGMA name"):
+        AiosqliteConfig(driver_features={"pragmas": {"journal_mode; DROP TABLE x": "WAL"}})
+
+
+def test_pragma_value_rejects_injection() -> None:
+    with pytest.raises(ImproperConfigurationError, match="PRAGMA value"):
+        AiosqliteConfig(driver_features={"pragmas": {"journal_mode": "WAL; DROP TABLE x"}})
+
+
+def test_pragma_values_rendered() -> None:
+    config = AiosqliteConfig(
+        driver_features={"pragmas": {"cache_size": -16000, "foreign_keys": True, "journal_mode": "WAL"}}
+    )
+
+    assert config._runtime_setup is not None
+    assert config._runtime_setup["pragmas"] == [
+        ("cache_size", "-16000"),
+        ("foreign_keys", "1"),
+        ("journal_mode", "WAL"),
+    ]
+
+
+def test_row_factory_literal_validated() -> None:
+    with pytest.raises(ImproperConfigurationError, match="row_factory"):
+        AiosqliteConfig(driver_features={"row_factory": "bogus"})
+
+
+def test_row_factory_non_callable_rejected() -> None:
+    with pytest.raises(ImproperConfigurationError, match="row_factory"):
+        AiosqliteConfig(driver_features={"row_factory": 123})
+
+
+def test_row_factory_dict_literal_accepted() -> None:
+    config = AiosqliteConfig(driver_features={"row_factory": "dict"})
+
+    assert config._runtime_setup is not None
+    assert config._runtime_setup["row_factory"] == "dict"
+
+
+def test_custom_function_entry_requires_keys() -> None:
+    with pytest.raises(ImproperConfigurationError, match="custom_functions"):
+        AiosqliteConfig(driver_features={"custom_functions": [{"name": "f"}]})
+
+
+def test_custom_collation_entry_requires_keys() -> None:
+    with pytest.raises(ImproperConfigurationError, match="custom_collations"):
+        AiosqliteConfig(driver_features={"custom_collations": [{"name": "sort_name"}]})
+
+
+def test_custom_aggregate_entry_requires_keys() -> None:
+    with pytest.raises(ImproperConfigurationError, match="custom_aggregates"):
+        AiosqliteConfig(driver_features={"custom_aggregates": [{"name": "agg", "narg": 1}]})
+
+
+def test_progress_handler_interval_must_be_positive() -> None:
+    with pytest.raises(ImproperConfigurationError, match="progress_handler_interval"):
+        AiosqliteConfig(driver_features={"progress_handler": lambda: None, "progress_handler_interval": 0})
+
+
+def test_runtime_keys_removed_from_driver_features() -> None:
+    config = AiosqliteConfig(
+        driver_features={
+            "custom_functions": [{"name": "double", "narg": 1, "func": lambda value: value}],
+            "row_factory": "tuple",
+            "pragmas": {"foreign_keys": True},
+            "extensions": ["/tmp/ext.so"],
+        }
+    )
+
+    assert "custom_functions" not in config.driver_features
+    assert "row_factory" not in config.driver_features
+    assert "pragmas" not in config.driver_features
+    assert "extensions" not in config.driver_features
+    assert config.driver_features["enable_custom_adapters"] is True

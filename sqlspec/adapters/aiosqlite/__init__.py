@@ -1,8 +1,11 @@
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteRawCursor
 from sqlspec.adapters.aiosqlite.config import (
+    AiosqliteAggregateConfig,
+    AiosqliteCollationConfig,
     AiosqliteConfig,
     AiosqliteConnectionParams,
     AiosqliteDriverFeatures,
+    AiosqliteFunctionConfig,
     AiosqlitePoolParams,
 )
 from sqlspec.adapters.aiosqlite.core import default_statement_config
@@ -15,6 +18,8 @@ from sqlspec.adapters.aiosqlite.pool import (
 )
 
 __all__ = (
+    "AiosqliteAggregateConfig",
+    "AiosqliteCollationConfig",
     "AiosqliteConfig",
     "AiosqliteConnectTimeoutError",
     "AiosqliteConnection",
@@ -24,6 +29,7 @@ __all__ = (
     "AiosqliteDriver",
     "AiosqliteDriverFeatures",
     "AiosqliteExceptionHandler",
+    "AiosqliteFunctionConfig",
     "AiosqlitePoolClosedError",
     "AiosqlitePoolConnection",
     "AiosqlitePoolParams",

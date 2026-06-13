@@ -21,6 +21,72 @@ logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlite"
 
 
+def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":
+    return {column[0]: row[index] for index, column in enumerate(cursor.description)}
+
+
+def _resolve_row_factory(row_factory: Any) -> Any:
+    if row_factory == "row":
+        return sqlite3.Row
+    if row_factory == "dict":
+        return _dict_row_factory
+    if row_factory == "tuple":
+        return None
+    return row_factory
+
+
+def _load_extensions(connection: SqliteConnection, extensions: "list[str]") -> None:
+    connection.enable_load_extension(True)
+    try:
+        for extension_path in extensions:
+            connection.load_extension(extension_path)
+    finally:
+        connection.enable_load_extension(False)
+
+
+def _apply_runtime_setup(connection: SqliteConnection, runtime_setup: "dict[str, Any]") -> None:
+    for pragma_name, pragma_value in runtime_setup.get("pragmas", ()):
+        connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
+
+    extensions = runtime_setup.get("extensions")
+    if extensions:
+        _load_extensions(connection, list(extensions))
+
+    for function_config in runtime_setup.get("custom_functions", ()):
+        connection.create_function(
+            function_config["name"],
+            function_config["narg"],
+            function_config["func"],
+            deterministic=function_config.get("deterministic", False),
+        )
+
+    for aggregate_config in runtime_setup.get("custom_aggregates", ()):
+        connection.create_aggregate(
+            aggregate_config["name"], aggregate_config["narg"], aggregate_config["aggregate_class"]
+        )
+
+    for collation_config in runtime_setup.get("custom_collations", ()):
+        connection.create_collation(collation_config["name"], collation_config["func"])
+
+    authorizer_callback = runtime_setup.get("authorizer_callback")
+    if authorizer_callback is not None:
+        connection.set_authorizer(authorizer_callback)
+
+    trace_callback = runtime_setup.get("trace_callback")
+    if trace_callback is not None:
+        connection.set_trace_callback(trace_callback)
+
+    progress_handler = runtime_setup.get("progress_handler")
+    if progress_handler is not None:
+        connection.set_progress_handler(progress_handler, runtime_setup.get("progress_handler_interval", 1000))
+
+    if "row_factory" in runtime_setup:
+        connection.row_factory = _resolve_row_factory(runtime_setup["row_factory"])
+
+    if "text_factory" in runtime_setup:
+        connection.text_factory = runtime_setup["text_factory"]
+
+
 class SqliteConnectionPool:
     """Thread-local connection manager for SQLite.
 
@@ -36,6 +102,7 @@ class SqliteConnectionPool:
         "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
+        "_runtime_setup",
         "_thread_local",
     )
 
@@ -46,6 +113,7 @@ class SqliteConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[SqliteConnection], None] | None" = None,
+        runtime_setup: "dict[str, Any] | None" = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -55,6 +123,7 @@ class SqliteConnectionPool:
             recycle_seconds: Connection recycle time in seconds (default 24h)
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Callback executed when connection is created
+            runtime_setup: Runtime feature configuration applied after internal PRAGMAs
         """
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
@@ -64,6 +133,7 @@ class SqliteConnectionPool:
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
+        self._runtime_setup = runtime_setup
         self._pool_id = str(uuid.uuid4())[:8]
 
     @property
@@ -92,6 +162,9 @@ class SqliteConnectionPool:
                 connection.execute("PRAGMA busy_timeout = 5000")
 
             connection.execute("PRAGMA foreign_keys = ON")
+
+        if self._runtime_setup is not None:
+            _apply_runtime_setup(connection, self._runtime_setup)
 
         # Call user-provided callback after internal setup
         if self._on_connection_create is not None:
