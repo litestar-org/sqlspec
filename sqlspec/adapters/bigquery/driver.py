@@ -16,6 +16,7 @@ from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor
 from sqlspec.adapters.bigquery.core import (
     DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
+    _run_query_and_wait,
     _uses_local_bigquery_endpoint,
     build_dml_rowcount,
     build_inlined_script,
@@ -56,7 +57,7 @@ if TYPE_CHECKING:
     from google.cloud.bigquery import QueryJob, QueryJobConfig
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementFilter
+    from sqlspec.core import SQL, ArrowResult, Statement, StatementFilter
     from sqlspec.storage import (
         StorageBridgeJob,
         StorageDestination,
@@ -104,13 +105,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
-        "_job_result_kwargs",
+        "_job_result_kwargs_defaults",
         "_job_result_timeout",
         "_job_retry",
         "_job_retry_deadline",
         "_json_serializer",
         "_literal_inliner",
         "_request_timeout",
+        "_use_query_and_wait",
     )
     dialect = "bigquery"
 
@@ -138,11 +140,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
-        self._job_result_kwargs = self._build_job_result_kwargs(features)
+        self._job_result_kwargs_defaults = self._build_job_result_kwargs(features)
         self._job_retry_deadline = float(features.get("job_retry_deadline", 60.0))
         self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
+        self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
 
     def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
         timeout = features.get("request_timeout")
@@ -163,6 +166,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_result_kwargs["max_results"] = query_max_results
         return job_result_kwargs
 
+    def _job_request_timeout(self) -> float:
+        return self._request_timeout
+
     def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
         return run_query_job(
             connection,
@@ -172,9 +178,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config=None,
             json_serializer=self._json_serializer,
             retry=self._job_retry,
-            timeout=self._request_timeout,
+            timeout=self._job_request_timeout(),
             job_retry=self._job_retry,
         )
+
+    def _job_result_kwargs(self) -> dict[str, Any]:
+        return dict(self._job_result_kwargs_defaults)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -191,6 +200,35 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with query results and metadata
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
+        if self._use_query_and_wait:
+            row_iterator = _run_query_and_wait(
+                cursor,
+                sql,
+                parameters,
+                default_job_config=self._default_query_job_config,
+                json_serializer=self._json_serializer,
+                retry=self._job_retry,
+                wait_timeout=self._job_request_timeout(),
+                job_retry=self._job_retry,
+            )
+            cursor.job = None
+            iterator_schema = getattr(row_iterator, "schema", None)
+            if statement.returns_rows() or iterator_schema:
+                column_names = resolve_column_names(iterator_schema, self._column_name_cache)
+                rows_list, _ = collect_rows(row_iterator, iterator_schema, column_names=column_names)
+
+                return self.create_execution_result(
+                    cursor,
+                    selected_data=rows_list,
+                    column_names=column_names,
+                    data_row_count=len(rows_list),
+                    is_select_result=True,
+                    row_format="record",
+                )
+
+            affected_rows = build_dml_rowcount(row_iterator, 0)
+            return self.create_execution_result(cursor, rowcount_override=affected_rows)
+
         cursor.job = self._run_query_job(cursor, sql, parameters)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
@@ -199,7 +237,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             job_result = cursor.job.result(
-                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs
+                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
             )
             job_schema = cursor.job.schema or getattr(job_result, "schema", None)
             column_names = resolve_column_names(job_schema, self._column_name_cache)
@@ -246,7 +284,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         allow_parse = statement.statement_config.enable_parsing
         if is_simple_insert(sql, parsed_expression, allow_parse=allow_parse):
             rowcount = try_bulk_insert(
-                self.connection, sql, prepared_parameters, parsed_expression, allow_parse=allow_parse
+                self.connection,
+                sql,
+                prepared_parameters,
+                parsed_expression,
+                allow_parse=allow_parse,
+                result_timeout=self._job_request_timeout(),
             )
             if rowcount is not None:
                 return self.create_execution_result(cursor, rowcount_override=rowcount, is_many_result=True)
@@ -446,7 +489,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         with exc_handler:
             query_job = self._run_query_job(self.connection, sql, driver_params)
             query_job.result(
-                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs
+                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
             )  # Wait for completion
 
             # Native Arrow via Storage API
@@ -528,8 +571,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         pq.write_table(arrow_table, buffer)
         buffer.seek(0)
         job_config = build_load_job_config("parquet", overwrite)
-        job = self.connection.load_table_from_file(buffer, table, job_config=job_config)
-        job.result()
+        job = self.connection.load_table_from_file(
+            buffer, table, job_config=job_config, timeout=self._job_request_timeout()
+        )
+        job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label="parquet")
         if telemetry:
             telemetry_payload.setdefault("extra", {})
@@ -552,8 +597,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
             msg = "BigQuery storage bridge currently supports Parquet ingest only"
             raise StorageCapabilityError(msg, capability="parquet_import_enabled")
         job_config = build_load_job_config(file_format, overwrite)
-        job = self.connection.load_table_from_uri(source, table, job_config=job_config)
-        job.result()
+        job = self.connection.load_table_from_uri(
+            source, table, job_config=job_config, retry=self._job_retry, timeout=self._job_request_timeout()
+        )
+        job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)

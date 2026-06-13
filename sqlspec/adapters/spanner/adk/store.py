@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.exceptions import OperationalError
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
@@ -726,6 +727,12 @@ class _SpannerWriteJob:
         self._statements = statements
 
     def __call__(self, transaction: "Transaction") -> None:
+        if len(self._statements) > 1:
+            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
+            if status.code != 0:
+                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
+                raise OperationalError(msg)
+            return
         for sql, params, types in self._statements:
             transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
 
@@ -737,6 +744,12 @@ class _SpannerMemoryWriteJob:
         self._statements = statements
 
     def __call__(self, transaction: "Transaction") -> None:
+        if len(self._statements) > 1:
+            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
+            if status.code != 0:
+                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
+                raise OperationalError(msg)
+            return
         for sql, params, types in self._statements:
             transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
 
