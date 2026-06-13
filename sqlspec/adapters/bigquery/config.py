@@ -94,6 +94,9 @@ class BigQueryDriverFeatures(TypedDict):
         job_result_timeout: Timeout (seconds) for polling ``QueryJob.result()``. Defaults to the
             client polling default (waits indefinitely for the job using the API's per-call default
             timeouts). Also used as the per-request HTTP timeout when ``request_timeout`` is unset.
+        use_query_and_wait: Use ``Client.query_and_wait()`` for single-statement queries.
+            Pair with ``connection_config["default_job_creation_mode"]="JOB_CREATION_OPTIONAL"``
+            to allow short queries to run without creating a job. Defaults to False.
         request_timeout: Per-request HTTP transport timeout (seconds) for the API calls that start
             query jobs. Bounds each request so a server that accepts the request but never responds
             (e.g. a wedged emulator) raises instead of blocking indefinitely. Defaults to
@@ -111,6 +114,7 @@ class BigQueryDriverFeatures(TypedDict):
     events_backend: NotRequired[str]
     job_retry_deadline: NotRequired[float]
     job_result_timeout: NotRequired[float]
+    use_query_and_wait: NotRequired[bool]
     request_timeout: NotRequired[float]
     query_page_size: NotRequired[int]
     query_max_results: NotRequired[int]

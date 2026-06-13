@@ -1,5 +1,6 @@
 """Spanner configuration."""
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from google.cloud.spanner_v1 import Client
@@ -28,7 +29,9 @@ if TYPE_CHECKING:
     from google.cloud.spanner_admin_database_v1.types import DatabaseDialect, EncryptionConfig
     from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest
     from google.cloud.spanner_v1.database import Database
+    from google.cloud.spanner_v1.database import BatchSnapshot
     from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
+    from collections.abc import Iterator
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
@@ -137,6 +140,9 @@ class SpannerDriverFeatures(TypedDict):
         json_deserializer: Custom JSON deserializer for result conversion.
         retry: Per-request retry policy passed to execute_sql(), execute_update(), and batch_update().
         timeout: Per-request timeout in seconds passed to execute_sql(), execute_update(), and batch_update().
+        request_options: Default RequestOptions forwarded to execute_sql(), execute_update(),
+            and batch_update(). Per-call overrides are available via
+            SpannerSyncDriver.execute_with_options().
         session_labels: Deprecated compatibility alias for pool session labels.
             Prefer ``connection_config["session_labels"]``.
         enable_events: Enable database event channel support.
@@ -150,6 +156,7 @@ class SpannerDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     retry: "NotRequired[Retry | None]"
     timeout: "NotRequired[float | None]"
+    request_options: "NotRequired[Any]"
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
     events_backend: "NotRequired[str]"
@@ -419,12 +426,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         """
         connection_ctx = SpannerConnectionContext(self, transaction=transaction)
         handler = _SpannerSessionConnectionHandler(self, connection_ctx)
+        session_driver_features: dict[str, Any] = dict(self.driver_features)
+        session_driver_features["database_provider"] = self.get_database
 
         return SpannerSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
             statement_config=statement_config or self.statement_config or default_statement_config,
-            driver_features=self.driver_features,
+            driver_features=session_driver_features,
             prepare_driver=self._prepare_driver,
         )
 
@@ -443,6 +452,20 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         For DDL/DML, use :meth:`provide_session` (write-capable by default).
         """
         return self.provide_session(*args, statement_config=statement_config, transaction=False, **kwargs)
+
+    @contextmanager
+    def provide_batch_snapshot(
+        self, *, read_timestamp: "Any | None" = None, exact_staleness: "Any | None" = None
+    ) -> "Iterator[BatchSnapshot]":
+        """Yield a BatchSnapshot for partitioned reads across parallel workers."""
+        snapshot = self.get_database().batch_snapshot(
+            read_timestamp=read_timestamp,
+            exact_staleness=exact_staleness,
+        )
+        try:
+            yield snapshot
+        finally:
+            snapshot.close()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerSyncConfig types.

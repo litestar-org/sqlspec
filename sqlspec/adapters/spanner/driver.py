@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import sqlglot as _sqlglot
 from google.api_core import exceptions as api_exceptions
+from google.cloud.spanner_v1.keyset import KeySet
 from google.cloud.spanner_v1.transaction import Transaction
 from sqlglot import exp as _sqlglot_exp
 
@@ -26,7 +27,7 @@ from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
@@ -37,11 +38,12 @@ _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
-    from sqlspec.core import ArrowResult
+    from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat
@@ -111,11 +113,30 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+class _PerCallExecuteOptions:
+    """Per-call Spanner execution options captured for a single dispatch."""
+
+    __slots__ = ("directed_read_options", "request_options", "retry", "timeout")
+
+    def __init__(
+        self,
+        *,
+        request_options: "Any | None" = None,
+        directed_read_options: "Any | None" = None,
+        retry: "Any | None" = None,
+        timeout: "float | None" = None,
+    ) -> None:
+        self.request_options = request_options
+        self.directed_read_options = directed_read_options
+        self.retry = retry
+        self.timeout = timeout
+
+
 class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_type_converter")
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_pending_execute_options", "_type_converter")
 
     def __init__(
         self,
@@ -136,6 +157,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._data_dictionary: SpannerDataDictionary | None = None
+        self._pending_execute_options: _PerCallExecuteOptions | None = None
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS - The Execution Engine
@@ -146,10 +168,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
-        execute_kwargs = self._execute_kwargs()
 
         if statement.returns_rows():
             reader = cast("_SpannerReadProtocol", cursor)
+            execute_kwargs = self._execute_kwargs(for_read=True)
             result_set = reader.execute_sql(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             rows = list(result_set)
             try:
@@ -174,6 +196,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         if supports_write(cursor):
             writer = cast("_SpannerWriteProtocol", cursor)
+            execute_kwargs = self._execute_kwargs()
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
@@ -225,7 +248,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         script_params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(script_params)
         param_types_map = self._infer_param_types(coerced_params)
-        execute_kwargs = self._execute_kwargs()
+        read_execute_kwargs = self._execute_kwargs(for_read=True)
+        write_execute_kwargs = self._execute_kwargs()
         for stmt in statements:
             try:
                 parsed = _sqlglot.parse_one(stmt)
@@ -236,9 +260,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
-                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **execute_kwargs)
+                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **write_execute_kwargs)
             else:
-                _ = list(reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map, **execute_kwargs))
+                _ = list(
+                    reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map, **read_execute_kwargs)
+                )
             count += 1
 
         return self.create_execution_result(
@@ -270,8 +296,133 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "SpannerExceptionHandler":
         return SpannerExceptionHandler()
 
-    def _execute_kwargs(self) -> dict[str, Any]:
-        return {key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features}
+    def _execute_kwargs(self, *, for_read: bool = False) -> dict[str, Any]:
+        kwargs = {key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features}
+        request_options = self.driver_features.get("request_options")
+        if request_options is not None:
+            kwargs["request_options"] = request_options
+        pending = self._pending_execute_options
+        if pending is not None:
+            if pending.request_options is not None:
+                kwargs["request_options"] = pending.request_options
+            if pending.retry is not None:
+                kwargs["retry"] = pending.retry
+            if pending.timeout is not None:
+                kwargs["timeout"] = pending.timeout
+            if for_read and pending.directed_read_options is not None:
+                kwargs["directed_read_options"] = pending.directed_read_options
+        return kwargs
+
+    def execute_with_options(
+        self,
+        statement: "Any",
+        /,
+        *parameters: "Any",
+        request_options: "Any | None" = None,
+        directed_read_options: "Any | None" = None,
+        retry: "Any | None" = None,
+        timeout: "float | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute a single statement with per-call Spanner request options."""
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        self._pending_execute_options = _PerCallExecuteOptions(
+            request_options=request_options,
+            directed_read_options=directed_read_options,
+            retry=retry,
+            timeout=timeout,
+        )
+        try:
+            return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        finally:
+            self._pending_execute_options = None
+
+    def _require_database(self) -> "Any":
+        provider = self.driver_features.get("database_provider")
+        if provider is None:
+            msg = (
+                "Spanner database-level operations require a session created via "
+                "SpannerSyncConfig.provide_session()."
+            )
+            raise ImproperConfigurationError(msg)
+        return provider()
+
+    def execute_partitioned_dml(
+        self,
+        statement: "Any",
+        /,
+        *parameters: "Any",
+        request_options: "Any | None" = None,
+        exclude_txn_from_change_streams: bool = False,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Execute a partitioned DML statement across the whole table."""
+        database = self._require_database()
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, params = self._get_compiled_sql(sql_statement, config)
+        coerced_params = self._coerce_params(cast("dict[str, Any] | None", params))
+        param_types_map = self._infer_param_types(coerced_params)
+        exc_handler = self.handle_database_exceptions()
+        row_count = 0
+        with exc_handler:
+            row_count = int(
+                database.execute_partitioned_dml(
+                    sql,
+                    params=coerced_params,
+                    param_types=param_types_map,
+                    request_options=request_options
+                    if request_options is not None
+                    else self.driver_features.get("request_options"),
+                    exclude_txn_from_change_streams=exclude_txn_from_change_streams,
+                )
+            )
+        self._check_pending_exception(exc_handler)
+        return row_count
+
+    def apply_mutations(
+        self,
+        table: str,
+        *,
+        columns: "Sequence[str] | None" = None,
+        insert: "Sequence[Sequence[Any]] | None" = None,
+        update: "Sequence[Sequence[Any]] | None" = None,
+        insert_or_update: "Sequence[Sequence[Any]] | None" = None,
+        replace: "Sequence[Sequence[Any]] | None" = None,
+        delete_keys: "Sequence[Sequence[Any]] | None" = None,
+        delete_all: bool = False,
+        request_options: "Any | None" = None,
+        max_commit_delay: "Any | None" = None,
+    ) -> None:
+        """Apply blind-write mutations to a table in a single atomic commit."""
+        row_groups = (insert, update, insert_or_update, replace)
+        if any(group is not None for group in row_groups) and columns is None:
+            msg = "apply_mutations() requires 'columns' when row mutations are provided."
+            raise ImproperConfigurationError(msg)
+
+        database = self._require_database()
+        resolved_request_options = request_options if request_options is not None else self.driver_features.get(
+            "request_options"
+        )
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
+            with database.batch(request_options=resolved_request_options, max_commit_delay=max_commit_delay) as batch:
+                if insert is not None:
+                    batch.insert(table, columns, insert)
+                if update is not None:
+                    batch.update(table, columns, update)
+                if insert_or_update is not None:
+                    batch.insert_or_update(table, columns, insert_or_update)
+                if replace is not None:
+                    batch.replace(table, columns, replace)
+                if delete_all:
+                    batch.delete(table, KeySet(all_=True))
+                elif delete_keys is not None:
+                    batch.delete(table, KeySet(keys=list(delete_keys)))
+        self._check_pending_exception(exc_handler)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # ARROW API METHODS
