@@ -1,8 +1,8 @@
 """Unit tests for ADK session/event converters and scoped state helpers.
 
 Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
-- EventRecord has exactly 5 keys (session_id, invocation_id, author, timestamp, event_json)
-- event_to_record takes only (event, session_id), not (event, session_id, app_name, user_id)
+- EventRecord has exactly 7 keys (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
+- event_to_record takes (event, app_name, user_id, session_id)
 - record_to_event uses Event.model_validate for full round-trip fidelity
 - filter_temp_state, split_scoped_state, merge_scoped_state for scoped state handling
 - session_to_record strips temp: keys from state
@@ -42,12 +42,13 @@ def _make_event(
     event_id: str = "evt-1",
     invocation_id: str = "inv-1",
     author: str = "user",
-    text: "str | None" = None,
-    state_delta: "dict | None" = None,
-    branch: "str | None" = None,
-    partial: "bool | None" = None,
-    turn_complete: "bool | None" = None,
-    custom_metadata: "dict | None" = None,
+    text: str | None = None,
+    state_delta: dict | None = None,
+    branch: str | None = None,
+    isolation_scope: str | None = None,
+    partial: bool | None = None,
+    turn_complete: bool | None = None,
+    custom_metadata: dict | None = None,
 ) -> Event:
     content = types.Content(parts=[types.Part(text=text)]) if text is not None else None
     actions = EventActions(state_delta=state_delta or {})
@@ -59,6 +60,7 @@ def _make_event(
         actions=actions,
         timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc).timestamp(),
         branch=branch,
+        isolation_scope=isolation_scope,
         partial=partial,
         turn_complete=turn_complete,
         custom_metadata=custom_metadata,
@@ -244,65 +246,79 @@ def test_compute_update_marker_normalizes_aware_datetime_to_utc() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_event_to_record_only_5_keys() -> None:
-    """EventRecord has exactly session_id, invocation_id, author, timestamp, event_json."""
+def test_event_to_record_clean_break_keys() -> None:
+    """EventRecord has exactly the clean-break indexed fields plus event_data."""
     event = _make_event()
-    record = event_to_record(event, "session-1")
-    assert set(record.keys()) == {"session_id", "invocation_id", "author", "timestamp", "event_json"}
+    record = event_to_record(event, "app", "u1", "session-1")
+    assert set(record.keys()) == {"id", "app_name", "user_id", "session_id", "invocation_id", "timestamp", "event_data"}
 
 
-def test_event_to_record_signature_two_args_only() -> None:
-    """event_to_record raises TypeError if called with extra positional args (old 4-arg signature)."""
+def test_event_to_record_rejects_old_two_arg_signature() -> None:
+    """event_to_record rejects the old session-only identity signature."""
     event = _make_event()
     with pytest.raises(TypeError):
-        event_to_record(event, "session-1", "app-name", "user-id")  # type: ignore[call-arg]
+        event_to_record(event, "session-1")  # type: ignore[call-arg]
 
 
 def test_event_to_record_session_id_stored_correctly() -> None:
     """session_id in the record matches the argument passed."""
     event = _make_event(invocation_id="inv-abc", author="model")
-    record = event_to_record(event, "my-session-id")
+    record = event_to_record(event, "app", "u1", "my-session-id")
     assert record["session_id"] == "my-session-id"
 
 
 def test_event_to_record_indexed_fields_match_event() -> None:
-    """Indexed scalar columns (invocation_id, author, timestamp) match the source event."""
-    event = _make_event(invocation_id="inv-xyz", author="tool")
-    record = event_to_record(event, "s1")
+    """Indexed scalar columns match the source event and context identity."""
+    event = _make_event(event_id="evt-xyz", invocation_id="inv-xyz", author="tool")
+    record = event_to_record(event, "app", "u1", "s1")
+    assert record["id"] == "evt-xyz"
+    assert record["app_name"] == "app"
+    assert record["user_id"] == "u1"
+    assert record["session_id"] == "s1"
     assert record["invocation_id"] == "inv-xyz"
-    assert record["author"] == "tool"
     assert isinstance(record["timestamp"], datetime)
+    assert record["event_data"]["author"] == "tool"
 
 
-def test_event_to_record_event_json_matches_model_dump() -> None:
-    """event_json in the record equals event.model_dump(exclude_none=True, mode='json')."""
+def test_event_to_record_event_data_matches_model_dump() -> None:
+    """event_data in the record equals event.model_dump(exclude_none=True, mode='json')."""
     event = _make_event(text="hello", state_delta={"key": "val"}, custom_metadata={"foo": "bar"})
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "app", "u1", "s1")
     expected_json = event.model_dump(exclude_none=True, mode="json")
-    assert record["event_json"] == expected_json
+    assert record["event_data"] == expected_json
 
 
-def test_event_to_record_event_json_is_dict() -> None:
-    """event_json field is a plain dict (not bytes, not string)."""
+def test_event_to_record_omits_assigned_none_actions() -> None:
+    """A defensive assigned-None actions value is not persisted as actions:null."""
     event = _make_event()
-    record = event_to_record(event, "s1")
-    assert isinstance(record["event_json"], dict)
+    event.actions = None  # type: ignore[assignment]
+
+    record = event_to_record(event, "app", "u1", "s1")
+
+    assert "actions" not in record["event_data"]
 
 
-def test_event_to_record_actions_in_event_json_is_structured() -> None:
-    """Actions are stored as structured JSON dict in event_json, not as raw bytes."""
+def test_event_to_record_event_data_is_dict() -> None:
+    """event_data field is a plain dict (not bytes, not string)."""
+    event = _make_event()
+    record = event_to_record(event, "app", "u1", "s1")
+    assert isinstance(record["event_data"], dict)
+
+
+def test_event_to_record_actions_in_event_data_is_structured() -> None:
+    """Actions are stored as structured JSON dict in event_data, not as raw bytes."""
     event = _make_event(state_delta={"x": "y"})
-    record = event_to_record(event, "s1")
-    event_json = record["event_json"]
+    record = event_to_record(event, "app", "u1", "s1")
+    event_data = record["event_data"]
     # actions should be a dict in the JSON blob
-    if "actions" in event_json:
-        assert isinstance(event_json["actions"], dict)
+    if "actions" in event_data:
+        assert isinstance(event_data["actions"], dict)
 
 
 def test_event_to_record_timestamp_is_datetime() -> None:
     """timestamp column is a datetime object with timezone."""
     event = _make_event()
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "app", "u1", "s1")
     assert isinstance(record["timestamp"], datetime)
     assert record["timestamp"].tzinfo is not None
 
@@ -315,7 +331,7 @@ def test_event_to_record_timestamp_is_datetime() -> None:
 def test_record_to_event_full_roundtrip_basic() -> None:
     """Event -> record -> Event produces an identical object for basic fields."""
     original = _make_event(event_id="evt-rt", invocation_id="inv-rt", author="model")
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.id == original.id
@@ -326,7 +342,7 @@ def test_record_to_event_full_roundtrip_basic() -> None:
 def test_record_to_event_roundtrip_preserves_content() -> None:
     """Content (parts) survives the round-trip."""
     original = _make_event(text="hello world", author="model")
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.content is not None
@@ -337,7 +353,7 @@ def test_record_to_event_roundtrip_preserves_content() -> None:
 def test_record_to_event_roundtrip_preserves_actions() -> None:
     """EventActions (state_delta) survives the round-trip."""
     original = _make_event(state_delta={"key": "v1", "other": 42})
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.actions is not None
@@ -347,7 +363,7 @@ def test_record_to_event_roundtrip_preserves_actions() -> None:
 def test_record_to_event_roundtrip_preserves_custom_metadata() -> None:
     """custom_metadata survives the round-trip."""
     original = _make_event(custom_metadata={"tag": "v2", "score": 0.9})
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.custom_metadata == {"tag": "v2", "score": 0.9}
@@ -356,16 +372,37 @@ def test_record_to_event_roundtrip_preserves_custom_metadata() -> None:
 def test_record_to_event_roundtrip_preserves_branch() -> None:
     """branch field survives the round-trip."""
     original = _make_event(branch="feature-branch")
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.branch == "feature-branch"
 
 
+def test_record_to_event_roundtrip_preserves_isolation_scope() -> None:
+    """ADK 2.2 isolation_scope survives the round-trip."""
+    original = _make_event(isolation_scope="scope-1")
+    record = event_to_record(original, "app", "u1", "s1")
+    restored = record_to_event(record)
+
+    assert restored.isolation_scope == "scope-1"
+
+
+def test_record_to_event_normalizes_actions_null_to_default() -> None:
+    """Legacy or external actions:null payloads are normalized before ADK validation."""
+    original = _make_event(state_delta={"key": "v1"})
+    record = event_to_record(original, "app", "u1", "s1")
+    record["event_data"]["actions"] = None
+
+    restored = record_to_event(record)
+
+    assert restored.actions is not None
+    assert restored.actions.state_delta == {}
+
+
 def test_record_to_event_roundtrip_preserves_partial_flag() -> None:
     """partial flag survives the round-trip."""
     original = _make_event(partial=True)
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.partial is True
@@ -374,7 +411,7 @@ def test_record_to_event_roundtrip_preserves_partial_flag() -> None:
 def test_record_to_event_roundtrip_preserves_turn_complete() -> None:
     """turn_complete flag survives the round-trip."""
     original = _make_event(turn_complete=True)
-    record = event_to_record(original, "s1")
+    record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert restored.turn_complete is True
@@ -384,19 +421,19 @@ def test_record_to_event_roundtrip_preserves_timestamp() -> None:
     """timestamp survives the round-trip within float precision."""
     fixed_ts = datetime(2024, 6, 1, 10, 30, 0, tzinfo=timezone.utc).timestamp()
     event = Event(id="ts-evt", invocation_id="inv-1", author="user", actions=EventActions(), timestamp=fixed_ts)
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "app", "u1", "s1")
     restored = record_to_event(record)
 
     assert abs(restored.timestamp - fixed_ts) < 1.0  # within 1 second
 
 
-def test_record_to_event_ignores_unknown_fields_in_event_json() -> None:
-    """Unknown event_json fields are ignored by the current ADK Event model."""
+def test_record_to_event_ignores_unknown_fields_in_event_data() -> None:
+    """Unknown event_data fields are ignored by the current ADK Event model."""
     event = _make_event(event_id="extra-fields-evt", author="tool")
-    record = event_to_record(event, "s1")
+    record = event_to_record(event, "app", "u1", "s1")
 
-    # Inject hypothetical future ADK field into event_json
-    record["event_json"]["hypothetical_v3_field"] = "some_value"  # type: ignore[index]
+    # Inject hypothetical future ADK field into event_data
+    record["event_data"]["hypothetical_v3_field"] = "some_value"  # type: ignore[index]
 
     restored = record_to_event(record)
     assert restored.id == "extra-fields-evt"
@@ -470,7 +507,7 @@ def test_record_to_session_with_events_round_trip() -> None:
         update_time=datetime.now(timezone.utc),
     )
     event = _make_event(text="hello", author="user")
-    event_record = event_to_record(event, "s1")
+    event_record = event_to_record(event, "app", "u1", "s1")
 
     session = record_to_session(session_record, [event_record])
 

@@ -1,14 +1,13 @@
 """SQLite sync ADK store for Google Agent Development Kit session/event storage."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     import logging
@@ -27,7 +26,7 @@ SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 logger: "logging.Logger" = get_logger("sqlspec.adapters.sqlite.adk.store")
 
 
-class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
+class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
     """SQLite ADK store using synchronous SQLite driver.
 
     Implements session and event storage for Google Agent Development Kit
@@ -56,6 +55,168 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         """
         super().__init__(config)
 
+    def create_tables(self) -> None:
+        """Create both sessions and events tables if they don't exist."""
+        self._create_tables()
+
+    def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session.
+
+        Args:
+            session_id: Unique session identifier.
+            app_name: Application name.
+            user_id: User identifier.
+            state: Initial session state.
+            owner_id: Optional owner ID value for owner ID column.
+
+        Returns:
+            Created session record.
+        """
+        return self._create_session(session_id, app_name, user_id, state, owner_id)
+
+    def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+            renew_for: If positive, touch the session update timestamp while reading.
+
+        Returns:
+            Session record or None if not found.
+        """
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+            state: New state dictionary (replaces existing state).
+        """
+        self._update_session_state(app_name, user_id, session_id, state)
+
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app, optionally filtered by user.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier. If None, lists all sessions for the app.
+
+        Returns:
+            List of session records ordered by update_time DESC.
+        """
+        return self._list_sessions(app_name, user_id)
+
+    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and all associated events (cascade).
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+        """
+        self._delete_session(app_name, user_id, session_id)
+
+    def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session.
+
+        Args:
+            event_record: Event record to store.
+        """
+        self._append_event(event_record)
+
+    def append_event_and_update_state(
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state.
+
+        Inserts the event and updates the session state + update_time in a
+        single transaction, returning the updated SessionRecord via RETURNING.
+
+        Args:
+            event_record: Event record to store.
+            app_name: Application name for scoped state.
+            user_id: User identifier for scoped state.
+            session_id: Session identifier whose state should be updated.
+            state: Post-append durable state snapshot (temp: keys already
+                stripped by the service layer).
+            app_state: App-scoped state snapshot to upsert when changed.
+            user_state: User-scoped state snapshot to upsert when changed.
+        """
+        return self._append_event_and_update_state(
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        )
+
+    def get_events(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
+    ) -> "list[EventRecord]":
+        """Get events for a session.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+
+    def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than the given timestamp."""
+        return self._delete_expired_events(before)
+
+    def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        return self._delete_idle_sessions(updated_before)
+
+    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        return self._get_app_state(app_name)
+
+    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        return self._get_user_state(app_name, user_id)
+
+    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        self._upsert_app_state(app_name, state)
+
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        self._upsert_user_state(app_name, user_id, state)
+
+    def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        return self._get_metadata(key)
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        self._set_metadata(key, value)
+
     def _apply_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile for this connection.
 
@@ -67,69 +228,16 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         connection.execute("PRAGMA mmap_size = 30000000")
         connection.execute("PRAGMA journal_size_limit = 67108864")
 
-    async def _get_create_sessions_table_sql(self) -> str:
-        """Get SQLite CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-        """
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id TEXT PRIMARY KEY,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL{owner_id_line},
-            state TEXT NOT NULL DEFAULT '{{}}',
-            create_time REAL NOT NULL,
-            update_time REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-        """
-
-    async def _get_create_events_table_sql(self) -> str:
-        """Get SQLite CREATE TABLE SQL for events.
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            invocation_id TEXT,
-            author TEXT,
-            timestamp REAL NOT NULL,
-            event_data TEXT NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        """Get SQLite DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-        """
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
         with self._config.provide_session() as driver:
             self._apply_pragmas(driver.connection)
-            driver.execute_script(run_(self._get_create_sessions_table_sql)())
-            driver.execute_script(run_(self._get_create_events_table_sql)())
-
-    async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist."""
-        await async_(self._create_tables)()
+            driver.execute_script(self._get_create_sessions_table_sql())
+            driver.execute_script(self._get_create_events_table_sql())
+            driver.execute_script(self._get_create_app_states_table_sql())
+            driver.execute_script(self._get_create_user_states_table_sql())
+            driver.execute_script(self._get_create_metadata_table_sql())
+            driver.execute_script(self._get_seed_metadata_sql())
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -163,35 +271,37 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner ID column.
-
-        Returns:
-            Created session record.
-        """
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
-
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Synchronous implementation of get_session."""
+        params = (app_name, user_id, session_id)
+        update_params: tuple[Any, ...]
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            update_sql = f"""
+            UPDATE {self._session_table}
+            SET update_time = ?
+            WHERE app_name = ? AND user_id = ? AND id = ?
+            """
+            now_julian = _datetime_to_julian(datetime.now(timezone.utc))
+            update_params = (now_julian, app_name, user_id, session_id)
+        else:
+            update_sql = ""
+            update_params = ()
+
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         try:
             with self._config.provide_connection() as conn:
                 self._apply_pragmas(conn)
-                cursor = conn.execute(sql, (session_id,))
+                if update_sql:
+                    conn.execute(update_sql, update_params)
+                    conn.commit()
+                cursor = conn.execute(sql, params)
                 row = cursor.fetchone()
 
                 if row is None:
@@ -210,18 +320,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return None
             raise
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID.
-
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            Session record or None if not found.
-        """
-        return await async_(self._get_session)(session_id)
-
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Synchronous implementation of update_session_state."""
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
@@ -229,22 +328,13 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
-            conn.execute(sql, (state_json, now_julian, session_id))
+            conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             conn.commit()
-
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
-
-        Args:
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-        """
-        await async_(self._update_session_state)(session_id, state)
 
     def _list_sessions(self, app_name: str, user_id: "str | None") -> "list[SessionRecord]":
         """Synchronous implementation of list_sessions."""
@@ -287,115 +377,118 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return []
             raise
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-        """
-        return await async_(self._list_sessions)(app_name, user_id)
-
-    def _delete_session(self, session_id: str) -> None:
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Synchronous implementation of delete_session."""
-        sql = f"DELETE FROM {self._session_table} WHERE id = ?"
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
-            conn.execute(sql, (session_id,))
+            conn.execute(sql, (app_name, user_id, session_id))
             conn.commit()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
-
-        Args:
-            session_id: Session identifier.
-        """
-        await async_(self._delete_session)(session_id)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-        event_data_json = to_json(event_record["event_json"])
+        event_data_json = to_json(event_record["event_data"])
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, author, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """
-
-        import uuid
-
-        event_id = str(uuid.uuid4())
 
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(
                 sql,
                 (
-                    event_id,
+                    event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     timestamp_julian,
                     event_data_json,
                 ),
             )
             conn.commit()
 
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session.
-
-        Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_json.
-        """
-        await async_(self._append_event)(event_record)
-
     def _append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Synchronous implementation of append_event_and_update_state."""
-        import uuid
-
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-        event_data_json = to_json(event_record["event_json"])
+        event_data_json = to_json(event_record["event_data"])
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
-        event_id = str(uuid.uuid4())
 
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, author, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """
 
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         RETURNING id, app_name, user_id, state, create_time, update_time
+        """
+
+        app_upsert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        user_upsert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
         """
 
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
-            conn.execute(
-                insert_sql,
-                (
-                    event_id,
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["author"],
-                    timestamp_julian,
-                    event_data_json,
-                ),
-            )
-            cursor = conn.execute(update_sql, (state_json, now_julian, session_id))
-            row = cursor.fetchone()
-            conn.commit()
+            try:
+                cursor = conn.execute(update_sql, (state_json, now_julian, app_name, user_id, session_id))
+                row = cursor.fetchone()
+                if row is not None:
+                    conn.execute(
+                        insert_sql,
+                        (
+                            event_record["id"],
+                            app_name,
+                            user_id,
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            timestamp_julian,
+                            event_data_json,
+                        ),
+                    )
+                    if app_state is not None:
+                        conn.execute(app_upsert_sql, (app_name, to_json(app_state), now_julian))
+                    if user_state is not None:
+                        conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
+            except Exception:
+                conn.rollback()
+                raise
+            else:
+                if row is None:
+                    conn.rollback()
+                else:
+                    conn.commit()
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
@@ -410,28 +503,20 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
             update_time=_julian_to_datetime(row[5]),
         )
 
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state.
-
-        Inserts the event and updates the session state + update_time in a
-        single transaction, returning the updated SessionRecord via RETURNING.
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (temp: keys already
-                stripped by the service layer).
-        """
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
-
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Synchronous implementation of get_events."""
-        where_clauses = ["session_id = ?"]
-        params: list[Any] = [session_id]
+        if limit == 0:
+            return []
+
+        where_clauses = ["app_name = ?", "user_id = ?", "session_id = ?"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
             where_clauses.append("timestamp > ?")
@@ -441,7 +526,7 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, invocation_id, author, timestamp, event_data
+        SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -455,11 +540,13 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
 
                 return [
                     EventRecord(
-                        session_id=row[1],
-                        invocation_id=row[2],
-                        author=row[3],
-                        timestamp=_julian_to_datetime(row[4]),
-                        event_json=from_json(row[5]) if row[5] else {},
+                        id=row[0],
+                        app_name=row[1],
+                        user_id=row[2],
+                        session_id=row[3],
+                        invocation_id=row[4],
+                        timestamp=_julian_to_datetime(row[5]),
+                        event_data=from_json(row[6]) if row[6] else {},
                     )
                     for row in rows
                 ]
@@ -468,23 +555,239 @@ class SqliteADKStore(BaseAsyncADKStore["SqliteConfig"]):
                 return []
             raise
 
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session.
+    def _delete_expired_events(self, before: datetime) -> int:
+        """Synchronous implementation of delete_expired_events."""
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
 
-        Args:
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, (_datetime_to_julian(before),))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    def _delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Synchronous implementation of delete_idle_sessions."""
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, (_datetime_to_julian(updated_before),))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Synchronous implementation of get_app_state."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, (app_name,))
+                row = cursor.fetchone()
+                return from_json(row[0]) if row is not None and row[0] else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Synchronous implementation of get_user_state."""
+        sql = f"""
+        SELECT state
+        FROM {self._user_state_table}
+        WHERE app_name = ? AND user_id = ?
+        """
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, (app_name, user_id))
+                row = cursor.fetchone()
+                return from_json(row[0]) if row is not None and row[0] else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of upsert_app_state."""
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
+            conn.commit()
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Synchronous implementation of upsert_user_state."""
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
+            conn.commit()
+
+    def _get_metadata(self, key: str) -> "str | None":
+        """Synchronous implementation of get_metadata."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = ?"
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, (key,))
+                row = cursor.fetchone()
+                return str(row[0]) if row is not None else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        """Synchronous implementation of set_metadata."""
+        sql = f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """
+
+        with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
+            conn.execute(sql, (key, value))
+            conn.commit()
+
+    def _get_create_sessions_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for sessions.
 
         Returns:
-            List of event records ordered by timestamp ASC.
+            SQL statement to create adk_session table with indexes.
         """
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id TEXT PRIMARY KEY,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL{owner_id_line},
+            state TEXT NOT NULL DEFAULT '{{}}',
+            create_time REAL NOT NULL,
+            update_time REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
+            ON {self._session_table}(app_name, user_id);
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
+            ON {self._session_table}(update_time DESC);
+        """
+
+    def _get_create_events_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for events."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id TEXT PRIMARY KEY,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            invocation_id TEXT,
+            timestamp REAL NOT NULL,
+            event_data TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
+            ON {self._events_table}(app_name, user_id, session_id, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_invocation
+            ON {self._events_table}(invocation_id);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp
+            ON {self._events_table}(timestamp ASC);
+        """
+
+    def _get_create_app_states_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for app-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT '{{}}',
+            update_time REAL NOT NULL
+        );
+        """
+
+    def _get_create_user_states_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for user-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT '{{}}',
+            update_time REAL NOT NULL,
+            PRIMARY KEY (app_name, user_id)
+        );
+        """
+
+    def _get_create_metadata_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for ADK internal metadata."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+
+    def _get_seed_metadata_sql(self) -> str:
+        """Get SQLite SQL to seed the ADK schema-version metadata row."""
+        return f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT(key) DO NOTHING;
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for app-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for user-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for ADK internal metadata."""
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements."""
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
 
-class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
+class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
     """SQLite ADK memory store using synchronous SQLite driver.
 
     Implements memory entry storage for Google Agent Development Kit
@@ -510,7 +813,29 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
         """
         super().__init__(config)
 
-    async def _get_create_memory_table_sql(self) -> str:
+    def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        self._create_tables()
+
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return self._insert_memory_entries(entries, owner_id)
+
+    def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return self._search_entries(query, app_name, user_id, limit)
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return self._delete_entries_by_session(session_id)
+
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return self._delete_entries_older_than(days)
+
+    def _get_create_memory_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -597,11 +922,7 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         with self._config.provide_session() as driver:
             self._enable_foreign_keys(driver.connection)
-            driver.execute_script(run_(self._get_create_memory_table_sql)())
-
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
+            driver.execute_script(self._get_create_memory_table_sql())
 
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -687,10 +1008,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
@@ -720,12 +1037,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             except Exception as exc:  # pragma: no cover
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
-
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -798,10 +1109,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
 
         return deleted_count
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
-
     def _delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days.
 
@@ -824,10 +1131,6 @@ class SqliteADKMemoryStore(BaseAsyncADKMemoryStore["SqliteConfig"]):
             conn.commit()
 
         return deleted_count
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)
 
 
 def _datetime_to_julian(dt: datetime) -> float:

@@ -35,7 +35,7 @@ async def test_inmemory_enabled_creates_sessions_table_with_inmemory_async(
                 """
                 SELECT inmemory, inmemory_priority, inmemory_distribute
                 FROM user_tables
-                WHERE table_name = 'ADK_SESSIONS'
+                WHERE table_name = 'ADK_SESSION'
                 """
             )
             row = await cursor.fetchone()
@@ -77,7 +77,7 @@ async def test_inmemory_enabled_creates_events_table_with_inmemory_async(
                 """
                 SELECT inmemory, inmemory_priority, inmemory_distribute
                 FROM user_tables
-                WHERE table_name = 'ADK_EVENTS'
+                WHERE table_name = 'ADK_EVENT'
                 """
             )
             row = await cursor.fetchone()
@@ -115,7 +115,7 @@ async def test_inmemory_disabled_creates_tables_without_inmemory_async(oracle_as
                 """
                 SELECT inmemory, inmemory_priority, inmemory_distribute
                 FROM user_tables
-                WHERE table_name IN ('ADK_SESSIONS', 'ADK_EVENTS')
+                WHERE table_name IN ('ADK_SESSION', 'ADK_EVENT')
                 ORDER BY table_name
                 """
             )
@@ -153,7 +153,7 @@ async def test_inmemory_default_disabled_async(oracle_async_config: OracleAsyncC
                 """
                 SELECT inmemory
                 FROM user_tables
-                WHERE table_name = 'ADK_SESSIONS'
+                WHERE table_name = 'ADK_SESSION'
                 """
             )
             row = await cursor.fetchone()
@@ -214,7 +214,7 @@ async def test_inmemory_with_owner_id_column_async(oracle_async_config: OracleAs
                 SELECT inmemory, column_name
                 FROM user_tables t
                 LEFT JOIN user_tab_columns c ON t.table_name = c.table_name
-                WHERE t.table_name = 'ADK_SESSIONS' AND (c.column_name = 'OWNER_ID' OR c.column_name IS NULL)
+                WHERE t.table_name = 'ADK_SESSION' AND (c.column_name = 'OWNER_ID' OR c.column_name IS NULL)
                 """
             )
             rows = await cursor.fetchall()
@@ -279,14 +279,14 @@ async def test_inmemory_tables_functional_async(oracle_async_config: OracleAsync
         assert session["id"] == session_id
         assert session["state"] == state
 
-        retrieved = await store.get_session(session_id)
+        retrieved = await store.get_session(app_name, user_id, session_id)
         assert retrieved is not None
         assert retrieved["state"] == state
 
         updated_state = {"data": "updated", "count": 100}
-        await store.update_session_state(session_id, updated_state)
+        await store.update_session_state(app_name, user_id, session_id, updated_state)
 
-        retrieved_updated = await store.get_session(session_id)
+        retrieved_updated = await store.get_session(app_name, user_id, session_id)
         assert retrieved_updated is not None
         assert retrieved_updated["state"] == updated_state
 
@@ -309,7 +309,7 @@ async def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> No
     )
 
     store = OracleSyncADKStore(config)
-    await store.create_tables()
+    store.create_tables()
 
     try:
         with config.provide_connection() as conn:
@@ -318,7 +318,7 @@ async def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> No
                 """
                 SELECT inmemory, inmemory_priority
                 FROM user_tables
-                WHERE table_name IN ('ADK_SESSIONS', 'ADK_EVENTS')
+                WHERE table_name IN ('ADK_SESSION', 'ADK_EVENT')
                 ORDER BY table_name
                 """
             )
@@ -350,7 +350,7 @@ async def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> N
     )
 
     store = OracleSyncADKStore(config)
-    await store.create_tables()
+    store.create_tables()
 
     try:
         with config.provide_connection() as conn:
@@ -359,7 +359,7 @@ async def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> N
                 """
                 SELECT inmemory, inmemory_priority
                 FROM user_tables
-                WHERE table_name IN ('ADK_SESSIONS', 'ADK_EVENTS')
+                WHERE table_name IN ('ADK_SESSION', 'ADK_EVENT')
                 """
             )
             rows = cursor.fetchall()
@@ -389,7 +389,7 @@ async def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncCon
     )
 
     store = OracleSyncADKStore(config)
-    await store.create_tables()
+    store.create_tables()
 
     try:
         session_id = "inmemory-sync-session"
@@ -397,11 +397,11 @@ async def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncCon
         user_id = "user-456"
         state = {"sync": True, "value": 99}
 
-        session = await store.create_session(session_id, app_name, user_id, state)
+        session = store.create_session(session_id, app_name, user_id, state)
         assert session["id"] == session_id
         assert session["state"] == state
 
-        retrieved = await store.get_session(session_id)
+        retrieved = store.get_session(app_name, user_id, session_id)
         assert retrieved is not None
         assert retrieved["state"] == state
 

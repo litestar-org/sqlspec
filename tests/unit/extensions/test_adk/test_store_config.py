@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Tests for shared ADK store configuration behavior."""
 
+import importlib
 import logging
 from datetime import datetime
 from typing import Any
@@ -13,7 +14,7 @@ from sqlspec.extensions.adk.artifact.store import BaseSyncADKArtifactStore
 from sqlspec.extensions.adk.memory import MemoryRecord
 from sqlspec.extensions.adk.memory import store as memory_store_module
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
-from sqlspec.extensions.adk.store import BaseSyncADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
 
 class _Config:
@@ -29,7 +30,128 @@ class _Config:
         return "original-session"
 
 
+class _AsyncSessionStore(BaseAsyncADKStore[Any]):
+    async def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+    ) -> SessionRecord:
+        return SessionRecord(
+            id=session_id,
+            app_name=app_name,
+            user_id=user_id,
+            state=state,
+            create_time=datetime.now(),
+            update_time=datetime.now(),
+        )
+
+    async def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: Any | None = None
+    ) -> SessionRecord | None:
+        return None
+
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
+        return None
+
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]:
+        return []
+
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        return None
+
+    async def append_event(self, event_record: EventRecord) -> None:
+        return None
+
+    async def append_event_and_update_state(
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: dict[str, Any],
+        *,
+        app_state: dict[str, Any] | None = None,
+        user_state: dict[str, Any] | None = None,
+    ) -> SessionRecord:
+        return await self.create_session(session_id, app_name, user_id, state)
+
+    async def get_events(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[EventRecord]:
+        return []
+
+    async def delete_expired_events(self, before: datetime) -> int:
+        return 0
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        return 0
+
+    async def get_app_state(self, app_name: str) -> dict[str, Any] | None:
+        return None
+
+    async def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    async def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
+        return None
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
+        return None
+
+    async def get_metadata(self, key: str) -> str | None:
+        return None
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        return None
+
+    async def create_tables(self) -> None:
+        return None
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        return ""
+
+    async def _get_create_events_table_sql(self) -> str:
+        return ""
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        return ""
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        return ""
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        return ""
+
+    async def _get_seed_metadata_sql(self) -> str:
+        return ""
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return ""
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return ""
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> list[str]:
+        return [
+            self._get_drop_metadata_table_sql(),
+            f"DROP TABLE IF EXISTS {self._user_state_table}",
+            f"DROP TABLE IF EXISTS {self._app_state_table}",
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
+
+
 class _SyncSessionStore(BaseSyncADKStore[Any]):
+    def __init__(self, config: _Config) -> None:
+        super().__init__(config)
+        self.create_tables_called = False
+
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
     ) -> SessionRecord:
@@ -42,45 +164,72 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
             update_time=datetime.now(),
         )
 
-    def get_session(self, session_id: str) -> SessionRecord | None:
+    def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: Any | None = None
+    ) -> SessionRecord | None:
         return None
 
-    def update_session_state(self, session_id: str, state: dict[str, Any]) -> None:
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         return None
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]:
         return []
 
-    def delete_session(self, session_id: str) -> None:
+    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         return None
 
-    def create_event(
+    def append_event(self, event_record: EventRecord) -> None:
+        return None
+
+    def append_event_and_update_state(
         self,
-        event_id: str,
-        session_id: str,
+        event_record: EventRecord,
         app_name: str,
         user_id: str,
-        author: str | None = None,
-        actions: bytes | None = None,
-        content: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> EventRecord:
-        return EventRecord(
-            session_id=session_id,
-            invocation_id=event_id,
-            author=author or user_id,
-            timestamp=datetime.now(),
-            event_json=content or {},
-        )
+        session_id: str,
+        state: dict[str, Any],
+        *,
+        app_state: dict[str, Any] | None = None,
+        user_state: dict[str, Any] | None = None,
+    ) -> SessionRecord:
+        return self.create_session(session_id, app_name, user_id, state)
 
-    def create_event_and_update_state(self, event_record: EventRecord, session_id: str, state: dict[str, Any]) -> None:
-        return None
-
-    def list_events(self, session_id: str) -> list[EventRecord]:
+    def get_events(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[EventRecord]:
         return []
 
-    def create_tables(self) -> None:
+    def delete_expired_events(self, before: datetime) -> int:
+        return 0
+
+    def delete_idle_sessions(self, updated_before: datetime) -> int:
+        return 0
+
+    def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         return None
+
+    def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
+        return None
+
+    def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
+        return None
+
+    def get_metadata(self, key: str) -> str | None:
+        return None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        return None
+
+    def create_tables(self) -> None:
+        self.create_tables_called = True
 
     def _get_create_sessions_table_sql(self) -> str:
         return ""
@@ -88,8 +237,35 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
     def _get_create_events_table_sql(self) -> str:
         return ""
 
+    def _get_create_app_states_table_sql(self) -> str:
+        return ""
+
+    def _get_create_user_states_table_sql(self) -> str:
+        return ""
+
+    def _get_create_metadata_table_sql(self) -> str:
+        return ""
+
+    def _get_seed_metadata_sql(self) -> str:
+        return ""
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return ""
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return ""
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
     def _get_drop_tables_sql(self) -> list[str]:
-        return []
+        return [
+            self._get_drop_metadata_table_sql(),
+            f"DROP TABLE IF EXISTS {self._user_state_table}",
+            f"DROP TABLE IF EXISTS {self._app_state_table}",
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
 
 class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
@@ -116,7 +292,7 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
         return ""
 
     def _get_drop_memory_table_sql(self) -> list[str]:
-        return []
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
 
 class _SyncArtifactStore(BaseSyncADKArtifactStore[Any]):
@@ -148,12 +324,20 @@ class _SyncArtifactStore(BaseSyncADKArtifactStore[Any]):
         return None
 
 
-@pytest.mark.parametrize("store_cls", [_SyncSessionStore, _SyncMemoryStore, _SyncArtifactStore])
+@pytest.mark.parametrize("store_cls", [_AsyncSessionStore, _SyncSessionStore, _SyncMemoryStore, _SyncArtifactStore])
 def test_adk_base_stores_keep_original_config(store_cls: type[Any]) -> None:
     config = _Config()
     store = store_cls(config)
 
     assert store.config is config
+
+
+def test_sync_session_store_ensure_tables_runs_sync_create_tables() -> None:
+    store = _SyncSessionStore(_Config({"session_table": "sessions", "events_table": "events"}))
+
+    store.ensure_tables()
+
+    assert store.create_tables_called
 
 
 def test_sync_memory_store_logs_ready_with_log_with_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,3 +377,53 @@ def test_sync_memory_store_logs_disabled_with_log_with_context(monkeypatch: pyte
     assert calls[0]["context"]["memory_table"] == "test_memories"
     assert calls[0]["context"]["reason"] == "disabled"
     assert "db_system" in calls[0]["context"]
+
+
+def test_session_store_reset_drop_tables_includes_legacy_metadata_table() -> None:
+    store = _AsyncSessionStore(_Config())
+
+    statements = store._get_reset_drop_tables_sql()
+
+    assert "DROP TABLE IF EXISTS adk_internal_metadata" in statements
+    assert "DROP TABLE IF EXISTS adk_metadata" in statements
+    assert "DROP TABLE IF EXISTS adk_session" in statements
+    assert "DROP TABLE IF EXISTS adk_event" in statements
+    assert "DROP TABLE IF EXISTS adk_app_state" in statements
+    assert "DROP TABLE IF EXISTS adk_user_state" in statements
+    assert "DROP TABLE IF EXISTS adk_sessions" in statements
+    assert "DROP TABLE IF EXISTS adk_events" in statements
+    assert "DROP TABLE IF EXISTS adk_app_states" in statements
+    assert "DROP TABLE IF EXISTS adk_user_states" in statements
+    assert store.metadata_table == "adk_internal_metadata"
+
+
+def test_session_store_reset_drop_tables_does_not_duplicate_configured_legacy_metadata_table() -> None:
+    store = _AsyncSessionStore(_Config({"metadata_table": "adk_metadata"}))
+
+    statements = store._get_reset_drop_tables_sql()
+
+    assert statements.count("DROP TABLE IF EXISTS adk_metadata") == 1
+    assert store.metadata_table == "adk_metadata"
+
+
+@pytest.mark.anyio
+async def test_reset_migration_accepts_sync_session_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    migration = importlib.import_module("sqlspec.extensions.adk.migrations.0002_reset_adk_tables")
+    context = type("Context", (), {"config": _Config()})()
+
+    monkeypatch.setattr(migration, "_get_store_class", lambda _context: _SyncSessionStore)
+    monkeypatch.setattr(migration, "_get_memory_store_class", lambda _context: None)
+
+    statements = await migration.up(context)
+
+    assert "" in statements
+
+
+def test_sync_memory_store_reset_drop_tables_uses_drop_sql() -> None:
+    store = _SyncMemoryStore(_Config({"memory_table": "agent_memory"}))
+
+    assert store._get_reset_drop_memory_table_sql() == [
+        "DROP TABLE IF EXISTS agent_memory",
+        "DROP TABLE IF EXISTS adk_memory",
+        "DROP TABLE IF EXISTS adk_memory_entries",
+    ]
