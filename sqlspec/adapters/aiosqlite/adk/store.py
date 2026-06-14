@@ -58,6 +58,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await driver.execute_script(await self._get_create_user_states_table_sql())
             await driver.execute_script(await self._get_create_metadata_table_sql())
             await driver.execute_script(await self._get_seed_metadata_sql())
+            await driver.commit()
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -720,6 +721,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_memory_table_sql())
+            await driver.commit()
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.

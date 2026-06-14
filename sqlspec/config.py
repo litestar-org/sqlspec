@@ -606,10 +606,10 @@ class ADKConfig(TypedDict):
     """
 
     session_table: NotRequired[str]
-    """Name of the sessions table. Default: 'adk_sessions'"""
+    """Name of the sessions table. Default: 'adk_session'"""
 
     events_table: NotRequired[str]
-    """Name of the events table. Default: 'adk_events'"""
+    """Name of the events table. Default: 'adk_event'"""
 
     memory_table: NotRequired[str]
     """Name of the memory entries table. Default: 'adk_memory_entries'"""
