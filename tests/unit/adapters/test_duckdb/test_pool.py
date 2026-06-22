@@ -46,7 +46,12 @@ def test_create_connection_raises_for_malicious_secret_name() -> None:
     pool = DuckDBConnectionPool(
         connection_config={"database": ":memory:"},
         secrets=[
-            {"name": "evil; DROP TABLE secrets--", "secret_type": "s3", "value": {"key_id": "abc", "secret": "xyz"}}
+            {
+                "name": "evil; DROP TABLE secrets--",
+                "secret_type": "s3",
+                "required": True,
+                "value": {"key_id": "abc", "secret": "xyz"},
+            }
         ],
     )
     with pytest.raises(ValueError, match="secret_name"):
@@ -60,6 +65,7 @@ def test_create_connection_raises_for_malicious_secret_type() -> None:
             {
                 "name": "safe_secret",
                 "secret_type": "S3); DROP TABLE secrets--",
+                "required": True,
                 "value": {"key_id": "abc", "secret": "xyz"},
             }
         ],
@@ -119,13 +125,11 @@ def test_create_connection_name_only_extension_is_load_only(monkeypatch: pytest.
             msg = "install must not be called for a name-only extension"
             raise RuntimeError(msg)
 
-    def fake_connect(**_: Any) -> FailingInstallConnection:
-        return FailingInstallConnection()
-
-    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", fake_connect)
+    connection = FailingInstallConnection()
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", lambda **_: connection)
     pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[{"name": "missing_extension"}])
 
-    connection = pool._create_connection()
+    pool._create_connection()
 
     assert connection.loaded_extensions == ["missing_extension"]
 
@@ -164,10 +168,48 @@ def test_create_connection_raises_when_secret_verification_fails(monkeypatch: py
     monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", fake_connect)
     pool = DuckDBConnectionPool(
         {"database": ":memory:"},
-        secrets=[{"name": "missing_secret", "secret_type": "s3", "value": {"key_id": "abc", "secret": "xyz"}}],
+        secrets=[
+            {
+                "name": "missing_secret",
+                "secret_type": "s3",
+                "required": True,
+                "value": {"key_id": "abc", "secret": "xyz"},
+            }
+        ],
     )
 
     with pytest.raises(RuntimeError, match="DuckDB secret 'missing_secret' was not visible"):
+        pool._create_connection()
+
+
+class _FailingSecretConnection(_FakeDuckDBConnection):
+    def execute(self, sql: str, parameters: Any = None) -> "_FailingSecretConnection":
+        if sql.startswith("CREATE"):
+            msg = "secret creation failed"
+            raise RuntimeError(msg)
+        return self
+
+
+def test_secret_creation_failure_is_best_effort_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", lambda **_: _FailingSecretConnection())
+    pool = DuckDBConnectionPool(
+        {"database": ":memory:"},
+        secrets=[{"name": "s3_secret", "secret_type": "s3", "value": {"key_id": "abc", "secret": "xyz"}}],
+    )
+
+    pool._create_connection()
+
+
+def test_secret_creation_failure_raises_when_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", lambda **_: _FailingSecretConnection())
+    pool = DuckDBConnectionPool(
+        {"database": ":memory:"},
+        secrets=[
+            {"name": "s3_secret", "secret_type": "s3", "required": True, "value": {"key_id": "abc", "secret": "xyz"}}
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="secret creation failed"):
         pool._create_connection()
 
 

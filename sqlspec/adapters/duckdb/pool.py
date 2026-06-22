@@ -387,12 +387,18 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
     if not (secret_name and secret_type):
         return
 
-    _validate_sql_identifier(secret_name, "secret_name")
-    _validate_sql_identifier(secret_type, "secret_type")
-
-    sql = _build_secret_sql(secret_config, secret_name, secret_type)
-    connection.execute(sql)
-    _verify_secret(connection, secret_config, secret_name, secret_type)
+    required = bool(secret_config.get("required", False))
+    try:
+        _validate_sql_identifier(secret_name, "secret_name")
+        _validate_sql_identifier(secret_type, "secret_type")
+        sql = _build_secret_sql(secret_config, secret_name, secret_type)
+        connection.execute(sql)
+        if required:
+            _verify_secret(connection, secret_config, secret_name, secret_type)
+    except Exception:
+        if required:
+            raise
+        logger.warning("DuckDB secret %r creation failed (best-effort)", secret_name)
 
 
 def _build_secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:
