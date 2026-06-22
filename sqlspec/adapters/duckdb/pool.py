@@ -21,6 +21,7 @@ __all__ = ("DuckDBConnectionPool",)
 
 
 _SQL_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_EXPLICIT_INSTALL_KEYS: Final[tuple[str, ...]] = ("version", "repository", "repository_url")
 
 
 logger = get_logger(POOL_LOGGER_NAME)
@@ -128,21 +129,29 @@ class DuckDBConnectionPool:
             if not ext_name:
                 continue
 
-            install_kwargs = {}
-            if "version" in ext_config:
-                install_kwargs["version"] = ext_config["version"]
-            if "repository" in ext_config:
-                install_kwargs["repository"] = ext_config["repository"]
-            if "repository_url" in ext_config:
-                install_kwargs["repository_url"] = ext_config["repository_url"]
-            if ext_config.get("force_install", False):
-                install_kwargs["force_install"] = True
+            required = bool(ext_config.get("required", False))
+            install_kwargs: dict[str, Any] = {k: ext_config[k] for k in _EXPLICIT_INSTALL_KEYS if k in ext_config}
+            force_install = bool(ext_config.get("force_install", False))
+            explicit_install = bool(ext_config.get("install", False)) or force_install or bool(install_kwargs)
 
-            if install_kwargs:
-                connection.install_extension(ext_name, **install_kwargs)
-            else:
-                connection.install_extension(ext_name)
-            connection.load_extension(ext_name)
+            if explicit_install:
+                self._install_extension_once(connection, ext_name, install_kwargs, force_install, required)
+
+            try:
+                connection.load_extension(ext_name)
+            except Exception as exc:
+                if required:
+                    raise
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "pool.extension.load.failed",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    database=self._database_name,
+                    extension=ext_name,
+                    error=str(exc),
+                )
 
         for secret_config in self._secrets:
             _create_secret(connection, secret_config)
@@ -153,6 +162,37 @@ class DuckDBConnectionPool:
             self._on_connection_create(connection)
 
         return connection
+
+    def _install_extension_once(
+        self,
+        connection: "DuckDBConnection",
+        ext_name: str,
+        install_kwargs: "dict[str, Any]",
+        force_install: bool,
+        required: bool,
+    ) -> None:
+        """Install an extension under the pool lock, best-effort unless required."""
+        with self._lock:
+            try:
+                if force_install:
+                    connection.install_extension(ext_name, force_install=True, **install_kwargs)
+                elif install_kwargs:
+                    connection.install_extension(ext_name, **install_kwargs)
+                else:
+                    connection.install_extension(ext_name)
+            except Exception as exc:
+                if required:
+                    raise
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "pool.extension.install.failed",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    database=self._database_name,
+                    extension=ext_name,
+                    error=str(exc),
+                )
 
     def _apply_extension_flags(self, connection: DuckDBConnection) -> None:
         """Apply connection-level extension flags via SET statements."""

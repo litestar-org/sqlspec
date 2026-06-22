@@ -113,10 +113,11 @@ def test_create_connection_passes_repository_url_to_extension_install(monkeypatc
     assert connection.loaded_extensions == ["spatial"]
 
 
-def test_create_connection_surfaces_extension_install_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_connection_name_only_extension_is_load_only(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingInstallConnection(_FakeDuckDBConnection):
         def install_extension(self, extension: str, **kwargs: Any) -> None:
-            raise RuntimeError("install failed")
+            msg = "install must not be called for a name-only extension"
+            raise RuntimeError(msg)
 
     def fake_connect(**_: Any) -> FailingInstallConnection:
         return FailingInstallConnection()
@@ -124,8 +125,9 @@ def test_create_connection_surfaces_extension_install_errors(monkeypatch: pytest
     monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", fake_connect)
     pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[{"name": "missing_extension"}])
 
-    with pytest.raises(RuntimeError, match="install failed"):
-        pool._create_connection()
+    connection = pool._create_connection()
+
+    assert connection.loaded_extensions == ["missing_extension"]
 
 
 def test_create_connection_creates_persistent_scoped_secret(tmp_path) -> None:
