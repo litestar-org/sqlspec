@@ -88,9 +88,7 @@ def test_name_only_extension_never_installs(monkeypatch: pytest.MonkeyPatch) -> 
     assert load_log == ["postgres"]
 
 
-def test_explicit_install_runs_once_across_sessions(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> None:
+def test_explicit_install_runs_once_across_sessions(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     """Test B: explicit install runs once per pool even across reconnects."""
     install_log, load_log = _spy_connect(monkeypatch)
     pool = DuckDBConnectionPool(
@@ -121,7 +119,11 @@ def test_concurrent_sessions_do_not_multiply_installs(monkeypatch: pytest.Monkey
 
 @pytest.mark.parametrize(
     "extension",
-    [{"name": "h3", "version": "1.0"}, {"name": "h3", "repository": "community"}, {"name": "h3", "repository_url": "https://ext.example.test"}],
+    [
+        {"name": "h3", "version": "1.0"},
+        {"name": "h3", "repository": "community"},
+        {"name": "h3", "repository_url": "https://ext.example.test"},
+    ],
 )
 def test_version_repository_imply_install(monkeypatch: pytest.MonkeyPatch, extension: "dict[str, Any]") -> None:
     """Test D: version/repository/repository_url imply an explicit install."""
@@ -135,7 +137,9 @@ def test_version_repository_imply_install(monkeypatch: pytest.MonkeyPatch, exten
     assert load_log == ["h3"]
 
 
-def test_load_failure_is_best_effort_by_default(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_load_failure_is_best_effort_by_default(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Test E (load): a failing LOAD is swallowed with a WARNING by default."""
     _spy_connect(monkeypatch, fail_load=True)
     pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[{"name": "postgres"}])
