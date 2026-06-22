@@ -51,6 +51,7 @@ class DuckDBConnectionPool:
         "_extension_flags",
         "_extensions",
         "_health_check_interval",
+        "_installed_signatures",
         "_is_memory_db",
         "_lock",
         "_on_connection_create",
@@ -88,6 +89,7 @@ class DuckDBConnectionPool:
         self._extension_flags = extension_flags or {}
         self._secrets = secrets or []
         self._on_connection_create = on_connection_create
+        self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._lock = threading.RLock()
         self._pool_id = str(uuid.uuid4())[:8]
@@ -171,8 +173,16 @@ class DuckDBConnectionPool:
         force_install: bool,
         required: bool,
     ) -> None:
-        """Install an extension under the pool lock, best-effort unless required."""
+        """Install an extension once per pool per signature, best-effort unless required."""
+        signature = (
+            ext_name,
+            install_kwargs.get("version"),
+            install_kwargs.get("repository"),
+            install_kwargs.get("repository_url"),
+        )
         with self._lock:
+            if not force_install and signature in self._installed_signatures:
+                return
             try:
                 if force_install:
                     connection.install_extension(ext_name, force_install=True, **install_kwargs)
@@ -193,6 +203,8 @@ class DuckDBConnectionPool:
                     extension=ext_name,
                     error=str(exc),
                 )
+                return
+            self._installed_signatures.add(signature)
 
     def _apply_extension_flags(self, connection: DuckDBConnection) -> None:
         """Apply connection-level extension flags via SET statements."""
