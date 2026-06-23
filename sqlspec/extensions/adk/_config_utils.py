@@ -48,7 +48,6 @@ class _ADKArtifactStoreConfig(TypedDict):
     """Normalized ADK artifact store configuration."""
 
     artifact_table: str
-    storage_uri: NotRequired[str]
 
 
 class _ADKConfigSource(Protocol):
@@ -105,11 +104,7 @@ def _get_adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStor
     """Return normalized artifact store settings."""
 
     adk_config = _get_adk_config_from_extension(config)
-    result: _ADKArtifactStoreConfig = {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
-    storage_uri = adk_config.get("artifact_storage_uri")
-    if storage_uri is not None:
-        result["storage_uri"] = str(storage_uri)
-    return result
+    return {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
 
 
 def _resolve_adk_store_path(config: Any, store_suffix: str) -> str:
