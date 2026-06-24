@@ -21,7 +21,17 @@ class _Config:
 def test_adk_config_uses_flat_keys() -> None:
     """ADKConfig is a flat TypedDict; no per-adapter or nested negotiation blocks."""
     annotations = set(ADKConfig.__annotations__)
-    expected_flat = {"session_table", "events_table", "memory_table", "artifact_table", "in_memory", "owner_id_column"}
+    expected_flat = {
+        "session_table",
+        "events_table",
+        "app_state_table",
+        "user_state_table",
+        "metadata_table",
+        "memory_table",
+        "artifact_table",
+        "in_memory",
+        "owner_id_column",
+    }
     forbidden_nested = {"schema", "lifecycle", "capabilities", "optimizations", "oracle", "spanner", "adbc", "bigquery"}
     assert expected_flat <= annotations
     assert annotations.isdisjoint(forbidden_nested)
@@ -62,12 +72,12 @@ def test_flat_memory_config_resolves_memory_store_settings() -> None:
     assert resolved == {"enable_memory": False, "memory_table": "agent_memories", "use_fts": True, "max_results": 50}
 
 
-def test_flat_artifact_config_resolves_table_and_storage_uri() -> None:
+def test_flat_artifact_config_resolves_store_owned_table_only() -> None:
     config = _Config({"artifact_table": "agent_artifacts", "artifact_storage_uri": "s3://bucket/adk"})
 
     resolved = _get_adk_artifact_store_config(config)
 
-    assert resolved == {"artifact_table": "agent_artifacts", "storage_uri": "s3://bucket/adk"}
+    assert resolved == {"artifact_table": "agent_artifacts"}
 
 
 def test_include_memory_migration_overrides_enable_memory() -> None:
