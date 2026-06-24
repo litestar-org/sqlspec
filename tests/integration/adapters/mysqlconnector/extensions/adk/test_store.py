@@ -53,12 +53,10 @@ async def test_storage_types_verification(mysqlconnector_adk_store: MysqlConnect
             event_columns = await cursor.fetchall()
             event_col_names = [col[0] for col in event_columns]
 
-            # New 5-column schema: session_id, invocation_id, author, timestamp, event_json
             assert "session_id" in event_col_names
             assert "invocation_id" in event_col_names
-            assert "author" in event_col_names
             assert "timestamp" in event_col_names
-            assert "event_json" in event_col_names
+            assert "event_data" in event_col_names
 
             timestamp_col = next(col for col in event_columns if col[0] == "timestamp")
             assert "timestamp(6)" in cast("str", timestamp_col[2]).lower()
@@ -78,15 +76,17 @@ async def test_timestamp_precision(mysqlconnector_adk_store: MysqlConnectorAsync
 
     event_time = datetime.now(timezone.utc)
     event: EventRecord = {
+        "id": "event-micro",
+        "app_name": app_name,
+        "user_id": user_id,
         "session_id": session_id,
         "invocation_id": "inv-micro",
-        "author": "system",
         "timestamp": event_time,
-        "event_json": {"app_name": app_name},
+        "event_data": {"app_name": app_name, "author": "system"},
     }
     await mysqlconnector_adk_store.append_event(event)
 
-    events = await mysqlconnector_adk_store.get_events(session_id)
+    events = await mysqlconnector_adk_store.get_events(app_name, user_id, session_id)
     assert len(events) == 1
     assert hasattr(events[0]["timestamp"], "microsecond")
 
@@ -127,7 +127,7 @@ async def test_owner_id_constraint_enforcement(mysqlconnector_adk_store_with_fk:
         session_id=session_id, app_name=app_name, user_id=user_id, state={"tenant": "one"}, owner_id=1
     )
 
-    session = await mysqlconnector_adk_store_with_fk.get_session(session_id)
+    session = await mysqlconnector_adk_store_with_fk.get_session(app_name, user_id, session_id)
     assert session is not None
 
     with pytest.raises(Exception):
@@ -144,7 +144,7 @@ async def test_owner_id_cascade_delete(mysqlconnector_adk_store_with_fk: MysqlCo
         session_id="tenant1-session", app_name="test-app", user_id="user1", state={"data": "test"}, owner_id=1
     )
 
-    session_before = await mysqlconnector_adk_store_with_fk.get_session("tenant1-session")
+    session_before = await mysqlconnector_adk_store_with_fk.get_session("test-app", "user1", "tenant1-session")
     assert session_before is not None
 
     async with config.provide_connection() as conn:
@@ -155,7 +155,7 @@ async def test_owner_id_cascade_delete(mysqlconnector_adk_store_with_fk: MysqlCo
         finally:
             await cursor.close()
 
-    session_after = await mysqlconnector_adk_store_with_fk.get_session("tenant1-session")
+    session_after = await mysqlconnector_adk_store_with_fk.get_session("test-app", "user1", "tenant1-session")
     assert session_after is None
 
 

@@ -20,11 +20,14 @@ class _DummyCursor:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    def execute(self, query: Any, params: Any) -> None:
+    def execute(self, query: Any, params: Any = None) -> None:
         self.execute_calls.append((query, params))
 
     def fetchall(self) -> "list[dict[str, Any]]":
         return self._rows
+
+    def fetchone(self) -> "dict[str, Any] | None":
+        return self._rows[0] if self._rows else None
 
 
 class _DummyConnection:
@@ -38,7 +41,7 @@ class _DummyConnection:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    def cursor(self) -> _DummyCursor:
+    def cursor(self, **kwargs: Any) -> _DummyCursor:
         return self._cursor
 
     def commit(self) -> None:
@@ -63,6 +66,9 @@ def _build_store(
     store._config = config  # type: ignore[attr-defined]
     store._events_table = "test_events"  # type: ignore[attr-defined]
     store._session_table = "test_sessions"  # type: ignore[attr-defined]
+    store._app_state_table = "test_app_state"  # type: ignore[attr-defined]
+    store._user_state_table = "test_user_state"  # type: ignore[attr-defined]
+    store._metadata_table = "test_metadata"  # type: ignore[attr-defined]
     store._owner_id_column_ddl = None  # type: ignore[attr-defined]
     store._owner_id_column_name = None  # type: ignore[attr-defined]
     return store, cursor, connection
@@ -72,18 +78,21 @@ def test_sync_append_event_inserts_without_session_update() -> None:
     """append_event must insert a single event without writing session state."""
     store, cursor, connection = _build_store()
     event_record = {
+        "id": "event-1",
+        "app_name": "app",
+        "user_id": "user",
         "session_id": "session-1",
         "invocation_id": "",
-        "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-1"},
+        "event_data": {"id": "event-1"},
     }
 
     store._append_event(event_record)  # type: ignore[arg-type]
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
-    assert params[0] == "session-1"
+    assert params[0] == "event-1"
+    assert params[1] == "session-1"
     assert isinstance(params[4], Jsonb)
     assert connection.commit_called
 
@@ -95,16 +104,79 @@ def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
         {
             "session_id": "session-1",
             "invocation_id": "",
-            "author": "assistant",
             "timestamp": base_time,
-            "event_json": {"id": "event-2"},
+            "event_data": {"id": "event-2"},
+            "id": "event-2",
+            "app_name": "app",
+            "user_id": "user",
         }
     ]
     store, cursor, _ = _build_store(rows)
 
-    result = store._get_events("session-1", after_timestamp=base_time, limit=1)
+    result = store._get_events("app", "user", "session-1", after_timestamp=base_time, limit=1)
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
-    assert params == ("session-1", base_time, 1)
-    assert result[0]["event_json"]["id"] == "event-2"
+    assert params == ("app", "user", "session-1", base_time, 1)
+    assert result[0]["event_data"]["id"] == "event-2"
+
+
+def test_sync_get_events_limit_zero_returns_empty_without_query() -> None:
+    """get_events(limit=0) must return no events without querying."""
+    store, cursor, _ = _build_store()
+
+    result = store._get_events("app", "user", "session-1", limit=0)
+
+    assert result == []
+    assert cursor.execute_calls == []
+
+
+def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() -> None:
+    """append_event_and_update_state must use event_data and optional scoped state."""
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = [
+        {
+            "id": "session-1",
+            "app_name": "app",
+            "user_id": "user",
+            "state": {"session": True},
+            "create_time": base_time,
+            "update_time": base_time,
+        }
+    ]
+    store, cursor, connection = _build_store(rows)
+    event_record = {
+        "id": "event-1",
+        "app_name": "app",
+        "user_id": "user",
+        "session_id": "session-1",
+        "invocation_id": "invoke-1",
+        "timestamp": base_time,
+        "event_data": {"id": "event-1"},
+    }
+
+    result = store._append_event_and_update_state(
+        event_record,  # type: ignore[arg-type]
+        "app",
+        "user",
+        "session-1",
+        {"session": True},
+        app_state={},
+        user_state={"user:theme": "dark"},
+    )
+
+    assert result["id"] == "session-1"
+    assert len(cursor.execute_calls) == 4
+    _, insert_params = cursor.execute_calls[0]
+    _, update_params = cursor.execute_calls[1]
+    _, app_state_params = cursor.execute_calls[2]
+    _, user_state_params = cursor.execute_calls[3]
+    assert insert_params[0] == "event-1"
+    assert isinstance(insert_params[4], Jsonb)
+    assert getattr(update_params[0], "obj", None) == {"session": True}
+    assert update_params[1:4] == ("app", "user", "session-1")
+    assert app_state_params[0] == "app"
+    assert getattr(app_state_params[1], "obj", None) == {}
+    assert user_state_params[:2] == ("app", "user")
+    assert getattr(user_state_params[2], "obj", None) == {"user:theme": "dark"}
+    assert connection.commit_called

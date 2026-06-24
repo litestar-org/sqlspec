@@ -1,7 +1,7 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
@@ -48,76 +48,17 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
         super().__init__(config)
 
-    async def _apply_pragmas(self, connection: Any) -> None:
-        """Apply PRAGMA optimization profile for this connection.
-
-        Args:
-            connection: Aiosqlite connection.
-        """
-        await connection.execute("PRAGMA foreign_keys = ON")
-        await connection.execute("PRAGMA cache_size = -64000")
-        await connection.execute("PRAGMA mmap_size = 30000000")
-        await connection.execute("PRAGMA journal_size_limit = 67108864")
-
-    async def _get_create_sessions_table_sql(self) -> str:
-        """Get SQLite CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-        """
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id TEXT PRIMARY KEY,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL{owner_id_line},
-            state TEXT NOT NULL DEFAULT '{{}}',
-            create_time REAL NOT NULL,
-            update_time REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-        """
-
-    async def _get_create_events_table_sql(self) -> str:
-        """Get SQLite CREATE TABLE SQL for events.
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            invocation_id TEXT,
-            author TEXT,
-            timestamp REAL NOT NULL,
-            event_data TEXT NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        """Get SQLite DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-        """
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         async with self._config.provide_session() as driver:
             await self._apply_pragmas(driver.connection)
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
+            await driver.execute_script(await self._get_create_app_states_table_sql())
+            await driver.execute_script(await self._get_create_user_states_table_sql())
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
+            await driver.commit()
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -162,25 +103,39 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
+    async def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
         """Get session by ID.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
+            renew_for: If positive, touch the session update timestamp while reading.
 
         Returns:
             Session record or None if not found.
         """
+        params = (app_name, user_id, session_id)
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         try:
             async with self._config.provide_connection() as conn:
                 await self._apply_pragmas(conn)
-                cursor = await conn.execute(sql, (session_id,))
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    update_sql = f"""
+                    UPDATE {self._session_table}
+                    SET update_time = ?
+                    WHERE app_name = ? AND user_id = ? AND id = ?
+                    """
+                    await conn.execute(update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), *params))
+                    await conn.commit()
+                cursor = await conn.execute(sql, params)
                 row = await cursor.fetchone()
 
                 if row is None:
@@ -199,10 +154,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return None
             raise
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
         """
@@ -212,12 +169,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(sql, (state_json, now_julian, session_id))
+            await conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             await conn.commit()
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
@@ -269,36 +226,34 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return []
             raise
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events (cascade).
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE id = ?"
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(sql, (session_id,))
+            await conn.execute(sql, (app_name, user_id, session_id))
             await conn.commit()
 
     async def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session.
 
         Args:
-            event_record: Event record with 5 keys: session_id, invocation_id,
-                author, timestamp, event_json.
+            event_record: Event record to store.
         """
-        import uuid
-
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-        event_data_json = to_json(event_record["event_json"])
-        event_id = str(uuid.uuid4())
+        event_data_json = to_json(event_record["event_data"])
 
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, author, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """
 
         async with self._config.provide_connection() as conn:
@@ -306,10 +261,11 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(
                 sql,
                 (
-                    event_id,
+                    event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
-                    event_record["author"],
                     timestamp_julian,
                     event_data_json,
                 ),
@@ -317,7 +273,15 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.commit()
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update the session's durable state.
 
@@ -327,47 +291,78 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         Args:
             event_record: Event record to store.
+            app_name: Application name for scoped state.
+            user_id: User identifier for scoped state.
             session_id: Session identifier whose state should be updated.
             state: Post-append durable state snapshot (temp: keys already
                 stripped by the service layer).
+            app_state: App-scoped state snapshot to upsert when changed.
+            user_state: User-scoped state snapshot to upsert when changed.
         """
-        import uuid
-
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
-        event_data_json = to_json(event_record["event_json"])
+        event_data_json = to_json(event_record["event_data"])
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
-        event_id = str(uuid.uuid4())
 
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, author, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """
 
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
-        WHERE id = ?
+        WHERE app_name = ? AND user_id = ? AND id = ?
         RETURNING id, app_name, user_id, state, create_time, update_time
+        """
+
+        app_upsert_sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        user_upsert_sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
         """
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(
-                insert_sql,
-                (
-                    event_id,
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["author"],
-                    timestamp_julian,
-                    event_data_json,
-                ),
-            )
-            cursor = await conn.execute(update_sql, (state_json, now_julian, session_id))
-            row = await cursor.fetchone()
-            await conn.commit()
+            try:
+                cursor = await conn.execute(update_sql, (state_json, now_julian, app_name, user_id, session_id))
+                row = await cursor.fetchone()
+                if row is not None:
+                    await conn.execute(
+                        insert_sql,
+                        (
+                            event_record["id"],
+                            app_name,
+                            user_id,
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            timestamp_julian,
+                            event_data_json,
+                        ),
+                    )
+                    if app_state is not None:
+                        await conn.execute(app_upsert_sql, (app_name, to_json(app_state), now_julian))
+                    if user_state is not None:
+                        await conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
+            except Exception:
+                await conn.rollback()
+                raise
+            else:
+                if row is None:
+                    await conn.rollback()
+                else:
+                    await conn.commit()
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
@@ -383,11 +378,18 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         )
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session.
 
         Args:
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
             limit: Maximum number of events to return.
@@ -395,8 +397,11 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-        where_clauses = ["session_id = ?"]
-        params: list[Any] = [session_id]
+        if limit == 0:
+            return []
+
+        where_clauses = ["app_name = ?", "user_id = ?", "session_id = ?"]
+        params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
             where_clauses.append("timestamp > ?")
@@ -406,7 +411,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         limit_clause = f" LIMIT {limit}" if limit else ""
 
         sql = f"""
-        SELECT id, session_id, invocation_id, author, timestamp, event_data
+        SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         FROM {self._events_table}
         WHERE {where_clause}
         ORDER BY timestamp ASC{limit_clause}
@@ -420,11 +425,13 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
                 return [
                     EventRecord(
-                        session_id=row[1],
-                        invocation_id=row[2],
-                        author=row[3],
-                        timestamp=_julian_to_datetime(row[4]),
-                        event_json=from_json(row[5]) if row[5] else {},
+                        id=row[0],
+                        app_name=row[1],
+                        user_id=row[2],
+                        session_id=row[3],
+                        invocation_id=row[4],
+                        timestamp=_julian_to_datetime(row[5]),
+                        event_data=from_json(row[6]) if row[6] else {},
                     )
                     for row in rows
                 ]
@@ -432,6 +439,250 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
                 return []
             raise
+
+    async def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than the given timestamp."""
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, (_datetime_to_julian(before),))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                await conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions whose update_time predates the given threshold."""
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, (_datetime_to_julian(updated_before),))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                await conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = ?"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, (app_name,))
+                row = await cursor.fetchone()
+                return from_json(row[0]) if row is not None and row[0] else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        sql = f"""
+        SELECT state
+        FROM {self._user_state_table}
+        WHERE app_name = ? AND user_id = ?
+        """
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, (app_name, user_id))
+                row = await cursor.fetchone()
+                return from_json(row[0]) if row is not None and row[0] else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        sql = f"""
+        INSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_name) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        async with self._config.provide_connection() as conn:
+            await self._apply_pragmas(conn)
+            await conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
+            await conn.commit()
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        sql = f"""
+        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(app_name, user_id) DO UPDATE SET
+            state = excluded.state,
+            update_time = excluded.update_time
+        """
+
+        async with self._config.provide_connection() as conn:
+            await self._apply_pragmas(conn)
+            await conn.execute(
+                sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc)))
+            )
+            await conn.commit()
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = ?"
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, (key,))
+                row = await cursor.fetchone()
+                return str(row[0]) if row is not None else None
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        sql = f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """
+
+        async with self._config.provide_connection() as conn:
+            await self._apply_pragmas(conn)
+            await conn.execute(sql, (key, value))
+            await conn.commit()
+
+    async def _apply_pragmas(self, connection: Any) -> None:
+        """Apply PRAGMA optimization profile for this connection.
+
+        Args:
+            connection: Aiosqlite connection.
+        """
+        await connection.execute("PRAGMA foreign_keys = ON")
+        await connection.execute("PRAGMA cache_size = -64000")
+        await connection.execute("PRAGMA mmap_size = 30000000")
+        await connection.execute("PRAGMA journal_size_limit = 67108864")
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for sessions.
+
+        Returns:
+            SQL statement to create adk_session table with indexes.
+        """
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id TEXT PRIMARY KEY,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL{owner_id_line},
+            state TEXT NOT NULL DEFAULT '{{}}',
+            create_time REAL NOT NULL,
+            update_time REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
+            ON {self._session_table}(app_name, user_id);
+        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
+            ON {self._session_table}(update_time DESC);
+        """
+
+    async def _get_create_events_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for events."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id TEXT PRIMARY KEY,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            invocation_id TEXT,
+            timestamp REAL NOT NULL,
+            event_data TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
+            ON {self._events_table}(app_name, user_id, session_id, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_invocation
+            ON {self._events_table}(invocation_id);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp
+            ON {self._events_table}(timestamp ASC);
+        """
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for app-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+            app_name TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT '{{}}',
+            update_time REAL NOT NULL
+        );
+        """
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for user-scoped state."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT '{{}}',
+            update_time REAL NOT NULL,
+            PRIMARY KEY (app_name, user_id)
+        );
+        """
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for ADK internal metadata."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get SQLite SQL to seed the ADK schema-version metadata row."""
+        return f"""
+        INSERT INTO {self._metadata_table} (key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT(key) DO NOTHING;
+        """
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for app-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for user-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        """Get SQLite DROP TABLE SQL for ADK internal metadata."""
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements."""
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
 
 class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
@@ -460,76 +711,6 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         """
         super().__init__(config)
 
-    async def _get_create_memory_table_sql(self) -> str:
-        """Get SQLite CREATE TABLE SQL for memory entries.
-
-        Returns:
-            SQL statement to create memory table with indexes.
-        """
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        fts_table = ""
-        if self._use_fts:
-            fts_table = f"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
-            content_text,
-            content={self._memory_table},
-            content_rowid=rowid
-        );
-
-        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ai AFTER INSERT ON {self._memory_table} BEGIN
-            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ad AFTER DELETE ON {self._memory_table} BEGIN
-            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
-            VALUES('delete', old.rowid, old.content_text);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_au AFTER UPDATE ON {self._memory_table} BEGIN
-            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
-            VALUES('delete', old.rowid, old.content_text);
-            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
-        END;
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            event_id TEXT NOT NULL UNIQUE,
-            author TEXT{owner_id_line},
-            timestamp REAL NOT NULL,
-            content_json TEXT NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json TEXT,
-            inserted_at REAL NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_table}
-        """
-
-    def _get_drop_memory_table_sql(self) -> "list[str]":
-        """Get SQLite DROP TABLE SQL statements."""
-        statements = [f"DROP TABLE IF EXISTS {self._memory_table}"]
-        if self._use_fts:
-            statements.extend([
-                f"DROP TABLE IF EXISTS {self._memory_table}_fts",
-                f"DROP TRIGGER IF EXISTS {self._memory_table}_ai",
-                f"DROP TRIGGER IF EXISTS {self._memory_table}_ad",
-                f"DROP TRIGGER IF EXISTS {self._memory_table}_au",
-            ])
-        return statements
-
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
 
@@ -540,6 +721,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_memory_table_sql())
+            await driver.commit()
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -674,6 +856,76 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             cursor = await conn.execute(sql, (cutoff,))
             await conn.commit()
             return cursor.rowcount
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get SQLite CREATE TABLE SQL for memory entries.
+
+        Returns:
+            SQL statement to create memory table with indexes.
+        """
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_table = ""
+        if self._use_fts:
+            fts_table = f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
+            content_text,
+            content={self._memory_table},
+            content_rowid=rowid
+        );
+
+        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ai AFTER INSERT ON {self._memory_table} BEGIN
+            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ad AFTER DELETE ON {self._memory_table} BEGIN
+            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
+            VALUES('delete', old.rowid, old.content_text);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_au AFTER UPDATE ON {self._memory_table} BEGIN
+            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
+            VALUES('delete', old.rowid, old.content_text);
+            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+        END;
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            event_id TEXT NOT NULL UNIQUE,
+            author TEXT{owner_id_line},
+            timestamp REAL NOT NULL,
+            content_json TEXT NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json TEXT,
+            inserted_at REAL NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_table}
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements."""
+        statements = [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        if self._use_fts:
+            statements.extend([
+                f"DROP TABLE IF EXISTS {self._memory_table}_fts",
+                f"DROP TRIGGER IF EXISTS {self._memory_table}_ai",
+                f"DROP TRIGGER IF EXISTS {self._memory_table}_ad",
+                f"DROP TRIGGER IF EXISTS {self._memory_table}_au",
+            ])
+        return statements
 
 
 def _datetime_to_julian(dt: datetime) -> float:

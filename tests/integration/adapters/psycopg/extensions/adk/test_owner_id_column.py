@@ -57,7 +57,7 @@ async def psycopg_sync_store_with_fk(postgres_service: "PostgresService") -> "As
         },
     )
     store = PsycopgSyncADKStore(config)
-    await store.create_tables()
+    store.create_tables()
     yield store
 
     with config.provide_connection() as conn, conn.cursor() as cur:
@@ -174,7 +174,7 @@ async def test_async_ddl_includes_owner_id_column(psycopg_async_store_with_fk: P
 
 async def test_sync_ddl_includes_owner_id_column(psycopg_sync_store_with_fk: PsycopgSyncADKStore) -> None:
     """Test that the DDL generation includes the owner_id_column."""
-    ddl = await psycopg_sync_store_with_fk._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
+    ddl = psycopg_sync_store_with_fk._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
 
     assert "account_id VARCHAR(64) NOT NULL" in ddl
     assert "test_sessions_sync_fk" in ddl

@@ -11,7 +11,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlspec.adapters.aiomysql.config import AiomysqlConfig
     from sqlspec.extensions.adk import MemoryRecord
@@ -23,129 +23,28 @@ MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
 class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
-    """MySQL/MariaDB ADK store using aiomysql driver.
-
-    Implements session and event storage for Google Agent Development Kit
-    using MySQL/MariaDB via the aiomysql driver. Provides:
-    - Session state management with JSON storage
-    - Full-event JSON storage (single ``event_json`` column)
-    - Atomic event-append + state-update in one transaction
-    - Microsecond-precision timestamps
-    - Foreign key constraints with cascade delete
-    - Efficient upserts using ON DUPLICATE KEY UPDATE
-    """
+    """MySQL/MariaDB ADK store using aiomysql driver."""
 
     __slots__ = ()
 
     def __init__(self, config: "AiomysqlConfig") -> None:
-        """Initialize aiomysql ADK store.
-
-        Args:
-            config: AiomysqlConfig instance.
-        """
+        """Initialize aiomysql ADK store."""
         super().__init__(config)
 
-    def _parse_owner_id_column_for_mysql(self, column_ddl: str) -> "tuple[str, str]":
-        """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
-
-        MySQL ignores inline REFERENCES syntax in column definitions.
-        This method extracts the column definition and creates a separate
-        FOREIGN KEY constraint.
-
-        Args:
-            column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
-
-        Returns:
-            Tuple of (column_definition, foreign_key_constraint)
-        """
-        references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
-
-        if not references_match:
-            return (column_ddl.strip(), "")
-
-        col_def = column_ddl[: references_match.start()].strip()
-        fk_clause = references_match.group(1).strip()
-        col_name = col_def.split()[0]
-        fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
-
-        return (col_def, fk_constraint)
-
-    async def _get_create_sessions_table_sql(self) -> str:
-        """Get MySQL CREATE TABLE SQL for sessions.
-
-        Returns:
-            SQL statement to create adk_sessions table with indexes.
-        """
-        owner_id_col = ""
-        fk_constraint = ""
-
-        if self._owner_id_column_ddl:
-            col_def, fk_def = self._parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_col = f"{col_def},"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            {owner_id_col}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._session_table}_app_user (app_name, user_id),
-            INDEX idx_{self._session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    async def _get_create_events_table_sql(self) -> str:
-        """Get MySQL CREATE TABLE SQL for events.
-
-        Returns:
-            SQL statement to create adk_events table with indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            author VARCHAR(128) NOT NULL,
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            event_json JSON NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{self._events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _get_drop_tables_sql(self) -> "list[str]":
-        """Get MySQL DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop tables and indexes.
-        """
-        return [f"DROP TABLE IF EXISTS {self._events_table}", f"DROP TABLE IF EXISTS {self._session_table}"]
-
     async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist."""
+        """Create all ADK session tables if they don't exist."""
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._get_create_sessions_table_sql())
             await driver.execute_script(await self._get_create_events_table_sql())
+            await driver.execute_script(await self._get_create_app_states_table_sql())
+            await driver.execute_script(await self._get_create_user_states_table_sql())
+            await driver.execute_script(await self._get_create_metadata_table_sql())
+            await driver.execute_script(await self._get_seed_metadata_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner_id_column (if configured).
-
-        Returns:
-            Created session record.
-        """
+        """Create a new session."""
         state_json = to_json(state)
 
         params: tuple[Any, ...]
@@ -169,21 +68,33 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        return await self.get_session(session_id)  # type: ignore[return-value]
+        result = await self.get_session(app_name, user_id, session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID.
+    async def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by scoped identifiers."""
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            sql = f"""
+            UPDATE {self._session_table}
+            SET update_time = UTC_TIMESTAMP(6)
+            WHERE app_name = %s AND user_id = %s AND id = %s
+            """
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (app_name, user_id, session_id))
+                await conn.commit()
 
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            Session record or None if not found.
-        """
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         try:
@@ -191,74 +102,35 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 self._config.provide_connection() as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
-                await cursor.execute(sql, (session_id,))
+                await cursor.execute(sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
 
                 if row is None:
                     return None
 
-                session_id_val, app_name, user_id, state_json, create_time, update_time = row
-
-                return SessionRecord(
-                    id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
-                    state=from_json(state_json) if isinstance(state_json, str) else state_json,
-                    create_time=create_time,
-                    update_time=update_time,
-                )
-        except pymysql.err.ProgrammingError as e:
-            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return _session_record_from_row(row)
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 return None
             raise
 
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
-
-        Args:
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-        """
-        state_json = to_json(state)
-
+    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
         sql = f"""
         UPDATE {self._session_table}
-        SET state = %s
-        WHERE id = %s
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         async with (
             self._config.provide_connection() as conn,
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
-            await cursor.execute(sql, (state_json, session_id))
-            await conn.commit()
-
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
-
-        Args:
-            session_id: Session identifier.
-        """
-        sql = f"DELETE FROM {self._session_table} WHERE id = %s"
-
-        async with (
-            self._config.provide_connection() as conn,
-            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-        ):
-            await cursor.execute(sql, (session_id,))
+            await cursor.execute(sql, (to_json(state), app_name, user_id, session_id))
             await conn.commit()
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-        """
+        """List sessions for an app, optionally filtered by user."""
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -266,7 +138,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             WHERE app_name = %s
             ORDER BY update_time DESC
             """
-            params: tuple[str, ...] = (app_name,)
+            params: tuple[Any, ...] = (app_name,)
         else:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -283,151 +155,129 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
-
-                return [
-                    SessionRecord(
-                        id=row[0],
-                        app_name=row[1],
-                        user_id=row[2],
-                        state=from_json(row[3]) if isinstance(row[3], str) else row[3],
-                        create_time=row[4],
-                        update_time=row[5],
-                    )
-                    for row in rows
-                ]
-        except pymysql.err.ProgrammingError as e:
-            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return [_session_record_from_row(row) for row in rows]
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 return []
             raise
 
+    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and all associated events."""
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
+            await cursor.execute(sql, (app_name, user_id, session_id))
+            await conn.commit()
+
     async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session.
-
-        Args:
-            event_record: Event record with 5 keys (session_id, invocation_id,
-                author, timestamp, event_json).
-        """
-        event_json = event_record["event_json"]
-        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
-
+        """Append an event to a session."""
         sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
 
         async with (
             self._config.provide_connection() as conn,
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
-            await cursor.execute(
-                sql,
-                (
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["author"],
-                    event_record["timestamp"],
-                    event_json_str,
-                ),
-            )
+            await cursor.execute(sql, _event_insert_params(event_record))
             await conn.commit()
 
     async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state.
-
-        MySQL doesn't support UPDATE...RETURNING; we follow the UPDATE with a
-        SELECT inside the same transaction so callers get the refreshed row
-        in a single round-trip pair (no separate connection acquisition).
-
-        Args:
-            event_record: Event record to store.
-            session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot.
-        """
-        event_json = event_record["event_json"]
-        event_json_str = to_json(event_json) if not isinstance(event_json, str) else event_json
-        state_json = to_json(state)
-
+        """Atomically append an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            session_id, invocation_id, author, timestamp, event_json
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-
         update_sql = f"""
         UPDATE {self._session_table}
-        SET state = %s
-        WHERE id = %s
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
-
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
-        WHERE id = %s
+        WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
         async with (
             self._config.provide_connection() as conn,
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
-            await cursor.execute(
-                insert_sql,
-                (
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["author"],
-                    event_record["timestamp"],
-                    event_json_str,
-                ),
-            )
-            await cursor.execute(update_sql, (state_json, session_id))
-            await cursor.execute(select_sql, (session_id,))
-            row = await cursor.fetchone()
-            await conn.commit()
+            try:
+                await cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+                await cursor.execute(select_sql, (app_name, user_id, session_id))
+                row = await cursor.fetchone()
+                if row is None:
+                    _raise_session_not_found(session_id)
+                await cursor.execute(
+                    insert_sql,
+                    (
+                        event_record["id"],
+                        app_name,
+                        user_id,
+                        session_id,
+                        event_record["invocation_id"],
+                        event_record["timestamp"],
+                        _json_for_storage(event_record["event_data"]),
+                    ),
+                )
+                if app_state is not None:
+                    await cursor.execute(
+                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(app_state))
+                    )
+                if user_state is not None:
+                    await cursor.execute(
+                        _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(user_state))
+                    )
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
-        if row is None:
-            msg = f"Session {session_id} not found during append_event_and_update_state."
-            raise ValueError(msg)
-
-        state_value = row[3]
-        return SessionRecord(
-            id=row[0],
-            app_name=row[1],
-            user_id=row[2],
-            state=from_json(state_value) if isinstance(state_value, str) else state_value,
-            create_time=row[4],
-            update_time=row[5],
-        )
+        return _session_record_from_row(row)
 
     async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
-        """Get events for a session.
+        """Get events for a session."""
+        if limit == 0:
+            return []
 
-        Args:
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-        """
-        where_clauses = ["session_id = %s"]
-        params: list[Any] = [session_id]
-
+        where_clauses = ["app_name = %s", "user_id = %s", "session_id = %s"]
+        params: list[Any] = [app_name, user_id, session_id]
         if after_timestamp is not None:
             where_clauses.append("timestamp > %s")
             params.append(after_timestamp)
-
-        where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit else ""
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = " LIMIT %s"
+            params.append(limit)
 
         sql = f"""
-        SELECT session_id, invocation_id, author, timestamp, event_json
+        SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         FROM {self._events_table}
-        WHERE {where_clause}
+        WHERE {" AND ".join(where_clauses)}
         ORDER BY timestamp ASC{limit_clause}
         """
 
@@ -438,41 +288,171 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
-
-                return [
-                    EventRecord(
-                        session_id=row[0],
-                        invocation_id=row[1],
-                        author=row[2],
-                        timestamp=row[3],
-                        event_json=from_json(row[4]) if isinstance(row[4], str) else row[4],
-                    )
-                    for row in rows
-                ]
-        except pymysql.err.ProgrammingError as e:
-            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return [_event_record_from_row(row) for row in rows]
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 return []
             raise
 
+    async def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
 
-def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
-    """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (before,))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
-    Args:
-        column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE".
+    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the threshold."""
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
 
-    Returns:
-        Tuple of (column_definition, foreign_key_constraint).
-    """
-    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
-    if not references_match:
-        return (column_ddl.strip(), "")
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (updated_before,))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
-    col_def = column_ddl[: references_match.start()].strip()
-    fk_clause = references_match.group(1).strip()
-    col_name = col_def.split()[0]
-    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
-    return (col_def, fk_constraint)
+    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (app_name,))
+                row = await cursor.fetchone()
+                return _json_dict(row[0]) if row is not None else None
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return None
+            raise
+
+    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (app_name, user_id))
+                row = await cursor.fetchone()
+                return _json_dict(row[0]) if row is not None else None
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return None
+            raise
+
+    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
+            await cursor.execute(_mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state)))
+            await conn.commit()
+
+    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
+            await cursor.execute(
+                _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(state))
+            )
+            await conn.commit()
+
+    async def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (key,))
+                row = await cursor.fetchone()
+                return str(row[0]) if row is not None else None
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return None
+            raise
+
+    async def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
+        async with (
+            self._config.provide_connection() as conn,
+            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+        ):
+            await cursor.execute(_mysql_upsert_metadata_sql(self._metadata_table), (key, value))
+            await conn.commit()
+
+    async def _get_create_sessions_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for sessions."""
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
+
+    async def _get_create_events_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for events."""
+        return _mysql_events_ddl(self._events_table, self._session_table)
+
+    async def _get_create_app_states_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for app-scoped state."""
+        return _mysql_app_state_ddl(self._app_state_table)
+
+    async def _get_create_user_states_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for user-scoped state."""
+        return _mysql_user_state_ddl(self._user_state_table)
+
+    async def _get_create_metadata_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for ADK metadata."""
+        return _mysql_metadata_ddl(self._metadata_table)
+
+    async def _get_seed_metadata_sql(self) -> str:
+        """Get MySQL metadata seed SQL."""
+        return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        """Get MySQL DROP TABLE SQL for app-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        """Get MySQL DROP TABLE SQL for user-scoped state."""
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        """Get MySQL DROP TABLE SQL for ADK metadata."""
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _get_drop_tables_sql(self) -> "list[str]":
+        """Get MySQL DROP TABLE SQL statements."""
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
 
 
 class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
@@ -483,42 +463,6 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
     def __init__(self, config: "AiomysqlConfig") -> None:
         """Initialize aiomysql memory store."""
         super().__init__(config)
-
-    async def _get_create_memory_table_sql(self) -> str:
-        """Get MySQL CREATE TABLE SQL for memory entries."""
-        owner_id_line = ""
-        fk_constraint = ""
-        if self._owner_id_column_ddl:
-            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
-            owner_id_line = f",\n            {col_def}"
-            if fk_def:
-                fk_constraint = f",\n            {fk_def}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
-            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _get_drop_memory_table_sql(self) -> "list[str]":
-        """Get MySQL DROP TABLE SQL statements."""
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -664,3 +608,206 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             await cursor.execute(sql, (days,))
             await conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def _get_create_memory_table_sql(self) -> str:
+        """Get MySQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        fk_constraint = ""
+        if self._owner_id_column_ddl:
+            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            owner_id_line = f",\n            {col_def}"
+            if fk_def:
+                fk_constraint = f",\n            {fk_def}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            content_json JSON NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSON,
+            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
+            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+    def _get_drop_memory_table_sql(self) -> "list[str]":
+        """Get MySQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+
+def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
+    """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
+
+    Args:
+        column_ddl: Column DDL like "tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE".
+
+    Returns:
+        Tuple of (column_definition, foreign_key_constraint).
+    """
+    references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
+    if not references_match:
+        return (column_ddl.strip(), "")
+
+    col_def = column_ddl[: references_match.start()].strip()
+    fk_clause = references_match.group(1).strip()
+    col_name = col_def.split()[0]
+    fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
+    return (col_def, fk_constraint)
+
+
+def _is_mysql_table_missing(exc: BaseException) -> bool:
+    args = getattr(exc, "args", ())
+    return "doesn't exist" in str(exc) or bool(args and args[0] == MYSQL_TABLE_NOT_FOUND_ERROR)
+
+
+def _json_for_storage(value: Any) -> str:
+    return value if isinstance(value, str) else to_json(value)
+
+
+def _json_dict(value: Any) -> "dict[str, Any]":
+    if isinstance(value, bytearray):
+        value = bytes(value)
+    if isinstance(value, (bytes, str)):
+        return cast("dict[str, Any]", from_json(value))
+    return cast("dict[str, Any]", value)
+
+
+def _session_record_from_row(row: Any) -> SessionRecord:
+    return SessionRecord(
+        id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
+    )
+
+
+def _event_record_from_row(row: Any) -> EventRecord:
+    return EventRecord(
+        id=row[0],
+        app_name=row[1],
+        user_id=row[2],
+        session_id=row[3],
+        invocation_id=row[4],
+        timestamp=row[5],
+        event_data=_json_dict(row[6]),
+    )
+
+
+def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
+    return (
+        event_record["id"],
+        event_record["app_name"],
+        event_record["user_id"],
+        event_record["session_id"],
+        event_record["invocation_id"],
+        event_record["timestamp"],
+        _json_for_storage(event_record["event_data"]),
+    )
+
+
+def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -> str:
+    owner_id_line = ""
+    fk_constraint = ""
+    if owner_id_column_ddl:
+        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
+        owner_id_line = f"\n            {col_def},"
+        if fk_def:
+            fk_constraint = f",\n            {fk_def}"
+
+    return f"""
+        CREATE TABLE IF NOT EXISTS {session_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,{owner_id_line}
+            state JSON NOT NULL,
+            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+            INDEX idx_{session_table}_app_user (app_name, user_id),
+            INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+
+def _mysql_events_ddl(events_table: str, session_table: str) -> str:
+    return f"""
+        CREATE TABLE IF NOT EXISTS {events_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            session_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256) NOT NULL,
+            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            event_data JSON NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
+            INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC),
+            INDEX idx_{events_table}_session (session_id, timestamp ASC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+
+def _mysql_app_state_ddl(app_state_table: str) -> str:
+    return f"""
+        CREATE TABLE IF NOT EXISTS {app_state_table} (
+            app_name VARCHAR(128) PRIMARY KEY,
+            state JSON NOT NULL,
+            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+
+def _mysql_user_state_ddl(user_state_table: str) -> str:
+    return f"""
+        CREATE TABLE IF NOT EXISTS {user_state_table} (
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            state JSON NOT NULL,
+            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (app_name, user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+
+def _mysql_metadata_ddl(metadata_table: str) -> str:
+    return f"""
+        CREATE TABLE IF NOT EXISTS {metadata_table} (
+            `key` VARCHAR(128) PRIMARY KEY,
+            value VARCHAR(512) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+
+
+def _mysql_upsert_app_state_sql(app_state_table: str) -> str:
+    return f"""
+        INSERT INTO {app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+
+def _mysql_upsert_user_state_sql(user_state_table: str) -> str:
+    return f"""
+        INSERT INTO {user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
+        ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
+        """
+
+
+def _mysql_upsert_metadata_sql(metadata_table: str) -> str:
+    return f"""
+        INSERT INTO {metadata_table} (`key`, value)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE value = VALUES(value)
+        """
+
+
+def _raise_session_not_found(session_id: str) -> None:
+    msg = f"Session {session_id} not found during append_event_and_update_state."
+    raise ValueError(msg)

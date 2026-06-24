@@ -101,7 +101,7 @@ def initial_state() -> "dict[str, Any]":
     return {"key": "value", "count": 0}
 
 
-async def test_owner_id_column_integer_reference(
+def test_owner_id_column_integer_reference(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test owner ID column with INTEGER foreign key."""
@@ -115,9 +115,9 @@ async def test_owner_id_column_integer_reference(
         },
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    session = await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
+    session = store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
 
     assert session["id"] == session_id
     assert session["app_name"] == app_name
@@ -126,13 +126,13 @@ async def test_owner_id_column_integer_reference(
     assert isinstance(session["create_time"], datetime)
     assert isinstance(session["update_time"], datetime)
 
-    retrieved = await store.get_session(session_id)
+    retrieved = store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
     assert retrieved["state"] == initial_state
 
 
-async def test_owner_id_column_text_reference(
+def test_owner_id_column_text_reference(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test owner ID column with TEXT foreign key."""
@@ -145,19 +145,19 @@ async def test_owner_id_column_text_reference(
         extension_config={"adk": {"owner_id_column": "user_ref TEXT REFERENCES users(username) ON DELETE CASCADE"}},
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    session = await store.create_session(session_id, app_name, user_id, initial_state, owner_id=username)
+    session = store.create_session(session_id, app_name, user_id, initial_state, owner_id=username)
 
     assert session["id"] == session_id
     assert session["state"] == initial_state
 
-    retrieved = await store.get_session(session_id)
+    retrieved = store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
 
 
-async def test_owner_id_column_cascade_delete(
+def test_owner_id_column_cascade_delete(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test CASCADE DELETE on owner ID column."""
@@ -171,11 +171,11 @@ async def test_owner_id_column_cascade_delete(
         },
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
+    store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
 
-    retrieved_before = await store.get_session(session_id)
+    retrieved_before = store.get_session(app_name, user_id, session_id)
     assert retrieved_before is not None
 
     with sqlite_config.provide_connection() as conn:
@@ -183,11 +183,11 @@ async def test_owner_id_column_cascade_delete(
         conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
         conn.commit()
 
-    retrieved_after = await store.get_session(session_id)
+    retrieved_after = store.get_session(app_name, user_id, session_id)
     assert retrieved_after is None
 
 
-async def test_owner_id_column_constraint_violation(
+def test_owner_id_column_constraint_violation(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test FK constraint violation with invalid tenant_id."""
@@ -198,17 +198,17 @@ async def test_owner_id_column_constraint_violation(
         extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
     invalid_tenant_id = 99999
 
     with pytest.raises(Exception) as exc_info:
-        await store.create_session(session_id, app_name, user_id, initial_state, owner_id=invalid_tenant_id)
+        store.create_session(session_id, app_name, user_id, initial_state, owner_id=invalid_tenant_id)
 
     assert "FOREIGN KEY constraint failed" in str(exc_info.value) or "constraint" in str(exc_info.value).lower()
 
 
-async def test_owner_id_column_not_null_constraint(
+def test_owner_id_column_not_null_constraint(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test NOT NULL constraint on owner ID column."""
@@ -219,15 +219,15 @@ async def test_owner_id_column_not_null_constraint(
         extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
     with pytest.raises(Exception) as exc_info:
-        await store.create_session(session_id, app_name, user_id, initial_state, owner_id=None)
+        store.create_session(session_id, app_name, user_id, initial_state, owner_id=None)
 
     assert "NOT NULL constraint failed" in str(exc_info.value) or "not null" in str(exc_info.value).lower()
 
 
-async def test_owner_id_column_nullable(
+def test_owner_id_column_nullable(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test nullable owner ID column."""
@@ -239,33 +239,33 @@ async def test_owner_id_column_nullable(
         extension_config={"adk": {"owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"}},
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    session_without_fk = await store.create_session(str(uuid.uuid4()), app_name, user_id, initial_state, owner_id=None)
+    session_without_fk = store.create_session(str(uuid.uuid4()), app_name, user_id, initial_state, owner_id=None)
     assert session_without_fk is not None
 
-    session_with_fk = await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
+    session_with_fk = store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
     assert session_with_fk is not None
 
 
-async def test_without_owner_id_column(
+def test_without_owner_id_column(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test store without owner ID column configured."""
     store = SqliteADKStore(sqlite_config)
-    await store.create_tables()
+    store.create_tables()
 
-    session = await store.create_session(session_id, app_name, user_id, initial_state)
+    session = store.create_session(session_id, app_name, user_id, initial_state)
 
     assert session["id"] == session_id
     assert session["state"] == initial_state
 
-    retrieved = await store.get_session(session_id)
+    retrieved = store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
 
 
-async def test_foreign_keys_pragma_enabled(
+def test_foreign_keys_pragma_enabled(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test that PRAGMA foreign_keys = ON is properly enabled."""
@@ -277,9 +277,9 @@ async def test_foreign_keys_pragma_enabled(
         extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"}},
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    await store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
+    store.create_session(session_id, app_name, user_id, initial_state, owner_id=tenant_id)
 
     with sqlite_config.provide_connection() as conn:
         cursor = conn.execute("PRAGMA foreign_keys")
@@ -287,7 +287,7 @@ async def test_foreign_keys_pragma_enabled(
         assert fk_enabled == 1
 
 
-async def test_multi_tenant_isolation(
+def test_multi_tenant_isolation(
     sqlite_config: SqliteConfig, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test multi-tenant isolation with different tenant IDs."""
@@ -302,16 +302,16 @@ async def test_multi_tenant_isolation(
         },
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
     session1_id = str(uuid.uuid4())
     session2_id = str(uuid.uuid4())
 
-    await store.create_session(session1_id, app_name, user_id, initial_state, owner_id=tenant1_id)
-    await store.create_session(session2_id, app_name, user_id, {"data": "tenant2"}, owner_id=tenant2_id)
+    store.create_session(session1_id, app_name, user_id, initial_state, owner_id=tenant1_id)
+    store.create_session(session2_id, app_name, user_id, {"data": "tenant2"}, owner_id=tenant2_id)
 
-    session1 = await store.get_session(session1_id)
-    session2 = await store.get_session(session2_id)
+    session1 = store.get_session(app_name, user_id, session1_id)
+    session2 = store.get_session(app_name, user_id, session2_id)
 
     assert session1 is not None
     assert session2 is not None
@@ -323,14 +323,14 @@ async def test_multi_tenant_isolation(
         conn.execute("DELETE FROM tenants WHERE id = ?", (tenant1_id,))
         conn.commit()
 
-    session1_after = await store.get_session(session1_id)
-    session2_after = await store.get_session(session2_id)
+    session1_after = store.get_session(app_name, user_id, session1_id)
+    session2_after = store.get_session(app_name, user_id, session2_id)
 
     assert session1_after is None
     assert session2_after is not None
 
 
-async def test_owner_id_column_ddl_extraction(sqlite_config: SqliteConfig) -> None:
+def test_owner_id_column_ddl_extraction(sqlite_config: SqliteConfig) -> None:
     """Test that column name is correctly extracted from DDL."""
     config_with_extension = SqliteConfig(
         connection_config=sqlite_config.connection_config,
@@ -344,7 +344,7 @@ async def test_owner_id_column_ddl_extraction(sqlite_config: SqliteConfig) -> No
     assert store._owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"  # pyright: ignore[reportPrivateUsage]
 
 
-async def test_create_session_without_fk_when_not_required(
+def test_create_session_without_fk_when_not_required(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test creating session without owner_id when column is nullable."""
@@ -355,15 +355,15 @@ async def test_create_session_without_fk_when_not_required(
         extension_config={"adk": {"owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"}},
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    session = await store.create_session(session_id, app_name, user_id, initial_state)
+    session = store.create_session(session_id, app_name, user_id, initial_state)
 
     assert session["id"] == session_id
     assert session["state"] == initial_state
 
 
-async def test_owner_id_with_default_value(
+def test_owner_id_with_default_value(
     sqlite_config: SqliteConfig, session_id: str, app_name: str, user_id: str, initial_state: "dict[str, Any]"
 ) -> None:
     """Test owner ID column with DEFAULT value."""
@@ -377,10 +377,10 @@ async def test_owner_id_with_default_value(
         },
     )
     store = SqliteADKStore(config_with_extension)
-    await store.create_tables()
+    store.create_tables()
 
-    session = await store.create_session(session_id, app_name, user_id, initial_state)
+    session = store.create_session(session_id, app_name, user_id, initial_state)
 
     assert session["id"] == session_id
-    retrieved = await store.get_session(session_id)
+    retrieved = store.get_session(app_name, user_id, session_id)
     assert retrieved is not None

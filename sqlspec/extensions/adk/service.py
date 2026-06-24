@@ -1,9 +1,10 @@
 """SQLSpec-backed session service for Google ADK."""
 
+import inspect
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
 
@@ -11,15 +12,22 @@ from sqlspec.extensions.adk.converters import (
     compute_update_marker,
     event_to_record,
     filter_temp_state,
+    merge_scoped_state,
     record_to_session,
+    split_scoped_state,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from google.adk.events.event import Event
     from google.adk.sessions import Session
 
-    from sqlspec.extensions.adk.store import BaseAsyncADKStore
+    from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
+
+    ADKStore = BaseAsyncADKStore | BaseSyncADKStore
 
 __all__ = ("SQLSpecSessionService",)
 
@@ -36,7 +44,7 @@ class SQLSpecSessionService(BaseSessionService):
         store: Database store implementation.
     """
 
-    def __init__(self, store: "BaseAsyncADKStore") -> None:
+    def __init__(self, store: "ADKStore") -> None:
         """Initialize the session service.
 
         Args:
@@ -45,7 +53,7 @@ class SQLSpecSessionService(BaseSessionService):
         self._store = store
 
     @property
-    def store(self) -> "BaseAsyncADKStore":
+    def store(self) -> "ADKStore":
         """Return the database store."""
         return self._store
 
@@ -70,10 +78,25 @@ class SQLSpecSessionService(BaseSessionService):
             state = {}
 
         persisted_state = filter_temp_state(state)
+        app_state_delta, user_state_delta, session_state = split_scoped_state(persisted_state)
+        current_app_state = await self._call_store("get_app_state", app_name)
+        current_user_state = await self._call_store("get_user_state", app_name, user_id)
 
-        record = await self._store.create_session(
-            session_id=session_id, app_name=app_name, user_id=user_id, state=persisted_state
+        app_state = dict(current_app_state or {})
+        if app_state_delta:
+            app_state.update(app_state_delta)
+        user_state = dict(current_user_state or {})
+        if user_state_delta:
+            user_state.update(user_state_delta)
+
+        record = await self._call_store(
+            "create_session", session_id=session_id, app_name=app_name, user_id=user_id, state=session_state
         )
+        if app_state_delta:
+            await self._call_store("upsert_app_state", app_name, app_state)
+        if user_state_delta:
+            await self._call_store("upsert_user_state", app_name, user_id, user_state)
+        record["state"] = merge_scoped_state(record["state"], app_state, user_state)
         log_with_context(
             logger, logging.DEBUG, "adk.session.create", app_name=app_name, session_id=session_id, has_state=bool(state)
         )
@@ -94,7 +117,7 @@ class SQLSpecSessionService(BaseSessionService):
         Returns:
             Session object if found, None otherwise.
         """
-        record = await self._store.get_session(session_id)
+        record = await self._call_store("get_session", app_name, user_id, session_id)
 
         if not record:
             log_with_context(
@@ -108,6 +131,10 @@ class SQLSpecSessionService(BaseSessionService):
             )
             return None
 
+        app_state = await self._call_store("get_app_state", app_name)
+        user_state = await self._call_store("get_user_state", app_name, user_id)
+        record["state"] = merge_scoped_state(record["state"], app_state, user_state)
+
         after_timestamp = None
         limit = None
 
@@ -116,7 +143,12 @@ class SQLSpecSessionService(BaseSessionService):
                 after_timestamp = datetime.fromtimestamp(config.after_timestamp, tz=timezone.utc)
             limit = config.num_recent_events
 
-        events = await self._store.get_events(session_id=session_id, after_timestamp=after_timestamp, limit=limit)
+        if limit == 0:
+            events = []
+        else:
+            events = await self._call_store(
+                "get_events", app_name, user_id, session_id, after_timestamp=after_timestamp, limit=limit
+            )
         log_with_context(
             logger,
             logging.DEBUG,
@@ -129,6 +161,24 @@ class SQLSpecSessionService(BaseSessionService):
 
         return record_to_session(record, events)
 
+    async def get_user_state(self, *, app_name: str, user_id: str) -> "dict[str, Any]":
+        """Get user-scoped state for an app and user.
+
+        ADK's service API returns unprefixed user state keys, while SQLSpec
+        stores the durable state using ADK's documented ``user:`` prefix.
+
+        Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
+
+        Returns:
+            User-scoped state with ``user:`` prefixes removed.
+        """
+        state = await self._call_store("get_user_state", app_name, user_id)
+        if not state:
+            return {}
+        return {key.removeprefix("user:") if key.startswith("user:") else key: value for key, value in state.items()}
+
     async def list_sessions(self, *, app_name: str, user_id: str | None = None) -> "ListSessionsResponse":
         """List all sessions for an app, optionally filtered by user.
 
@@ -139,7 +189,7 @@ class SQLSpecSessionService(BaseSessionService):
         Returns:
             Response containing list of sessions (without events).
         """
-        records = await self._store.list_sessions(app_name=app_name, user_id=user_id)
+        records = await self._call_store("list_sessions", app_name, user_id=user_id)
 
         sessions = [record_to_session(record, events=[]) for record in records]
         log_with_context(
@@ -161,7 +211,7 @@ class SQLSpecSessionService(BaseSessionService):
             user_id: ID of the user.
             session_id: Session identifier.
         """
-        record = await self._store.get_session(session_id)
+        record = await self._call_store("get_session", app_name, user_id, session_id)
 
         if not record:
             log_with_context(
@@ -175,7 +225,7 @@ class SQLSpecSessionService(BaseSessionService):
             )
             return
 
-        await self._store.delete_session(session_id)
+        await self._call_store("delete_session", app_name, user_id, session_id)
         log_with_context(
             logger, logging.DEBUG, "adk.session.delete", app_name=app_name, session_id=session_id, deleted=True
         )
@@ -214,16 +264,12 @@ class SQLSpecSessionService(BaseSessionService):
         self._apply_temp_state(session, event)
         event = self._trim_temp_delta_state(event)
 
-        event_record = event_to_record(event=event, session_id=session.id)
-
-        # Build durable state: current state minus temp keys, plus the
-        # event's state delta (temp keys already stripped by _trim above).
-        durable_state = filter_temp_state(session.state)
-        if event.actions and event.actions.state_delta:
-            durable_state.update(event.actions.state_delta)
+        event_record = event_to_record(
+            event=event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
+        )
 
         # --- Stale-session detection ---
-        current_record = await self._store.get_session(session.id)
+        current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
         if current_record is None:
             msg = f"Session {session.id} not found."
             raise ValueError(msg)
@@ -243,10 +289,34 @@ class SQLSpecSessionService(BaseSessionService):
             )
             raise ValueError(msg)
 
+        state_delta = (event.actions.state_delta if event.actions else None) or {}
+        app_state_delta, user_state_delta, session_state_delta = split_scoped_state(filter_temp_state(state_delta))
+
+        _, _, session_state = split_scoped_state(filter_temp_state(session.state))
+        session_state.update(session_state_delta)
+
+        app_state = None
+        if app_state_delta:
+            app_state = dict(await self._call_store("get_app_state", session.app_name) or {})
+            app_state.update(app_state_delta)
+
+        user_state = None
+        if user_state_delta:
+            user_state = dict(await self._call_store("get_user_state", session.app_name, session.user_id) or {})
+            user_state.update(user_state_delta)
+
         # --- Persist event and state atomically ---
-        updated_record = await self._store.append_event_and_update_state(
-            event_record=event_record, session_id=session.id, state=durable_state
+        updated_record = await self._call_store(
+            "append_event_and_update_state",
+            event_record,
+            session.app_name,
+            session.user_id,
+            session.id,
+            session_state,
+            app_state=app_state,
+            user_state=user_state,
         )
+        updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
         # Use the returned record directly — saves a round-trip vs a follow-up get_session().
         session.last_update_time = updated_record["update_time"].timestamp()
@@ -261,3 +331,13 @@ class SQLSpecSessionService(BaseSessionService):
         )
 
         return event
+
+    async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Call an async store method or offload a sync store method."""
+        method = getattr(self._store, method_name)
+        if inspect.iscoroutinefunction(method):
+            return await method(*args, **kwargs)
+        sync_method = method
+        if TYPE_CHECKING:
+            sync_method = cast("Callable[..., Any]", method)
+        return await async_(sync_method)(*args, **kwargs)

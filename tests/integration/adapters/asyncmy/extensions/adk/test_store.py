@@ -54,12 +54,10 @@ async def test_storage_types_verification(asyncmy_adk_store: AsyncmyADKStore) ->
         event_columns = await cursor.fetchall()
         event_col_names = [col[0] for col in event_columns]
 
-        # New 5-column schema: session_id, invocation_id, author, timestamp, event_json
         assert "session_id" in event_col_names
         assert "invocation_id" in event_col_names
-        assert "author" in event_col_names
         assert "timestamp" in event_col_names
-        assert "event_json" in event_col_names
+        assert "event_data" in event_col_names
 
         timestamp_col = next(col for col in event_columns if col[0] == "timestamp")
         assert "timestamp(6)" in timestamp_col[2].lower(), "timestamp must be TIMESTAMP(6) for microseconds"
@@ -78,15 +76,17 @@ async def test_timestamp_precision(asyncmy_adk_store: AsyncmyADKStore) -> None:
 
     event_time = datetime.now(timezone.utc)
     event: EventRecord = {
+        "id": "event-micro",
+        "app_name": app_name,
+        "user_id": user_id,
         "session_id": session_id,
         "invocation_id": "inv-micro",
-        "author": "system",
         "timestamp": event_time,
-        "event_json": {"app_name": app_name},
+        "event_data": {"app_name": app_name, "author": "system"},
     }
     await asyncmy_adk_store.append_event(event)
 
-    events = await asyncmy_adk_store.get_events(session_id)
+    events = await asyncmy_adk_store.get_events(app_name, user_id, session_id)
     assert len(events) == 1
     assert hasattr(events[0]["timestamp"], "microsecond")
 
@@ -123,7 +123,7 @@ async def test_owner_id_constraint_enforcement(asyncmy_adk_store_with_fk: Asyncm
         session_id=session_id, app_name=app_name, user_id=user_id, state={"tenant": "one"}, owner_id=1
     )
 
-    session = await asyncmy_adk_store_with_fk.get_session(session_id)
+    session = await asyncmy_adk_store_with_fk.get_session(app_name, user_id, session_id)
     assert session is not None
 
     with pytest.raises(Exception):
@@ -140,14 +140,14 @@ async def test_owner_id_cascade_delete(asyncmy_adk_store_with_fk: AsyncmyADKStor
         session_id="tenant1-session", app_name="test-app", user_id="user1", state={"data": "test"}, owner_id=1
     )
 
-    session_before = await asyncmy_adk_store_with_fk.get_session("tenant1-session")
+    session_before = await asyncmy_adk_store_with_fk.get_session("test-app", "user1", "tenant1-session")
     assert session_before is not None
 
     async with config.provide_connection() as conn, conn.cursor() as cursor:
         await cursor.execute("DELETE FROM test_tenants WHERE id = 1")
         await conn.commit()
 
-    session_after = await asyncmy_adk_store_with_fk.get_session("tenant1-session")
+    session_after = await asyncmy_adk_store_with_fk.get_session("test-app", "user1", "tenant1-session")
     assert session_after is None
 
 

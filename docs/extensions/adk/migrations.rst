@@ -55,11 +55,11 @@ If you are upgrading from a pre-clean-break version of the ADK extension,
 note the following schema changes:
 
 - **Events table**: The column layout changed to full-event JSON storage.
-  The ``event_json`` column now stores the entire ADK Event as a JSON blob.
-  Individual event columns (``content``, ``actions``, ``branch``, etc.) have
-  been replaced by indexed scalar columns (``invocation_id``, ``author``,
-  ``timestamp``) plus ``event_json``.
-- **Artifact table**: New table (``adk_artifact_versions``) for artifact
+  Legacy pre-clean-break schemas used ``event_json`` for the event payload.
+  The clean-break schema stores the full ADK Event in ``event_data`` alongside
+  indexed scalar columns (``id``, ``app_name``, ``user_id``, ``session_id``,
+  ``invocation_id``, ``timestamp``).
+- **Artifact table**: New table (``adk_artifact``) for artifact
   metadata. Create this table when enabling the artifact service.
 - **BigQuery**: Removed. Migrate to Spanner, PostgreSQL, or any other
   supported backend.

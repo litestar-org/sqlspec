@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import pytest
@@ -29,7 +29,7 @@ def spanner_adk_config(spanner_service: SpannerService, spanner_database: "Datab
 
 
 @pytest.fixture
-async def spanner_adk_store(spanner_adk_config: SpannerSyncConfig) -> AsyncGenerator[SpannerSyncADKStore, None]:
+def spanner_adk_store(spanner_adk_config: SpannerSyncConfig) -> Generator[SpannerSyncADKStore, None, None]:
     store = SpannerSyncADKStore(spanner_adk_config)
-    await store.create_tables()
+    store.create_tables()
     yield store

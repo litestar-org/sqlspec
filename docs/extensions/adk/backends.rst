@@ -115,10 +115,10 @@ Status Definitions
 
 Current scoped-state boundary
    The shared session service strips ``temp:`` keys before persistence.
-   ``app:`` and ``user:`` keys are preserved in each session's state JSON, but
-   current SQLSpec ADK stores do not yet persist them in shared app/user state
-   buckets across sessions. This is a shared store-contract boundary, not a
-   SQLite-specific limitation.
+   ``app:`` keys are persisted in the app-scoped state table and ``user:`` keys
+   are persisted in the user-scoped state table. Session-local keys remain in
+   the session row. Loaded sessions merge those scopes back into the ADK state
+   view.
 
 **Removed**
    Previously available but no longer supported. See the removal notice for
@@ -298,9 +298,9 @@ All backends are configured through ``extension_config["adk"]``:
        connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "adk": {
-               "session_table": "adk_sessions",
-               "events_table": "adk_events",
-               "memory_table": "adk_memory_entries",
+               "session_table": "adk_session",
+               "events_table": "adk_event",
+               "memory_table": "adk_memory",
                "memory_use_fts": True,
                "owner_id_column": "tenant_id INTEGER NOT NULL",
            }

@@ -9,6 +9,128 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.51.0 - ADK 2.0 clean-break store contract
+------------------------------------------------------------------------------
+
+**Breaking changes:**
+
+* The ADK session and event store contract is rebuilt for Google ADK 2.0
+  (verified through ``google-adk`` 2.3.0). Sessions are now keyed by
+  ``(app_name, user_id, session_id)`` across every adapter, and the session
+  service APIs (``create_session``, ``get_session``, ``list_sessions``,
+  ``delete_session``) are keyword-only.
+* ``get_session()``, ``delete_session()``, and ``update_session_state()`` on
+  the store now require ``app_name`` and ``user_id`` in addition to
+  ``session_id``. ``update_session_state(app_name, user_id, session_id,
+  state)`` replaces the former two-argument form.
+* The event payload column was renamed from ``event_json`` to ``event_data``
+  on every ADK adapter store.
+* Session state is split into scoped tables. Alongside ``adk_session`` and
+  ``adk_event``, stores now manage ``adk_app_state``, ``adk_user_state``, and
+  ``adk_internal_metadata``.
+* Migration ``0002_reset_adk_tables`` is destructive: it unconditionally drops
+  legacy ADK tables (sessions, events, app/user state, metadata, memory) and
+  recreates them in the 2.0 shape. Back up ADK data before upgrading.
+
+**Added:**
+
+* Scoped-state accessors on every ADK store: ``get_app_state``,
+  ``get_user_state``, ``upsert_app_state``, ``upsert_user_state``,
+  ``get_metadata``, and ``set_metadata``.
+* ``append_event_and_update_state()`` accepts optional ``app_state`` and
+  ``user_state`` deltas and applies them atomically with the session and event
+  write, returning the updated ``SessionRecord``.
+
+**Fixed:**
+
+* Removed a dead ``storage_uri`` key from the artifact-store config
+  normalization; the artifact storage URI is supplied to ``ADKArtifactService``
+  through its constructor and was never read from the store config.
+
+v0.50.1 - DuckDB extension lifecycle and SQLGlot builder modernization
+------------------------------------------------------------------------------
+
+**Changed:**
+
+* Modernized the SQLGlot builder code paths.
+
+**Fixed:**
+
+* Separated DuckDB extension installation from loading with a best-effort
+  lifecycle, so a failing optional extension no longer aborts connection setup.
+
+v0.50.0 - Adapter config modernization, row streaming, and fetch tuning
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Native row streaming via ``select_stream()`` across all adapters, built on a
+  new Arrow-streaming foundation with Arrow-native streaming paths.
+* Driver-level cache and fetch tuning controls.
+* SQLite runtime connection setup.
+* Oracle sparse ``VECTOR`` passthrough.
+* SQL-file parameter metadata annotations (``-- param:``).
+
+**Changed:**
+
+* Modernized adapter configuration across the full adapter suite: sqlite,
+  aiosqlite, asyncpg, psycopg, psqlpy, oracledb, duckdb, asyncmy, aiomysql,
+  mysqlconnector, pymysql, adbc, arrow-odbc, bigquery, spanner, mssql, and the
+  cockroach (asyncpg/psycopg) configs.
+
+**Fixed:**
+
+* Honored optimizer flags in the query builder.
+* Preserved the ADBC driver-manager configuration.
+
+v0.49.1 - Transaction context-manager propagation
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* ``begin_transaction`` context managers no longer suppress exceptions raised
+  inside the block.
+
+v0.49.0 - Driver-contract matrix consolidation
+------------------------------------------------------------------------------
+
+**Changed:**
+
+* Consolidated the adapter suite into a shared driver-contract test matrix as
+  part of a mypyc and code-quality overhaul.
+
+**Fixed:**
+
+* Normalized dialect identifier bindings.
+* Generated Oracle-safe parameter names.
+
+v0.48.2 - Filter-provider deepcopy fix
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Dropped the filter-provider modules from mypyc compilation to restore
+  ``copy.deepcopy`` support for providers.
+
+v0.48.1 - deepcopy and pickle for compiled value objects
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Supported ``copy.deepcopy`` and ``pickle`` on mypyc-compiled value objects.
+
+v0.48.0 - Arrow ODBC and mssql-python adapters, migration schemas
+------------------------------------------------------------------------------
+
+**Added:**
+
+* New ``arrow_odbc`` and ``mssql_python`` adapters.
+* Support for specifying a schema for migrations.
+
+**Fixed:**
+
+* Repaired filter providers and adapter regressions.
+
 v0.47.0 - Persistent listeners, schema builders, and performance polish
 ------------------------------------------------------------------------------
 
