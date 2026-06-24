@@ -1,6 +1,7 @@
 """Unit tests for portal provider and portal manager."""
 
 import asyncio
+import contextvars
 import queue
 from collections.abc import Callable, Coroutine, Generator
 from typing import Any
@@ -97,6 +98,23 @@ def test_portal_provider_call(async_multiply: Callable[[int], Coroutine[Any, Any
     assert result == 10
 
     provider.stop()
+
+
+def test_portal_provider_call_preserves_caller_contextvars() -> None:
+    """PortalProvider.call propagates caller context into the portal coroutine."""
+    request_id: contextvars.ContextVar[str] = contextvars.ContextVar("portal_request_id")
+    token = request_id.set("portal-context")
+
+    async def read_context() -> str:
+        return request_id.get()
+
+    provider = PortalProvider()
+    provider.start()
+    try:
+        assert provider.call(read_context) == "portal-context"
+    finally:
+        provider.stop()
+        request_id.reset(token)
 
 
 def test_portal_provider_call_after_stop(async_add: Callable[[int, int], Coroutine[Any, Any, int]]) -> None:
@@ -254,6 +272,8 @@ def test_portal_manager_restarts_after_pid_change(monkeypatch: Any) -> None:
 
     assert portal2 is not portal1
     assert provider2 is not provider1
+    assert provider1 is not None
+    assert not provider1.is_running
 
     manager.stop()
 

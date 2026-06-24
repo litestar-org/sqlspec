@@ -9,6 +9,7 @@ capacity limiting, and async context management.
 import asyncio
 import concurrent.futures
 import contextvars
+import inspect
 import threading
 import time
 from typing import Any
@@ -100,6 +101,30 @@ def test_run_basic() -> None:
 
     result = async_function(5)
     assert result == 10
+
+
+def test_async_public_signature_exposes_executor_parameter() -> None:
+    """async_ keeps executor as an additive keyword-only parameter."""
+    signature = inspect.signature(async_)
+
+    assert list(signature.parameters) == ["function", "limiter", "executor"]
+    assert signature.parameters["limiter"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["executor"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["executor"].default is None
+
+
+def test_wrappers_preserve_wrapped_function_signature_metadata() -> None:
+    """Public wrapper factories preserve callable metadata for introspection."""
+
+    def sync_function(value: int, *, flag: bool = False) -> str:
+        return f"{value}:{flag}"
+
+    async def async_function(value: int, *, flag: bool = False) -> str:
+        return f"{value}:{flag}"
+
+    for wrapper in (async_(sync_function), ensure_async_(sync_function), run_(async_function), await_(async_function)):
+        assert wrapper.__name__ in {"sync_function", "async_function"}
+        assert inspect.signature(wrapper) == inspect.signature(sync_function)
 
 
 def test_run_with_exception() -> None:
