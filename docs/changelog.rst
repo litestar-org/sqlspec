@@ -9,6 +9,25 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added typed environment parsing helpers in ``sqlspec.utils.env``.
+* Added ``executor=`` support to ``sqlspec.utils.sync_tools.async_()`` and
+  opt-in process-wide bounded async bridge controls via
+  ``SQLSPEC_ASYNC_THREAD_LIMIT``, ``enable_default_async_thread_pool()``,
+  ``set_default_async_executor()``, ``get_default_async_executor()``, and
+  ``shutdown_default_async_executor()``.
+
+**Fixed:**
+
+* Preserved ``contextvars`` when ``async_()`` routes sync work through
+  explicit or shared executors.
+* Documented the migration path for downstream applications that used local
+  async bridge shims only to cap thread usage.
+
 v0.51.0 - ADK 2.0 clean-break store contract
 ------------------------------------------------------------------------------
 

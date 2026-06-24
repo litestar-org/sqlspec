@@ -13,6 +13,86 @@ helper documents service-backed scenarios for the cache and fetch controls:
 
    uv run python tools/scripts/bench_tuning.py --list
 
+Async bridge thread limits
+==========================
+
+``sqlspec.utils.sync_tools.async_()`` keeps its historical default behavior unless
+you opt into a shared executor. With no ``executor`` argument and no SQLSpec
+default executor configured, SQLSpec delegates to ``asyncio.to_thread()`` and uses
+the current event loop's default executor.
+
+Use an explicit executor when one call site or service already owns the worker
+pool:
+
+.. code-block:: python
+
+   from concurrent.futures import ThreadPoolExecutor
+
+   from sqlspec.utils.sync_tools import async_
+
+   executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="app-sql")
+   run_blocking_query = async_(blocking_query, executor=executor)
+
+   result = await run_blocking_query()
+
+For process-wide control, set ``SQLSPEC_ASYNC_THREAD_LIMIT`` before SQLSpec first
+uses ``async_()``:
+
+.. code-block:: bash
+
+   SQLSPEC_ASYNC_THREAD_LIMIT=8
+
+The environment variable opts ``async_()`` into a SQLSpec-managed
+``ThreadPoolExecutor`` shared by every event loop in the process. This is useful
+for services that run multiple long-lived loops and want one bounded async bridge
+pool instead of one default executor per loop.
+
+Programmatic controls are available when environment configuration is not a good
+fit:
+
+.. code-block:: python
+
+   from sqlspec.utils.sync_tools import (
+       enable_default_async_thread_pool,
+       set_default_async_executor,
+       shutdown_default_async_executor,
+   )
+
+   enable_default_async_thread_pool(max_workers=8)
+
+   # Or route through an application-owned executor. SQLSpec will not shut this
+   # executor down for you.
+   set_default_async_executor(app_executor)
+
+   # Optional during application shutdown; SQLSpec also registers an atexit hook.
+   shutdown_default_async_executor(wait=False)
+
+Explicit ``executor=`` values win over every configured default. A caller-owned
+default executor set with ``set_default_async_executor()`` wins over the
+environment-managed pool. SQLSpec only shuts down pools it creates; caller-owned
+executors are cleared from SQLSpec state, not shut down. Both caller-owned and
+managed defaults are PID-aware, so forked children never reuse a parent process's
+worker pool.
+
+All async bridge paths preserve ``contextvars``. ``asyncio.to_thread()`` provides
+that behavior on the default path, and SQLSpec copies the caller context before
+using ``run_in_executor()`` for explicit or shared executors.
+
+Downstream shim migration
+-------------------------
+
+Applications that carried a local ``async_`` shim only to cap worker threads can
+usually remove it:
+
+* Replace local shim imports with ``from sqlspec.utils.sync_tools import async_``.
+* Set ``SQLSPEC_ASYNC_THREAD_LIMIT`` for process-wide bounded behavior, or call
+  ``enable_default_async_thread_pool(max_workers=...)`` during startup.
+* If the application already owns a shared executor, pass it with
+  ``async_(fn, executor=executor)`` or register it with
+  ``set_default_async_executor(executor)``.
+* Remove local ``contextvars.copy_context()`` wrapping; SQLSpec preserves caller
+  context on every offload path.
+
 Cache and fetch controls
 ========================
 
