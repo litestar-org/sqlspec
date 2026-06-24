@@ -6,16 +6,20 @@ for adapter implementations that need to support both sync and async patterns.
 """
 
 import asyncio
+import atexit
 import concurrent.futures
+import contextvars
 import functools
 import inspect
 import os
 import sys
+import threading
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from typing_extensions import ParamSpec
 
+from sqlspec.utils.env import get_env
 from sqlspec.utils.module_loader import module_available
 from sqlspec.utils.portal import get_global_portal
 
@@ -32,6 +36,10 @@ else:
 ReturnT = TypeVar("ReturnT")
 ParamSpecT = ParamSpec("ParamSpecT")
 T = TypeVar("T")
+
+DEFAULT_ASYNC_THREAD_LIMIT = 8
+ASYNC_THREAD_LIMIT_ENV = "SQLSPEC_ASYNC_THREAD_LIMIT"
+_ASYNC_THREAD_NAME_PREFIX = "sqlspec-async"
 
 
 class NoValue:
@@ -99,6 +107,106 @@ class CapacityLimiter:
 
 
 _default_limiter = CapacityLimiter(1000)
+_default_async_executor: concurrent.futures.Executor | None = None
+_default_async_executor_pid: int | None = None
+_managed_async_executor: concurrent.futures.ThreadPoolExecutor | None = None
+_managed_async_executor_enabled: bool = False
+_managed_async_executor_lock = threading.Lock()
+_managed_async_executor_max_workers: int | None = None
+_managed_async_executor_pid: int | None = None
+
+
+def set_default_async_executor(executor: "concurrent.futures.Executor | None") -> None:
+    """Set a caller-owned process-local default executor for ``async_``.
+
+    SQLSpec never shuts down caller-provided executors. If a process fork is
+    detected later, the stored executor is cleared instead of reused.
+
+    Args:
+        executor: Caller-owned executor to use by default, or ``None`` to clear it.
+    """
+    global _default_async_executor, _default_async_executor_pid  # noqa: PLW0603
+    with _managed_async_executor_lock:
+        _default_async_executor = executor
+        _default_async_executor_pid = os.getpid() if executor is not None else None
+
+
+def enable_default_async_thread_pool(max_workers: int | None = None) -> None:
+    """Enable SQLSpec's managed default executor for ``async_``.
+
+    Args:
+        max_workers: Optional worker limit. When omitted, ``SQLSPEC_ASYNC_THREAD_LIMIT``
+            is read, falling back to ``DEFAULT_ASYNC_THREAD_LIMIT``.
+    """
+    global _managed_async_executor_enabled, _managed_async_executor_max_workers  # noqa: PLW0603
+    with _managed_async_executor_lock:
+        _managed_async_executor_enabled = True
+        _managed_async_executor_max_workers = max_workers
+        _ensure_managed_async_executor_locked(os.getpid())
+
+
+def get_default_async_executor() -> "concurrent.futures.Executor | None":
+    """Return the configured or managed default executor for ``async_``.
+
+    Returns:
+        Caller-owned default executor, SQLSpec-managed executor, or ``None``.
+    """
+    global _default_async_executor, _default_async_executor_pid  # noqa: PLW0603
+    current_pid = os.getpid()
+    with _managed_async_executor_lock:
+        if _default_async_executor is not None:
+            if _default_async_executor_pid == current_pid:
+                return _default_async_executor
+            _default_async_executor = None
+            _default_async_executor_pid = None
+
+        if _managed_async_executor_enabled or ASYNC_THREAD_LIMIT_ENV in os.environ:
+            return _ensure_managed_async_executor_locked(current_pid)
+    return None
+
+
+def shutdown_default_async_executor(wait: bool = False) -> None:
+    """Clear default async executors and shut down SQLSpec-owned pools.
+
+    Args:
+        wait: Whether to wait for SQLSpec-managed executor tasks to finish.
+    """
+    global _default_async_executor, _default_async_executor_pid  # noqa: PLW0603
+    global _managed_async_executor, _managed_async_executor_enabled, _managed_async_executor_max_workers
+    global _managed_async_executor_pid
+    with _managed_async_executor_lock:
+        if _managed_async_executor is not None:
+            _managed_async_executor.shutdown(wait=wait)
+        _managed_async_executor = None
+        _managed_async_executor_enabled = False
+        _managed_async_executor_max_workers = None
+        _managed_async_executor_pid = None
+        _default_async_executor = None
+        _default_async_executor_pid = None
+
+
+def _ensure_managed_async_executor_locked(current_pid: int) -> concurrent.futures.ThreadPoolExecutor:
+    global _managed_async_executor, _managed_async_executor_pid  # noqa: PLW0603
+    if _managed_async_executor is None or _managed_async_executor_pid != current_pid:
+        if _managed_async_executor is not None:
+            _managed_async_executor.shutdown(wait=False)
+        max_workers = _resolve_managed_async_thread_limit()
+        _managed_async_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix=_ASYNC_THREAD_NAME_PREFIX
+        )
+        _managed_async_executor_pid = current_pid
+    return _managed_async_executor
+
+
+def _resolve_managed_async_thread_limit() -> int:
+    if _managed_async_executor_max_workers is None:
+        max_workers = get_env(ASYNC_THREAD_LIMIT_ENV, DEFAULT_ASYNC_THREAD_LIMIT)()
+    else:
+        max_workers = _managed_async_executor_max_workers
+    return max(1, max_workers)
+
+
+atexit.register(shutdown_default_async_executor)
 
 
 class _RunWrapper(Generic[ParamSpecT, ReturnT]):
@@ -161,19 +269,23 @@ def await_(
 
 
 def async_(
-    function: "Callable[ParamSpecT, ReturnT]", *, limiter: "CapacityLimiter | None" = None
+    function: "Callable[ParamSpecT, ReturnT]",
+    *,
+    limiter: "CapacityLimiter | None" = None,
+    executor: "concurrent.futures.Executor | None" = None,
 ) -> "Callable[ParamSpecT, Awaitable[ReturnT]]":
     """Convert a blocking function to an async one using asyncio.to_thread().
 
     Args:
         function: The blocking function to convert.
         limiter: Limit the total number of threads.
+        executor: Optional executor to use instead of the event loop's default thread executor.
 
     Returns:
         An async function that runs the original function in a thread.
     """
 
-    return _AsyncWrapper(function, limiter)
+    return _AsyncWrapper(function, limiter, executor)
 
 
 def ensure_async_(
@@ -238,19 +350,40 @@ class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
 
 
 class _AsyncWrapper(Generic[ParamSpecT, ReturnT]):
-    __slots__ = ("__dict__", "_function", "_limiter")
+    __slots__ = ("__dict__", "_executor", "_function", "_limiter")
 
-    def __init__(self, function: "Callable[ParamSpecT, ReturnT]", limiter: "CapacityLimiter | None") -> None:
+    def __init__(
+        self,
+        function: "Callable[ParamSpecT, ReturnT]",
+        limiter: "CapacityLimiter | None",
+        executor: "concurrent.futures.Executor | None",
+    ) -> None:
+        self._executor = executor
         self._function = function
         self._limiter = limiter
         functools.update_wrapper(self, function)
 
     async def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
-        partial_f = functools.partial(self._function, *args, **kwargs)
+        executor = self._executor if self._executor is not None else get_default_async_executor()
         if self._limiter is not None:
             async with self._limiter:
-                return await asyncio.to_thread(partial_f)
-        return await asyncio.to_thread(partial_f)
+                return await self._run_sync(executor, *args, **kwargs)
+        return await self._run_sync(executor, *args, **kwargs)
+
+    async def _run_sync(
+        self,
+        executor: "concurrent.futures.Executor | None",
+        *args: "ParamSpecT.args",
+        **kwargs: "ParamSpecT.kwargs",
+    ) -> "ReturnT":
+        if executor is None:
+            partial_f = functools.partial(self._function, *args, **kwargs)
+            return await asyncio.to_thread(partial_f)
+
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        call = functools.partial(ctx.run, self._function, *args, **kwargs)
+        return await loop.run_in_executor(executor, call)
 
 
 class _EnsureAsyncWrapper(Generic[ParamSpecT, ReturnT]):

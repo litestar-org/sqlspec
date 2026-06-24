@@ -109,6 +109,7 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@echo "${INFO} Testing mypyc compilation... 🔧"
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/text.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/sync_tools.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/env.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/module_loader.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/cache.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/hashing.py

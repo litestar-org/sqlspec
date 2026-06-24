@@ -233,6 +233,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Hot async bridge helpers are already in the include set.",
     },
+    "sqlspec/utils/env.py": {
+        "classification": "compile_now",
+        "reason": "Typed environment parsing utility is pure runtime logic and feeds compiled async bridge configuration.",
+    },
     "sqlspec/utils/schema.py": {
         "classification": "compile_now",
         "reason": "Core schema conversion path is already compiled and actively optimized.",
