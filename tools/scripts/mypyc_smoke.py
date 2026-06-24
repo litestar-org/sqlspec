@@ -24,8 +24,10 @@ class SmokeImport(NamedTuple):
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("package", "sqlspec"),
+    SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
+    SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
     SmokeImport("sync_driver", "sqlspec.driver._sync", "SyncDriverAdapterBase", True),
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),

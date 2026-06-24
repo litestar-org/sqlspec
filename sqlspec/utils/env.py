@@ -2,22 +2,17 @@
 
 import json
 import os
-from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Final, Generic, TypeVar, cast, get_args, get_origin, overload
+from typing import TYPE_CHECKING, Any, Final, get_args, get_origin, overload
 
-__all__ = (
-    "get_config_val",
-    "get_config_val_with_aliases",
-    "get_env",
-    "get_env_with_aliases",
-    "is_env_set",
-)
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+__all__ = ("get_config_val", "get_config_val_with_aliases", "get_env", "get_env_with_aliases", "is_env_set")
 
 TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "y", "on", "t"})
 FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "n", "off", "f"})
 
-T = TypeVar("T")
 ParseType = bool | int | float | str | Path | list[Any] | dict[str, Any] | None
 
 
@@ -30,18 +25,18 @@ class _UnsetType:
 _UNSET = _UnsetType()
 
 
-class _EnvFactory(Generic[T]):
+class _EnvFactory:
     """Callable factory for delayed environment parsing."""
 
     __slots__ = ("_aliases", "_default", "_key", "_type_hint")
 
-    def __init__(self, key: str, aliases: "Sequence[str]", default: T, type_hint: object) -> None:
+    def __init__(self, key: str, aliases: "Sequence[str]", default: ParseType, type_hint: object) -> None:
         self._aliases = aliases
         self._default = default
         self._key = key
         self._type_hint = type_hint
 
-    def __call__(self) -> T:
+    def __call__(self) -> Any:
         if self._aliases:
             return get_config_val_with_aliases(self._key, self._aliases, self._default, self._type_hint)
         return get_config_val(self._key, self._default, self._type_hint)
@@ -72,13 +67,11 @@ def get_env(key: str, default: list[Any], type_hint: "_UnsetType" = _UNSET) -> "
 
 
 @overload
-def get_env(
-    key: str, default: dict[str, Any], type_hint: "_UnsetType" = _UNSET
-) -> "Callable[[], dict[str, Any]]": ...
+def get_env(key: str, default: dict[str, Any], type_hint: "_UnsetType" = _UNSET) -> "Callable[[], dict[str, Any]]": ...
 
 
 @overload
-def get_env(key: str, default: None, type_hint: "_UnsetType" = _UNSET) -> "Callable[[], None]": ...
+def get_env(key: str, default: None, type_hint: "_UnsetType" = _UNSET) -> "Callable[[], str | None]": ...
 
 
 @overload
@@ -144,7 +137,7 @@ def get_env_with_aliases(
 @overload
 def get_env_with_aliases(
     key: str, aliases: "Sequence[str]", default: None, type_hint: "_UnsetType" = _UNSET
-) -> "Callable[[], None]": ...
+) -> "Callable[[], str | None]": ...
 
 
 @overload
@@ -170,7 +163,43 @@ def get_env_with_aliases(
     return _EnvFactory(key, aliases, default, type_hint)
 
 
-def get_config_val(key: str, default: T, type_hint: object = _UNSET) -> T:
+@overload
+def get_config_val(key: str, default: bool, type_hint: "_UnsetType" = _UNSET) -> bool: ...
+
+
+@overload
+def get_config_val(key: str, default: int, type_hint: "_UnsetType" = _UNSET) -> int: ...
+
+
+@overload
+def get_config_val(key: str, default: float, type_hint: "_UnsetType" = _UNSET) -> float: ...
+
+
+@overload
+def get_config_val(key: str, default: str, type_hint: "_UnsetType" = _UNSET) -> str: ...
+
+
+@overload
+def get_config_val(key: str, default: Path, type_hint: "_UnsetType" = _UNSET) -> Path: ...
+
+
+@overload
+def get_config_val(key: str, default: list[Any], type_hint: "_UnsetType" = _UNSET) -> list[Any]: ...
+
+
+@overload
+def get_config_val(key: str, default: dict[str, Any], type_hint: "_UnsetType" = _UNSET) -> dict[str, Any]: ...
+
+
+@overload
+def get_config_val(key: str, default: None, type_hint: "_UnsetType" = _UNSET) -> "str | None": ...
+
+
+@overload
+def get_config_val(key: str, default: ParseType, type_hint: object) -> Any: ...
+
+
+def get_config_val(key: str, default: ParseType, type_hint: object = _UNSET) -> Any:
     """Parse an environment variable value.
 
     Args:
@@ -186,7 +215,61 @@ def get_config_val(key: str, default: T, type_hint: object = _UNSET) -> T:
     return _parse_value(key, os.path.expandvars(os.environ[key]), default, type_hint)
 
 
-def get_config_val_with_aliases(key: str, aliases: "Sequence[str]", default: T, type_hint: object = _UNSET) -> T:
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: bool, type_hint: "_UnsetType" = _UNSET
+) -> bool: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: int, type_hint: "_UnsetType" = _UNSET
+) -> int: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: float, type_hint: "_UnsetType" = _UNSET
+) -> float: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: str, type_hint: "_UnsetType" = _UNSET
+) -> str: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: Path, type_hint: "_UnsetType" = _UNSET
+) -> Path: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: list[Any], type_hint: "_UnsetType" = _UNSET
+) -> list[Any]: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: dict[str, Any], type_hint: "_UnsetType" = _UNSET
+) -> dict[str, Any]: ...
+
+
+@overload
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: None, type_hint: "_UnsetType" = _UNSET
+) -> "str | None": ...
+
+
+@overload
+def get_config_val_with_aliases(key: str, aliases: "Sequence[str]", default: ParseType, type_hint: object) -> Any: ...
+
+
+def get_config_val_with_aliases(
+    key: str, aliases: "Sequence[str]", default: ParseType, type_hint: object = _UNSET
+) -> Any:
     """Parse a canonical environment variable, falling back to aliases.
 
     Args:
@@ -343,10 +426,10 @@ def _resolve_target(default: Any, type_hint: object) -> tuple[object, object]:
     return type(default), _UNSET
 
 
-def _parse_value(key: str, value: str, default: T, type_hint: object) -> T:
+def _parse_value(key: str, value: str, default: ParseType, type_hint: object) -> Any:
     target_type, item_type = _resolve_target(default, type_hint)
     if target_type is list:
-        return cast("T", _parse_list(key, value, item_type))
+        return _parse_list(key, value, item_type)
     if target_type is dict:
-        return cast("T", _parse_dict(key, value))
-    return cast("T", _parse_basic_type(key, value, target_type))
+        return _parse_dict(key, value)
+    return _parse_basic_type(key, value, target_type)

@@ -1,17 +1,13 @@
 """Tests for environment variable parsing utilities."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from typing_extensions import assert_type
 
-from sqlspec.utils.env import (
-    get_config_val,
-    get_config_val_with_aliases,
-    get_env,
-    get_env_with_aliases,
-    is_env_set,
-)
+from sqlspec.utils.env import get_config_val, get_config_val_with_aliases, get_env, get_env_with_aliases, is_env_set
 
 
 def test_get_env_returns_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,6 +117,25 @@ def test_get_env_uses_list_type_hint_with_none_default(monkeypatch: pytest.Monke
     monkeypatch.setenv("SQLSPEC_LIST_VALUE", "1,2,3")
 
     assert get_env("SQLSPEC_LIST_VALUE", None, list[int])() == [1, 2, 3]
+
+
+def test_get_env_none_default_returns_optional_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SQLSPEC_STRING_VALUE", "configured")
+
+    factory = get_env("SQLSPEC_STRING_VALUE", None)
+    alias_factory = get_env_with_aliases("SQLSPEC_MISSING_VALUE", ("SQLSPEC_STRING_VALUE",), None)
+    config_value = get_config_val("SQLSPEC_STRING_VALUE", None)
+    alias_config_value = get_config_val_with_aliases("SQLSPEC_MISSING_VALUE", ("SQLSPEC_STRING_VALUE",), None)
+
+    assert_type(factory, Callable[[], str | None])
+    assert_type(alias_factory, Callable[[], str | None])
+    assert_type(config_value, str | None)
+    assert_type(alias_config_value, str | None)
+
+    assert factory() == "configured"
+    assert alias_factory() == "configured"
+    assert config_value == "configured"
+    assert alias_config_value == "configured"
 
 
 def test_get_env_parses_json_dict(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -26,8 +26,10 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
 
     assert {
         "package",
+        "async_bridge",
         "core_statement",
         "builder_select",
+        "env_utils",
         "sync_driver",
         "async_driver",
         "storage_registry",
@@ -39,10 +41,12 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
     assert compiled_required == {
         "async_driver",
         "adk_record_types",
+        "async_bridge",
         "builder_select",
         "core_statement",
         "data_dictionary_loader",
         "data_dictionary_registry",
+        "env_utils",
         "event_payload",
         "event_queue",
         "fastapi_providers",
@@ -66,6 +70,8 @@ def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
     assert any(result["module"] == "sqlspec.adapters.sqlite.type_converter" for result in results)
     assert any(result["module"] == "sqlspec.storage.pipeline" for result in results)
     assert any(result["module"] == "sqlspec.migrations.runner" for result in results)
+    assert any(result["module"] == "sqlspec.utils.env" for result in results)
+    assert any(result["module"] == "sqlspec.utils.sync_tools" for result in results)
 
 
 def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) -> None:

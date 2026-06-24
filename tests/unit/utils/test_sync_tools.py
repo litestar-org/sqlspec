@@ -12,7 +12,7 @@ import contextvars
 import inspect
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from typing_extensions import Self
@@ -256,6 +256,14 @@ async def test_async_explicit_executor_runs_on_that_executor() -> None:
         assert (await async_version()).startswith("sqlspec-test-explicit")
 
 
+def test_async_rejects_process_pool_executor() -> None:
+    """async_ requires thread executors because it preserves contextvars."""
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(TypeError, match="ThreadPoolExecutor"):
+            async_(lambda: None, executor=cast("concurrent.futures.ThreadPoolExecutor", executor))
+
+
 async def test_async_explicit_executor_preserves_contextvars() -> None:
     """Explicit run_in_executor path copies caller contextvars."""
     request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id")
@@ -367,6 +375,14 @@ async def test_set_default_async_executor_wins_over_env_managed_pool(monkeypatch
     finally:
         _sync_tools_module.shutdown_default_async_executor()
         caller_executor.shutdown(wait=False)
+
+
+def test_set_default_async_executor_rejects_process_pool_executor() -> None:
+    """Process pools are not valid defaults for the context-preserving bridge."""
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(TypeError, match="ThreadPoolExecutor"):
+            _sync_tools_module.set_default_async_executor(cast("concurrent.futures.ThreadPoolExecutor", executor))
 
 
 def test_default_async_executor_pid_change_rebuilds_managed_and_clears_caller_owned(

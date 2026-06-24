@@ -21,8 +21,8 @@ you opt into a shared executor. With no ``executor`` argument and no SQLSpec
 default executor configured, SQLSpec delegates to ``asyncio.to_thread()`` and uses
 the current event loop's default executor.
 
-Use an explicit executor when one call site or service already owns the worker
-pool:
+Use an explicit ``ThreadPoolExecutor`` when one call site or service already
+owns the worker pool:
 
 .. code-block:: python
 
@@ -60,19 +60,19 @@ fit:
 
    enable_default_async_thread_pool(max_workers=8)
 
-   # Or route through an application-owned executor. SQLSpec will not shut this
-   # executor down for you.
+   # Or route through an application-owned ThreadPoolExecutor. SQLSpec will not
+   # shut this executor down for you.
    set_default_async_executor(app_executor)
 
    # Optional during application shutdown; SQLSpec also registers an atexit hook.
    shutdown_default_async_executor(wait=False)
 
-Explicit ``executor=`` values win over every configured default. A caller-owned
-default executor set with ``set_default_async_executor()`` wins over the
-environment-managed pool. SQLSpec only shuts down pools it creates; caller-owned
-executors are cleared from SQLSpec state, not shut down. Both caller-owned and
-managed defaults are PID-aware, so forked children never reuse a parent process's
-worker pool.
+Explicit ``executor=`` values must be ``ThreadPoolExecutor`` instances and win
+over every configured default. A caller-owned default thread executor set with
+``set_default_async_executor()`` wins over the environment-managed pool. SQLSpec
+only shuts down pools it creates; caller-owned executors are cleared from SQLSpec
+state, not shut down. Both caller-owned and managed defaults are PID-aware, so
+forked children never reuse a parent process's worker pool.
 
 All async bridge paths preserve ``contextvars``. ``asyncio.to_thread()`` provides
 that behavior on the default path, and SQLSpec copies the caller context before
@@ -87,7 +87,7 @@ usually remove it:
 * Replace local shim imports with ``from sqlspec.utils.sync_tools import async_``.
 * Set ``SQLSPEC_ASYNC_THREAD_LIMIT`` for process-wide bounded behavior, or call
   ``enable_default_async_thread_pool(max_workers=...)`` during startup.
-* If the application already owns a shared executor, pass it with
+* If the application already owns a shared ``ThreadPoolExecutor``, pass it with
   ``async_(fn, executor=executor)`` or register it with
   ``set_default_async_executor(executor)``.
 * Remove local ``contextvars.copy_context()`` wrapping; SQLSpec preserves caller

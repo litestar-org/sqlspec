@@ -15,8 +15,8 @@ Unreleased
 **Added:**
 
 * Added typed environment parsing helpers in ``sqlspec.utils.env``.
-* Added ``executor=`` support to ``sqlspec.utils.sync_tools.async_()`` and
-  opt-in process-wide bounded async bridge controls via
+* Added ``ThreadPoolExecutor`` support to ``sqlspec.utils.sync_tools.async_()``
+  and opt-in process-wide bounded async bridge controls via
   ``SQLSPEC_ASYNC_THREAD_LIMIT``, ``enable_default_async_thread_pool()``,
   ``set_default_async_executor()``, ``get_default_async_executor()``, and
   ``shutdown_default_async_executor()``.
