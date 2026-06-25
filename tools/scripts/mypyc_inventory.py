@@ -175,11 +175,17 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/extensions/fastapi/providers.py": {
         "classification": "keep_interpreted",
-        "reason": "Compiled providers crash on copy.deepcopy via mypyc native cls.__new__ -> __init__() chain; providers precompute signatures once per FilterConfig and are cached in dep_cache, so the mypyc win is boot-only.",
+        "reason": (
+            "Provider signature construction stays interpreted; direct mypyc compilation has passed historically, "
+            "but the runtime provider boundary has had compiled-wheel issues."
+        ),
     },
     "sqlspec/extensions/litestar/providers.py": {
         "classification": "keep_interpreted",
-        "reason": "Compiled providers crash on copy.deepcopy via mypyc native cls.__new__ -> __init__() chain; providers precompute signatures once per FilterConfig and are cached in dep_cache, so the mypyc win is boot-only.",
+        "reason": (
+            "Provider signature construction stays interpreted; direct mypyc compilation has passed historically, "
+            "but the runtime provider boundary has had compiled-wheel issues."
+        ),
     },
     "sqlspec/migrations/commands.py": {
         "classification": "keep_interpreted",
@@ -232,6 +238,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/utils/sync_tools.py": {
         "classification": "compile_now",
         "reason": "Hot async bridge helpers are already in the include set.",
+    },
+    "sqlspec/utils/env.py": {
+        "classification": "compile_now",
+        "reason": "Typed environment parsing utility is pure runtime logic and feeds compiled async bridge configuration.",
     },
     "sqlspec/utils/schema.py": {
         "classification": "compile_now",

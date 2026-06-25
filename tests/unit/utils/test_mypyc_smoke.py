@@ -1,10 +1,16 @@
 """Tests for the compiled-wheel smoke matrix."""
 
 import importlib.util
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 
 from pytest import MonkeyPatch
+
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -19,6 +25,20 @@ def _load_mypyc_smoke_module() -> ModuleType:
     return module
 
 
+def _load_mypyc_include_paths() -> set[str]:
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+    include_patterns: Sequence[str] = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["hooks"]["mypyc"][
+        "include"
+    ]
+    paths: set[str] = set()
+    for pattern in include_patterns:
+        if any(marker in pattern for marker in "*?["):
+            paths.update(path.relative_to(PROJECT_ROOT).as_posix() for path in PROJECT_ROOT.glob(pattern))
+        else:
+            paths.add(pattern)
+    return paths
+
+
 def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
     module = _load_mypyc_smoke_module()
 
@@ -26,8 +46,10 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
 
     assert {
         "package",
+        "async_bridge",
         "core_statement",
         "builder_select",
+        "env_utils",
         "sync_driver",
         "async_driver",
         "storage_registry",
@@ -39,14 +61,14 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
     assert compiled_required == {
         "async_driver",
         "adk_record_types",
+        "async_bridge",
         "builder_select",
         "core_statement",
         "data_dictionary_loader",
         "data_dictionary_registry",
+        "env_utils",
         "event_payload",
         "event_queue",
-        "fastapi_providers",
-        "litestar_providers",
         "migration_runner",
         "sqlite_pool",
         "sqlite_type_converter",
@@ -54,6 +76,16 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "storage_pipeline",
         "sync_driver",
     }
+
+
+def test_compiled_smoke_requirements_are_in_mypyc_include_list() -> None:
+    module = _load_mypyc_smoke_module()
+    included_paths = _load_mypyc_include_paths()
+
+    missing = [entry.module.replace(".", "/") + ".py" for entry in module.SMOKE_IMPORTS if entry.require_compiled]
+    missing = [path for path in missing if path not in included_paths]
+
+    assert missing == []
 
 
 def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
@@ -66,6 +98,17 @@ def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
     assert any(result["module"] == "sqlspec.adapters.sqlite.type_converter" for result in results)
     assert any(result["module"] == "sqlspec.storage.pipeline" for result in results)
     assert any(result["module"] == "sqlspec.migrations.runner" for result in results)
+    assert any(result["module"] == "sqlspec.utils.env" for result in results)
+    assert any(result["module"] == "sqlspec.utils.sync_tools" for result in results)
+
+
+def test_construction_checks_build_provider_signatures_without_requiring_compilation() -> None:
+    module = _load_mypyc_smoke_module()
+
+    results = module.run_construction_checks(require_compiled=False)
+
+    assert all(result["imported"] or result["skipped"] for result in results)
+    assert {result["name"] for result in results} == {"fastapi_filter_construction", "litestar_filter_construction"}
 
 
 def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) -> None:
