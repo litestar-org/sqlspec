@@ -174,12 +174,18 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
     },
     "sqlspec/extensions/fastapi/providers.py": {
-        "classification": "compile_now",
-        "reason": "Compiled provider construction is covered by the wheel smoke; dependency signatures are cached per FilterConfig.",
+        "classification": "keep_interpreted",
+        "reason": (
+            "Provider signature construction stays interpreted; direct mypyc compilation has passed historically, "
+            "but the runtime provider boundary has had compiled-wheel issues."
+        ),
     },
     "sqlspec/extensions/litestar/providers.py": {
-        "classification": "compile_now",
-        "reason": "Compiled provider construction is covered by the wheel smoke; dependency signatures are cached per FilterConfig.",
+        "classification": "keep_interpreted",
+        "reason": (
+            "Provider signature construction stays interpreted; direct mypyc compilation has passed historically, "
+            "but the runtime provider boundary has had compiled-wheel issues."
+        ),
     },
     "sqlspec/migrations/commands.py": {
         "classification": "keep_interpreted",

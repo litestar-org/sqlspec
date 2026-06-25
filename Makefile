@@ -142,8 +142,6 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/_types.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/memory/_types.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/artifact/_types.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/fastapi/providers.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/litestar/providers.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/migrations/version.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/observability/_formatting.py
 	@echo "${OK} Mypyc compilation tests passed ✨"

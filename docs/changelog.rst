@@ -9,25 +9,6 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
-------------------------------------------------------------------------------
-
-**Added:**
-
-* Added typed environment parsing helpers in ``sqlspec.utils.env``.
-* Added ``ThreadPoolExecutor`` support to ``sqlspec.utils.sync_tools.async_()``
-  and opt-in process-wide bounded async bridge controls via
-  ``SQLSPEC_ASYNC_THREAD_LIMIT``, ``enable_default_async_thread_pool()``,
-  ``set_default_async_executor()``, ``get_default_async_executor()``, and
-  ``shutdown_default_async_executor()``.
-
-**Fixed:**
-
-* Preserved ``contextvars`` when ``async_()`` routes sync work through
-  explicit or shared executors.
-* Documented the migration path for downstream applications that used local
-  async bridge shims only to cap thread usage.
-
 v0.51.0 - ADK 2.0 clean-break store contract
 ------------------------------------------------------------------------------
 
@@ -53,6 +34,12 @@ v0.51.0 - ADK 2.0 clean-break store contract
 
 **Added:**
 
+* Typed environment parsing helpers in ``sqlspec.utils.env``.
+* ``ThreadPoolExecutor`` support for ``sqlspec.utils.sync_tools.async_()``, plus
+  opt-in bounded async bridge controls through
+  ``SQLSPEC_ASYNC_THREAD_LIMIT``, ``enable_default_async_thread_pool()``,
+  ``set_default_async_executor()``, ``get_default_async_executor()``, and
+  ``shutdown_default_async_executor()``.
 * Scoped-state accessors on every ADK store: ``get_app_state``,
   ``get_user_state``, ``upsert_app_state``, ``upsert_user_state``,
   ``get_metadata``, and ``set_metadata``.
@@ -62,6 +49,8 @@ v0.51.0 - ADK 2.0 clean-break store contract
 
 **Fixed:**
 
+* Preserved ``contextvars`` when ``async_()`` routes sync work through explicit
+  or shared thread executors.
 * Removed a dead ``storage_uri`` key from the artifact-store config
   normalization; the artifact storage URI is supplied to ``ADKArtifactService``
   through its constructor and was never read from the store config.
