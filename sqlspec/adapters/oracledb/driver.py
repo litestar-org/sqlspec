@@ -383,11 +383,32 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
-        cursor.executemany(sql, prepared_parameters)
+        execution_args = statement.statement_config.execution_args or {}
+        batch_errors = bool(execution_args.get("oracle_batch_errors", False))
+        array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
+        cursor.executemany(sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts)
 
         affected_rows = len(prepared_parameters)
+        special_data: "dict[str, Any] | None" = None
+        if batch_errors or array_dml_row_counts:
+            special_data = {}
+            if batch_errors:
+                special_data["oracle_batch_errors"] = [
+                    {
+                        "offset": getattr(error, "offset", None),
+                        "code": getattr(error, "code", None),
+                        "message": getattr(error, "message", str(error)),
+                    }
+                    for error in cursor.getbatcherrors()
+                ]
+            if array_dml_row_counts:
+                row_counts = list(cursor.getarraydmlrowcounts())
+                special_data["oracle_dml_row_counts"] = row_counts
+                affected_rows = sum(row_counts)
 
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+        return self.create_execution_result(
+            cursor, rowcount_override=affected_rows, special_data=special_data, is_many_result=True
+        )
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -934,11 +955,34 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
-        await cursor.executemany(sql, prepared_parameters)
+        execution_args = statement.statement_config.execution_args or {}
+        batch_errors = bool(execution_args.get("oracle_batch_errors", False))
+        array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
+        await cursor.executemany(
+            sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts
+        )
 
         affected_rows = len(prepared_parameters)
+        special_data: "dict[str, Any] | None" = None
+        if batch_errors or array_dml_row_counts:
+            special_data = {}
+            if batch_errors:
+                special_data["oracle_batch_errors"] = [
+                    {
+                        "offset": getattr(error, "offset", None),
+                        "code": getattr(error, "code", None),
+                        "message": getattr(error, "message", str(error)),
+                    }
+                    for error in cursor.getbatcherrors()
+                ]
+            if array_dml_row_counts:
+                row_counts = list(cursor.getarraydmlrowcounts())
+                special_data["oracle_dml_row_counts"] = row_counts
+                affected_rows = sum(row_counts)
 
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+        return self.create_execution_result(
+            cursor, rowcount_override=affected_rows, special_data=special_data, is_many_result=True
+        )
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
