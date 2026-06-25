@@ -9,7 +9,7 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
 
-pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql, pytest.mark.mysqlconnector]
+pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql, pytest.mark.mysql_connector]
 
 
 @pytest.fixture

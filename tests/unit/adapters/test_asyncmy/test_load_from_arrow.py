@@ -1,9 +1,8 @@
-"""Asyncmy load_from_arrow ingest paths (LOAD DATA LOCAL INFILE and executemany)."""
+"""Asyncmy load_from_arrow ingest paths."""
 
 from pathlib import Path
 from typing import Any, cast
 
-import anyio
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -24,14 +23,10 @@ class _FakeCursor:
     def __init__(self) -> None:
         self.execute_calls: list[str] = []
         self.executemany_calls: list[tuple[str, list[Any]]] = []
-        self.loaded_payload: bytes | None = None
         self.rowcount = 0
 
     async def execute(self, sql: str, *_args: Any) -> None:
         self.execute_calls.append(sql)
-        if sql.startswith("LOAD DATA"):
-            path = sql.split("'")[1]
-            self.loaded_payload = await anyio.Path(path).read_bytes()
 
     async def executemany(self, sql: str, params: Any) -> None:
         self.executemany_calls.append((sql, [tuple(row) for row in params]))
@@ -48,28 +43,13 @@ class _FakeConnection:
         return self._cursor
 
 
-def _make_driver(connection: _FakeConnection, *, enable_local_infile: bool) -> AsyncmyDriver:
-    return AsyncmyDriver(
-        connection=cast("Any", connection),
-        driver_features={"storage_capabilities": _CAPS, "enable_local_infile_bulk_load": enable_local_infile},
-    )
+def _make_driver(connection: _FakeConnection) -> AsyncmyDriver:
+    return AsyncmyDriver(connection=cast("Any", connection), driver_features={"storage_capabilities": _CAPS})
 
 
-async def test_load_from_arrow_local_infile_writes_tsv_and_loads() -> None:
+async def test_load_from_arrow_uses_executemany() -> None:
     conn = _FakeConnection()
-    driver = _make_driver(conn, enable_local_infile=True)
-
-    job = await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
-
-    assert job.telemetry["rows_processed"] == 2
-    assert conn._cursor.loaded_payload == b"1\ta\n2\tb\n"
-    assert conn._cursor.execute_calls[0].startswith("LOAD DATA LOCAL INFILE")
-    assert conn._cursor.executemany_calls == []
-
-
-async def test_load_from_arrow_without_feature_uses_executemany() -> None:
-    conn = _FakeConnection()
-    driver = _make_driver(conn, enable_local_infile=False)
+    driver = _make_driver(conn)
 
     job = await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
 
@@ -82,19 +62,19 @@ async def test_load_from_arrow_without_feature_uses_executemany() -> None:
 
 async def test_load_from_arrow_overwrite_truncates_first() -> None:
     conn = _FakeConnection()
-    driver = _make_driver(conn, enable_local_infile=True)
+    driver = _make_driver(conn)
 
     await driver.load_from_arrow("orders", pa.table({"id": [1]}), overwrite=True)
 
     assert conn._cursor.execute_calls[0] == "TRUNCATE TABLE `orders`"
-    assert any(sql.startswith("LOAD DATA") for sql in conn._cursor.execute_calls)
+    assert conn._cursor.executemany_calls[0][0].startswith("INSERT INTO")
 
 
 async def test_load_from_storage_reads_parquet_and_delegates(tmp_path: Path) -> None:
     parquet_path = tmp_path / "data.parquet"
     pq.write_table(pa.table({"id": [1, 2], "name": ["a", "b"]}), parquet_path)
     conn = _FakeConnection()
-    driver = _make_driver(conn, enable_local_infile=False)
+    driver = _make_driver(conn)
 
     job = await driver.load_from_storage("orders", str(parquet_path), file_format="parquet")
 

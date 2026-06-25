@@ -182,7 +182,6 @@ class AsyncmyDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
-    enable_local_infile_bulk_load: NotRequired[bool]
 
 
 class _AsyncmySessionFactory(AsyncPoolSessionFactory):
@@ -296,8 +295,12 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
-        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
-            msg = "enable_local_infile_bulk_load requires local_infile=True and allow_local_infile=True in connection_config."
+        if features_dict.get("enable_local_infile_bulk_load"):
+            msg = (
+                "asyncmy does not currently support SQLSpec's LOAD DATA LOCAL INFILE bulk path reliably. "
+                "Use aiomysql, mysql-connector, or pymysql for LOCAL INFILE bulk loads, or omit "
+                "enable_local_infile_bulk_load to use asyncmy batched executemany."
+            )
             raise ImproperConfigurationError(msg)
 
         super().__init__(
