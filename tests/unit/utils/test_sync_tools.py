@@ -7,7 +7,12 @@ capacity limiting, and async context management.
 """
 
 import asyncio
-from typing import Any
+import concurrent.futures
+import contextvars
+import inspect
+import threading
+import time
+from typing import Any, cast
 
 import pytest
 from typing_extensions import Self
@@ -96,6 +101,30 @@ def test_run_basic() -> None:
 
     result = async_function(5)
     assert result == 10
+
+
+def test_async_public_signature_exposes_executor_parameter() -> None:
+    """async_ keeps executor as an additive keyword-only parameter."""
+    signature = inspect.signature(async_)
+
+    assert list(signature.parameters) == ["function", "limiter", "executor"]
+    assert signature.parameters["limiter"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["executor"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["executor"].default is None
+
+
+def test_wrappers_preserve_wrapped_function_signature_metadata() -> None:
+    """Public wrapper factories preserve callable metadata for introspection."""
+
+    def sync_function(value: int, *, flag: bool = False) -> str:
+        return f"{value}:{flag}"
+
+    async def async_function(value: int, *, flag: bool = False) -> str:
+        return f"{value}:{flag}"
+
+    for wrapper in (async_(sync_function), ensure_async_(sync_function), run_(async_function), await_(async_function)):
+        assert wrapper.__name__ in {"sync_function", "async_function"}
+        assert inspect.signature(wrapper) == inspect.signature(sync_function)
 
 
 def test_run_with_exception() -> None:
@@ -200,6 +229,236 @@ async def test_async_with_limiter() -> None:
     async_version = async_(sync_function, limiter=limiter)
     result = await async_version(2)
     assert result == 10
+
+
+async def test_async_default_path_preserves_contextvars() -> None:
+    """Default async_ offload keeps context propagation through SQLSpec's managed pool."""
+    request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id")
+    request_id.set("default-context")
+
+    def sync_function() -> str:
+        return request_id.get()
+
+    async_version = async_(sync_function)
+
+    assert await async_version() == "default-context"
+
+
+async def test_async_default_uses_managed_pool_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """async_ uses SQLSpec's bounded managed pool by default."""
+    monkeypatch.delenv("SQLSPEC_ASYNC_THREAD_LIMIT", raising=False)
+
+    def sync_function() -> str:
+        return threading.current_thread().name
+
+    try:
+        async_version = async_(sync_function)
+
+        thread_name = await async_version()
+        executor = _sync_tools_module.get_default_async_executor()
+
+        assert thread_name.startswith("sqlspec-async")
+        assert isinstance(executor, concurrent.futures.ThreadPoolExecutor)
+        assert executor._max_workers == _sync_tools_module.DEFAULT_ASYNC_THREAD_LIMIT
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
+
+
+async def test_async_explicit_executor_runs_on_that_executor() -> None:
+    """Explicit executor routes sync work through the caller-provided pool."""
+
+    def sync_function() -> str:
+        return threading.current_thread().name
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="sqlspec-test-explicit") as executor:
+        async_version = async_(sync_function, executor=executor)
+
+        assert (await async_version()).startswith("sqlspec-test-explicit")
+
+
+def test_async_rejects_process_pool_executor() -> None:
+    """async_ requires thread executors because it preserves contextvars."""
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(TypeError, match="ThreadPoolExecutor"):
+            async_(lambda: None, executor=cast("concurrent.futures.ThreadPoolExecutor", executor))
+
+
+async def test_async_explicit_executor_preserves_contextvars() -> None:
+    """Explicit run_in_executor path copies caller contextvars."""
+    request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id")
+    request_id.set("explicit-context")
+
+    def sync_function() -> str:
+        return request_id.get()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        async_version = async_(sync_function, executor=executor)
+
+        assert await async_version() == "explicit-context"
+
+
+async def test_async_limiter_wraps_executor_backed_calls() -> None:
+    """CapacityLimiter applies before dispatching to explicit executors."""
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    limiter = CapacityLimiter(1)
+
+    def sync_function() -> int:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.01)
+        with lock:
+            active -= 1
+        return max_active
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        async_version = async_(sync_function, limiter=limiter, executor=executor)
+
+        results = await asyncio.gather(*(async_version() for _ in range(5)))
+
+    assert results == [1, 1, 1, 1, 1]
+    assert max_active == 1
+
+
+async def test_async_explicit_executor_propagates_exceptions() -> None:
+    """Exceptions from executor-backed calls propagate unchanged."""
+
+    def sync_function() -> None:
+        raise ValueError("executor error")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        async_version = async_(sync_function, executor=executor)
+
+        with pytest.raises(ValueError, match="executor error"):
+            await async_version()
+
+
+async def test_async_env_thread_limit_enables_managed_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SQLSPEC_ASYNC_THREAD_LIMIT configures SQLSpec's managed executor."""
+    monkeypatch.setenv("SQLSPEC_ASYNC_THREAD_LIMIT", "1")
+
+    def sync_function() -> str:
+        return threading.current_thread().name
+
+    try:
+        async_version = async_(sync_function)
+
+        thread_name = await async_version()
+        executor = _sync_tools_module.get_default_async_executor()
+
+        assert thread_name.startswith("sqlspec-async")
+        assert isinstance(executor, concurrent.futures.ThreadPoolExecutor)
+        assert executor._max_workers == 1  # pyright: ignore[reportPrivateUsage]
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
+
+
+def test_enable_default_async_thread_pool_reuses_pool_across_event_loops() -> None:
+    """Programmatic managed pool is process-wide instead of per-event-loop."""
+
+    def sync_function() -> int:
+        return threading.get_ident()
+
+    async def run_sync_function() -> int:
+        return await async_(sync_function)()
+
+    try:
+        _sync_tools_module.enable_default_async_thread_pool(max_workers=1)
+
+        first_thread = asyncio.run(run_sync_function())
+        second_thread = asyncio.run(run_sync_function())
+
+        assert first_thread == second_thread
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
+
+
+async def test_set_default_async_executor_wins_over_env_managed_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Caller-owned default executor takes precedence over env-managed pools."""
+    monkeypatch.setenv("SQLSPEC_ASYNC_THREAD_LIMIT", "1")
+
+    def sync_function() -> str:
+        return threading.current_thread().name
+
+    caller_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="sqlspec-test-caller-owned"
+    )
+    try:
+        _sync_tools_module.set_default_async_executor(caller_executor)
+        async_version = async_(sync_function)
+
+        assert (await async_version()).startswith("sqlspec-test-caller-owned")
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
+        caller_executor.shutdown(wait=False)
+
+
+def test_set_default_async_executor_rejects_process_pool_executor() -> None:
+    """Process pools are not valid defaults for the context-preserving bridge."""
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(TypeError, match="ThreadPoolExecutor"):
+            _sync_tools_module.set_default_async_executor(cast("concurrent.futures.ThreadPoolExecutor", executor))
+
+
+def test_default_async_executor_pid_change_rebuilds_managed_and_clears_caller_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PID changes rebuild managed pools and clear caller-owned defaults."""
+    try:
+        _sync_tools_module.enable_default_async_thread_pool(max_workers=1)
+        managed_executor = _sync_tools_module.get_default_async_executor()
+        monkeypatch.setattr(_sync_tools_module, "_managed_async_executor_pid", -1)
+
+        rebuilt_executor = _sync_tools_module.get_default_async_executor()
+
+        assert rebuilt_executor is not managed_executor
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
+
+    caller_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        _sync_tools_module.set_default_async_executor(caller_executor)
+        monkeypatch.setattr(_sync_tools_module, "_default_async_executor_pid", -1)
+
+        fallback_executor = _sync_tools_module.get_default_async_executor()
+
+        assert fallback_executor is not caller_executor
+        assert isinstance(fallback_executor, concurrent.futures.ThreadPoolExecutor)
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
+        caller_executor.shutdown(wait=False)
+
+
+def test_shutdown_default_async_executor_shuts_down_only_managed_pool() -> None:
+    """Shutdown owns managed pools but leaves caller-owned executors running."""
+    _sync_tools_module.enable_default_async_thread_pool(max_workers=1)
+    managed_executor = _sync_tools_module.get_default_async_executor()
+
+    _sync_tools_module.shutdown_default_async_executor()
+
+    assert isinstance(managed_executor, concurrent.futures.ThreadPoolExecutor)
+    with pytest.raises(RuntimeError, match="cannot schedule new futures"):
+        managed_executor.submit(lambda: None)
+
+    caller_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        _sync_tools_module.set_default_async_executor(caller_executor)
+
+        _sync_tools_module.shutdown_default_async_executor()
+
+        assert caller_executor.submit(lambda: 1).result() == 1
+        next_executor = _sync_tools_module.get_default_async_executor()
+
+        assert next_executor is not caller_executor
+        assert isinstance(next_executor, concurrent.futures.ThreadPoolExecutor)
+    finally:
+        caller_executor.shutdown(wait=False)
+        _sync_tools_module.shutdown_default_async_executor()
 
 
 async def test_ensure_async_with_async_function() -> None:

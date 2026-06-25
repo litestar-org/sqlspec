@@ -16,6 +16,7 @@ from sqlspec.data_dictionary._types import (
     ForeignKeyMetadata,
     IndexMetadata,
     TableMetadata,
+    TableStatisticsMetadata,
     VersionCacheResult,
     VersionInfo,
 )
@@ -32,6 +33,7 @@ __all__ = (
     "ForeignKeyMetadata",
     "IndexMetadata",
     "TableMetadata",
+    "TableStatisticsMetadata",
     "VersionCacheResult",
     "VersionInfo",
     "get_data_dictionary_loader",

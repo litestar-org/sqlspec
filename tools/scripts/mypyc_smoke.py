@@ -24,8 +24,10 @@ class SmokeImport(NamedTuple):
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("package", "sqlspec"),
+    SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
+    SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
     SmokeImport("sync_driver", "sqlspec.driver._sync", "SyncDriverAdapterBase", True),
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
@@ -35,9 +37,9 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
-    SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", True, "fastapi"),
+    SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", False, "fastapi"),
     SmokeImport(
-        "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", True, "litestar"
+        "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", False, "litestar"
     ),
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
@@ -100,17 +102,14 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     return results
 
 
-def _check_litestar_filter_construction(*, require_compiled: bool) -> dict[str, Any]:
+def _check_litestar_filter_construction() -> dict[str, Any]:
     """Construct every paired-annotation Litestar filter provider (issue #475).
 
-    The originally reported failure — ``UnboundLocalError: local variable
-    "before_annotation" referenced before assignment`` — only fires when
-    ``_BeforeAfterFilterProvider.__init__`` runs under a mypyc-compiled wheel.
-    Plain imports do not trigger it, so this check invokes
-    ``create_filter_dependencies`` with a config that drives every provider
-    class with two ``Annotated`` locals: ``_BeforeAfterFilterProvider`` (twice,
-    via ``created_at`` and ``updated_at``), ``_LimitOffsetFilterProvider``,
-    ``_SearchFilterProvider``, and ``_OrderByProvider``.
+    This invokes ``create_filter_dependencies`` with a config that drives every
+    provider class with two ``Annotated`` locals: ``_BeforeAfterFilterProvider``
+    (twice, via ``created_at`` and ``updated_at``),
+    ``_LimitOffsetFilterProvider``, ``_SearchFilterProvider``, and
+    ``_OrderByProvider``. The provider module intentionally remains interpreted.
     """
     result: dict[str, Any] = {
         "name": "litestar_filter_construction",
@@ -118,7 +117,7 @@ def _check_litestar_filter_construction(*, require_compiled: bool) -> dict[str, 
         "attribute": "create_filter_dependencies",
         "imported": False,
         "compiled": False,
-        "compiled_required": require_compiled,
+        "compiled_required": False,
         "error": None,
         "skipped": False,
         "skip_reason": None,
@@ -138,10 +137,6 @@ def _check_litestar_filter_construction(*, require_compiled: bool) -> dict[str, 
 
     result["imported"] = True
     result["compiled"] = is_compiled_module(providers)
-    if require_compiled and not result["compiled"]:
-        result["error"] = "module was imported from Python source, not a compiled extension"
-        return result
-
     config = providers.FilterConfig(
         created_at=True,
         updated_at=True,
@@ -165,9 +160,86 @@ def _check_litestar_filter_construction(*, require_compiled: bool) -> dict[str, 
     return result
 
 
+def _check_fastapi_filter_construction() -> dict[str, Any]:
+    """Construct every generated FastAPI filter provider."""
+    result: dict[str, Any] = {
+        "name": "fastapi_filter_construction",
+        "module": "sqlspec.extensions.fastapi.providers",
+        "attribute": "provide_filters",
+        "imported": False,
+        "compiled": False,
+        "compiled_required": False,
+        "error": None,
+        "skipped": False,
+        "skip_reason": None,
+    }
+    try:
+        providers = importlib.import_module("sqlspec.extensions.fastapi.providers")
+    except ModuleNotFoundError as exc:
+        if _is_missing_optional_dependency(exc.name or "", "fastapi"):
+            result["skipped"] = True
+            result["skip_reason"] = "optional dependency missing: fastapi"
+            return result
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(providers)
+    config = providers.FilterConfig(
+        id_filter=int,
+        created_at=True,
+        updated_at=True,
+        pagination_type="limit_offset",
+        pagination_size=25,
+        search=["name", "email"],
+        search_ignore_case=True,
+        sort_field=["created_at", "name"],
+        sort_order="asc",
+        not_in_fields=[providers.FieldNameType("status")],
+        in_fields=[providers.FieldNameType("role")],
+        null_fields=["deleted_at"],
+        not_null_fields=["published_at"],
+        boolean_fields=["active"],
+        choice_fields=[providers.ChoiceField("kind", ["a", "b"])],
+    )
+    try:
+        dependency = providers.provide_filters(config)
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    signature = getattr(dependency, "__signature__", None)
+    if signature is None:
+        result["error"] = "provide_filters returned dependency without __signature__"
+        return result
+
+    expected = {
+        "active_boolean_filter",
+        "created_filter",
+        "deleted_at_null_filter",
+        "id_filter",
+        "kind_choices_filter",
+        "limit_offset_filter",
+        "order_by_filter",
+        "published_at_not_null_filter",
+        "role_in_filter",
+        "search_filter",
+        "status_not_in_filter",
+        "updated_filter",
+    }
+    missing = sorted(expected - signature.parameters.keys())
+    if missing:
+        result["error"] = f"provide_filters returned without expected parameters: {missing}"
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Run construction-time smoke checks for compiled provider classes."""
-    return [_check_litestar_filter_construction(require_compiled=require_compiled)]
+    """Run construction-time smoke checks for provider classes."""
+    del require_compiled
+    return [_check_fastapi_filter_construction(), _check_litestar_filter_construction()]
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

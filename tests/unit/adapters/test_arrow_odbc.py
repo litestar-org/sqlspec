@@ -17,7 +17,8 @@ from sqlspec.adapters.arrow_odbc import (
     odbc_type_to_arrow,
     resolve_dialect_from_dbms_name,
 )
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
+from sqlspec.exceptions import SQLFileNotFoundError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
@@ -80,10 +81,90 @@ class ErrorConnection(FakeConnection):
     """Connection stub that raises an ODBC driver error."""
 
     def read_arrow_batches(self, **kwargs: Any) -> FakeReader:
+        self.read_calls.append(kwargs)
         raise FakeOdbcError("read failed")
 
     def from_table_to_db(self, source: pa.Table, target: str, chunk_size: int = 1000) -> None:
         raise FakeOdbcError("insert failed")
+
+
+def _empty_table_reader() -> FakeReader:
+    return FakeReader(pa.table({"id": pa.array([], type=pa.int64()), "name": pa.array([], type=pa.string())}))
+
+
+def test_get_columns_probes_arrow_schema_when_query_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing bundled column SQL should fall back to a zero-row Arrow schema probe."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    def read_arrow_batches(**kwargs: Any) -> FakeReader:
+        connection.read_calls.append(kwargs)
+        return _empty_table_reader()
+
+    connection.read_arrow_batches = read_arrow_batches  # type: ignore[assignment]
+
+    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
+        raise SQLFileNotFoundError(name)
+
+    monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
+
+    result = driver.data_dictionary.get_columns(driver, table="items")
+
+    assert [entry["data_type"] for entry in result] == ["BIGINT", "VARCHAR"]
+    assert [entry["ordinal_position"] for entry in result] == [1, 2]
+    assert connection.read_calls[-1]["query"] == 'SELECT * FROM "items" WHERE 1=0'
+
+
+def test_get_columns_probe_quotes_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema-qualified probes should quote both schema and table identifiers."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    def read_arrow_batches(**kwargs: Any) -> FakeReader:
+        connection.read_calls.append(kwargs)
+        return _empty_table_reader()
+
+    connection.read_arrow_batches = read_arrow_batches  # type: ignore[assignment]
+
+    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
+        raise SQLFileNotFoundError(name)
+
+    monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
+
+    result = driver.data_dictionary.get_columns(driver, table="items", schema="dbo")
+
+    assert [entry["schema_name"] for entry in result] == ["dbo", "dbo"]
+    assert connection.read_calls[-1]["query"] == 'SELECT * FROM "dbo"."items" WHERE 1=0'
+
+
+def test_get_columns_schema_wide_does_not_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema-wide missing SQL should stay on the empty SQL fallback and skip probing."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
+        raise SQLFileNotFoundError(name)
+
+    monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
+
+    result = driver.data_dictionary.get_columns(driver)
+
+    assert result == []
+    assert connection.read_calls == []
+
+
+def test_get_columns_probe_failure_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Probe failures should preserve the existing empty-result contract."""
+    connection = ErrorConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
+        raise SQLFileNotFoundError(name)
+
+    monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
+
+    assert driver.data_dictionary.get_columns(driver, table="items") == []
+    assert connection.read_calls[-1]["query"] == 'SELECT * FROM "items" WHERE 1=0'
 
 
 def test_resolve_dialect_from_dbms_name() -> None:

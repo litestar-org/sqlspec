@@ -62,6 +62,7 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
     assert smoke_invocations == [
         "sqlspec/utils/text.py",
         "sqlspec/utils/sync_tools.py",
+        "sqlspec/utils/env.py",
         "sqlspec/utils/module_loader.py",
         "sqlspec/core/cache.py",
         "sqlspec/core/hashing.py",
@@ -132,6 +133,7 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/extensions/adk/artifact/_types.py" in payload["compiled_modules"]
     assert "sqlspec/migrations/runner.py" in payload["compiled_modules"]
     assert "sqlspec/observability/_formatting.py" in payload["compiled_modules"]
+    assert "sqlspec/utils/env.py" in payload["compiled_modules"]
     assert "sqlspec/adapters/asyncpg/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/psycopg/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/cockroach_asyncpg/driver.py" in payload["interpreted_modules"]

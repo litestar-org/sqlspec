@@ -90,7 +90,8 @@ Complete flag set:
 - **Types / codecs**: `supports_json`, `supports_json_native`, `supports_arrays`,
   `supports_native_array_codec`, `supports_vector`, `supports_lob`
 - **Schema / migrations**: `supports_migrations`, `supports_schema_qualified_ddl`,
-  `supports_multi_schema_migrations`, `supports_data_dictionary`
+  `supports_multi_schema_migrations`, `supports_data_dictionary`, `supports_native_metadata`,
+  `supports_native_statistics`
 - **Connectivity / transactions**: `supports_transactions`, `supports_exception_translation`
 - **Lifecycle (config-factory)**: `supports_pooling`, `supports_connection_hook`,
   `supports_connection_instance`, `supports_lowercase_columns`, `supports_uuid_feature`,
