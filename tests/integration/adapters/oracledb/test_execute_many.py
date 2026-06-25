@@ -147,3 +147,75 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_error_handling'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
+
+
+def test_sync_execute_many_batch_errors_surface_metadata(oracle_sync_session: OracleSyncDriver) -> None:
+    """oracle_batch_errors collects per-row failures instead of raising."""
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE batch_err_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("CREATE TABLE batch_err_sync (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    oracle_sync_session.execute("INSERT INTO batch_err_sync (id, name) VALUES (:1, :2)", (2, "existing"))
+    oracle_sync_session.commit()
+
+    config = oracle_sync_session.statement_config.replace(execution_args={"oracle_batch_errors": True})
+    rows = [(1, "a"), (2, "dup"), (3, "c")]
+    result = oracle_sync_session.execute_many(
+        "INSERT INTO batch_err_sync (id, name) VALUES (:1, :2)", rows, statement_config=config
+    )
+
+    assert isinstance(result, SQLResult)
+    assert result.metadata["oracle_batch_errors"]
+    assert result.metadata["oracle_batch_errors"][0]["offset"] == 1
+
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE batch_err_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+
+def test_sync_execute_many_array_dml_row_counts(oracle_sync_session: OracleSyncDriver) -> None:
+    """oracle_array_dml_row_counts surfaces per-statement counts and sums rows_affected."""
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE dml_counts_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("CREATE TABLE dml_counts_sync (id NUMBER PRIMARY KEY, grp NUMBER)")
+    oracle_sync_session.execute_many("INSERT INTO dml_counts_sync (id, grp) VALUES (:1, :2)", [(1, 1), (2, 1), (3, 2)])
+    oracle_sync_session.commit()
+
+    config = oracle_sync_session.statement_config.replace(execution_args={"oracle_array_dml_row_counts": True})
+    result = oracle_sync_session.execute_many(
+        "UPDATE dml_counts_sync SET grp = grp + 10 WHERE grp = :1", [(1,), (2,)], statement_config=config
+    )
+
+    assert isinstance(result, SQLResult)
+    counts = result.metadata["oracle_dml_row_counts"]
+    assert counts == [2, 1]
+    assert result.rows_affected == sum(counts)
+
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE dml_counts_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+
+async def test_async_execute_many_batch_errors_surface_metadata(oracle_async_session: OracleAsyncDriver) -> None:
+    """Async oracle_batch_errors collects per-row failures instead of raising."""
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE batch_err_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    await oracle_async_session.execute_script("CREATE TABLE batch_err_async (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    await oracle_async_session.execute("INSERT INTO batch_err_async (id, name) VALUES (:1, :2)", (2, "existing"))
+    await oracle_async_session.commit()
+
+    config = oracle_async_session.statement_config.replace(execution_args={"oracle_batch_errors": True})
+    rows = [(1, "a"), (2, "dup"), (3, "c")]
+    result = await oracle_async_session.execute_many(
+        "INSERT INTO batch_err_async (id, name) VALUES (:1, :2)", rows, statement_config=config
+    )
+
+    assert isinstance(result, SQLResult)
+    assert result.metadata["oracle_batch_errors"]
+    assert result.metadata["oracle_batch_errors"][0]["offset"] == 1
+
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE batch_err_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )

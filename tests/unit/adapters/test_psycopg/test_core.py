@@ -11,6 +11,7 @@ from typing_extensions import Self
 
 from sqlspec.adapters.psycopg.core import (
     build_async_pipeline_execution_result,
+    build_copy_from_command,
     build_pipeline_execution_result,
     create_mapped_exception,
     default_statement_config,
@@ -58,6 +59,15 @@ def test_resolve_many_rowcount_prefers_precomputed_fallback_for_unsized_paramete
 
     affected_rows = resolve_many_rowcount(cursor, _parameter_stream(), fallback_count=4)
     assert affected_rows == 4
+
+
+def test_build_copy_from_command_preserves_quoted_dots_in_table_identifier() -> None:
+    statement = build_copy_from_command('"analytics.schema"."orders.table"', ["id"])
+
+    rendered = repr(statement)
+    assert "Identifier('analytics.schema')" in rendered
+    assert "Identifier('orders.table')" in rendered
+    assert "Identifier('analytics')" not in rendered
 
 
 def test_create_mapped_exception_dispatches_native_psycopg_error() -> None:

@@ -69,6 +69,7 @@ class _RecordingConnection:
         self.query_calls: list[tuple[str, dict[str, Any]]] = []
         self.query_and_wait_calls: list[tuple[str, dict[str, Any]]] = []
         self.load_file_calls: list[tuple[Any, Any, dict[str, Any]]] = []
+        self.load_json_calls: list[tuple[Any, Any, dict[str, Any]]] = []
         self.load_uri_calls: list[tuple[Any, Any, dict[str, Any]]] = []
         self.query_job = _RecordingJob()
         self.row_iterator = _RecordingRowIterator()
@@ -84,6 +85,10 @@ class _RecordingConnection:
 
     def load_table_from_file(self, file_obj: Any, destination: Any, **kwargs: Any) -> _RecordingJob:
         self.load_file_calls.append((file_obj, destination, kwargs))
+        return self.load_job
+
+    def load_table_from_json(self, json_rows: Any, destination: Any, **kwargs: Any) -> _RecordingJob:
+        self.load_json_calls.append((list(json_rows), destination, kwargs))
         return self.load_job
 
     def load_table_from_uri(self, source_uris: Any, destination: Any, **kwargs: Any) -> _RecordingJob:
@@ -196,6 +201,52 @@ def test_load_from_storage_forwards_retry_and_bounds_result_timeout() -> None:
     assert result.telemetry["rows_processed"] == 0
     assert connection.load_uri_calls[0][2]["retry"] is driver._job_retry
     assert connection.load_uri_calls[0][2]["timeout"] == driver._job_request_timeout()
+    assert connection.load_job.result_calls[0]["timeout"] == driver._job_request_timeout()
+
+
+def test_load_from_storage_normalizes_gcs_scheme_for_uri_load() -> None:
+    connection = _RecordingConnection()
+    connection.load_job = _RecordingJob(statement_type="LOAD")
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 5.0})
+
+    driver.load_from_storage("dataset.table", "gcs://bucket/object.jsonl", file_format="jsonl")
+
+    assert connection.load_uri_calls[0][0] == "gs://bucket/object.jsonl"
+    assert connection.load_file_calls == []
+
+
+def test_load_from_storage_uploads_non_gcs_storage_bytes(monkeypatch: Any) -> None:
+    connection = _RecordingConnection()
+    connection.load_job = _RecordingJob(statement_type="LOAD")
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 5.0})
+    pipeline = SimpleNamespace(stream_read=lambda source: iter([b'{"id": 1}\n']))
+    monkeypatch.setattr(BigQueryDriver, "_storage_pipeline", lambda self: pipeline)
+
+    result = driver.load_from_storage("dataset.table", "s3://bucket/object.jsonl", file_format="jsonl")
+
+    assert result.telemetry["rows_processed"] == 0
+    assert connection.load_uri_calls == []
+    file_obj, destination, kwargs = connection.load_file_calls[0]
+    assert file_obj.getvalue() == b'{"id": 1}\n'
+    assert destination == "dataset.table"
+    assert kwargs["job_config"].source_format == "NEWLINE_DELIMITED_JSON"
+    assert kwargs["timeout"] == driver._job_request_timeout()
+    assert connection.load_job.result_calls[0]["timeout"] == driver._job_request_timeout()
+
+
+def test_load_from_records_uses_bigquery_json_load_api() -> None:
+    connection = _RecordingConnection()
+    connection.load_job = _RecordingJob(statement_type="LOAD")
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"job_result_timeout": 5.0})
+
+    result = driver.load_from_records("dataset.table", [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}])
+
+    assert result.telemetry["rows_processed"] == 0
+    assert connection.load_file_calls == []
+    assert connection.load_json_calls[0][0] == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+    assert connection.load_json_calls[0][1] == "dataset.table"
+    assert connection.load_json_calls[0][2]["job_config"].source_format == "NEWLINE_DELIMITED_JSON"
+    assert connection.load_json_calls[0][2]["timeout"] == driver._job_request_timeout()
     assert connection.load_job.result_calls[0]["timeout"] == driver._job_request_timeout()
 
 

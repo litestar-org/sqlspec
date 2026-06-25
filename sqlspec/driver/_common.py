@@ -44,6 +44,7 @@ from sqlspec.driver._storage_helpers import (
     build_ingest_telemetry,
     coerce_arrow_table,
     create_storage_job,
+    records_to_arrow_table,
 )
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -2153,6 +2154,13 @@ class CommonDriverAttributesMixin:
     def _build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
         """Build telemetry dict from Arrow table statistics."""
         return build_ingest_telemetry(table, format_label=format_label)
+
+    @staticmethod
+    def _records_to_arrow_table(
+        records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]", columns: "list[str] | None"
+    ) -> "ArrowTable":
+        """Normalize dict or positional records into a PyArrow table for ingest."""
+        return records_to_arrow_table(records, columns)
 
     def _attach_partition_telemetry(
         self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"

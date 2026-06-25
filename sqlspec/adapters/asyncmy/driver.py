@@ -319,10 +319,11 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
+            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
             insert_sql = build_insert_statement(table, columns)
             prepared_records = (
                 self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                if self._arrow_table_needs_parameter_preparation(arrow_table)
+                if needs_preparation
                 else records
             )
             exc_handler = self.handle_database_exceptions()

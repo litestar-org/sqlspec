@@ -35,6 +35,7 @@ from sqlspec.adapters.oracledb.core import (
     resolve_row_metadata,
     resolve_rowcount,
     supports_df_batches,
+    supports_direct_path_load,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
@@ -61,7 +62,7 @@ from sqlspec.driver import (
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.text import normalize_identifier, quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
@@ -87,6 +88,17 @@ __all__ = (
 
 
 logger = get_logger(__name__)
+
+
+def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    if len(parts) == 1:
+        return connection.username, parts[0]
+    return ".".join(parts[:-1]), parts[-1]
+
 
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
 # on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
@@ -383,11 +395,32 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
-        cursor.executemany(sql, prepared_parameters)
+        execution_args = statement.statement_config.execution_args or {}
+        batch_errors = bool(execution_args.get("oracle_batch_errors", False))
+        array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
+        cursor.executemany(sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts)
 
         affected_rows = len(prepared_parameters)
+        special_data: dict[str, Any] | None = None
+        if batch_errors or array_dml_row_counts:
+            special_data = {}
+            if batch_errors:
+                special_data["oracle_batch_errors"] = [
+                    {
+                        "offset": getattr(error, "offset", None),
+                        "code": getattr(error, "code", None),
+                        "message": getattr(error, "message", str(error)),
+                    }
+                    for error in cursor.getbatcherrors()
+                ]
+            if array_dml_row_counts:
+                row_counts = list(cursor.getarraydmlrowcounts())
+                special_data["oracle_dml_row_counts"] = row_counts
+                affected_rows = sum(row_counts)
 
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+        return self.create_execution_result(
+            cursor, rowcount_override=affected_rows, special_data=special_data, is_many_result=True
+        )
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -643,18 +676,31 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if overwrite:
             statement = build_truncate_statement(table)
             exc_handler = self.handle_database_exceptions()
-            with exc_handler:
-                self.connection.execute(statement)
+            with self.with_cursor(self.connection) as cursor, exc_handler:
+                cursor.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = build_insert_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                cursor.executemany(statement, records)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            use_direct_path = self.driver_features.get(
+                "enable_direct_path_load", True
+            ) is not False and supports_direct_path_load(self.connection)
+            if use_direct_path:
+                schema_name, table_name = _resolve_direct_path_target(self.connection, table)
+                exc_handler = self.handle_database_exceptions()
+                with exc_handler:
+                    self.connection.direct_path_load(
+                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                    )
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+            else:
+                statement = build_insert_statement(table, columns)
+                exc_handler = self.handle_database_exceptions()
+                with self.with_cursor(self.connection) as cursor, exc_handler:
+                    cursor.executemany(statement, records)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -934,11 +980,34 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
-        await cursor.executemany(sql, prepared_parameters)
+        execution_args = statement.statement_config.execution_args or {}
+        batch_errors = bool(execution_args.get("oracle_batch_errors", False))
+        array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
+        await cursor.executemany(
+            sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts
+        )
 
         affected_rows = len(prepared_parameters)
+        special_data: dict[str, Any] | None = None
+        if batch_errors or array_dml_row_counts:
+            special_data = {}
+            if batch_errors:
+                special_data["oracle_batch_errors"] = [
+                    {
+                        "offset": getattr(error, "offset", None),
+                        "code": getattr(error, "code", None),
+                        "message": getattr(error, "message", str(error)),
+                    }
+                    for error in cursor.getbatcherrors()
+                ]
+            if array_dml_row_counts:
+                row_counts = list(cursor.getarraydmlrowcounts())
+                special_data["oracle_dml_row_counts"] = row_counts
+                affected_rows = sum(row_counts)
 
-        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+        return self.create_execution_result(
+            cursor, rowcount_override=affected_rows, special_data=special_data, is_many_result=True
+        )
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -1205,12 +1274,25 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = build_insert_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            async with self.with_cursor(self.connection) as cursor, exc_handler:
-                await cursor.executemany(statement, records)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            use_direct_path = self.driver_features.get(
+                "enable_direct_path_load", True
+            ) is not False and supports_direct_path_load(self.connection)
+            if use_direct_path:
+                schema_name, table_name = _resolve_direct_path_target(self.connection, table)
+                exc_handler = self.handle_database_exceptions()
+                async with exc_handler:
+                    await self.connection.direct_path_load(
+                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                    )
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+            else:
+                statement = build_insert_statement(table, columns)
+                exc_handler = self.handle_database_exceptions()
+                async with self.with_cursor(self.connection) as cursor, exc_handler:
+                    await cursor.executemany(statement, records)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)

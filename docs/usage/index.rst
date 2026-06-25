@@ -121,5 +121,6 @@ Recommended Path
    filtering
    testing
    etl
+   bulk_ingest
    performance
    ../extensions/index

@@ -12,6 +12,7 @@ from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandl
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -116,6 +117,8 @@ class PyMysqlDriverFeatures(TypedDict):
      Runs after connection creation.
     enable_events: Enable database event channel support.
     events_backend: Event channel backend selection.
+    enable_local_infile_bulk_load: Route load_from_arrow through LOAD DATA LOCAL INFILE.
+     Requires local_infile=True in connection_config.
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -123,6 +126,7 @@ class PyMysqlDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[PyMysqlConnection], None]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    enable_local_infile_bulk_load: NotRequired[bool]
 
 
 class PyMysqlConnectionContext(SyncPoolConnectionContext):
@@ -177,6 +181,10 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         self._user_connection_hook: Callable[[PyMysqlConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
+            msg = "enable_local_infile_bulk_load requires local_infile=True in connection_config."
+            raise ImproperConfigurationError(msg)
 
         super().__init__(
             connection_config=connection_config,

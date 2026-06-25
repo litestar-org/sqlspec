@@ -147,6 +147,10 @@ class SpannerDriverFeatures(TypedDict):
             Defaults to True when extension_config["events"] is configured.
         events_backend: Backend type for event handling.
             Spanner only supports "table_queue" (no native pub/sub).
+        enable_batch_write_api: Route load_from_arrow through the Spanner Batch Write API
+            (Database.mutation_groups().batch_write()) for high-throughput, independently
+            committed mutation groups instead of a single in-transaction insert_or_update.
+            Defaults to False.
     """
 
     enable_uuid_conversion: "NotRequired[bool]"
@@ -159,6 +163,7 @@ class SpannerDriverFeatures(TypedDict):
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
     events_backend: "NotRequired[str]"
+    enable_batch_write_api: "NotRequired[bool]"
 
 
 class SpannerConnectionContext(SyncPoolConnectionContext):
@@ -202,11 +207,12 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
                         txn_id = txn._transaction_id
                     except AttributeError:
                         txn_id = None
+                    mutations = getattr(txn, "_mutations", None)
                     try:
                         committed = txn.committed
                     except AttributeError:
                         committed = None
-                    if txn_id is not None and committed is None:
+                    if committed is None and (txn_id is not None or bool(mutations)):
                         txn.commit()
                 else:
                     try:

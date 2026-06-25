@@ -25,7 +25,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
 
@@ -90,9 +90,8 @@ def format_identifier(identifier: str) -> str:
     if not cleaned:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
-    if "." not in cleaned:
-        return quote_identifier(cleaned)
-    return ".".join(quote_identifier(part) for part in cleaned.split(".") if part)
+    parts = split_qualified_identifier(cleaned, quote_chars='"')
+    return ".".join(quote_identifier(part) for part in parts)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:

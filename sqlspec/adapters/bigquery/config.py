@@ -104,6 +104,9 @@ class BigQueryDriverFeatures(TypedDict):
         query_page_size: Optional page size passed through ``QueryJob.result()`` for SELECT result fetching.
             Non-positive values are ignored by the BigQuery client.
         query_max_results: Optional total row limit passed through ``QueryJob.result()`` for SELECT result fetching.
+        enable_storage_write_api: Route ``load_from_arrow`` (append, ``overwrite=False``) through the
+            BigQuery Storage Write API using native Arrow instead of a Parquet load job. Falls back to
+            the Parquet path on any ``bigquery_storage`` import/availability failure. Defaults to False.
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -118,6 +121,7 @@ class BigQueryDriverFeatures(TypedDict):
     request_timeout: NotRequired[float]
     query_page_size: NotRequired[int]
     query_max_results: NotRequired[int]
+    enable_storage_write_api: NotRequired[bool]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):

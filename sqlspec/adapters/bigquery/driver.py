@@ -6,6 +6,7 @@ type coercion, error handling, and query job management.
 """
 
 import io
+from collections.abc import Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
@@ -18,6 +19,7 @@ from sqlspec.adapters.bigquery.core import (
     BigQueryStreamSource,
     _run_query_and_wait,
     _uses_local_bigquery_endpoint,
+    build_arrow_write_stream_payload,
     build_dml_rowcount,
     build_inlined_script,
     build_load_job_config,
@@ -44,18 +46,20 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.exceptions import MissingDependencyError, StorageCapabilityError
+from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Sequence
 
     from google.api_core.retry import Retry
     from google.cloud import bigquery_storage  # type: ignore[attr-defined, unused-ignore]
     from google.cloud.bigquery import QueryJob, QueryJobConfig
 
+    from sqlspec.adapters.bigquery.core import BigQueryLoadFormat
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, Statement, StatementFilter
     from sqlspec.storage import (
@@ -70,6 +74,22 @@ if TYPE_CHECKING:
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
 
 logger = get_logger(__name__)
+_DATASET_TABLE_PARTS = 2
+_PROJECT_DATASET_TABLE_PARTS = 3
+
+
+def _resolve_storage_write_table_path(table: str, default_project: str) -> tuple[str, str, str]:
+    parts = split_qualified_identifier(table, quote_chars="`", allow_bracket_quotes=False)
+    if len(parts) == 1 and "." in parts[0]:
+        parts = tuple(part for part in parts[0].split(".") if part)
+    if len(parts) == _DATASET_TABLE_PARTS:
+        dataset, table_name = parts
+        return default_project, dataset, table_name
+    if len(parts) == _PROJECT_DATASET_TABLE_PARTS:
+        project, dataset, table_name = parts
+        return project, dataset, table_name
+    msg = f"Storage Write API requires a dataset-qualified table, got '{table}'"
+    raise StorageOperationFailedError(msg)
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -105,6 +125,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_enable_storage_write_api",
         "_job_result_kwargs_defaults",
         "_job_result_timeout",
         "_job_retry",
@@ -146,6 +167,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
         self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
+        self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
 
     def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
         timeout = features.get("request_timeout")
@@ -550,6 +572,24 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
 
+    def load_from_records(
+        self,
+        table: str,
+        records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]",
+        *,
+        columns: "list[str] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load in-memory records through BigQuery's newline-delimited JSON load API."""
+        rows = _records_to_json_rows(records, columns)
+        job_config = build_load_job_config("jsonl", overwrite)
+        job = self.connection.load_table_from_json(
+            rows, table, job_config=job_config, timeout=self._job_request_timeout()
+        )
+        job.result(timeout=self._job_request_timeout())
+        telemetry_payload = build_load_job_telemetry(job, table, format_label="jsonl")
+        return self._create_storage_job(telemetry_payload)
+
     def load_from_arrow(
         self,
         table: str,
@@ -559,11 +599,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data by uploading a temporary Parquet payload to BigQuery."""
+        """Load Arrow data into BigQuery (Parquet load job, or opt-in Storage Write API)."""
 
         self._require_capability("parquet_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         ensure_pyarrow()
+
+        if self._enable_storage_write_api and not overwrite:
+            try:
+                telemetry_payload = self._load_arrow_via_storage_write_api(table, arrow_table)
+            except ImportError as exc:
+                logger.warning("Storage Write API unavailable, falling back to Parquet load job: %s", exc)
+            else:
+                if telemetry:
+                    telemetry_payload.setdefault("extra", {})
+                    telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
+                self._attach_partition_telemetry(telemetry_payload, partitioner)
+                return self._create_storage_job(telemetry_payload)
 
         import pyarrow.parquet as pq
 
@@ -582,28 +634,75 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
 
+    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
+        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
+        from google.cloud import bigquery_storage_v1
+        from google.cloud.bigquery_storage_v1 import types
+
+        project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
+
+        credentials = getattr(self.connection, "_credentials", None)
+        client = bigquery_storage_v1.BigQueryWriteClient(credentials=credentials)  # type: ignore[no-untyped-call]
+        parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
+        write_stream = client.create_write_stream(
+            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
+        )
+        stream_name = write_stream.name
+
+        requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
+        if requests:
+            for response in client.append_rows(requests=iter(requests)):
+                if response.error.code:
+                    msg = f"Storage Write API append failed: {response.error.message}"
+                    raise StorageOperationFailedError(msg)
+        client.finalize_write_stream(name=stream_name)
+        commit = client.batch_commit_write_streams(
+            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
+        )
+        if getattr(commit, "stream_errors", None):
+            msg = f"Storage Write API commit failed: {commit.stream_errors}"
+            raise StorageOperationFailedError(msg)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table, format_label="arrow-storage-write")
+        telemetry_payload["destination"] = table
+        return telemetry_payload
+
     def load_from_storage(
         self,
         table: str,
         source: "StorageDestination",
         *,
-        file_format: "StorageFormat",
+        file_format: "BigQueryLoadFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
 
-        if file_format != "parquet":
-            msg = "BigQuery storage bridge currently supports Parquet ingest only"
-            raise StorageCapabilityError(msg, capability="parquet_import_enabled")
         job_config = build_load_job_config(file_format, overwrite)
-        job = self.connection.load_table_from_uri(
-            source, table, job_config=job_config, retry=self._job_retry, timeout=self._job_request_timeout()
-        )
+        gcs_source = _normalize_bigquery_gcs_uri(source)
+        if gcs_source is not None:
+            job = self.connection.load_table_from_uri(
+                gcs_source, table, job_config=job_config, retry=self._job_retry, timeout=self._job_request_timeout()
+            )
+            source_telemetry: StorageTelemetry | None = None
+        else:
+            buffer = io.BytesIO()
+            for chunk in self._storage_pipeline().stream_read(source):
+                buffer.write(chunk)
+            source_telemetry = {
+                "destination": str(source),
+                "bytes_processed": buffer.tell(),
+                "rows_processed": 0,
+                "format": file_format,
+            }
+            buffer.seek(0)
+            job = self.connection.load_table_from_file(
+                buffer, table, job_config=job_config, timeout=self._job_request_timeout()
+            )
         job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload)
+        return self._create_storage_job(telemetry_payload, source_telemetry)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # UTILITY METHODS
@@ -659,3 +758,50 @@ def _bigquery_arrow_reader_from_iterable(batches: "Iterable[ArrowRecordBatch]") 
     except StopIteration:
         return None
     return pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
+
+
+def _records_to_json_rows(
+    records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]", columns: "list[str] | None"
+) -> "list[dict[str, Any]]":
+    materialized = list(records)
+    if not materialized:
+        msg = "load_from_records requires at least one record."
+        raise ImproperConfigurationError(msg)
+
+    first = materialized[0]
+    if isinstance(first, Mapping):
+        resolved = columns if columns is not None else list(first.keys())
+        expected = set(resolved)
+        rows: list[dict[str, Any]] = []
+        for record in materialized:
+            if not isinstance(record, Mapping):
+                msg = "load_from_records mapping records must all be mappings."
+                raise ImproperConfigurationError(msg)
+            if set(record.keys()) != expected:
+                msg = "load_from_records mapping records must all share the same keys."
+                raise ImproperConfigurationError(msg)
+            rows.append({column: record[column] for column in resolved})
+        return rows
+
+    if columns is None:
+        msg = "load_from_records requires columns when records are positional sequences."
+        raise ImproperConfigurationError(msg)
+
+    rows = []
+    for record in materialized:
+        values = list(record)
+        if len(values) != len(columns):
+            msg = "load_from_records positional records must match the number of columns."
+            raise ImproperConfigurationError(msg)
+        rows.append(dict(zip(columns, values, strict=True)))
+    return rows
+
+
+def _normalize_bigquery_gcs_uri(source: "StorageDestination") -> str | None:
+    if not isinstance(source, str):
+        return None
+    if source.startswith("gs://"):
+        return source
+    if source.startswith("gcs://"):
+        return f"gs://{source.removeprefix('gcs://')}"
+    return None

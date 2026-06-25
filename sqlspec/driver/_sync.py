@@ -34,7 +34,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -1564,6 +1564,33 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         self._raise_storage_not_implemented("load_from_storage")
         raise NotImplementedError
+
+    def load_from_records(
+        self,
+        table: str,
+        records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]",
+        *,
+        columns: "list[str] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load in-memory dict or positional records into the target table.
+
+        Records are normalized into an Arrow table and routed through the
+        adapter's native ``load_from_arrow`` path (COPY, executemany, mutations,
+        etc.). Dict records derive their columns from the keys; positional
+        records require ``columns``.
+
+        Args:
+            table: Target table name.
+            records: Mapping records, or positional sequences with ``columns``.
+            columns: Column names (required for positional records).
+            overwrite: Whether to overwrite existing data.
+
+        Returns:
+            StorageBridgeJob with execution telemetry.
+        """
+        arrow_table = self._records_to_arrow_table(records, columns)
+        return self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
     def stage_artifact(self, request: "dict[str, Any]") -> "dict[str, Any]":
         """Provision staging metadata for adapters that require remote URIs.

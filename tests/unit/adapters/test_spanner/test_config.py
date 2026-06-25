@@ -382,6 +382,115 @@ def test_provide_connection_batch_and_snapshot() -> None:
         assert conn is snap_obj
 
 
+def test_transaction_context_commits_mutations_only_transaction() -> None:
+    """Queued mutations must commit even before Spanner assigns a transaction id."""
+
+    class _Txn:
+        def __init__(self) -> None:
+            self._transaction_id = None
+            self._mutations = [object()]
+            self.committed = None
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def commit(self):
+            self.commit_calls += 1
+            self.committed = object()
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+    class _Session:
+        def __init__(self) -> None:
+            self.txn = _Txn()
+
+        def create(self):
+            pass
+
+        def delete(self):
+            pass
+
+        def transaction(self):
+            return self.txn
+
+    class _DB:
+        def __init__(self) -> None:
+            self.session_obj = _Session()
+
+        def session(self):
+            return self.session_obj
+
+    db = _DB()
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config.get_database = lambda: db  # type: ignore[assignment]
+
+    with config.provide_connection(transaction=True):
+        pass
+
+    assert db.session_obj.txn.commit_calls == 1
+    assert db.session_obj.txn.rollback_calls == 0
+
+
+def test_transaction_context_does_not_commit_empty_transaction() -> None:
+    """Empty write sessions should exit cleanly without forcing a Spanner commit."""
+
+    class _Txn:
+        def __init__(self) -> None:
+            self._transaction_id = None
+            self._mutations: list[object] = []
+            self.committed = None
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def commit(self):
+            self.commit_calls += 1
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+    class _Session:
+        def __init__(self) -> None:
+            self.txn = _Txn()
+
+        def create(self):
+            pass
+
+        def delete(self):
+            pass
+
+        def transaction(self):
+            return self.txn
+
+    class _DB:
+        def __init__(self) -> None:
+            self.session_obj = _Session()
+
+        def session(self):
+            return self.session_obj
+
+    db = _DB()
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config.get_database = lambda: db  # type: ignore[assignment]
+
+    with config.provide_connection(transaction=True):
+        pass
+
+    assert db.session_obj.txn.commit_calls == 0
+    assert db.session_obj.txn.rollback_calls == 0
+
+
 def test_provide_session_uses_batch_when_transaction_requested() -> None:
     """Driver should receive transaction connection when transaction=True."""
 

@@ -39,7 +39,7 @@ from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
 
@@ -434,13 +434,14 @@ def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
     if not cleaned:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
-    if "." not in cleaned:
-        return None, cleaned.strip('"')
-    parts = [part for part in cleaned.split(".") if part]
+    parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
     if len(parts) == 1:
-        return None, parts[0].strip('"')
-    schema_name = ".".join(parts[:-1]).strip('"')
-    table_name = parts[-1].strip('"')
+        return None, parts[0]
+    schema_name = ".".join(parts[:-1])
+    table_name = parts[-1]
     if not table_name:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)

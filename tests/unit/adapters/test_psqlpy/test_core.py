@@ -152,6 +152,12 @@ def test_encode_records_for_binary_copy_uses_global_string_writer(monkeypatch) -
     assert payload == b"plain\tline\\nbreak\n"
 
 
+def test_format_table_identifier_preserves_quoted_dots() -> None:
+    assert psqlpy_core.format_table_identifier('"analytics.schema"."orders.table"') == (
+        '"analytics.schema"."orders.table"'
+    )
+
+
 def test_no_lazy_optional_dependency_getter_functions_in_psqlpy_core() -> None:
     assert not hasattr(psqlpy_core, "_get_jsonb_type")
     assert not hasattr(psqlpy_core, "_get_librt_string_writer")

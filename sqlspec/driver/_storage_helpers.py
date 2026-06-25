@@ -14,6 +14,7 @@ from sqlspec.utils.arrow_helpers import (
 from sqlspec.utils.arrow_helpers import arrow_table_to_rows as _arrow_table_to_rows_impl
 from sqlspec.utils.arrow_helpers import build_ingest_telemetry as _build_ingest_telemetry_impl
 from sqlspec.utils.arrow_helpers import coerce_arrow_table as _coerce_arrow_table_impl
+from sqlspec.utils.arrow_helpers import records_to_arrow_table as _records_to_arrow_table_impl
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
@@ -29,6 +30,7 @@ __all__ = (
     "build_ingest_telemetry",
     "coerce_arrow_table",
     "create_storage_job",
+    "records_to_arrow_table",
     "stringify_storage_target",
 )
 
@@ -104,6 +106,11 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
     """
     telemetry = _build_ingest_telemetry_impl(table, format_label=format_label)
     return cast("StorageTelemetry", telemetry)
+
+
+def records_to_arrow_table(records: "Any", columns: "list[str] | None") -> "ArrowTable":
+    """Normalize mapping or positional records into a PyArrow table for ingest."""
+    return _records_to_arrow_table_impl(records, columns)
 
 
 def attach_partition_telemetry(telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None") -> None:

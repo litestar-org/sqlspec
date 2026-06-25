@@ -195,6 +195,10 @@ class OracleDriverFeatures(TypedDict):
      - "advanced_queue": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
      - "table_queue": Durable table-backed queue with retries and exactly-once delivery
      Defaults to "table_queue" (works on all Oracle editions without special privileges).
+    enable_direct_path_load: Route load_from_arrow through Connection.direct_path_load.
+     Thin-mode only; falls back to executemany when the API is absent or the
+     connection is in Thick mode. Defaults to True; set to False to force
+     executemany.
     Native pipeline execution is runtime-gated by driver API support, Oracle Database
      version, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment override; there is
      no adapter config switch that can force-enable unsupported pipeline execution.
@@ -213,6 +217,7 @@ class OracleDriverFeatures(TypedDict):
     on_connection_create: NotRequired[Callable[..., Any]]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[OracleEventsBackend]
+    enable_direct_path_load: NotRequired[bool]
 
 
 class OracleSyncConnectionContext(SyncPoolConnectionContext):

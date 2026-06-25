@@ -454,27 +454,30 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            statement = f"DELETE FROM {format_identifier(table)}"
-            try:
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        prepared_records = (
+            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+            if records and self._arrow_table_needs_parameter_preparation(arrow_table)
+            else records
+        )
+        owns_transaction = not self.connection.in_transaction
+        try:
+            if owns_transaction:
+                self.connection.execute("BEGIN IMMEDIATE")
+            if overwrite:
+                statement = f"DELETE FROM {format_identifier(table)}"
                 with self.with_cursor(self.connection) as cursor:
                     cursor.execute(statement)
-            except sqlite3.Error as exc:
-                raise create_mapped_exception(exc) from exc
-
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            insert_sql = build_insert_statement(table, columns)
-            prepared_records = (
-                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                if self._arrow_table_needs_parameter_preparation(arrow_table)
-                else records
-            )
-            try:
+            if records:
+                insert_sql = build_insert_statement(table, columns)
                 with self.with_cursor(self.connection) as cursor:
                     cursor.executemany(insert_sql, cast("Any", prepared_records))
-            except sqlite3.Error as exc:
-                raise create_mapped_exception(exc) from exc
+            if owns_transaction:
+                self.connection.commit()
+        except sqlite3.Error as exc:
+            if owns_transaction:
+                self.connection.rollback()
+            raise create_mapped_exception(exc) from exc
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table

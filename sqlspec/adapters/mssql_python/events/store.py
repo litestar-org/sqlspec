@@ -4,10 +4,12 @@ import re
 
 from sqlspec.adapters.mssql_python.config import MssqlPythonAsyncConfig, MssqlPythonConfig
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.utils.text import split_qualified_identifier
 
 __all__ = ("MssqlPythonAsyncEventQueueStore", "MssqlPythonEventQueueStore", "MssqlPythonSyncEventQueueStore")
 
 _NVARCHAR_MAX_THRESHOLD = 4000
+_QUALIFIED_IDENTIFIER_MIN_PARTS = 2
 
 
 class _MssqlPythonEventStoreMixin:
@@ -33,13 +35,13 @@ class _MssqlPythonEventStoreMixin:
         if object_type == "table":
             match = re.search(r"CREATE TABLE\s+(\S+)", statement, re.IGNORECASE)
             if match:
-                table_name = match.group(1).strip("[]")
+                table_name = match.group(1)
                 return f"IF OBJECT_ID(N'{_object_name(table_name)}', N'U') IS NULL BEGIN {statement}; END"
         if object_type == "index":
             match = re.search(r"CREATE INDEX\s+(\S+)\s+ON\s+(\S+)", statement, re.IGNORECASE)
             if match:
                 index_name = match.group(1).strip("[]")
-                table_name = match.group(2).strip("[]")
+                table_name = match.group(2)
                 return (
                     "IF NOT EXISTS (SELECT 1 FROM sys.indexes "
                     f"WHERE name = N'{index_name}' AND object_id = OBJECT_ID(N'{_object_name(table_name)}')) "
@@ -50,7 +52,7 @@ class _MssqlPythonEventStoreMixin:
     def _wrap_drop_statement(self, statement: str) -> str:
         match = re.search(r"DROP TABLE\s+(\S+)", statement, re.IGNORECASE)
         if match:
-            table_name = match.group(1).strip("[]")
+            table_name = match.group(1)
             return f"IF OBJECT_ID(N'{_object_name(table_name)}', N'U') IS NOT NULL DROP TABLE {table_name};"
         return statement
 
@@ -71,12 +73,17 @@ MssqlPythonSyncEventQueueStore = MssqlPythonEventQueueStore
 
 
 def _split_table_name(table_name: str) -> tuple[str, str]:
-    if "." not in table_name:
-        return "dbo", table_name
-    schema_name, bare_table_name = table_name.rsplit(".", 1)
-    return schema_name.strip("[]"), bare_table_name.strip("[]")
+    parts = split_qualified_identifier(table_name, quote_chars='"')
+    if len(parts) < _QUALIFIED_IDENTIFIER_MIN_PARTS:
+        return "dbo", parts[0] if parts else table_name
+    schema_name = ".".join(parts[:-1])
+    return schema_name or "dbo", parts[-1]
 
 
 def _object_name(table_name: str) -> str:
     schema_name, bare_table_name = _split_table_name(table_name)
-    return f"{schema_name}.{bare_table_name}"
+    return f"{_quote_bracket_identifier(schema_name)}.{_quote_bracket_identifier(bare_table_name)}"
+
+
+def _quote_bracket_identifier(identifier: str) -> str:
+    return f"[{identifier.replace(']', ']]')}]"

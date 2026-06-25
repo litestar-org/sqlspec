@@ -1,5 +1,7 @@
 """Unit tests for storage utilities."""
 
+from typing import get_args
+
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
@@ -105,3 +107,7 @@ def test_pipeline_reexports_arrow_payload_storage_format_literal() -> None:
 
 def test_public_storage_format_matches_pipeline_reexport() -> None:
     assert PublicStorageFormat is PipelineStorageFormat
+
+
+def test_arrow_payload_storage_format_only_advertises_encodable_formats() -> None:
+    assert set(get_args(ArrowPayloadStorageFormat)) == {"jsonl", "json", "parquet", "arrow-ipc", "csv"}

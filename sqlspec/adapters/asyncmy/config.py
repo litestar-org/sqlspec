@@ -295,6 +295,14 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
+        if features_dict.get("enable_local_infile_bulk_load"):
+            msg = (
+                "asyncmy does not currently support SQLSpec's LOAD DATA LOCAL INFILE bulk path reliably. "
+                "Use aiomysql, mysql-connector, or pymysql for LOCAL INFILE bulk loads, or omit "
+                "enable_local_infile_bulk_load to use asyncmy batched executemany."
+            )
+            raise ImproperConfigurationError(msg)
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,

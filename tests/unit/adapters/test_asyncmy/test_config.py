@@ -90,6 +90,15 @@ def test_asyncmy_local_infile_requires_explicit_security_gate() -> None:
     assert "allow_local_infile" not in config.connection_config
 
 
+def test_asyncmy_rejects_local_infile_bulk_load_feature() -> None:
+    """Asyncmy exposes local_infile, but its LOAD DATA LOCAL INFILE protocol path is not usable."""
+    with pytest.raises(ImproperConfigurationError, match="asyncmy does not currently support"):
+        AsyncmyConfig(
+            connection_config={"local_infile": True, "allow_local_infile": True},
+            driver_features={"enable_local_infile_bulk_load": True},
+        )
+
+
 async def test_asyncmy_create_pool_normalizes_connection_and_pool_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool-only and SQLSpec-only settings should not leak into asyncmy connection kwargs."""
     import sqlspec.adapters.asyncmy.config as config_mod

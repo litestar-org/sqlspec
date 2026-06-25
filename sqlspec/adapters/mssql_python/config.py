@@ -268,7 +268,7 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     migration_tracker_type: "ClassVar[type[MssqlPythonSyncMigrationTracker]]" = MssqlPythonSyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
-    supports_native_arrow_import: "ClassVar[bool]" = False
+    supports_native_arrow_import: "ClassVar[bool]" = True
     supports_arrow_streaming: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
@@ -347,7 +347,7 @@ class MssqlPythonAsyncConfig(
     migration_tracker_type: "ClassVar[type[MssqlPythonAsyncMigrationTracker]]" = MssqlPythonAsyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
-    supports_native_arrow_import: "ClassVar[bool]" = False
+    supports_native_arrow_import: "ClassVar[bool]" = True
     supports_arrow_streaming: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
