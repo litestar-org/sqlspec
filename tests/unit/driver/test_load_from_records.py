@@ -1,5 +1,8 @@
 """Record normalization for the generic load_from_records base method."""
 
+from collections.abc import Iterator, Mapping
+from typing import Any
+
 import pytest
 
 from sqlspec.adapters.sqlite.driver import SqliteDriver
@@ -8,10 +11,30 @@ from sqlspec.exceptions import ImproperConfigurationError
 _normalize = SqliteDriver._records_to_arrow_table
 
 
+class _CustomRecord(Mapping[str, Any]):
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = data
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+
 def test_dict_records_derive_columns_from_keys() -> None:
     table = _normalize([{"a": 1, "b": "x"}, {"a": 2, "b": "y"}], None)
     assert table.column_names == ["a", "b"]
     assert table.num_rows == 2
+    assert table.to_pydict() == {"a": [1, 2], "b": ["x", "y"]}
+
+
+def test_mapping_records_derive_columns_from_keys() -> None:
+    table = _normalize([_CustomRecord({"a": 1, "b": "x"}), _CustomRecord({"a": 2, "b": "y"})], None)
+    assert table.column_names == ["a", "b"]
     assert table.to_pydict() == {"a": [1, 2], "b": ["x", "y"]}
 
 

@@ -4,7 +4,9 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from google.cloud.bigquery_storage_v1 import types
 
+from sqlspec.adapters.bigquery.core import build_arrow_write_stream_payload
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 CAPABILITIES = {
@@ -158,3 +160,15 @@ def test_import_failure_falls_back_to_parquet(monkeypatch: pytest.MonkeyPatch) -
     driver.load_from_arrow("dataset.table", pa.table({"id": [1]}))
 
     assert connection.load_file_calls
+
+
+def test_storage_write_payload_splits_before_request_limit() -> None:
+    table = pa.table({"payload": ["x" * 100 for _ in range(30)]})
+
+    requests = build_arrow_write_stream_payload("streams/s1", table, types, max_request_bytes=1_200)
+
+    assert len(requests) > 1
+    assert requests[0].write_stream == "streams/s1"
+    assert requests[0].arrow_rows.writer_schema.serialized_schema
+    assert all(request.arrow_rows.rows.serialized_record_batch for request in requests)
+    assert all(len(request.arrow_rows.rows.serialized_record_batch) <= 1_200 for request in requests)

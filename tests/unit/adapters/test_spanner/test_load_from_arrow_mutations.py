@@ -56,13 +56,13 @@ def test_load_from_arrow_uses_single_insert_or_update(mutations_driver: SpannerS
 
 def test_load_from_arrow_chunks_above_cell_cap(mutations_driver: SpannerSyncDriver) -> None:
     txn = cast("_FakeTransaction", mutations_driver.connection)
-    columns = {f"c{c}": list(range(2001)) for c in range(10)}
+    columns = {f"c{c}": list(range(8001)) for c in range(10)}
     arrow_table = pa.table(columns)
 
     mutations_driver.load_from_arrow("wide", arrow_table)
 
     assert len(txn.insert_or_update_calls) == 2
-    assert len(txn.insert_or_update_calls[0][2]) == 2000
+    assert len(txn.insert_or_update_calls[0][2]) == 8000
     assert len(txn.insert_or_update_calls[1][2]) == 1
 
 

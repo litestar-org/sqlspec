@@ -453,7 +453,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 msg = "Arrow import requires a Transaction context."
                 raise SQLConversionError(msg)
             chunks = self._chunk_mutation_rows(columns, records)
-            if self.driver_features.get("enable_batch_write_api"):
+            if self.driver_features.get("enable_batch_write_api") and not overwrite:
                 self._batch_write_mutations(table, columns, chunks)
             else:
                 writer = cast("_SpannerWriteProtocol", conn)
@@ -466,17 +466,21 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self._create_storage_job(telemetry_payload, telemetry)
 
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
-        """Coerce Arrow rows into mutation value chunks bounded by Spanner's per-commit cell ceiling."""
+        """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
         column_count = len(columns)
-        max_cells = 20_000
+        max_cells = 80_000
         chunks: list[list[list[Any]]] = []
         values: list[list[Any]] = []
         pending_cells = 0
         for record in records:
+            if values and pending_cells + column_count > max_cells:
+                chunks.append(values)
+                values = []
+                pending_cells = 0
             coerced = self._coerce_params({f"p{i}": value for i, value in enumerate(record)}) or {}
             values.append([coerced.get(f"p{i}") for i in range(column_count)])
             pending_cells += column_count
-            if pending_cells >= max_cells:
+            if pending_cells == max_cells:
                 chunks.append(values)
                 values = []
                 pending_cells = 0
@@ -491,15 +495,15 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         if database is None:
             msg = "Spanner Batch Write API requires a database-backed session."
             raise SQLConversionError(msg)
-        mutation_groups = database.mutation_groups()
-        for chunk in chunks:
-            group = mutation_groups.group()
-            group.insert_or_update(table, columns, chunk)
-        for response in mutation_groups.batch_write():
-            status = response.status
-            if status is not None and status.code:
-                msg = f"Spanner batch_write group failed: {status.message}"
-                raise SQLConversionError(msg)
+        with database.mutation_groups() as mutation_groups:
+            for chunk in chunks:
+                group = mutation_groups.group()
+                group.insert_or_update(table, columns, chunk)
+            for response in mutation_groups.batch_write():
+                status = response.status
+                if status is not None and status.code:
+                    msg = f"Spanner batch_write group failed: {status.message}"
+                    raise SQLConversionError(msg)
 
     def load_from_storage(
         self,

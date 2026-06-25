@@ -32,6 +32,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     StorageCapabilityError,
+    StorageOperationFailedError,
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
@@ -41,11 +42,14 @@ from sqlspec.utils.type_guards import has_errors, has_value_attribute
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
+    from typing import Literal
 
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
     from sqlspec.driver._common import SyncExceptionHandler
-    from sqlspec.storage import StorageFormat, StorageTelemetry
+    from sqlspec.storage import StorageTelemetry
     from sqlspec.typing import StatementParameters
+
+    BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
 
 
 class _BigQueryRow(Protocol):
@@ -110,6 +114,7 @@ only converts hung servers (notably emulators that execute jobs synchronously
 inside the HTTP handler) into fast, retryable errors.
 """
 LOCAL_BIGQUERY_ENDPOINT_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
+BQ_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES = 20_000_000
 
 
 def storage_api_available() -> bool:
@@ -626,30 +631,74 @@ def _run_query_and_wait(
     return connection.query_and_wait(sql, **query_kwargs)
 
 
-def build_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "LoadJobConfig":
+def build_load_job_config(file_format: "BigQueryLoadFormat", overwrite: bool) -> "LoadJobConfig":
     job_config = LoadJobConfig()
     job_config.source_format = _map_bigquery_source_format(file_format)
     job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
     return job_config
 
 
-def build_arrow_write_stream_payload(stream_name: str, arrow_table: Any, types: Any) -> "list[Any]":
+def build_arrow_write_stream_payload(
+    stream_name: str,
+    arrow_table: Any,
+    types: Any,
+    *,
+    max_request_bytes: int = BQ_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES,
+) -> "list[Any]":
     """Build PENDING-stream AppendRowsRequest payloads from an Arrow table (native arrow_rows)."""
     schema_bytes = arrow_table.schema.serialize().to_pybytes()
     requests: list[Any] = []
     for batch in arrow_table.to_batches():
-        arrow_data = types.AppendRowsRequest.ArrowData(
-            rows=types.ArrowRecordBatch(
-                serialized_record_batch=batch.serialize().to_pybytes(), row_count=batch.num_rows
-            )
+        _append_sized_arrow_requests(
+            requests, stream_name, batch, schema_bytes, types, max_request_bytes=max_request_bytes
         )
-        if not requests:
-            arrow_data.writer_schema = types.ArrowSchema(serialized_schema=schema_bytes)
-        request = types.AppendRowsRequest(arrow_rows=arrow_data)
-        if not requests:
-            request.write_stream = stream_name
-        requests.append(request)
     return requests
+
+
+def _append_sized_arrow_requests(
+    requests: "list[Any]", stream_name: str, batch: Any, schema_bytes: bytes, types: Any, *, max_request_bytes: int
+) -> None:
+    pending = [batch]
+    while pending:
+        current = pending.pop(0)
+        include_schema = not requests
+        request = _build_arrow_append_request(
+            stream_name, current, schema_bytes, types, include_stream=include_schema, include_schema=include_schema
+        )
+        if _append_request_size(request) < max_request_bytes:
+            requests.append(request)
+            continue
+        if current.num_rows <= 1:
+            msg = "BigQuery Storage Write API row exceeds the maximum AppendRowsRequest size."
+            raise StorageOperationFailedError(msg)
+        left_count = current.num_rows // 2
+        pending.insert(0, current.slice(left_count, current.num_rows - left_count))
+        pending.insert(0, current.slice(0, left_count))
+
+
+def _build_arrow_append_request(
+    stream_name: str, batch: Any, schema_bytes: bytes, types: Any, *, include_stream: bool, include_schema: bool
+) -> Any:
+    arrow_data = types.AppendRowsRequest.ArrowData(
+        rows=types.ArrowRecordBatch(serialized_record_batch=batch.serialize().to_pybytes(), row_count=batch.num_rows)
+    )
+    if include_schema:
+        arrow_data.writer_schema = types.ArrowSchema(serialized_schema=schema_bytes)
+    request = types.AppendRowsRequest(arrow_rows=arrow_data)
+    if include_stream:
+        request.write_stream = stream_name
+    return request
+
+
+def _append_request_size(request: Any) -> int:
+    try:
+        return int(request._pb.ByteSize())
+    except AttributeError:
+        arrow_rows = request.arrow_rows
+        size = len(arrow_rows.rows.serialized_record_batch)
+        size += len(getattr(arrow_rows.writer_schema, "serialized_schema", b"") or b"")
+        size += len(getattr(request, "write_stream", "").encode())
+        return size
 
 
 def build_load_job_telemetry(job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
@@ -719,7 +768,7 @@ def extract_insert_table(sql: str, expression: "exp.Expr | None" = None, *, allo
     return None
 
 
-def _map_bigquery_source_format(file_format: "StorageFormat") -> str:
+def _map_bigquery_source_format(file_format: "BigQueryLoadFormat | str") -> str:
     if file_format == "parquet":
         return "PARQUET"
     if file_format in {"json", "jsonl"}:

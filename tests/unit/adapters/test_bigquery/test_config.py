@@ -96,5 +96,7 @@ def test_bigquery_config_typed_surfaces_do_not_advertise_inert_settings() -> Non
     """Typed public settings should only include options that SQLSpec routes."""
     assert "credentials_path" not in BigQueryConnectionParams.__annotations__
     assert "use_query_and_wait" in BigQueryDriverFeatures.__annotations__
+    assert "enable_storage_write_api" in BigQueryDriverFeatures.__annotations__
+    assert "enable_storage_write_api" not in BigQueryConnectionParams.__annotations__
     assert "on_job_start" not in BigQueryDriverFeatures.__annotations__
     assert "on_job_complete" not in BigQueryDriverFeatures.__annotations__

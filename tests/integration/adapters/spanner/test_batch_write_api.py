@@ -45,7 +45,7 @@ def test_batch_write_ingest(spanner_batch_write_config: SpannerSyncConfig, test_
     with spanner_batch_write_config.provide_write_session() as session:
         try:
             job = session.load_from_arrow(test_users_table, arrow_table)
-        except gcore_exceptions.Unimplemented:
+        except gcore_exceptions.MethodNotImplemented:
             pytest.skip("Spanner emulator does not implement the Batch Write API")
         assert job.telemetry["rows_processed"] == 8
 

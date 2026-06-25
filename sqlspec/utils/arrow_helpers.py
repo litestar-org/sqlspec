@@ -8,10 +8,11 @@ when compiled drivers touch Arrow objects.
 """
 
 import contextlib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
@@ -38,6 +39,7 @@ __all__ = (
     "convert_dict_to_arrow",
     "convert_dict_to_arrow_with_schema",
     "ensure_arrow_table",
+    "records_to_arrow_table",
 )
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
 _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
@@ -151,6 +153,49 @@ def convert_dict_to_arrow_with_schema(
         return table.to_batches(max_chunksize=batch_size)
     batches = table.to_batches(max_chunksize=batch_size)
     return batches[0] if batches else pa.RecordBatch.from_pydict({})
+
+
+def records_to_arrow_table(
+    records: "Iterable[Mapping[str, Any]] | Iterable[Iterable[Any]]", columns: "list[str] | None"
+) -> "ArrowTable":
+    """Normalize mapping or positional records into a PyArrow table for ingest."""
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    materialized = list(records)
+    if not materialized:
+        msg = "load_from_records requires at least one record."
+        raise ImproperConfigurationError(msg)
+
+    first = materialized[0]
+    if isinstance(first, Mapping):
+        resolved = columns if columns is not None else list(first.keys())
+        expected = set(resolved)
+        column_data: dict[str, list[Any]] = {column: [] for column in resolved}
+        for record in materialized:
+            if not isinstance(record, Mapping):
+                msg = "load_from_records mapping records must all be mappings."
+                raise ImproperConfigurationError(msg)
+            if set(record.keys()) != expected:
+                msg = "load_from_records mapping records must all share the same keys."
+                raise ImproperConfigurationError(msg)
+            for column in resolved:
+                column_data[column].append(record[column])
+        return pa.table(column_data)
+
+    if columns is None:
+        msg = "load_from_records requires columns when records are positional sequences."
+        raise ImproperConfigurationError(msg)
+
+    positional: dict[str, list[Any]] = {column: [] for column in columns}
+    for record in materialized:
+        values = list(record)
+        if len(values) != len(columns):
+            msg = "load_from_records positional records must match the number of columns."
+            raise ImproperConfigurationError(msg)
+        for column, value in zip(columns, values, strict=True):
+            positional[column].append(value)
+    return pa.table(positional)
 
 
 def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":

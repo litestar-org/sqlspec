@@ -44,6 +44,7 @@ from sqlspec.driver._storage_helpers import (
     build_ingest_telemetry,
     coerce_arrow_table,
     create_storage_job,
+    records_to_arrow_table,
 )
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -2159,37 +2160,7 @@ class CommonDriverAttributesMixin:
         records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]", columns: "list[str] | None"
     ) -> "ArrowTable":
         """Normalize dict or positional records into a PyArrow table for ingest."""
-        import pyarrow as pa
-
-        materialized = list(records)
-        if not materialized:
-            msg = "load_from_records requires at least one record."
-            raise ImproperConfigurationError(msg)
-        first = materialized[0]
-        if isinstance(first, dict):
-            resolved = columns if columns is not None else list(first.keys())
-            expected = set(resolved)
-            column_data: dict[str, list[Any]] = {column: [] for column in resolved}
-            for record in materialized:
-                mapping = cast("dict[str, Any]", record)
-                if set(mapping.keys()) != expected:
-                    msg = "load_from_records mapping records must all share the same keys."
-                    raise ImproperConfigurationError(msg)
-                for column in resolved:
-                    column_data[column].append(mapping[column])
-            return pa.table(column_data)
-        if columns is None:
-            msg = "load_from_records requires columns when records are positional sequences."
-            raise ImproperConfigurationError(msg)
-        positional: dict[str, list[Any]] = {column: [] for column in columns}
-        for record in materialized:
-            values = list(cast("abc.Sequence[Any]", record))
-            if len(values) != len(columns):
-                msg = "load_from_records positional records must match the number of columns."
-                raise ImproperConfigurationError(msg)
-            for column, value in zip(columns, values, strict=True):
-                positional[column].append(value)
-        return pa.table(positional)
+        return records_to_arrow_table(records, columns)
 
     def _attach_partition_telemetry(
         self, telemetry: "StorageTelemetry", partitioner: "dict[str, object] | None"

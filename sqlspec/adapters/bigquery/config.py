@@ -63,7 +63,6 @@ class BigQueryConnectionParams(TypedDict):
     dataframes_backend: NotRequired[str]
     enable_continuous_queries: NotRequired[bool]
     enable_vector_search: NotRequired[bool]
-    enable_storage_write_api: NotRequired[bool]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -122,6 +121,7 @@ class BigQueryDriverFeatures(TypedDict):
     request_timeout: NotRequired[float]
     query_page_size: NotRequired[int]
     query_max_results: NotRequired[int]
+    enable_storage_write_api: NotRequired[bool]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):
