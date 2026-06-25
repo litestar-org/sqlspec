@@ -32,6 +32,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -39,7 +40,13 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.driver import ExecutionResult
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
+
+
+def _quote_mssql_table(table: str) -> str:
+    return ".".join(quote_identifier(part) for part in table.split(".") if part)
+
 
 __all__ = (
     "MssqlPythonAsyncCursor",
@@ -309,6 +316,44 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         self._check_pending_exception(exc_handler)
         return result
 
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQL Server via BulkCopy."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if overwrite:
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                cursor.execute(f"DELETE FROM {_quote_mssql_table(table)}")
+            self._check_pending_exception(exc_handler)
+        if records:
+            self.bulk_copy(table, records, column_mappings=columns)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQL Server via BulkCopy."""
+        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
 
 class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
     """Async wrapper around mssql-python's sync DB-API via asyncio.to_thread."""
@@ -529,6 +574,46 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
             result = _coerce_bulk_copy_result(raw_result, cursor)
         self._check_pending_exception(exc_handler)
         return result
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQL Server via BulkCopy."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if overwrite:
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                await asyncio.to_thread(_execute_cursor, cursor, f"DELETE FROM {_quote_mssql_table(table)}", None)
+            self._check_pending_exception(exc_handler)
+        if records:
+            await self.bulk_copy(table, records, column_mappings=columns)
+        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._create_storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQL Server via BulkCopy."""
+        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:
