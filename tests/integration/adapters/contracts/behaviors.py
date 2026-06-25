@@ -140,6 +140,8 @@ class SyncContractDriver(Protocol):
 
     def load_from_arrow(self, table: str, source: Any, /, **kwargs: Any) -> Any: ...
 
+    def load_from_records(self, table: str, records: Any, /, **kwargs: Any) -> Any: ...
+
     def load_from_storage(self, table: str, source: object, /, **kwargs: Any) -> Any: ...
 
 
@@ -177,6 +179,8 @@ class AsyncContractDriver(Protocol):
     ) -> Any: ...
 
     async def load_from_arrow(self, table: str, source: Any, /, **kwargs: Any) -> Any: ...
+
+    async def load_from_records(self, table: str, records: Any, /, **kwargs: Any) -> Any: ...
 
     async def load_from_storage(self, table: str, source: object, /, **kwargs: Any) -> Any: ...
 
@@ -4036,6 +4040,48 @@ async def assert_async_native_bulk_ingest_contract(driver: object, case: DriverC
 
     await async_driver.load_from_arrow(table.name, _bulk_ingest_arrow(50))
     assert await async_driver.select_value(table.select_count_sql) == 60
+
+
+def _records(row_count: int) -> "list[dict[str, Any]]":
+    return [{"name": f"row{i}", "value": i, "note": f"note{i}"} for i in range(row_count)]
+
+
+def assert_sync_load_from_records_contract(driver: object, case: DriverCase) -> None:
+    """Assert load_from_records ingests dict and positional records and validates input."""
+    if not case.supports_load_from_records:
+        pytest.skip(f"{case.adapter} has no verified load_from_records support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    job = sync_driver.load_from_records(table.name, _records(20), overwrite=True)
+    assert job.telemetry["rows_processed"] == 20
+    assert sync_driver.select_value(table.select_count_sql) == 20
+
+    positional = [(f"p{i}", i, f"note{i}") for i in range(5)]
+    sync_driver.load_from_records(table.name, positional, columns=["name", "value", "note"], overwrite=True)
+    assert sync_driver.select_value(table.select_count_sql) == 5
+
+    with pytest.raises(ImproperConfigurationError):
+        sync_driver.load_from_records(table.name, [], overwrite=True)
+
+
+async def assert_async_load_from_records_contract(driver: object, case: DriverCase) -> None:
+    """Assert async load_from_records ingests dict and positional records and validates input."""
+    if not case.supports_load_from_records:
+        pytest.skip(f"{case.adapter} has no verified load_from_records support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    job = await async_driver.load_from_records(table.name, _records(20), overwrite=True)
+    assert job.telemetry["rows_processed"] == 20
+    assert await async_driver.select_value(table.select_count_sql) == 20
+
+    positional = [(f"p{i}", i, f"note{i}") for i in range(5)]
+    await async_driver.load_from_records(table.name, positional, columns=["name", "value", "note"], overwrite=True)
+    assert await async_driver.select_value(table.select_count_sql) == 5
+
+    with pytest.raises(ImproperConfigurationError):
+        await async_driver.load_from_records(table.name, [], overwrite=True)
 
 
 def _storage_bridge_export_sql(table: ContractTable) -> str:
