@@ -3992,6 +3992,52 @@ async def assert_async_storage_bridge_local_contract(driver: object, case: Drive
     assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
 
 
+def _bulk_ingest_arrow(row_count: int) -> Any:
+    import pyarrow as pa
+
+    return pa.table({
+        "name": [f"row{i}" for i in range(row_count)],
+        "value": list(range(row_count)),
+        "note": [f"note{i}" for i in range(row_count)],
+    })
+
+
+def assert_sync_native_bulk_ingest_contract(driver: object, case: DriverCase) -> None:
+    """Assert native bulk-ingest row-count fidelity, overwrite/append, and error surfacing."""
+    if not case.supports_native_bulk_ingest:
+        pytest.skip(f"{case.adapter} has no verified native bulk-ingest support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    job = sync_driver.load_from_arrow(table.name, _bulk_ingest_arrow(50), overwrite=True)
+    assert job.telemetry["rows_processed"] == 50
+    assert sync_driver.select_value(table.select_count_sql) == 50
+
+    sync_driver.load_from_arrow(table.name, _bulk_ingest_arrow(10), overwrite=True)
+    assert sync_driver.select_value(table.select_count_sql) == 10
+
+    sync_driver.load_from_arrow(table.name, _bulk_ingest_arrow(50))
+    assert sync_driver.select_value(table.select_count_sql) == 60
+
+
+async def assert_async_native_bulk_ingest_contract(driver: object, case: DriverCase) -> None:
+    """Assert async native bulk-ingest row-count fidelity, overwrite/append, and error surfacing."""
+    if not case.supports_native_bulk_ingest:
+        pytest.skip(f"{case.adapter} has no verified native bulk-ingest support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    job = await async_driver.load_from_arrow(table.name, _bulk_ingest_arrow(50), overwrite=True)
+    assert job.telemetry["rows_processed"] == 50
+    assert await async_driver.select_value(table.select_count_sql) == 50
+
+    await async_driver.load_from_arrow(table.name, _bulk_ingest_arrow(10), overwrite=True)
+    assert await async_driver.select_value(table.select_count_sql) == 10
+
+    await async_driver.load_from_arrow(table.name, _bulk_ingest_arrow(50))
+    assert await async_driver.select_value(table.select_count_sql) == 60
+
+
 def _storage_bridge_export_sql(table: ContractTable) -> str:
     return f"SELECT name, value, note FROM {table.name} WHERE value >= ? ORDER BY value"
 
