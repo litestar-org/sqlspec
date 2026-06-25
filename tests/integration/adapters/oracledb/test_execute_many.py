@@ -179,9 +179,7 @@ def test_sync_execute_many_array_dml_row_counts(oracle_sync_session: OracleSyncD
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE dml_counts_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
     oracle_sync_session.execute_script("CREATE TABLE dml_counts_sync (id NUMBER PRIMARY KEY, grp NUMBER)")
-    oracle_sync_session.execute_many(
-        "INSERT INTO dml_counts_sync (id, grp) VALUES (:1, :2)", [(1, 1), (2, 1), (3, 2)]
-    )
+    oracle_sync_session.execute_many("INSERT INTO dml_counts_sync (id, grp) VALUES (:1, :2)", [(1, 1), (2, 1), (3, 2)])
     oracle_sync_session.commit()
 
     config = oracle_sync_session.statement_config.replace(execution_args={"oracle_array_dml_row_counts": True})

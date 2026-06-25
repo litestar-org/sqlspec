@@ -51,7 +51,9 @@ def _async_driver() -> OracleAsyncDriver:
 
 def test_default_execute_many_passes_disabled_batch_options() -> None:
     driver = _sync_driver()
-    statement = SQL("INSERT INTO t (a) VALUES (:a)", [{"a": 1}, {"a": 2}], statement_config=driver.statement_config, is_many=True)
+    statement = SQL(
+        "INSERT INTO t (a) VALUES (:a)", [{"a": 1}, {"a": 2}], statement_config=driver.statement_config, is_many=True
+    )
     cursor = _FakeManyCursor()
 
     result = driver.dispatch_execute_many(cursor, statement)
@@ -76,7 +78,9 @@ def test_batch_errors_surface_in_special_data() -> None:
 def test_array_dml_row_counts_override_rowcount() -> None:
     driver = _sync_driver()
     config = driver.statement_config.replace(execution_args={"oracle_array_dml_row_counts": True})
-    statement = SQL("UPDATE t SET a = :a WHERE id = :a", [{"a": 1}, {"a": 2}, {"a": 3}], statement_config=config, is_many=True)
+    statement = SQL(
+        "UPDATE t SET a = :a WHERE id = :a", [{"a": 1}, {"a": 2}, {"a": 3}], statement_config=config, is_many=True
+    )
     cursor = _FakeManyCursor(dml_row_counts=[2, 3, 5])
 
     result = driver.dispatch_execute_many(cursor, statement)
