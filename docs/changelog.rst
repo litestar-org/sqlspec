@@ -59,6 +59,9 @@ v0.51.0 - ADK 2.0 clean-break store contract
 * Removed a dead ``storage_uri`` key from the artifact-store config
   normalization; the artifact storage URI is supplied to ``ADKArtifactService``
   through its constructor and was never read from the store config.
+* ``DMLResult.all()`` and ``one_or_none()`` no longer raise ``AttributeError``
+  when called with ``schema_type``; the fast DML result path now initializes its
+  schema-row caches.
 
 v0.50.1 - DuckDB extension lifecycle and SQLGlot builder modernization
 ------------------------------------------------------------------------------

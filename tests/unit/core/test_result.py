@@ -39,6 +39,18 @@ def test_fast_dml_result_alias_is_not_exported() -> None:
     assert not hasattr(result_package, alias_name)
 
 
+def test_dml_result_schema_type_does_not_raise() -> None:
+    """DMLResult must initialize its schema-row cache slots so schema_type access does not raise."""
+
+    @dataclass
+    class _Row:
+        id: int
+
+    result = result_base.DMLResult("INSERT", 1)
+    assert result.all(schema_type=_Row) == []
+    assert result.one_or_none(schema_type=_Row) is None
+
+
 def test_sql_result_helpers_do_not_upper_operation_type() -> None:
     stmt = SQL("INSERT INTO users (id) VALUES (1)")
     result = SQLResult(statement=stmt, operation_type=_operation_type("INSERT"), rows_affected=1)

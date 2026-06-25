@@ -948,6 +948,8 @@ class DMLResult(SQLResult):
         self.parameters = None
         self._row_format = "dict"
         self._materialized_dicts = None
+        self._schema_rows_cache = None
+        self._schema_row_cache = None
 
         self.column_names: list[str] = []
         self.total_count = 0
