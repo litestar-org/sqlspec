@@ -1,7 +1,7 @@
 """Regression-lock tests for mssql_python BulkCopy stats and wrapper defaults."""
 
 import inspect
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -15,17 +15,17 @@ class _FakeCursor:
 
 def test_coerce_bulk_copy_result_preserves_upstream_stats() -> None:
     stats: dict[str, Any] = {"rows_copied": 10, "batch_count": 2, "elapsed_time": 0.5, "future_key": "x"}
-    result = _coerce_bulk_copy_result(stats, _FakeCursor(rowcount=0))
+    result = _coerce_bulk_copy_result(stats, cast("Any", _FakeCursor(rowcount=0)))
     assert result == stats
 
 
 def test_coerce_bulk_copy_result_falls_back_to_rowcount() -> None:
-    assert _coerce_bulk_copy_result(None, _FakeCursor(rowcount=7)) == {"rows_copied": 7}
+    assert _coerce_bulk_copy_result(None, cast("Any", _FakeCursor(rowcount=7))) == {"rows_copied": 7}
 
 
 def test_coerce_bulk_copy_result_copies_dict_not_aliases() -> None:
     stats: dict[str, Any] = {"rows_copied": 3}
-    result = _coerce_bulk_copy_result(stats, _FakeCursor())
+    result = _coerce_bulk_copy_result(stats, cast("Any", _FakeCursor()))
     result["rows_copied"] = 99
     assert stats["rows_copied"] == 3
 
