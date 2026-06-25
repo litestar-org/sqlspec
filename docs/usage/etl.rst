@@ -51,6 +51,11 @@ Supported ``return_format`` values:
 - ``"batches"`` -- iterator of ``RecordBatch`` objects
 - ``"reader"`` -- ``RecordBatchReader`` for streaming
 
+.. seealso::
+
+   :doc:`bulk_ingest` for the inbound side -- loading Arrow tables, staged
+   files, and in-memory records into a table via native driver primitives.
+
 DuckDB as Staging Layer
 -----------------------
 
