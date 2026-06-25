@@ -95,6 +95,8 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/extensions/adk/_types.py",
         "sqlspec/extensions/adk/memory/_types.py",
         "sqlspec/extensions/adk/artifact/_types.py",
+        "sqlspec/extensions/fastapi/providers.py",
+        "sqlspec/extensions/litestar/providers.py",
         "sqlspec/migrations/version.py",
         "sqlspec/observability/_formatting.py",
     ]
@@ -131,6 +133,8 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/extensions/adk/_types.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/memory/_types.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/artifact/_types.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/fastapi/providers.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/litestar/providers.py" in payload["compiled_modules"]
     assert "sqlspec/migrations/runner.py" in payload["compiled_modules"]
     assert "sqlspec/observability/_formatting.py" in payload["compiled_modules"]
     assert "sqlspec/utils/env.py" in payload["compiled_modules"]
@@ -146,8 +150,6 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/dialects/spanner/_spangres.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/spanner/_spanner.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/fastapi/providers.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/litestar/providers.py" in payload["interpreted_modules"]
     assert "sqlspec/storage/_arrow_payload.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["preserved_exclusions"]
     assert payload["adapter_pool_runtimes"]["status"] == "compiled"

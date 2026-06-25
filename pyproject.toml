@@ -255,6 +255,8 @@ include = [
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators
   "sqlspec/extensions/events/_payload.py",         # Event JSON payload codec helpers
   "sqlspec/extensions/events/_queue.py",           # Table-backed event queue
+  "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider construction
+  "sqlspec/extensions/litestar/providers.py",      # Litestar filter provider construction
   "sqlspec/extensions/adk/_types.py",              # ADK session/event record types
   "sqlspec/extensions/adk/memory/_types.py",       # ADK memory record types
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
