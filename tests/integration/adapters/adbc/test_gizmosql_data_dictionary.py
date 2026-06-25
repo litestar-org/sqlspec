@@ -1,7 +1,7 @@
 """GizmoSQL data dictionary and migration integration tests for ADBC."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -13,10 +13,16 @@ from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 pytestmark = [pytest.mark.adbc, pytest.mark.xdist_group("gizmosql")]
 
 
+def _get_objects_dict_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [cast("dict[str, Any]", item) for item in value if isinstance(item, dict)]
+
+
 def _find_get_objects_table(rows: list[dict[str, Any]], table_name: str) -> dict[str, Any] | None:
     for catalog in rows:
-        for db_schema in catalog.get("catalog_db_schemas") or []:
-            for table in db_schema.get("db_schema_tables") or []:
+        for db_schema in _get_objects_dict_list(catalog.get("catalog_db_schemas")):
+            for table in _get_objects_dict_list(db_schema.get("db_schema_tables")):
                 if table.get("table_name") == table_name:
                     return table
     return None
