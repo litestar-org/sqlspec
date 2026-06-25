@@ -267,7 +267,11 @@ SQLSpec does not define a portable SQL statistics contract. It wraps
      - Unsupported (raises ``OperationalError``)
    * - Flight SQL / GizmoSQL
      - Native overlay is server dependent; central dialect fallback applies
-       when the backend dialect is mapped
+       when the backend dialect is mapped. DuckDB-backed GizmoSQL exposes
+       catalogs, schemas, tables, columns, and constraints through
+       ``GetObjects`` when the server returns a complete payload; incomplete
+       constraint or nullability metadata falls back to SQLSpec's central
+       dialect SQL.
      - Server dependent
    * - BigQuery
      - Central BigQuery SQL fallback
