@@ -1017,6 +1017,8 @@ class SQLProcessor:
         self._cache.clear()
         self._cache_hits = 0
         self._cache_misses = 0
+        self._last_cache_key = None
+        self._last_result = None
         self._parse_cache.clear()
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0

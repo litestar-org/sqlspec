@@ -62,6 +62,9 @@ v0.51.0 - ADK 2.0 clean-break store contract
 * ``DMLResult.all()`` and ``one_or_none()`` no longer raise ``AttributeError``
   when called with ``schema_type``; the fast DML result path now initializes its
   schema-row caches.
+* ``SQLProcessor.clear_cache()`` now resets the single-entry micro-cache, so the
+  next compile of a previously compiled statement is recorded as a miss and
+  repopulates the cache instead of returning a stale result.
 
 v0.50.1 - DuckDB extension lifecycle and SQLGlot builder modernization
 ------------------------------------------------------------------------------

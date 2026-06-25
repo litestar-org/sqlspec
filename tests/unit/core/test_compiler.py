@@ -236,6 +236,21 @@ def test_sql_processor_custom_cache_size(basic_statement_config: "StatementConfi
     assert processor._parse_cache_max_size == 500
 
 
+def test_clear_cache_resets_micro_cache(basic_statement_config: "StatementConfig") -> None:
+    """clear_cache() must reset the micro-cache so the next compile of the same SQL misses and repopulates the cache."""
+    processor = SQLProcessor(basic_statement_config)
+    sql = "SELECT * FROM users WHERE id = 1"
+
+    processor.compile(sql)
+    processor.clear_cache()
+    processor.compile(sql)
+
+    stats = processor.cache_stats
+    assert stats["size"] == 1
+    assert stats["hits"] == 0
+    assert stats["misses"] == 1
+
+
 def test_basic_compilation(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test basic SQL compilation functionality."""
     processor = SQLProcessor(basic_statement_config)
