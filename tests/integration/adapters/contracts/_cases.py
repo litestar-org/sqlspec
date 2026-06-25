@@ -350,6 +350,7 @@ SYNC_DRIVER_CASES = (
         extra_assertions=(
             "param_codecs:bigquery",
             "driver_features:bigquery_sql_features",
+            "driver_features:bigquery_job_controls",
             "streaming_native:bigquery",
         ),
     ),
@@ -648,7 +649,10 @@ DEFERRED_DRIVER_CASES = (
         "spanner",
         "sync",
         integration_status="deferred",
-        reason="Spanner remains optional and needs existing opt-in gate wiring.",
+        reason=(
+            "Spanner session controls remain covered by unit and adapter-specific tests until "
+            "the shared matrix has safe active opt-in gate wiring."
+        ),
     ),
 )
 

@@ -1,6 +1,7 @@
 """Public behavior helpers for adapter-local and central contract tests."""
 
 import contextlib
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -2459,6 +2460,27 @@ def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
 
 
 register_sync_extra_assertion("driver_features:bigquery_sql_features", DRIVER_FEATURES_SCOPE, _bigquery_sql_features)
+
+
+def _bigquery_job_controls(driver: object, case: DriverCase) -> None:
+    """Fold BigQuery job-control wiring into the shared driver-feature contract."""
+    assert case.adapter == "bigquery"
+    sync_driver = cast("SyncContractDriver", driver)
+    assert not hasattr(driver, "execute_with_job")
+    assert not hasattr(driver, "export_table_to_storage")
+
+    execute_parameters = inspect.signature(sync_driver.execute).parameters
+    for parameter_name in ("job_config", "job_retry", "job_result_timeout", "request_timeout", "use_query_and_wait"):
+        assert parameter_name not in execute_parameters
+
+    assert getattr(driver, "_job_result_timeout") == 30.0
+    assert getattr(driver, "_job_retry_deadline") == 0.0
+    assert getattr(driver, "_job_retry") is None
+    assert getattr(driver, "_request_timeout") == 15.0
+    assert getattr(driver, "_use_query_and_wait") is False
+
+
+register_sync_extra_assertion("driver_features:bigquery_job_controls", DRIVER_FEATURES_SCOPE, _bigquery_job_controls)
 
 
 def assert_sync_driver_features_contract(driver: object, case: DriverCase) -> None:

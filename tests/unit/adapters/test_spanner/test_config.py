@@ -5,7 +5,12 @@ import pytest
 from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
 
 from sqlspec.adapters.spanner import config as config_module
-from sqlspec.adapters.spanner.config import SpannerConnectionParams, SpannerPoolParams, SpannerSyncConfig
+from sqlspec.adapters.spanner.config import (
+    SpannerConnectionParams,
+    SpannerDriverFeatures,
+    SpannerPoolParams,
+    SpannerSyncConfig,
+)
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
@@ -70,6 +75,7 @@ def test_driver_features_defaults() -> None:
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     assert config.driver_features["enable_uuid_conversion"] is True
     assert config.driver_features["json_serializer"] is not None
+    assert "request_options" in SpannerDriverFeatures.__annotations__
 
 
 def test_driver_feature_session_labels_are_routed_to_pool() -> None:

@@ -36,15 +36,18 @@ _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
+    from google.api_core.retry import Retry
+    from google.cloud.spanner_v1 import DirectedReadOptions, RequestOptions
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
-    from sqlspec.core import ArrowResult
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.core.statement import SQL
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = (
     "SpannerDataDictionary",
@@ -111,11 +114,30 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+class _PerCallExecuteOptions:
+    """Per-call Spanner execution options captured for a single dispatch."""
+
+    __slots__ = ("directed_read_options", "request_options", "retry", "timeout")
+
+    def __init__(
+        self,
+        *,
+        request_options: "RequestOptions | dict[str, Any] | None" = None,
+        directed_read_options: "DirectedReadOptions | None" = None,
+        retry: "Retry | None" = None,
+        timeout: "float | None" = None,
+    ) -> None:
+        self.request_options = request_options
+        self.directed_read_options = directed_read_options
+        self.retry = retry
+        self.timeout = timeout
+
+
 class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_type_converter")
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_pending_execute_options", "_type_converter")
 
     def __init__(
         self,
@@ -136,6 +158,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._data_dictionary: SpannerDataDictionary | None = None
+        self._pending_execute_options: _PerCallExecuteOptions | None = None
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS - The Execution Engine
@@ -146,10 +169,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
-        execute_kwargs = self._execute_kwargs()
 
         if statement.returns_rows():
             reader = cast("_SpannerReadProtocol", cursor)
+            execute_kwargs = self._execute_kwargs(for_read=True)
             result_set = reader.execute_sql(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             rows = list(result_set)
             try:
@@ -174,6 +197,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         if supports_write(cursor):
             writer = cast("_SpannerWriteProtocol", cursor)
+            execute_kwargs = self._execute_kwargs()
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
@@ -225,7 +249,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         script_params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(script_params)
         param_types_map = self._infer_param_types(coerced_params)
-        execute_kwargs = self._execute_kwargs()
+        read_execute_kwargs = self._execute_kwargs(for_read=True)
+        write_execute_kwargs = self._execute_kwargs()
         for stmt in statements:
             try:
                 parsed = _sqlglot.parse_one(stmt)
@@ -236,9 +261,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
-                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **execute_kwargs)
+                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **write_execute_kwargs)
             else:
-                _ = list(reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map, **execute_kwargs))
+                _ = list(
+                    reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map, **read_execute_kwargs)
+                )
             count += 1
 
         return self.create_execution_result(
@@ -270,8 +297,93 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "SpannerExceptionHandler":
         return SpannerExceptionHandler()
 
-    def _execute_kwargs(self) -> dict[str, Any]:
-        return {key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features}
+    def execute(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute a statement with optional Spanner per-call request options."""
+        execute_options = self._pop_execute_options(kwargs)
+        if execute_options is None:
+            return super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        previous_options = self._pending_execute_options
+        self._pending_execute_options = execute_options
+        try:
+            return super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        finally:
+            self._pending_execute_options = previous_options
+
+    def execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute a batch statement with optional Spanner per-call request options."""
+        execute_options = self._pop_execute_options(kwargs)
+        if execute_options is None:
+            return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+        previous_options = self._pending_execute_options
+        self._pending_execute_options = execute_options
+        try:
+            return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+        finally:
+            self._pending_execute_options = previous_options
+
+    def execute_script(
+        self,
+        statement: "str | SQL",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute a multi-statement script with optional Spanner per-call request options."""
+        execute_options = self._pop_execute_options(kwargs)
+        if execute_options is None:
+            return super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
+        previous_options = self._pending_execute_options
+        self._pending_execute_options = execute_options
+        try:
+            return super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
+        finally:
+            self._pending_execute_options = previous_options
+
+    def _execute_kwargs(self, *, for_read: bool = False) -> dict[str, Any]:
+        kwargs = {key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features}
+        request_options = self.driver_features.get("request_options")
+        if request_options is not None:
+            kwargs["request_options"] = request_options
+        directed_read_options = self.driver_features.get("directed_read_options")
+        if for_read and directed_read_options is not None:
+            kwargs["directed_read_options"] = directed_read_options
+        pending = self._pending_execute_options
+        if pending is not None:
+            if pending.request_options is not None:
+                kwargs["request_options"] = pending.request_options
+            if pending.retry is not None:
+                kwargs["retry"] = pending.retry
+            if pending.timeout is not None:
+                kwargs["timeout"] = pending.timeout
+            if for_read and pending.directed_read_options is not None:
+                kwargs["directed_read_options"] = pending.directed_read_options
+        return kwargs
+
+    def _pop_execute_options(self, kwargs: dict[str, Any]) -> "_PerCallExecuteOptions | None":
+        if not any(key in kwargs for key in ("request_options", "directed_read_options", "retry", "timeout")):
+            return None
+        return _PerCallExecuteOptions(
+            request_options=kwargs.pop("request_options", None),
+            directed_read_options=kwargs.pop("directed_read_options", None),
+            retry=kwargs.pop("retry", None),
+            timeout=kwargs.pop("timeout", None),
+        )
 
     # ─────────────────────────────────────────────────────────────────────────────
     # ARROW API METHODS

@@ -170,6 +170,7 @@ def try_bulk_insert(
     expression: "exp.Expr | None" = None,
     *,
     allow_parse: bool = True,
+    result_timeout: float | None = None,
 ) -> "int | None":
     """Attempt bulk insert via Parquet load.
 
@@ -179,6 +180,7 @@ def try_bulk_insert(
         parameters: Parameter dictionaries for the insert.
         expression: Optional parsed expression to reuse.
         allow_parse: Whether to parse SQL when expression is unavailable.
+        result_timeout: Timeout forwarded to the load job request and result wait.
 
     Returns:
         Inserted row count if bulk insert succeeds, otherwise None.
@@ -204,8 +206,8 @@ def try_bulk_insert(
         buffer.seek(0)
 
         job_config = build_load_job_config("parquet", overwrite=False)
-        job = connection.load_table_from_file(buffer, table_name, job_config=job_config)
-        job.result()
+        job = connection.load_table_from_file(buffer, table_name, job_config=job_config, timeout=result_timeout)
+        job.result(timeout=result_timeout)
         return len(parameters)
     except ImportError:
         logger.debug("pyarrow not available, falling back to literal inlining")
@@ -535,6 +537,10 @@ def run_query_job(
     retry: Retry | None = None,
     timeout: float | None = None,
     job_retry: Retry | None = None,
+    api_method: str | None = None,
+    timestamp_precision: Any | None = None,
+    job_id: str | None = None,
+    job_id_prefix: str | None = None,
 ) -> QueryJob:
     """Execute a BigQuery query job with merged configuration.
 
@@ -552,6 +558,11 @@ def run_query_job(
         job_retry: Retry policy attached to the returned query job. ``None``
             disables job retries and the client's built-in ``jobs.insert``
             retry wrapper (which carries a fixed 600s deadline).
+        api_method: Optional query API method override.
+        timestamp_precision: Optional timestamp precision override.
+        job_id: Explicit BigQuery job ID.
+        job_id_prefix: Prefix used by BigQuery to generate a job ID when
+            ``job_id`` is not provided.
 
     Returns:
         QueryJob object representing the executed job.
@@ -569,7 +580,49 @@ def run_query_job(
         "timeout": timeout,
         "job_retry": job_retry,
     }
+    if api_method is not None:
+        query_kwargs["api_method"] = api_method
+    if timestamp_precision is not None:
+        query_kwargs["timestamp_precision"] = timestamp_precision
+    if job_id is not None:
+        query_kwargs["job_id"] = job_id
+    elif job_id_prefix is not None:
+        query_kwargs["job_id_prefix"] = job_id_prefix
     return connection.query(sql, **query_kwargs)
+
+
+def _run_query_and_wait(
+    connection: "BigQueryConnection",
+    sql: str,
+    parameters: Any,
+    *,
+    default_job_config: QueryJobConfig | None,
+    json_serializer: "Callable[[Any], str]",
+    retry: Retry | None = None,
+    wait_timeout: float | None = None,
+    job_retry: Retry | None = None,
+    page_size: int | None = None,
+    max_results: int | None = None,
+) -> Any:
+    """Execute a BigQuery query via query_and_wait and return the row iterator."""
+    final_job_config = QueryJobConfig()
+    if default_job_config:
+        copy_job_config(default_job_config, final_job_config)
+    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
+
+    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
+    if retry is not None:
+        query_kwargs["retry"] = retry
+    if wait_timeout is not None:
+        query_kwargs["api_timeout"] = wait_timeout
+        query_kwargs["wait_timeout"] = wait_timeout
+    if job_retry is not None:
+        query_kwargs["job_retry"] = job_retry
+    if page_size is not None:
+        query_kwargs["page_size"] = page_size
+    if max_results is not None:
+        query_kwargs["max_results"] = max_results
+    return connection.query_and_wait(sql, **query_kwargs)
 
 
 def build_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "LoadJobConfig":
