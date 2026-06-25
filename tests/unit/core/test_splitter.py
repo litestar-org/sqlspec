@@ -54,6 +54,19 @@ def test_contains_executable_content_accepts_pre_tokenized_statement(monkeypatch
     assert splitter._contains_executable_content(tokens) is True
 
 
+def test_split_cache_keys_on_script_text_not_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Splitter result cache must key on script text, not hash(sql); a hash collision must not return the wrong split."""
+    splitter = StatementSplitter(GenericDialectConfig())
+    splitter._result_cache.clear()
+    monkeypatch.setattr(splitter_module, "hash", lambda _sql: 0, raising=False)
+
+    result_a = splitter.split("SELECT 1")
+    result_b = splitter.split("SELECT 2")
+
+    assert result_a == ["SELECT 1"]
+    assert result_b == ["SELECT 2"]
+
+
 def test_contains_executable_content_rejects_comment_only_tokens() -> None:
     splitter = StatementSplitter(GenericDialectConfig())
     tokens = [Token(TokenType.COMMENT_LINE, "-- note", 1, 1, 0), Token(TokenType.WHITESPACE, "\n", 1, 8, 7)]

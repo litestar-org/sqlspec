@@ -831,8 +831,7 @@ class StatementSplitter:
         Returns:
             List of individual SQL statements
         """
-        script_hash = hash(sql)
-        cache_key = CacheKey(("split", self._dialect.name, script_hash, self._strip_trailing_semicolon))
+        cache_key = CacheKey(("split", self._dialect.name, sql, self._strip_trailing_semicolon))
 
         cached_result = self._result_cache.get(cache_key)
         if cached_result is not None:
