@@ -69,9 +69,9 @@ Capability matrix
      - Atomic when the driver owns the transaction; rolls back on error
      - Always on
    * - oracledb
-     - ``executemany`` (default); direct path load (opt-in)
+     - direct path load (Thin mode, default); ``executemany`` fallback
      - Per ``execute_many``; array-DML row counts available
-     - ``enable_direct_path_load`` (Thin only); ``oracle_batch_errors`` /
+     - ``enable_direct_path_load=False`` to force fallback; ``oracle_batch_errors`` /
        ``oracle_array_dml_row_counts`` execution args
    * - MySQL family (pymysql, asyncmy, aiomysql, mysql-connector)
      - ``executemany`` (default); ``LOAD DATA LOCAL INFILE`` (opt-in)
@@ -108,8 +108,10 @@ Some fast paths are opt-in because they read local files or change semantics:
   The MySQL server must also have ``local_infile`` enabled. mysql-connector
   additionally honors ``allow_local_infile_in_path`` -- the staged temp file must
   live under that directory when it is set.
-- **Oracle direct path load** (``enable_direct_path_load``) applies only in Thin
-  mode and silently falls back to ``executemany`` otherwise.
+- **Oracle direct path load** is the default bulk-ingest transport in Thin mode.
+  Set ``enable_direct_path_load=False`` to force ``executemany``. Connections
+  that do not expose the Direct Path Load API, including Thick-mode connections,
+  silently fall back to ``executemany``.
 - **BigQuery Storage Write API** (``enable_storage_write_api``) streams Arrow
   rows for ``load_from_arrow`` appends and falls back to the Parquet load job
   when the Storage client is unavailable; ``overwrite=True`` always uses a

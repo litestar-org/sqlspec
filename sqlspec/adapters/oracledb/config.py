@@ -197,7 +197,8 @@ class OracleDriverFeatures(TypedDict):
      Defaults to "table_queue" (works on all Oracle editions without special privileges).
     enable_direct_path_load: Route load_from_arrow through Connection.direct_path_load.
      Thin-mode only; falls back to executemany when the API is absent or the
-     connection is in Thick mode. Defaults to False.
+     connection is in Thick mode. Defaults to True; set to False to force
+     executemany.
     Native pipeline execution is runtime-gated by driver API support, Oracle Database
      version, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment override; there is
      no adapter config switch that can force-enable unsupported pipeline execution.

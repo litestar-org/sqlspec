@@ -1,4 +1,4 @@
-"""Oracle direct path load opt-in integration coverage (Thin mode)."""
+"""Oracle direct path load default integration coverage (Thin mode)."""
 
 from collections.abc import AsyncGenerator, Generator
 
@@ -20,8 +20,7 @@ def oracle_sync_dpl_config(oracle_23ai_service: "OracleService") -> "Generator[O
             "service_name": oracle_23ai_service.service_name,
             "user": oracle_23ai_service.user,
             "password": oracle_23ai_service.password,
-        },
-        driver_features={"enable_direct_path_load": True},
+        }
     )
     yield config
     config.close_pool()
@@ -36,8 +35,7 @@ async def oracle_async_dpl_config(oracle_23ai_service: "OracleService") -> "Asyn
             "service_name": oracle_23ai_service.service_name,
             "user": oracle_23ai_service.user,
             "password": oracle_23ai_service.password,
-        },
-        driver_features={"enable_direct_path_load": True},
+        }
     )
     yield config
     await config.close_pool()

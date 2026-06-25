@@ -1,4 +1,4 @@
-"""Oracle direct path load opt-in bulk ingest (Thin-mode gated)."""
+"""Oracle direct path load default bulk ingest (Thin-mode gated)."""
 
 from typing import Any, cast
 
@@ -69,11 +69,9 @@ def _arrow() -> pa.Table:
     return pa.table({"id": [1, 2], "name": ["a", "b"]})
 
 
-def test_direct_path_load_used_when_thin_and_enabled() -> None:
+def test_direct_path_load_used_by_default_when_thin() -> None:
     conn = _DPLConnection(thin=True, username="SCOTT")
-    driver = OracleSyncDriver(
-        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": True}
-    )
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
 
     driver.load_from_arrow("MYTAB", _arrow())
 
@@ -110,9 +108,11 @@ def test_thick_mode_falls_back_to_executemany() -> None:
     assert len(conn._cursor.executemany_calls) == 1
 
 
-def test_feature_off_falls_back_to_executemany() -> None:
+def test_direct_path_load_can_be_disabled() -> None:
     conn = _DPLConnection(thin=True)
-    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    driver = OracleSyncDriver(
+        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": False}
+    )
 
     driver.load_from_arrow("MYTAB", _arrow())
 
@@ -181,11 +181,9 @@ class _AsyncDPLConnection:
         return self._cursor
 
 
-async def test_async_direct_path_load_used_when_thin_and_enabled() -> None:
+async def test_async_direct_path_load_used_by_default_when_thin() -> None:
     conn = _AsyncDPLConnection(thin=True, username="SCOTT")
-    driver = OracleAsyncDriver(
-        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": True}
-    )
+    driver = OracleAsyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
 
     await driver.load_from_arrow("MYSCHEMA.MYTAB", _arrow())
 
@@ -209,9 +207,11 @@ async def test_async_direct_path_load_defaults_schema_to_username() -> None:
     assert conn.dpl_calls[0]["table_name"] == "MYTAB"
 
 
-async def test_async_feature_off_falls_back_to_executemany() -> None:
+async def test_async_direct_path_load_can_be_disabled() -> None:
     conn = _AsyncDPLConnection(thin=True)
-    driver = OracleAsyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    driver = OracleAsyncDriver(
+        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": False}
+    )
 
     await driver.load_from_arrow("MYTAB", _arrow())
 

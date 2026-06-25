@@ -35,6 +35,7 @@ from sqlspec.adapters.oracledb.core import (
     resolve_row_metadata,
     resolve_rowcount,
     supports_df_batches,
+    supports_direct_path_load,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.core import (
@@ -670,11 +671,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            use_direct_path = (
-                bool(self.driver_features.get("enable_direct_path_load"))
-                and hasattr(self.connection, "direct_path_load")
-                and getattr(self.connection, "thin", False)
-            )
+            use_direct_path = self.driver_features.get(
+                "enable_direct_path_load", True
+            ) is not False and supports_direct_path_load(self.connection)
             if use_direct_path:
                 if "." in table:
                     schema_name, _, table_name = table.partition(".")
@@ -1267,11 +1266,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            use_direct_path = (
-                bool(self.driver_features.get("enable_direct_path_load"))
-                and hasattr(self.connection, "direct_path_load")
-                and getattr(self.connection, "thin", False)
-            )
+            use_direct_path = self.driver_features.get(
+                "enable_direct_path_load", True
+            ) is not False and supports_direct_path_load(self.connection)
             if use_direct_path:
                 if "." in table:
                     schema_name, _, table_name = table.partition(".")
