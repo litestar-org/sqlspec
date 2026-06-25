@@ -207,11 +207,12 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
                         txn_id = txn._transaction_id
                     except AttributeError:
                         txn_id = None
+                    mutations = getattr(txn, "_mutations", None)
                     try:
                         committed = txn.committed
                     except AttributeError:
                         committed = None
-                    if txn_id is not None and committed is None:
+                    if committed is None and (txn_id is not None or bool(mutations)):
                         txn.commit()
                 else:
                     try:
