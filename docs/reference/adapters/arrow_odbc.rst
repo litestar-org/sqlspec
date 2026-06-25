@@ -35,3 +35,15 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.arrow_odbc.data_dictionary.ArrowOdbcDataDictionary
    :members:
    :show-inheritance:
+
+Schema Discovery
+================
+
+``ArrowOdbcDataDictionary.get_columns`` first uses bundled dialect catalog
+queries. When no query exists for the detected dialect (or it returns no
+rows) and a table name is given, the driver issues a zero-row probe
+(``SELECT * FROM "schema"."table" WHERE 1=0``) and derives column names,
+ordering, nullability, and SQL type names from the Arrow reader schema.
+Arrow-derived type names are approximations (for example ``VARCHAR`` for any
+string column); ``mssql_python`` and other ODBC adapters without native
+metadata APIs remain SQL-only.
