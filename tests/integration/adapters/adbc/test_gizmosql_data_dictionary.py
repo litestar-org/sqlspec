@@ -13,6 +13,15 @@ from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 pytestmark = [pytest.mark.adbc, pytest.mark.xdist_group("gizmosql")]
 
 
+def _find_get_objects_table(rows: list[dict[str, Any]], table_name: str) -> dict[str, Any] | None:
+    for catalog in rows:
+        for db_schema in catalog.get("catalog_db_schemas") or []:
+            for table in db_schema.get("db_schema_tables") or []:
+                if table.get("table_name") == table_name:
+                    return table
+    return None
+
+
 @xfail_if_driver_missing
 def test_gizmosql_data_dictionary_tables_columns_and_indexes(adbc_gizmosql_session: AdbcDriver) -> None:
     """GizmoSQL should expose DuckDB table and column metadata through the ADBC dictionary."""
@@ -50,6 +59,26 @@ def test_gizmosql_data_dictionary_tables_columns_and_indexes(adbc_gizmosql_sessi
     ).get_data()
     assert schema_rows
     schema_name = schema_rows[0]["table_schema"]
+
+    raw_objects = (
+        adbc_gizmosql_session.connection
+        .adbc_get_objects(depth="all", db_schema_filter=schema_name, table_name_filter="gizmosql_dd_child_adbc")
+        .read_all()
+        .to_pylist()
+    )
+    assert isinstance(raw_objects, list)
+    raw_child = _find_get_objects_table(raw_objects, "gizmosql_dd_child_adbc")
+    assert raw_child is not None
+    assert {column["column_name"] for column in raw_child.get("table_columns") or []} == {
+        "id",
+        "parent_id",
+        "amount",
+        "created_at",
+    }
+    constraints = raw_child.get("table_constraints") or []
+    if not constraints:
+        pytest.xfail("GizmoSQL FlightSQL GetObjects did not return constraints; SQLSpec must use central fallback")
+    assert any(str(constraint.get("constraint_type")).upper() == "FOREIGN KEY" for constraint in constraints)
 
     table_names = {table["table_name"] for table in dictionary.get_tables(adbc_gizmosql_session, schema=schema_name)}
     assert {"gizmosql_dd_parent_adbc", "gizmosql_dd_child_adbc"}.issubset(table_names)
