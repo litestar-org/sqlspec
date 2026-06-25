@@ -65,6 +65,9 @@ v0.51.0 - ADK 2.0 clean-break store contract
 * ``SQLProcessor.clear_cache()`` now resets the single-entry micro-cache, so the
   next compile of a previously compiled statement is recorded as a miss and
   repopulates the cache instead of returning a stale result.
+* The SQL statement splitter caches results on the script text rather than
+  ``hash(sql)``, preventing a hash collision between two distinct scripts from
+  returning the wrong split.
 
 v0.50.1 - DuckDB extension lifecycle and SQLGlot builder modernization
 ------------------------------------------------------------------------------
