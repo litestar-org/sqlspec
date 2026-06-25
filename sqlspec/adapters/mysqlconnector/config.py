@@ -27,6 +27,7 @@ from sqlspec.adapters.mysqlconnector.driver import (
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, SyncDatabaseConfig
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -189,6 +190,7 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
     cursor_options: NotRequired[MysqlConnectorCursorParams]
+    enable_local_infile_bulk_load: NotRequired[bool]
 
 
 class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
@@ -314,6 +316,10 @@ class MysqlConnectorSyncConfig(
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("allow_local_infile"):
+            msg = "enable_local_infile_bulk_load requires allow_local_infile=True in connection_config."
+            raise ImproperConfigurationError(msg)
+
         super().__init__(
             connection_config=connection_config,
             connection_instance=connection_instance,
@@ -428,6 +434,10 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         self._user_connection_hook: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]] | None = (
             features_dict.pop("on_connection_create", None)
         )
+
+        if features_dict.get("enable_local_infile_bulk_load") and not self.connection_config.get("allow_local_infile"):
+            msg = "enable_local_infile_bulk_load requires allow_local_infile=True in connection_config."
+            raise ImproperConfigurationError(msg)
 
         super().__init__(
             connection_config=self.connection_config,

@@ -4,7 +4,9 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+import tempfile
 from collections.abc import Sized
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import mysql.connector
@@ -14,11 +16,13 @@ from sqlspec.adapters.mysqlconnector.core import (
     MysqlConnectorAsyncStreamSource,
     MysqlConnectorSyncStreamSource,
     build_insert_statement,
+    build_load_data_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     detect_json_columns_from_description,
     driver_profile,
+    encode_records_for_local_infile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -248,17 +252,34 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = build_insert_statement(table, columns)
-            prepared_records = (
-                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                if self._arrow_table_needs_parameter_preparation(arrow_table)
-                else records
-            )
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.executemany(insert_sql, cast("Any", prepared_records))
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
+            use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
+            if use_infile:
+                payload = encode_records_for_local_infile(records)
+                with tempfile.NamedTemporaryFile(mode="wb", suffix=".tsv", delete=False) as tmp:
+                    tmp.write(payload)
+                    tmp_name = tmp.name
+                try:
+                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    exc_handler = self.handle_database_exceptions()
+                    with exc_handler, self.with_cursor(self.connection) as cursor:
+                        cursor.execute(load_sql)
+                    if exc_handler.pending_exception is not None:
+                        raise exc_handler.pending_exception from None
+                finally:
+                    Path(tmp_name).unlink(missing_ok=True)
+            else:
+                insert_sql = build_insert_statement(table, columns)
+                prepared_records = (
+                    self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                    if needs_preparation
+                    else records
+                )
+                exc_handler = self.handle_database_exceptions()
+                with exc_handler, self.with_cursor(self.connection) as cursor:
+                    cursor.executemany(insert_sql, cast("Any", prepared_records))
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -485,17 +506,34 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = build_insert_statement(table, columns)
-            prepared_records = (
-                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                if self._arrow_table_needs_parameter_preparation(arrow_table)
-                else records
-            )
-            exc_handler = self.handle_database_exceptions()
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                await cursor.executemany(insert_sql, cast("Any", prepared_records))
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
+            use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
+            if use_infile:
+                payload = encode_records_for_local_infile(records)
+                with tempfile.NamedTemporaryFile(mode="wb", suffix=".tsv", delete=False) as tmp:
+                    tmp.write(payload)
+                    tmp_name = tmp.name
+                try:
+                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    exc_handler = self.handle_database_exceptions()
+                    async with exc_handler, self.with_cursor(self.connection) as cursor:
+                        await cursor.execute(load_sql)
+                    if exc_handler.pending_exception is not None:
+                        raise exc_handler.pending_exception from None
+                finally:
+                    Path(tmp_name).unlink(missing_ok=True)  # noqa: ASYNC240
+            else:
+                insert_sql = build_insert_statement(table, columns)
+                prepared_records = (
+                    self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                    if needs_preparation
+                    else records
+                )
+                exc_handler = self.handle_database_exceptions()
+                async with exc_handler, self.with_cursor(self.connection) as cursor:
+                    await cursor.executemany(insert_sql, cast("Any", prepared_records))
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
