@@ -28,8 +28,8 @@ When a user returns, the agent can resume from where it left off.
        connection_config={"dsn": "postgresql://localhost/mydb"},
        extension_config={
            "adk": {
-               "session_table": "adk_sessions",
-               "events_table": "adk_events",
+               "session_table": "adk_session",
+               "events_table": "adk_event",
            }
        },
    )

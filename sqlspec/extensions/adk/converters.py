@@ -1,9 +1,9 @@
 """Conversion functions between ADK models and database records.
 
 Implements full-event JSON storage: the entire Event is serialized via
-``Event.model_dump_json(exclude_none=True)`` into a single ``event_json``
+``Event.model_dump(exclude_none=True, mode="json")`` into a single ``event_data``
 column, with a small set of indexed scalar columns extracted alongside for
-query performance. Reconstruction uses ``Event.model_validate_json()``.
+query performance. Reconstruction uses ``Event.model_validate()``.
 
 Also provides scoped-state helpers that normalise ADK state prefixes
 (``app:``, ``user:``, ``temp:``) so the shared service layer can split,
@@ -106,34 +106,39 @@ def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Se
 # ---------------------------------------------------------------------------
 
 
-def event_to_record(event: "Event", session_id: str) -> EventRecord:
+def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str) -> EventRecord:
     """Convert ADK Event to database record using full-event JSON storage.
 
-    The entire Event is serialized into ``event_json`` via Pydantic's
-    ``model_dump_json(exclude_none=True)``. A small number of indexed scalar
-    columns are extracted alongside for query performance.
+    The entire Event is serialized into ``event_data`` via Pydantic's
+    ``model_dump(exclude_none=True, mode="json")``. Indexed scalar columns are
+    extracted alongside for scoped filtering.
 
     Args:
         event: ADK Event object.
+        app_name: Name of the parent app.
+        user_id: ID of the parent user.
         session_id: ID of the parent session.
 
     Returns:
         EventRecord for database storage.
     """
+    event_data = _normalize_event_data(event.model_dump(exclude_none=True, mode="json"))
     return EventRecord(
+        id=event.id,
+        app_name=app_name,
+        user_id=user_id,
         session_id=session_id,
         invocation_id=event.invocation_id,
-        author=event.author,
         timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
-        event_json=event.model_dump(exclude_none=True, mode="json"),
+        event_data=event_data,
     )
 
 
 def record_to_event(record: "EventRecord") -> "Event":
     """Convert database record to ADK Event.
 
-    Reconstruction is lossless: the full Event is restored from
-    ``event_json`` via ``Event.model_validate_json()``.
+    Reconstruction is lossless for valid ADK payloads: the full Event is
+    restored from ``event_data`` via ``Event.model_validate()``.
 
     Args:
         record: Event database record.
@@ -141,7 +146,11 @@ def record_to_event(record: "EventRecord") -> "Event":
     Returns:
         ADK Event object.
     """
-    return Event.model_validate(record["event_json"])
+    event_data = _normalize_event_data(record["event_data"])
+    event_data.setdefault("id", record["id"])
+    event_data.setdefault("invocation_id", record["invocation_id"])
+    event_data.setdefault("timestamp", record["timestamp"].timestamp())
+    return Event.model_validate(event_data)
 
 
 # ---------------------------------------------------------------------------
@@ -213,3 +222,17 @@ def merge_scoped_state(
     if user_state is not None:
         merged.update(user_state)
     return merged
+
+
+def _normalize_event_data(event_data: "dict[str, Any]") -> "dict[str, Any]":
+    """Return event data acceptable to ADK 2.2's Event model.
+
+    ADK 2.2 guards an assigned ``event.actions = None`` during service writes,
+    but explicit ``actions: null`` does not validate as a durable Event shape.
+    SQLSpec therefore omits that key before storing or restoring payloads.
+    """
+
+    normalized = dict(event_data)
+    if normalized.get("actions") is None:
+        normalized.pop("actions", None)
+    return normalized

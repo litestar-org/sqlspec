@@ -112,6 +112,12 @@ class DuckDBExtensionConfig(TypedDict):
     force_install: NotRequired[bool]
     """Force reinstallation of the extension."""
 
+    install: NotRequired[bool]
+    """Force an explicit install_extension() call even for a name-only config."""
+
+    required: NotRequired[bool]
+    """When True, install/load failure raises instead of best-effort WARNING."""
+
 
 class DuckDBSecretConfig(TypedDict):
     """DuckDB secret configuration for AI/API integrations."""
@@ -133,6 +139,9 @@ class DuckDBSecretConfig(TypedDict):
 
     persistent: NotRequired[bool]
     """Persist the secret to DuckDB's configured secret directory."""
+
+    required: NotRequired[bool]
+    """When True, secret-creation failure raises (and is verified). Default best-effort."""
 
 
 class DuckDBDriverFeatures(TypedDict):

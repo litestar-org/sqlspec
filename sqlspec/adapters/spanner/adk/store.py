@@ -2,17 +2,16 @@
 
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from google.cloud.spanner_v1 import param_types
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.exceptions import OperationalError
-from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.sync_tools import async_, run_
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
@@ -24,9 +23,11 @@ if TYPE_CHECKING:
 __all__ = ("SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
 
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
+MIN_DROP_TABLE_TOKENS: Final = 3
+MIN_DROP_SEARCH_INDEX_TOKENS: Final = 4
 
 
-class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
+class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
     """Spanner ADK store backed by synchronous Spanner client."""
 
     connector_name: ClassVar[str] = "spanner"
@@ -43,8 +44,106 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         )
         self._events_row_deletion_policy = _spanner_row_deletion_policy(adk_config, "event_ttl_seconds", "timestamp")
 
+    def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        self._create_tables()
+
+    def create_session(
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+    ) -> SessionRecord:
+        """Create a new session."""
+        return self._create_session(session_id, app_name, user_id, state, owner_id)
+
+    def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        """Get session by ID."""
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
+        self._update_session_state(app_name, user_id, session_id, state)
+
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
+        return self._list_sessions(app_name, user_id)
+
+    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and associated events."""
+        self._delete_session(app_name, user_id, session_id)
+
+    def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        self._append_event(event_record)
+
+    def append_event_and_update_state(
+        self,
+        event_record: EventRecord,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
+    ) -> SessionRecord:
+        """Atomically append an event and update the session's durable state."""
+        return self._append_event_and_update_state(
+            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        )
+
+    def get_events(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
+    ) -> "list[EventRecord]":
+        """Get events for a session."""
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+
+    def delete_expired_events(self, before: datetime) -> int:
+        """Delete events older than a timestamp."""
+        return self._delete_expired_events(before)
+
+    def delete_idle_sessions(self, updated_before: datetime) -> int:
+        """Delete sessions older than a timestamp."""
+        return self._delete_idle_sessions(updated_before)
+
+    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state."""
+        return self._get_app_state(app_name)
+
+    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state."""
+        return self._get_user_state(app_name, user_id)
+
+    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state."""
+        self._upsert_app_state(app_name, state)
+
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state."""
+        self._upsert_user_state(app_name, user_id, state)
+
+    def get_metadata(self, key: str) -> "str | None":
+        """Return a metadata value."""
+        return self._get_metadata(key)
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set a metadata value."""
+        self._set_metadata(key, value)
+
     def _database(self) -> "Database":
         return self._config.get_database()
+
+    def _get_reset_drop_tables_sql(self) -> "list[str]":
+        return _filter_existing_spanner_drops(super()._get_reset_drop_tables_sql(), self._existing_tables())
+
+    def _existing_tables(self) -> "set[str]":
+        database = self._database()
+        return {table.table_id for table in database.list_tables()}  # type: ignore[no-untyped-call]
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -71,12 +170,25 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
     def _event_param_types(self) -> "dict[str, Any]":
         json_type = _json_param_type()
         return {
+            "id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
             "invocation_id": SPANNER_PARAM_TYPES.STRING,
-            "author": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
-            "event_json": json_type,
+            "event_data": json_type,
         }
+
+    def _app_state_param_types(self) -> "dict[str, Any]":
+        return {"app_name": SPANNER_PARAM_TYPES.STRING, "state": _json_param_type()}
+
+    def _user_state_param_types(self) -> "dict[str, Any]":
+        return {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "state": _json_param_type(),
+        }
+
+    def _metadata_param_types(self) -> "dict[str, Any]":
+        return {"key": SPANNER_PARAM_TYPES.STRING, "value": SPANNER_PARAM_TYPES.STRING}
 
     def _decode_state(self, raw: Any) -> Any:
         if isinstance(raw, str):
@@ -119,23 +231,47 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             "update_time": datetime.now(timezone.utc),
         }
 
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return await async_(self._create_session)(session_id, app_name, user_id, state, owner_id)
+    def _get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "SessionRecord | None":
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            update_sql = f"""
+            UPDATE {self._session_table}
+            SET update_time = PENDING_COMMIT_TIMESTAMP()
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
+            """
+            if self._shard_count > 1:
+                update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
+            self._run_write([
+                (
+                    update_sql,
+                    {"app_name": app_name, "user_id": user_id, "id": session_id},
+                    {
+                        "app_name": SPANNER_PARAM_TYPES.STRING,
+                        "user_id": SPANNER_PARAM_TYPES.STRING,
+                        "id": SPANNER_PARAM_TYPES.STRING,
+                    },
+                )
+            ])
 
-    def _get_session(self, session_id: str) -> "SessionRecord | None":
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
-            WHERE id = @id
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
         sql = f"{sql} LIMIT 1"
-        params = {"id": session_id}
-        rows = self._run_read(sql, params, {"id": SPANNER_PARAM_TYPES.STRING})
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id}
+        rows = self._run_read(
+            sql,
+            params,
+            {
+                "app_name": SPANNER_PARAM_TYPES.STRING,
+                "user_id": SPANNER_PARAM_TYPES.STRING,
+                "id": SPANNER_PARAM_TYPES.STRING,
+            },
+        )
         if not rows:
             return None
 
@@ -151,25 +287,28 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         }
         return record
 
-    async def get_session(self, session_id: str) -> "SessionRecord | None":
-        """Get session by ID."""
-        return await async_(self._get_session)(session_id)
-
-    def _update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        params = {"id": session_id, "state": to_json(state)}
+    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": to_json(state)}
         json_type = _json_param_type()
         sql = f"""
             UPDATE {self._session_table}
             SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
-            WHERE id = @id
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
-        self._run_write([(sql, params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type})])
-
-    async def update_session_state(self, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        await async_(self._update_session_state)(session_id, state)
+        self._run_write([
+            (
+                sql,
+                params,
+                {
+                    "app_name": SPANNER_PARAM_TYPES.STRING,
+                    "user_id": SPANNER_PARAM_TYPES.STRING,
+                    "id": SPANNER_PARAM_TYPES.STRING,
+                    "state": json_type,
+                },
+            )
+        ])
 
     def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
         sql = f"""
@@ -202,26 +341,33 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
             records.append(record)
         return records
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return await async_(self._list_sessions)(app_name, user_id)
-
-    def _delete_session(self, session_id: str) -> None:
+    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         shard_clause = (
             f" AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})" if self._shard_count > 1 else ""
         )
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
-        delete_session_sql = f"DELETE FROM {self._session_table} WHERE id = @session_id{shard_clause}"
-        params = {"session_id": session_id}
-        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        delete_session_sql = (
+            f"DELETE FROM {self._session_table} "
+            f"WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
+        )
+        params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        types = {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "session_id": SPANNER_PARAM_TYPES.STRING,
+        }
         self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
 
-    async def delete_session(self, session_id: str) -> None:
-        """Delete session and associated events."""
-        await async_(self._delete_session)(session_id)
-
     def _append_event_and_update_state(
-        self, event_record: "EventRecord", session_id: str, state: "dict[str, Any]"
+        self,
+        event_record: "EventRecord",
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        *,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically insert an event and update session state in one transaction.
 
@@ -233,79 +379,124 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
         Args:
             event_record: Event record to store.
+            app_name: Application name.
+            user_id: User identifier.
             session_id: Session whose state should be updated.
             state: Post-append durable state snapshot.
+            app_state: Optional app-scoped state snapshot.
+            user_state: Optional user-scoped state snapshot.
         """
         event_params: dict[str, Any] = {
+            "id": event_record["id"],
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
-            "author": event_record["author"],
             "timestamp": event_record["timestamp"],
-            "event_json": to_json(event_record["event_json"]),
+            "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
-            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_json)
+            INSERT INTO {self._events_table} (id, session_id, invocation_id, timestamp, event_data)
+            VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
         """
 
         json_type = _json_param_type()
-        state_params: dict[str, Any] = {"id": session_id, "state": to_json(state)}
+        state_params: dict[str, Any] = {
+            "app_name": app_name,
+            "user_id": user_id,
+            "id": session_id,
+            "state": to_json(state),
+        }
         update_sql = f"""
             UPDATE {self._session_table}
             SET state = @state, update_time = PENDING_COMMIT_TIMESTAMP()
-            WHERE id = @id
+            WHERE app_name = @app_name AND user_id = @user_id AND id = @id
         """
         if self._shard_count > 1:
             update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
 
-        self._run_write([
+        statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
             (insert_sql, event_params, self._event_param_types()),
-            (update_sql, state_params, {"id": SPANNER_PARAM_TYPES.STRING, "state": json_type}),
-        ])
+            (
+                update_sql,
+                state_params,
+                {
+                    "app_name": SPANNER_PARAM_TYPES.STRING,
+                    "user_id": SPANNER_PARAM_TYPES.STRING,
+                    "id": SPANNER_PARAM_TYPES.STRING,
+                    "state": json_type,
+                },
+            ),
+        ]
+        if app_state is not None:
+            statements.append((
+                f"""
+                INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
+                VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
+                """,
+                {"app_name": app_name, "state": to_json(app_state)},
+                self._app_state_param_types(),
+            ))
+        if user_state is not None:
+            statements.append((
+                f"""
+                INSERT OR UPDATE {self._user_state_table} (app_name, user_id, state, update_time)
+                VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
+                """,
+                {"app_name": app_name, "user_id": user_id, "state": to_json(user_state)},
+                self._user_state_param_types(),
+            ))
 
-        record = self._get_session(session_id)
+        self._run_write(statements)
+
+        record = self._get_session(app_name, user_id, session_id)
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
         return record
 
-    async def append_event_and_update_state(
-        self, event_record: EventRecord, session_id: str, state: "dict[str, Any]"
-    ) -> SessionRecord:
-        """Atomically append an event and update the session's durable state."""
-        return await async_(self._append_event_and_update_state)(event_record, session_id, state)
-
     def _insert_event(self, event_record: "EventRecord") -> None:
         event_params: dict[str, Any] = {
+            "id": event_record["id"],
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
-            "author": event_record["author"],
             "timestamp": event_record["timestamp"],
-            "event_json": to_json(event_record["event_json"]),
+            "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (session_id, invocation_id, author, timestamp, event_json)
-            VALUES (@session_id, @invocation_id, @author, @timestamp, @event_json)
+            INSERT INTO {self._events_table} (id, session_id, invocation_id, timestamp, event_data)
+            VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
         """
         self._run_write([(insert_sql, event_params, self._event_param_types())])
 
     def _get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
     ) -> "list[EventRecord]":
+        if limit == 0:
+            return []
+
         sql = f"""
-            SELECT session_id, invocation_id, author, timestamp, event_json
-            FROM {self._events_table}
-            WHERE session_id = @session_id
+            SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+            FROM {self._events_table} e
+            JOIN {self._session_table} s ON e.session_id = s.id
+            WHERE s.app_name = @app_name AND s.user_id = @user_id AND e.session_id = @session_id
         """
         if self._shard_count > 1:
-            sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
-        params: dict[str, Any] = {"session_id": session_id}
-        types: dict[str, Any] = {"session_id": SPANNER_PARAM_TYPES.STRING}
+            sql = f"{sql} AND e.shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
+        params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        types: dict[str, Any] = {
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+            "session_id": SPANNER_PARAM_TYPES.STRING,
+        }
         if after_timestamp is not None:
-            sql = f"{sql} AND timestamp > @after_timestamp"
+            sql = f"{sql} AND e.timestamp > @after_timestamp"
             params["after_timestamp"] = after_timestamp
             types["after_timestamp"] = SPANNER_PARAM_TYPES.TIMESTAMP
-        sql = f"{sql} ORDER BY timestamp ASC"
+        sql = f"{sql} ORDER BY e.timestamp ASC"
         if limit is not None:
             sql = f"{sql} LIMIT @limit"
             params["limit"] = limit
@@ -313,28 +504,91 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
         rows = self._run_read(sql, params, types)
         return [
             {
-                "session_id": row[0],
-                "invocation_id": row[1] or "",
-                "author": row[2] or "",
+                "id": row[0],
+                "session_id": row[1],
+                "invocation_id": row[2] or "",
                 "timestamp": row[3],
-                "event_json": row[4],
+                "event_data": self._decode_json(row[4]) or {},
+                "app_name": row[5],
+                "user_id": row[6],
             }
             for row in rows
         ]
-
-    async def get_events(
-        self, session_id: str, after_timestamp: "datetime | None" = None, limit: "int | None" = None
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return await async_(self._get_events)(session_id, after_timestamp, limit)
 
     def _append_event(self, event_record: EventRecord) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
 
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        await async_(self._append_event)(event_record)
+    def _delete_expired_events(self, before: datetime) -> int:
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < @before"
+        return int(
+            cast("Any", self._database()).run_in_transaction(
+                _SpannerUpdateJob(sql, {"before": before}, {"before": SPANNER_PARAM_TYPES.TIMESTAMP})
+            )
+        )
+
+    def _delete_idle_sessions(self, updated_before: datetime) -> int:
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
+        return int(
+            cast("Any", self._database()).run_in_transaction(
+                _SpannerUpdateJob(
+                    sql, {"updated_before": updated_before}, {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
+                )
+            )
+        )
+
+    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
+        rows = self._run_read(sql, {"app_name": app_name}, {"app_name": SPANNER_PARAM_TYPES.STRING})
+        if not rows:
+            return None
+        return self._decode_json(rows[0][0]) or {}
+
+    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        sql = f"""
+            SELECT state
+            FROM {self._user_state_table}
+            WHERE app_name = @app_name AND user_id = @user_id
+            LIMIT 1
+        """
+        rows = self._run_read(
+            sql,
+            {"app_name": app_name, "user_id": user_id},
+            {"app_name": SPANNER_PARAM_TYPES.STRING, "user_id": SPANNER_PARAM_TYPES.STRING},
+        )
+        if not rows:
+            return None
+        return self._decode_json(rows[0][0]) or {}
+
+    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+            INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
+            VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
+        """
+        self._run_write([(sql, {"app_name": app_name, "state": to_json(state)}, self._app_state_param_types())])
+
+    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        sql = f"""
+            INSERT OR UPDATE {self._user_state_table} (app_name, user_id, state, update_time)
+            VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
+        """
+        self._run_write([
+            (sql, {"app_name": app_name, "user_id": user_id, "state": to_json(state)}, self._user_state_param_types())
+        ])
+
+    def _get_metadata(self, key: str) -> "str | None":
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = @key LIMIT 1"
+        rows = self._run_read(sql, {"key": key}, {"key": SPANNER_PARAM_TYPES.STRING})
+        if not rows:
+            return None
+        return str(rows[0][0])
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        sql = f"""
+            INSERT OR UPDATE {self._metadata_table} (key, value)
+            VALUES (@key, @value)
+        """
+        self._run_write([(sql, {"key": key, "value": value}, self._metadata_param_types())])
 
     def _create_tables(self) -> None:
         database = self._database()
@@ -342,18 +596,22 @@ class SpannerSyncADKStore(BaseAsyncADKStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._session_table not in existing_tables:
-            ddl_statements.append(run_(self._get_create_sessions_table_sql)())
+            ddl_statements.append(self._get_create_sessions_table_sql())
         if self._events_table not in existing_tables:
-            ddl_statements.append(run_(self._get_create_events_table_sql)())
+            ddl_statements.append(self._get_create_events_table_sql())
+        if self._app_state_table not in existing_tables:
+            ddl_statements.append(self._get_create_app_states_table_sql())
+        if self._user_state_table not in existing_tables:
+            ddl_statements.append(self._get_create_user_states_table_sql())
+        if self._metadata_table not in existing_tables:
+            ddl_statements.append(self._get_create_metadata_table_sql())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
+            if self._metadata_table not in existing_tables:
+                self._run_write([(self._get_seed_metadata_sql(), {}, {})])
 
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
-
-    async def _get_create_sessions_table_sql(self) -> str:
+    def _get_create_sessions_table_sql(self) -> str:
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
@@ -376,7 +634,7 @@ CREATE TABLE {self._session_table} (
 ) {pk}{options}{self._session_row_deletion_policy}
 """
 
-    async def _get_create_events_table_sql(self) -> str:
+    def _get_create_events_table_sql(self) -> str:
         shard_column = ""
         pk = "PRIMARY KEY (session_id, timestamp)"
         if self._shard_count > 1:
@@ -387,19 +645,67 @@ CREATE TABLE {self._session_table} (
             options = f"\nOPTIONS ({self._events_table_options})"
         return f"""
 CREATE TABLE {self._events_table} (
+  id STRING(128) NOT NULL,
   session_id STRING(128) NOT NULL,
-  invocation_id STRING(256) NOT NULL,
-  author STRING(128) NOT NULL,
+  invocation_id STRING(256),
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
-  event_json JSON NOT NULL{shard_column}
+  event_data JSON NOT NULL{shard_column}
 ) {pk}{options}{self._events_row_deletion_policy}
 """
 
+    def _get_create_app_states_table_sql(self) -> str:
+        return f"""
+CREATE TABLE {self._app_state_table} (
+  app_name STRING(128) NOT NULL,
+  state JSON NOT NULL,
+  update_time TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true)
+) PRIMARY KEY (app_name)
+"""
+
+    def _get_create_user_states_table_sql(self) -> str:
+        return f"""
+CREATE TABLE {self._user_state_table} (
+  app_name STRING(128) NOT NULL,
+  user_id STRING(128) NOT NULL,
+  state JSON NOT NULL,
+  update_time TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true)
+) PRIMARY KEY (app_name, user_id)
+"""
+
+    def _get_create_metadata_table_sql(self) -> str:
+        return f"""
+CREATE TABLE {self._metadata_table} (
+  key STRING(128) NOT NULL,
+  value STRING(512) NOT NULL
+) PRIMARY KEY (key)
+"""
+
+    def _get_seed_metadata_sql(self) -> str:
+        return f"""
+INSERT INTO {self._metadata_table} (key, value)
+VALUES ('schema_version', '1')
+"""
+
+    def _get_drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE {self._app_state_table}"
+
+    def _get_drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE {self._user_state_table}"
+
+    def _get_drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE {self._metadata_table}"
+
     def _get_drop_tables_sql(self) -> "list[str]":
-        return [f"DROP TABLE {self._events_table}", f"DROP TABLE {self._session_table}"]
+        return [
+            self._get_drop_metadata_table_sql(),
+            self._get_drop_user_states_table_sql(),
+            self._get_drop_app_states_table_sql(),
+            f"DROP TABLE {self._events_table}",
+            f"DROP TABLE {self._session_table}",
+        ]
 
 
-class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
+class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
     """Spanner ADK memory store backed by synchronous Spanner client."""
 
     connector_name: ClassVar[str] = "spanner"
@@ -414,8 +720,37 @@ class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
             cast("dict[str, Any]", adk_config), "memory_ttl_seconds", "inserted_at"
         )
 
+    def create_tables(self) -> None:
+        """Create tables if they don't exist."""
+        self._create_tables()
+
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
+        return self._insert_memory_entries(entries, owner_id)
+
+    def search_entries(
+        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
+    ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
+        return self._search_entries(query, app_name, user_id, limit)
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return self._delete_entries_by_session(session_id)
+
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        return self._delete_entries_older_than(days)
+
     def _database(self) -> "Database":
         return self._config.get_database()
+
+    def _get_reset_drop_memory_table_sql(self) -> "list[str]":
+        return _filter_existing_spanner_drops(super()._get_reset_drop_memory_table_sql(), self._existing_tables())
+
+    def _existing_tables(self) -> "set[str]":
+        database = self._database()
+        return {table.table_id for table in database.list_tables()}  # type: ignore[no-untyped-call]
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -465,16 +800,12 @@ class SpannerSyncADKMemoryStore(BaseAsyncADKMemoryStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._memory_table not in existing_tables:
-            ddl_statements.extend(run_(self._get_create_memory_table_sql)())
+            ddl_statements.extend(self._get_create_memory_table_sql())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
-    async def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await async_(self._create_tables)()
-
-    async def _get_create_memory_table_sql(self) -> "list[str]":
+    def _get_create_memory_table_sql(self) -> "list[str]":
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
@@ -586,10 +917,6 @@ CREATE TABLE {self._memory_table} (
             self._run_write(statements)
         return inserted_count
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return await async_(self._insert_memory_entries)(entries, owner_id)
-
     def _event_exists(self, event_id: str) -> bool:
         sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id = @event_id LIMIT 1"
         rows = self._run_read(sql, {"event_id": event_id}, {"event_id": SPANNER_PARAM_TYPES.STRING})
@@ -607,12 +934,6 @@ CREATE TABLE {self._memory_table} (
         if self._use_fts:
             return self._search_entries_fts(query, app_name, user_id, effective_limit)
         return self._search_entries_simple(query, app_name, user_id, effective_limit)
-
-    async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return await async_(self._search_entries)(query, app_name, user_id, limit)
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -663,20 +984,12 @@ CREATE TABLE {self._memory_table} (
         types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         return self._execute_update(sql, params, types)
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await async_(self._delete_entries_by_session)(session_id)
-
     def _delete_entries_older_than(self, days: int) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < @cutoff"
         params = {"cutoff": cutoff}
         types = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}
         return self._execute_update(sql, params, types)
-
-    async def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return await async_(self._delete_entries_older_than)(days)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         return [
@@ -720,6 +1033,35 @@ def _spanner_row_deletion_policy(adk_config: dict[str, Any], ttl_key: str, colum
     return f"\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
 
 
+def _filter_existing_spanner_drops(statements: "list[str]", existing_tables: "set[str]") -> "list[str]":
+    return [statement for statement in statements if _spanner_drop_statement_table(statement, existing_tables)]
+
+
+def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -> "str | None":
+    tokens = statement.strip().split()
+    if len(tokens) >= MIN_DROP_TABLE_TOKENS and tokens[0].upper() == "DROP" and tokens[1].upper() == "TABLE":
+        table_name = tokens[2]
+        return table_name if table_name in existing_tables else None
+
+    index_name: str | None = None
+    if len(tokens) >= MIN_DROP_TABLE_TOKENS and tokens[0].upper() == "DROP" and tokens[1].upper() == "INDEX":
+        index_name = tokens[2]
+    if (
+        len(tokens) >= MIN_DROP_SEARCH_INDEX_TOKENS
+        and tokens[0].upper() == "DROP"
+        and tokens[1].upper() == "SEARCH"
+        and tokens[2].upper() == "INDEX"
+    ):
+        index_name = tokens[3]
+    if index_name is None:
+        return None
+
+    for table_name in existing_tables:
+        if index_name.startswith(f"idx_{table_name}_"):
+            return table_name
+    return None
+
+
 class _SpannerWriteJob:
     __slots__ = ("_statements",)
 
@@ -752,6 +1094,18 @@ class _SpannerMemoryWriteJob:
             return
         for sql, params, types in self._statements:
             transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerUpdateJob:
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> int:
+        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
 
 
 class _SpannerMemoryUpdateJob:

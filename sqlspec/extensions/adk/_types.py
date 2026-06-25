@@ -27,15 +27,17 @@ class SessionRecord(TypedDict):
 class EventRecord(TypedDict):
     """Database record for an event.
 
-    Stores the full ADK Event as a single JSON blob (``event_json``) alongside
-    a small number of indexed scalar columns used for query filtering.
+    Stores the full ADK Event as a single JSON blob (``event_data``) alongside
+    indexed scalar columns used for scoped query filtering.
 
     This design eliminates column drift with upstream ADK: new Event fields are
-    automatically captured in ``event_json`` without schema changes.
+    automatically captured in ``event_data`` without schema changes.
     """
 
+    id: str
+    app_name: str
+    user_id: str
     session_id: str
     invocation_id: str
-    author: str
     timestamp: datetime
-    event_json: "dict[str, Any]"
+    event_data: "dict[str, Any]"

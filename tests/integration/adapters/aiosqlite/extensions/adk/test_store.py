@@ -37,7 +37,7 @@ async def test_aiosqlite_session_owner_column_is_created_when_configured(tmp_pat
         await store.create_session("session-owner", "app", "user", {}, owner_id="tenant-1")
 
         async with config.provide_connection() as conn:
-            cursor = await conn.execute("SELECT owner_id FROM adk_sessions WHERE id = ?", ("session-owner",))
+            cursor = await conn.execute("SELECT owner_id FROM adk_session WHERE id = ?", ("session-owner",))
             row = await cursor.fetchone()
 
         assert row == ("tenant-1",)

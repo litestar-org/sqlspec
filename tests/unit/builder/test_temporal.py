@@ -1,6 +1,10 @@
 import re
+import subprocess
+import sys
 
-from sqlspec.builder import sql
+from sqlglot import exp
+
+from sqlspec.builder import create_temporal_table, sql
 
 
 def normalize_sql(sql_str: str) -> str:
@@ -121,3 +125,22 @@ def test_join_as_of_dialect_override() -> None:
     # AS keyword may or may not be present before alias
     assert "LEFT JOIN audit_log AS OF TIMESTAMP CAST('2023-01-01' AS TIMESTAMP)" in normalized
     assert "log ON orders.id = log.order_id" in normalized
+
+
+def test_builder_import_does_not_eagerly_import_temporal_dialects() -> None:
+    """Importing sqlspec.builder should not load temporal dialect modules."""
+    code = (
+        "import sys; import sqlspec.builder; "
+        "loaded = [name for name in ('sqlglot.dialects.snowflake', 'sqlglot.dialects.oracle') if name in sys.modules]; "
+        "assert not loaded, loaded"
+    )
+    result = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_create_temporal_table_registers_version_generators_lazily() -> None:
+    """Temporal API calls should register exp.Version rendering before SQL generation."""
+    table_expr = create_temporal_table("users", exp.Literal.string("2024-01-01"))
+
+    assert "AS OF TIMESTAMP '2024-01-01'" in normalize_sql(table_expr.sql(dialect="oracle"))

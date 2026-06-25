@@ -6,8 +6,11 @@ import pytest
 from _pytest.mark.structures import Mark, MarkDecorator
 
 from tests.integration.adapters.contracts._cases import (
+    ADBC_MARK,
+    COCKROACH_XDIST_MARK,
     DUCKDB_XDIST_MARK,
     MYSQL_XDIST_MARK,
+    ORACLE_XDIST_MARK,
     POSTGRES_XDIST_MARK,
     SQLITE_XDIST_MARK,
 )
@@ -58,8 +61,40 @@ ADK_STORE_CASES = (
     ),
     AdkStoreCase("asyncpg", "adk_store_asyncpg", "asyncpg", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)),
     AdkStoreCase("psqlpy", "adk_store_psqlpy", "psqlpy", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("psycopg-async", "adk_store_psycopg_async", "psycopg", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("psycopg-sync", "adk_store_psycopg_sync", "psycopg", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("pymysql", "adk_store_pymysql", "pymysql", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase(
+        "cockroach-asyncpg",
+        "adk_store_cockroach_asyncpg",
+        "cockroach_asyncpg",
+        marks=(COCKROACH_XDIST_MARK, pytest.mark.anyio),
+    ),
+    AdkStoreCase(
+        "cockroach-psycopg-async",
+        "adk_store_cockroach_psycopg_async",
+        "cockroach_psycopg",
+        marks=(COCKROACH_XDIST_MARK, pytest.mark.anyio),
+    ),
+    AdkStoreCase(
+        "cockroach-psycopg-sync",
+        "adk_store_cockroach_psycopg_sync",
+        "cockroach_psycopg",
+        marks=(COCKROACH_XDIST_MARK, pytest.mark.anyio),
+    ),
+    AdkStoreCase("oracledb-async", "adk_store_oracle_async", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("oracledb-sync", "adk_store_oracle_sync", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("adbc-sqlite", "adk_store_adbc_sqlite", "adbc", marks=(ADBC_MARK, pytest.mark.anyio)),
+    AdkStoreCase(
+        "adbc-duckdb",
+        "adk_store_adbc_duckdb",
+        "adbc",
+        marks=(ADBC_MARK, pytest.mark.anyio),
+        supports_atomic_state_update=False,
+    ),
+    AdkStoreCase(
+        "adbc-postgres", "adk_store_adbc_postgres", "adbc", marks=(ADBC_MARK, POSTGRES_XDIST_MARK, pytest.mark.anyio)
+    ),
 )
-# NOTE: psycopg-async/sync are excluded pending sqlspec-cne7 — the psycopg ADK store read
-# methods index tuple-cursor rows by string key (TypeError). asyncpg/psqlpy cover postgres here.
 
 ADK_STORE_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in ADK_STORE_CASES)

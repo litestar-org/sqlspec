@@ -2,6 +2,7 @@
 
 import pytest
 
+import sqlspec.builder._merge as merge_module
 from sqlspec import sql
 from sqlspec.builder import Merge
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
@@ -569,6 +570,134 @@ def test_merge_using_single_dict_postgres_dialect() -> None:
     assert "jsonb_to_recordset" in stmt.sql.lower()
     assert 'as "src"("id"' in stmt.sql.lower() or "as src(id" in stmt.sql.lower()
     assert "json_data" in stmt.parameters
+
+
+def test_merge_postgres_json_source_golden_sql_and_parameters() -> None:
+    """PostgreSQL JSON source SQL and parameters should stay byte-identical."""
+    data = [{"id": 1, "name": "Widget", "price": 12.5, "active": True, "meta": {"x": 1}, "missing": None}]
+    query = (
+        sql
+        .merge(dialect="postgres")
+        .into("products", alias="t")
+        .using(data, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name", price="src.price")
+        .when_not_matched_then_insert(columns=["id", "name", "price", "active", "meta", "missing"])
+    )
+
+    stmt = query.build()
+    source_expr = query.get_expression().args["using"]  # type: ignore[index,union-attr]
+
+    assert stmt.parameters == {"json_data": data}
+    assert source_expr.sql(dialect="postgres") == (
+        "(SELECT id, name, price, active, meta, missing FROM "
+        "JSONB_TO_RECORDSET(CAST(%(json_data)s AS JSONB)) AS src_data(id INT, name TEXT, "
+        "price DOUBLE PRECISION, active BOOLEAN, meta JSONB, missing DECIMAL)) AS "
+        "src(id, name, price, active, meta, missing)"
+    )
+    assert (
+        stmt.sql
+        == """MERGE INTO products AS "t"
+USING (
+  SELECT
+    "id",
+    "name",
+    "price",
+    "active",
+    "meta",
+    "missing"
+  FROM JSONB_TO_RECORDSET(CAST(%(json_data)s AS JSONB)) AS "src_data"("id" INT, "name" TEXT, "price" DOUBLE PRECISION, "active" BOOLEAN, "meta" JSONB, "missing" DECIMAL)
+) AS "src"("id", "name", "price", "active", "meta", "missing")
+ON (
+  "t"."id" = "src"."id"
+)
+WHEN MATCHED THEN UPDATE SET
+  "name" = "src"."name",
+  "price" = "src"."price"
+WHEN NOT MATCHED THEN INSERT ("id", "name", "price", "active", "meta", "missing") VALUES (
+  "src"."id",
+  "src"."name",
+  "src"."price",
+  "src"."active",
+  "src"."meta",
+  "src"."missing"
+)"""
+    )
+
+
+def test_merge_oracle_json_source_golden_sql_and_parameters() -> None:
+    """Oracle JSON source SQL and parameters should stay byte-identical."""
+    data = [{"id": 1, "name": "Widget", "price": 12.5, "active": True, "meta": {"x": 1}, "missing": None}]
+    query = (
+        sql
+        .merge(dialect="oracle")
+        .into("products", alias="t")
+        .using(data, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name", price="src.price")
+        .when_not_matched_then_insert(columns=["id", "name", "price", "active", "meta", "missing"])
+    )
+
+    stmt = query.build()
+    source_expr = query.get_expression().args["using"]  # type: ignore[index,union-attr]
+
+    assert stmt.parameters == {
+        "json_payload": '[{"id":1,"name":"Widget","price":12.5,"active":true,"meta":{"x":1},"missing":null}]'
+    }
+    assert source_expr.sql(dialect="oracle") == (
+        "(SELECT id, name, price, active, meta, missing FROM JSON_TABLE(:json_payload, '$[*]' "
+        "COLUMNS(id NUMBER PATH '$.id', name VARCHAR2(4000) PATH '$.name', price NUMBER PATH '$.price', "
+        "active NUMBER(1) PATH '$.active', meta JSON PATH '$.meta', missing VARCHAR2(4000) PATH '$.missing'))) src"
+    )
+    assert (
+        stmt.sql
+        == """MERGE INTO products t
+USING (
+  SELECT
+    id,
+    name,
+    price,
+    active,
+    meta,
+    missing
+  FROM JSON_TABLE(:json_payload, '$[*]' COLUMNS(
+    id NUMBER PATH '$.id',
+    name VARCHAR2(4000) PATH '$.name',
+    price NUMBER PATH '$.price',
+    active NUMBER(1) PATH '$.active',
+    meta JSON PATH '$.meta',
+    missing VARCHAR2(4000) PATH '$.missing'
+  ))
+) src
+ON (
+  t.id = src.id
+)
+WHEN MATCHED THEN UPDATE SET
+  name = src.name,
+  price = src.price
+WHEN NOT MATCHED THEN INSERT (id, name, price, active, meta, missing) VALUES (src.id, src.name, src.price, src.active, src.meta, src.missing)"""
+    )
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "oracle"])
+def test_merge_json_source_avoids_parse_one(monkeypatch: pytest.MonkeyPatch, dialect: str) -> None:
+    """JSON source construction should not round-trip through sqlglot.parse_one."""
+    data = [{"id": 1, "name": "Widget"}]
+    builder = sql.merge(dialect=dialect)
+
+    def fail_parse_one(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("parse_one should not be called for JSON source construction")
+
+    merge_sqlglot = getattr(merge_module, "sg", None)
+    if merge_sqlglot is not None:
+        monkeypatch.setattr(merge_sqlglot, "parse_one", fail_parse_one)
+
+    if dialect == "postgres":
+        source_expr = builder._create_postgres_json_source(data, ["id", "name"], True, "src")  # pyright: ignore[reportPrivateUsage]
+    else:
+        source_expr = builder._create_oracle_json_source(data, ["id", "name"], "src")  # pyright: ignore[reportPrivateUsage]
+
+    assert "SELECT" in source_expr.sql(dialect=dialect)
 
 
 def test_merge_using_empty_list_raises_error() -> None:

@@ -7,6 +7,7 @@ dialect-aware SQL generation.
 from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import trait
+from sqlglot import Dialect
 from typing_extensions import Self
 
 from sqlspec.core import SQL, StatementConfig
@@ -58,7 +59,9 @@ def normalize_dialect_name(dialect: "DialectType | None") -> str | None:
         return None
     if isinstance(dialect, str):
         return dialect.lower()
-    return dialect.__class__.__name__.lower()
+    if isinstance(dialect, type) and issubclass(dialect, Dialect):
+        return dialect.__name__.lower()
+    return type(dialect).__name__.lower()
 
 
 def build_postgres_explain(statement_sql: str, options: "ExplainOptions") -> str:

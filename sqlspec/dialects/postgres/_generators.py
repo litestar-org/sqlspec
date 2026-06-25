@@ -9,9 +9,9 @@ interpreted subclasses.
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
-from sqlglot.generator import _DISPATCH_CACHE  # pyright: ignore[reportPrivateUsage]
 from sqlglot.generators.postgres import PostgresGenerator
 
+from sqlspec.builder._generation import invalidate_generator_dispatch
 from sqlspec.builder._vector_distance import (
     is_vector_distance_expression,
     render_vector_distance_postgres,
@@ -50,9 +50,7 @@ def _postgres_extension_operator_sql(generator: PostgresGenerator, expression: e
 # patch on the base class to support both environments consistently.
 PostgresGenerator.TRANSFORMS[exp.Operator] = _postgres_extension_operator_sql
 
-# Invalidate sqlglot's per-class dispatch cache so the patched Operator
-# transform is picked up by the next Generator instantiation.
-_DISPATCH_CACHE.pop(PostgresGenerator, None)
+invalidate_generator_dispatch(PostgresGenerator)
 
 PGVectorGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]
 ParadeDBGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]

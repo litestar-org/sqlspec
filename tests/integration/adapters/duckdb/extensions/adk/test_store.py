@@ -7,8 +7,7 @@ adapter-specific coverage (owner_id_column, storage-type fidelity, timestamp pre
 concurrency, event ordering/JSON details) that is not portable across the contract matrix.
 """
 
-import json
-from collections.abc import AsyncGenerator
+from collections.abc import Generator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,7 +21,7 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-async def duckdb_adk_store(tmp_path: Path) -> "AsyncGenerator[DuckdbADKStore, None]":
+def duckdb_adk_store(tmp_path: Path) -> "Generator[DuckdbADKStore, None, None]":
     """Create DuckDB ADK store with temporary file-based database.
 
     Args:
@@ -41,25 +40,28 @@ async def duckdb_adk_store(tmp_path: Path) -> "AsyncGenerator[DuckdbADKStore, No
             extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
         )
         store = DuckdbADKStore(config)
-        await store.create_tables()
+        store.create_tables()
         yield store
     finally:
         if db_path.exists():
             db_path.unlink()
 
 
-async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test creating events with optional fields stored in event_json."""
+def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
+    """Test creating events with optional fields stored in event_data."""
     session_id = "session-008"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
+    duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
 
     event_record: EventRecord = {
+        "id": "event-full",
+        "app_name": "test-app",
+        "user_id": "user-008",
         "session_id": session_id,
         "invocation_id": "inv-123",
-        "author": "assistant",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {
+        "event_data": {
             "id": "event-full",
+            "author": "assistant",
             "content": {"text": "Response"},
             "app_name": "test-app",
             "user_id": "user-008",
@@ -71,71 +73,70 @@ async def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> N
             "interrupted": False,
         },
     }
-    await duckdb_adk_store.append_event(event_record)
+    duckdb_adk_store.append_event(event_record)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = duckdb_adk_store.get_events("test-app", "user-008", session_id)
     assert len(events) == 1
 
-    # The 5-key record has invocation_id as a top-level indexed column
     assert events[0]["invocation_id"] == "inv-123"
 
-    # Other fields are inside event_json
-    event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
-    )
+    event_data = events[0]["event_data"]
     assert event_data["branch"] == "main"
     assert event_data["grounding_metadata"] == {"sources": ["doc1", "doc2"]}
     assert event_data["partial"] is True
     assert event_data["turn_complete"] is False
 
 
-async def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
     """Test events are ordered by timestamp ascending."""
     session_id = "session-009"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-009", {})
+    duckdb_adk_store.create_session(session_id, "test-app", "user-009", {})
 
     t1 = datetime.now(timezone.utc)
     t2 = datetime.now(timezone.utc)
     t3 = datetime.now(timezone.utc)
 
     ev_middle: EventRecord = {
+        "id": "event-middle",
+        "app_name": "test-app",
+        "user_id": "user-009",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "",
         "timestamp": t2,
-        "event_json": {"id": "event-middle", "app_name": "test-app", "user_id": "user-009"},
+        "event_data": {"id": "event-middle", "app_name": "test-app", "user_id": "user-009"},
     }
     ev_last: EventRecord = {
+        "id": "event-last",
+        "app_name": "test-app",
+        "user_id": "user-009",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "",
         "timestamp": t3,
-        "event_json": {"id": "event-last", "app_name": "test-app", "user_id": "user-009"},
+        "event_data": {"id": "event-last", "app_name": "test-app", "user_id": "user-009"},
     }
     ev_first: EventRecord = {
+        "id": "event-first",
+        "app_name": "test-app",
+        "user_id": "user-009",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "",
         "timestamp": t1,
-        "event_json": {"id": "event-first", "app_name": "test-app", "user_id": "user-009"},
+        "event_data": {"id": "event-first", "app_name": "test-app", "user_id": "user-009"},
     }
 
-    await duckdb_adk_store.append_event(ev_middle)
-    await duckdb_adk_store.append_event(ev_last)
-    await duckdb_adk_store.append_event(ev_first)
+    duckdb_adk_store.append_event(ev_middle)
+    duckdb_adk_store.append_event(ev_last)
+    duckdb_adk_store.append_event(ev_first)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = duckdb_adk_store.get_events("test-app", "user-009", session_id)
 
     assert len(events) == 3
     # Events should be ordered by timestamp ASC
-    event_ids = []
-    for e in events:
-        data = json.loads(e["event_json"]) if isinstance(e["event_json"], str) else e["event_json"]
-        event_ids.append(data["id"])
+    event_ids = [event["event_data"]["id"] for event in events]
     assert event_ids == ["event-first", "event-middle", "event-last"]
 
 
-async def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore) -> None:
     """Test session state with nested JSON structures."""
     session_id = "session-complex"
     complex_state = {
@@ -148,54 +149,59 @@ async def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore)
         "flags": [True, False, True],
     }
 
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-010", complex_state)
+    duckdb_adk_store.create_session(session_id, "test-app", "user-010", complex_state)
 
-    session = await duckdb_adk_store.get_session(session_id)
+    session = duckdb_adk_store.get_session("test-app", "user-010", session_id)
     assert session is not None
     assert session["state"] == complex_state
     assert session["state"]["user"]["preferences"]["theme"] == "dark"
     assert session["state"]["conversation"]["turn_count"] == 5
 
 
-async def test_event_json_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
-    """Test storing and retrieving event data via event_json."""
+def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
+    """Test storing and retrieving event data via event_data."""
     session_id = "session-json-rt"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
+    duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
 
     event_record: EventRecord = {
+        "id": "event-json",
+        "app_name": "test-app",
+        "user_id": "user-012",
         "session_id": session_id,
         "invocation_id": "",
-        "author": "system",
         "timestamp": datetime.now(timezone.utc),
-        "event_json": {"id": "event-json", "content": {"data": "value"}, "app_name": "test-app", "user_id": "user-012"},
+        "event_data": {
+            "id": "event-json",
+            "author": "system",
+            "content": {"data": "value"},
+            "app_name": "test-app",
+            "user_id": "user-012",
+        },
     }
-    await duckdb_adk_store.append_event(event_record)
+    duckdb_adk_store.append_event(event_record)
 
-    events = await duckdb_adk_store.get_events(session_id)
+    events = duckdb_adk_store.get_events("test-app", "user-012", session_id)
     assert len(events) == 1
-    event_data = (
-        json.loads(events[0]["event_json"]) if isinstance(events[0]["event_json"], str) else events[0]["event_json"]
-    )
-    assert event_data["content"] == {"data": "value"}
+    assert events[0]["event_data"]["content"] == {"data": "value"}
 
 
-async def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> None:
     """Test multiple updates to same session."""
     session_id = "session-concurrent"
-    await duckdb_adk_store.create_session(session_id, "test-app", "user-013", {"counter": 0})
+    duckdb_adk_store.create_session(session_id, "test-app", "user-013", {"counter": 0})
 
     for i in range(10):
-        session = await duckdb_adk_store.get_session(session_id)
+        session = duckdb_adk_store.get_session("test-app", "user-013", session_id)
         assert session is not None
         current_counter = session["state"]["counter"]
-        await duckdb_adk_store.update_session_state(session_id, {"counter": current_counter + 1})
+        duckdb_adk_store.update_session_state("test-app", "user-013", session_id, {"counter": current_counter + 1})
 
-    final_session = await duckdb_adk_store.get_session(session_id)
+    final_session = duckdb_adk_store.get_session("test-app", "user-013", session_id)
     assert final_session is not None
     assert final_session["state"]["counter"] == 10
 
 
-async def test_owner_id_column_with_integer(tmp_path: Path) -> None:
+def test_owner_id_column_with_integer(tmp_path: Path) -> None:
     """Test owner ID column with INTEGER type."""
     db_path = tmp_path / "test_owner_id_int.duckdb"
     try:
@@ -217,12 +223,12 @@ async def test_owner_id_column_with_integer(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
         assert store.owner_id_column_name == "tenant_id"
         assert store.owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id)"
 
-        session = await store.create_session(
+        session = store.create_session(
             session_id="session-tenant-1", app_name="test-app", user_id="user-001", state={"data": "test"}, owner_id=1
         )
 
@@ -238,7 +244,7 @@ async def test_owner_id_column_with_integer(tmp_path: Path) -> None:
             db_path.unlink()
 
 
-async def test_owner_id_column_with_ubigint(tmp_path: Path) -> None:
+def test_owner_id_column_with_ubigint(tmp_path: Path) -> None:
     """Test owner ID column with DuckDB UBIGINT type."""
     db_path = tmp_path / "test_owner_id_ubigint.duckdb"
     try:
@@ -260,11 +266,11 @@ async def test_owner_id_column_with_ubigint(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
         assert store.owner_id_column_name == "owner_id"
 
-        session = await store.create_session(
+        session = store.create_session(
             session_id="session-user-1",
             app_name="test-app",
             user_id="user-001",
@@ -284,7 +290,7 @@ async def test_owner_id_column_with_ubigint(tmp_path: Path) -> None:
             db_path.unlink()
 
 
-async def test_owner_id_column_foreign_key_constraint(tmp_path: Path) -> None:
+def test_owner_id_column_foreign_key_constraint(tmp_path: Path) -> None:
     """Test that FK constraint is enforced."""
     db_path = tmp_path / "test_owner_id_constraint.duckdb"
     try:
@@ -306,14 +312,14 @@ async def test_owner_id_column_foreign_key_constraint(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
-        await store.create_session(
+        store.create_session(
             session_id="session-org-1", app_name="test-app", user_id="user-001", state={"data": "test"}, owner_id=100
         )
 
         with pytest.raises(Exception) as exc_info:
-            await store.create_session(
+            store.create_session(
                 session_id="session-org-invalid",
                 app_name="test-app",
                 user_id="user-002",
@@ -327,7 +333,7 @@ async def test_owner_id_column_foreign_key_constraint(tmp_path: Path) -> None:
             db_path.unlink()
 
 
-async def test_owner_id_column_without_value(tmp_path: Path) -> None:
+def test_owner_id_column_without_value(tmp_path: Path) -> None:
     """Test creating session without owner_id when column is configured but nullable."""
     db_path = tmp_path / "test_owner_id_nullable.duckdb"
     try:
@@ -348,22 +354,22 @@ async def test_owner_id_column_without_value(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
-        session = await store.create_session(
+        session = store.create_session(
             session_id="session-no-fk", app_name="test-app", user_id="user-001", state={"data": "test"}, owner_id=None
         )
 
         assert session["id"] == "session-no-fk"
 
-        retrieved = await store.get_session("session-no-fk")
+        retrieved = store.get_session("test-app", "user-001", "session-no-fk")
         assert retrieved is not None
     finally:
         if db_path.exists():
             db_path.unlink()
 
 
-async def test_owner_id_column_with_varchar(tmp_path: Path) -> None:
+def test_owner_id_column_with_varchar(tmp_path: Path) -> None:
     """Test owner ID column with VARCHAR type."""
     db_path = tmp_path / "test_owner_id_varchar.duckdb"
     try:
@@ -385,9 +391,9 @@ async def test_owner_id_column_with_varchar(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
-        session = await store.create_session(
+        session = store.create_session(
             session_id="session-company-1",
             app_name="test-app",
             user_id="user-001",
@@ -407,7 +413,7 @@ async def test_owner_id_column_with_varchar(tmp_path: Path) -> None:
             db_path.unlink()
 
 
-async def test_owner_id_column_multiple_sessions(tmp_path: Path) -> None:
+def test_owner_id_column_multiple_sessions(tmp_path: Path) -> None:
     """Test multiple sessions with same FK value."""
     db_path = tmp_path / "test_owner_id_multiple.duckdb"
     try:
@@ -429,10 +435,10 @@ async def test_owner_id_column_multiple_sessions(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
         for i in range(5):
-            await store.create_session(
+            store.create_session(
                 session_id=f"session-dept-{i}",
                 app_name="test-app",
                 user_id=f"user-{i}",
@@ -450,7 +456,7 @@ async def test_owner_id_column_multiple_sessions(tmp_path: Path) -> None:
             db_path.unlink()
 
 
-async def test_owner_id_column_query_by_fk(tmp_path: Path) -> None:
+def test_owner_id_column_query_by_fk(tmp_path: Path) -> None:
     """Test querying sessions by FK column value."""
     db_path = tmp_path / "test_owner_id_query.duckdb"
     try:
@@ -472,11 +478,11 @@ async def test_owner_id_column_query_by_fk(tmp_path: Path) -> None:
             },
         )
         store = DuckdbADKStore(config_with_extension)
-        await store.create_tables()
+        store.create_tables()
 
-        await store.create_session("s1", "app", "u1", {"val": 1}, owner_id=1)
-        await store.create_session("s2", "app", "u2", {"val": 2}, owner_id=1)
-        await store.create_session("s3", "app", "u3", {"val": 3}, owner_id=2)
+        store.create_session("s1", "app", "u1", {"val": 1}, owner_id=1)
+        store.create_session("s2", "app", "u2", {"val": 2}, owner_id=1)
+        store.create_session("s3", "app", "u3", {"val": 3}, owner_id=2)
 
         with config.provide_connection() as conn:
             cursor = conn.execute("SELECT id FROM sessions_with_project WHERE project_id = ? ORDER BY id", (1,))

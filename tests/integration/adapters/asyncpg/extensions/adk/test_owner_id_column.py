@@ -210,15 +210,15 @@ async def test_cascade_delete_behavior(tenants_table: Any, postgres_service: Any
         await store.create_session("session-2", "app-1", "user-2", {"data": "test"}, owner_id=1)
         await store.create_session("session-3", "app-1", "user-3", {"data": "test"}, owner_id=2)
 
-        session = await store.get_session("session-1")
+        session = await store.get_session("app-1", "user-1", "session-1")
         assert session is not None
 
         async with config.provide_connection() as conn:
             await conn.execute("DELETE FROM tenants WHERE id = 1")
 
-        session1 = await store.get_session("session-1")
-        session2 = await store.get_session("session-2")
-        session3 = await store.get_session("session-3")
+        session1 = await store.get_session("app-1", "user-1", "session-1")
+        session2 = await store.get_session("app-1", "user-2", "session-2")
+        session3 = await store.get_session("app-1", "user-3", "session-3")
 
         assert session1 is None
         assert session2 is None

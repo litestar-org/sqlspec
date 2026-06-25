@@ -606,16 +606,25 @@ class ADKConfig(TypedDict):
     """
 
     session_table: NotRequired[str]
-    """Name of the sessions table. Default: 'adk_sessions'"""
+    """Name of the sessions table. Default: 'adk_session'"""
 
     events_table: NotRequired[str]
-    """Name of the events table. Default: 'adk_events'"""
+    """Name of the events table. Default: 'adk_event'"""
+
+    app_state_table: NotRequired[str]
+    """Name of the app-scoped state table. Default: 'adk_app_state'"""
+
+    user_state_table: NotRequired[str]
+    """Name of the user-scoped state table. Default: 'adk_user_state'"""
+
+    metadata_table: NotRequired[str]
+    """Name of the internal metadata table. Default: 'adk_internal_metadata'"""
 
     memory_table: NotRequired[str]
-    """Name of the memory entries table. Default: 'adk_memory_entries'"""
+    """Name of the memory entries table. Default: 'adk_memory'"""
 
     artifact_table: NotRequired[str]
-    """Name of the artifact versions table. Default: 'adk_artifact_versions'"""
+    """Name of the artifact metadata table. Default: 'adk_artifact'"""
 
     artifact_storage_uri: NotRequired[str]
     """

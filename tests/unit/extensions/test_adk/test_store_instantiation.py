@@ -65,6 +65,30 @@ MEMORY_STORE_CLASSES = [
 
 ALL_STORE_CLASSES = SESSION_STORE_CLASSES + MEMORY_STORE_CLASSES
 
+SYNC_SESSION_STORE_CLASSES = [
+    "sqlspec.adapters.adbc.adk.AdbcADKStore",
+    "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore",
+    "sqlspec.adapters.duckdb.adk.DuckdbADKStore",
+    "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKStore",
+    "sqlspec.adapters.oracledb.adk.OracleSyncADKStore",
+    "sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore",
+    "sqlspec.adapters.pymysql.adk.PyMysqlADKStore",
+    "sqlspec.adapters.spanner.adk.SpannerSyncADKStore",
+    "sqlspec.adapters.sqlite.adk.SqliteADKStore",
+]
+
+SYNC_MEMORY_STORE_CLASSES = [
+    "sqlspec.adapters.adbc.adk.AdbcADKMemoryStore",
+    "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore",
+    "sqlspec.adapters.duckdb.adk.DuckdbADKMemoryStore",
+    "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKMemoryStore",
+    "sqlspec.adapters.oracledb.adk.OracleSyncADKMemoryStore",
+    "sqlspec.adapters.psycopg.adk.PsycopgSyncADKMemoryStore",
+    "sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore",
+    "sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore",
+    "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
+]
+
 
 def _load_class(class_path: str) -> type:
     module_path, class_name = class_path.rsplit(".", 1)
@@ -110,6 +134,28 @@ def test_store_method_signatures_match_base_contract(class_path: str) -> None:
             f"{class_path}.{method_name} parameters differ from {base.__name__}: "
             f"{concrete_signature} != {base_signature}"
         )
+
+
+@pytest.mark.parametrize("class_path", SYNC_SESSION_STORE_CLASSES)
+def test_sync_session_store_contract_methods_are_sync(class_path: str) -> None:
+    """Sync-backed session stores expose sync methods, not async wrappers."""
+    cls = _load_class(class_path)
+
+    assert issubclass(cls, BaseSyncADKStore)
+    assert not issubclass(cls, BaseAsyncADKStore)
+    for method_name in BaseSyncADKStore.__abstractmethods__:
+        assert not inspect.iscoroutinefunction(getattr(cls, method_name)), f"{class_path}.{method_name} is async"
+
+
+@pytest.mark.parametrize("class_path", SYNC_MEMORY_STORE_CLASSES)
+def test_sync_memory_store_contract_methods_are_sync(class_path: str) -> None:
+    """Sync-backed memory stores expose sync methods, not async wrappers."""
+    cls = _load_class(class_path)
+
+    assert issubclass(cls, BaseSyncADKMemoryStore)
+    assert not issubclass(cls, BaseAsyncADKMemoryStore)
+    for method_name in BaseSyncADKMemoryStore.__abstractmethods__:
+        assert not inspect.iscoroutinefunction(getattr(cls, method_name)), f"{class_path}.{method_name} is async"
 
 
 def test_adk_store_registration_validator_resolves_sqlite_store_classes() -> None:
