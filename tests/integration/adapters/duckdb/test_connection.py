@@ -118,6 +118,54 @@ def test_connection_read_only_mode() -> None:
             os.unlink(temp_db_path)
 
 
+def test_file_backed_reconfiguration_requires_pool_close_by_default(tmp_path: Path) -> None:
+    """A live file-backed pool keeps its lock until the pool is closed."""
+
+    db_path = tmp_path / "reconfigure.duckdb"
+    first_config = create_permissive_config(database=str(db_path), threads=1)
+    second_config = create_permissive_config(database=str(db_path), threads=2)
+
+    try:
+        with first_config.provide_session() as session:
+            session.execute("CREATE TABLE config_lock_test (id INTEGER)")
+            session.execute("INSERT INTO config_lock_test VALUES (1)")
+
+        with pytest.raises(Exception):
+            with second_config.provide_session() as session:
+                session.execute("SELECT id FROM config_lock_test")
+
+        first_config.close_pool()
+
+        with second_config.provide_session() as session:
+            result = session.execute("SELECT id FROM config_lock_test").get_data()
+            assert result[0]["id"] == 1
+    finally:
+        first_config.close_pool()
+        second_config.close_pool()
+
+
+def test_connection_lifetime_session_allows_same_file_reconfiguration(tmp_path: Path) -> None:
+    """The opt-in session lifetime preserves the legacy same-file release behavior."""
+
+    db_path = tmp_path / "session-lifetime.duckdb"
+    first_config = DuckDBConfig(
+        connection_config=DuckDBPoolParams(database=str(db_path), threads=1, connection_lifetime="session")
+    )
+    second_config = create_permissive_config(database=str(db_path), threads=2)
+
+    try:
+        with first_config.provide_session() as session:
+            session.execute("CREATE TABLE session_lifetime_test (id INTEGER)")
+            session.execute("INSERT INTO session_lifetime_test VALUES (2)")
+
+        with second_config.provide_session() as session:
+            result = session.execute("SELECT id FROM session_lifetime_test").get_data()
+            assert result[0]["id"] == 2
+    finally:
+        first_config.close_pool()
+        second_config.close_pool()
+
+
 def test_duckdb_disabled_observability_has_zero_lifecycle_counts() -> None:
     """Ensure lifecycle counters stay zero when no hooks are registered."""
 

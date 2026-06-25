@@ -1,7 +1,7 @@
 """DuckDB database configuration with connection pooling."""
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -92,6 +92,8 @@ class DuckDBPoolParams(DuckDBConnectionParams):
 
     pool_recycle_seconds: NotRequired[int]
     health_check_interval: NotRequired[float]
+    connection_lifetime: NotRequired[Literal["pool", "session"]]
+    """'pool' keeps the thread-local connection until pool close; 'session' closes it on each session exit."""
 
 
 class DuckDBExtensionConfig(TypedDict):
@@ -312,11 +314,14 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
         health_check_interval = self.connection_config.get("health_check_interval")
+        connection_lifetime = self.connection_config.get("connection_lifetime")
         pool_kwargs: dict[str, Any] = {}
         if pool_recycle_seconds is not None:
             pool_kwargs["pool_recycle_seconds"] = pool_recycle_seconds
         if health_check_interval is not None:
             pool_kwargs["health_check_interval"] = health_check_interval
+        if connection_lifetime is not None:
+            pool_kwargs["connection_lifetime"] = connection_lifetime
 
         return DuckDBConnectionPool(
             connection_config=connection_config,

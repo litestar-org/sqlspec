@@ -77,7 +77,14 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    pool_only_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval"}
+    pool_only_keys = {
+        "connection_lifetime",
+        "pool_min_size",
+        "pool_max_size",
+        "pool_timeout",
+        "pool_recycle_seconds",
+        "health_check_interval",
+    }
     connect_parameters: dict[str, Any] = {}
     duckdb_config: dict[str, Any] = {}
 

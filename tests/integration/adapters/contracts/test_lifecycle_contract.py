@@ -8,12 +8,14 @@ from tests.integration.adapters.contracts._cases import DriverCaseContext
 from tests.integration.adapters.contracts.behaviors import (
     AsyncConfigFactory,
     SyncConfigFactory,
+    assert_async_bounded_bootstrap_contract,
     assert_async_connection_hook_contract,
     assert_async_connection_instance_contract,
     assert_async_custom_json_serializer_contract,
     assert_async_lowercase_columns_contract,
     assert_async_pooling_contract,
     assert_async_uuid_feature_contract,
+    assert_sync_bounded_bootstrap_contract,
     assert_sync_connection_hook_contract,
     assert_sync_connection_instance_contract,
     assert_sync_custom_json_serializer_contract,
@@ -78,6 +80,20 @@ async def test_async_connection_hook_contract(async_driver_case: DriverCaseConte
     if not async_driver_case.case.supports_connection_hook:
         pytest.skip(f"{async_driver_case.case.adapter} has no verified connection-hook support")
     await assert_async_connection_hook_contract(_async_factory(async_driver_case), async_driver_case.case)
+
+
+def test_sync_bounded_bootstrap_contract(sync_driver_case: DriverCaseContext) -> None:
+    """Sync adapters keep expensive bootstrap work call-count bounded across sessions."""
+    if not sync_driver_case.case.supports_bounded_bootstrap:
+        pytest.skip(f"{sync_driver_case.case.adapter} has no bounded-bootstrap contract")
+    assert_sync_bounded_bootstrap_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+
+
+async def test_async_bounded_bootstrap_contract(async_driver_case: DriverCaseContext) -> None:
+    """Async adapters keep expensive bootstrap work call-count bounded across sessions."""
+    if not async_driver_case.case.supports_bounded_bootstrap:
+        pytest.skip(f"{async_driver_case.case.adapter} has no bounded-bootstrap contract")
+    await assert_async_bounded_bootstrap_contract(_async_factory(async_driver_case), async_driver_case.case)
 
 
 def test_sync_lowercase_columns_contract(sync_driver_case: DriverCaseContext) -> None:

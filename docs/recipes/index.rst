@@ -25,9 +25,16 @@ patterns.
 
       Base service classes with pagination, get-or-404, and transaction helpers.
 
+   .. grid-item-card:: DuckDB Isolated Databases
+      :link: duckdb_lifecycle
+      :link-type: doc
+
+      Extension setup and pool lifetime patterns for isolated DuckDB files.
+
 
 .. toctree::
    :hidden:
 
    dishka
    service_layer
+   duckdb_lifecycle

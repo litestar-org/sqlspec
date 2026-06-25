@@ -1,6 +1,6 @@
 """DuckDB configuration tests covering statement config builders."""
 
-from typing import Any, get_type_hints
+from typing import Any, Literal, get_type_hints
 from unittest.mock import patch
 
 import duckdb
@@ -63,6 +63,7 @@ def test_pool_params_do_not_type_noop_pool_sizing_keys() -> None:
     assert "pool_timeout" not in hints
     assert hints["pool_recycle_seconds"] == NotRequired[int]
     assert hints["health_check_interval"] == NotRequired[float]
+    assert hints["connection_lifetime"] == NotRequired[Literal["pool", "session"]]
 
 
 def test_extension_config_types_repository_url() -> None:
@@ -98,6 +99,7 @@ def test_build_connection_config_preserves_nested_config_and_extra() -> None:
         "pool_timeout": 10.0,
         "pool_recycle_seconds": 60,
         "health_check_interval": 5.0,
+        "connection_lifetime": "pool",
     }
 
     assert build_connection_config(connection_config) == {

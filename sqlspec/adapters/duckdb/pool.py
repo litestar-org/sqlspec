@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import duckdb
 from typing_extensions import final
@@ -47,7 +47,9 @@ class DuckDBConnectionPool:
     """
 
     __slots__ = (
+        "_all_connections",
         "_connection_config",
+        "_connection_lifetime",
         "_extension_flags",
         "_extensions",
         "_health_check_interval",
@@ -66,6 +68,7 @@ class DuckDBConnectionPool:
         connection_config: "dict[str, Any]",
         pool_recycle_seconds: int = POOL_RECYCLE,
         health_check_interval: float = HEALTH_CHECK_INTERVAL,
+        connection_lifetime: "Literal['pool', 'session']" = "pool",
         extensions: "list[dict[str, Any]] | None" = None,
         extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
@@ -77,18 +80,21 @@ class DuckDBConnectionPool:
             connection_config: DuckDB connection configuration
             pool_recycle_seconds: Connection recycle time in seconds
             health_check_interval: Seconds of idle time before running health check
+            connection_lifetime: Whether file-backed connections persist until pool close or each session exit
             extensions: List of extensions to install/load
             extension_flags: Connection-level SET statements applied after creation
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
         """
         self._connection_config = connection_config
+        self._connection_lifetime = connection_lifetime
         self._recycle = pool_recycle_seconds
         self._health_check_interval = health_check_interval
         self._extensions = extensions or []
         self._extension_flags = extension_flags or {}
         self._secrets = secrets or []
         self._on_connection_create = on_connection_create
+        self._all_connections: dict[int, DuckDBConnection] = {}
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._lock = threading.RLock()
@@ -162,6 +168,9 @@ class DuckDBConnectionPool:
             # Let a failing user hook surface its real error instead of silently returning a
             # half-configured connection (mirrors the sqlite/aiosqlite pools).
             self._on_connection_create(connection)
+
+        with self._lock:
+            self._all_connections[threading.get_ident()] = connection
 
         return connection
 
@@ -248,7 +257,15 @@ class DuckDBConnectionPool:
         Each thread gets its own dedicated DuckDB connection to prevent
         thread-safety issues with concurrent cursor operations.
         """
+        thread_id = threading.get_ident()
         thread_state = self._thread_local.__dict__
+        if "connection" in thread_state:
+            with self._lock:
+                registered_connection = self._all_connections.get(thread_id)
+            if registered_connection is not thread_state["connection"]:
+                self._clear_thread_connection_state()
+                thread_state = self._thread_local.__dict__
+
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
@@ -287,13 +304,18 @@ class DuckDBConnectionPool:
         """Close the connection for the current thread."""
         thread_state = self._thread_local.__dict__
         if "connection" in thread_state:
+            connection = cast("DuckDBConnection", thread_state["connection"])
             with suppress(Exception):
-                self._thread_local.connection.close()
-            del self._thread_local.connection
-            if "created_at" in thread_state:
-                del self._thread_local.created_at
-            if "last_used" in thread_state:
-                del self._thread_local.last_used
+                connection.close()
+            with self._lock:
+                self._all_connections.pop(threading.get_ident(), None)
+            self._clear_thread_connection_state()
+
+    def _clear_thread_connection_state(self) -> None:
+        """Clear the caller thread's local connection metadata."""
+        thread_state = self._thread_local.__dict__
+        for key in ("connection", "created_at", "last_used"):
+            thread_state.pop(key, None)
 
     def _is_connection_alive(self, connection: DuckDBConnection) -> bool:
         """Check if a connection is still alive and usable.
@@ -318,9 +340,10 @@ class DuckDBConnectionPool:
         Each thread gets its own dedicated DuckDB connection to prevent
         thread-safety issues with concurrent cursor operations.
 
-        For file-based databases, the connection is closed when the context
-        manager exits to release DuckDB's file lock, allowing subsequent
-        connections with different configurations.
+        For file-based databases, the connection is kept alive until pool close
+        by default. Set ``connection_lifetime="session"`` to close after each
+        successful session and restore the legacy same-file reconfiguration
+        behavior.
 
         For in-memory databases, connections are kept alive to preserve data,
         as in-memory data is lost when the last connection closes.
@@ -335,18 +358,25 @@ class DuckDBConnectionPool:
             self._close_thread_connection()
             raise
         else:
-            # Only close connection for file-based databases to release file locks
-            # In-memory databases need connections to stay alive to preserve data
-            if not self._is_memory_db:
+            if self._connection_lifetime == "session" and not self._is_memory_db:
                 self._close_thread_connection()
 
     def close(self) -> None:
-        """Close the thread-local connection if it exists."""
-        self._close_thread_connection()
+        """Close all thread-local connections this pool created."""
+        with self._lock:
+            connections = list(self._all_connections.values())
+            self._all_connections.clear()
+
+        for connection in connections:
+            with suppress(Exception):
+                connection.close()
+
+        self._clear_thread_connection_state()
 
     def size(self) -> int:
-        """Get current pool size (always 1 for thread-local)."""
-        return 1 if "connection" in self._thread_local.__dict__ else 0
+        """Get current pool size."""
+        with self._lock:
+            return len(self._all_connections)
 
     def checked_out(self) -> int:
         """Get number of checked out connections (always 0 for thread-local)."""

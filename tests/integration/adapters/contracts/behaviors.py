@@ -1,6 +1,7 @@
 """Public behavior helpers for adapter-local and central contract tests."""
 
 import contextlib
+import importlib
 import inspect
 import json
 from collections.abc import Awaitable, Callable
@@ -32,6 +33,8 @@ from tests.integration.adapters.contracts._schema import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from sqlspec.typing import ArrowRecordBatch
 
 SyncExtraAssertion = Callable[[object, DriverCase], None]
@@ -2522,6 +2525,15 @@ AsyncConfigFactory = Callable[..., AsyncLifecycleConfig]
 ConnectionHook = Callable[[object], None]
 
 
+class _CallCounter:
+    """Mutable counter shared with monkeypatched bootstrap helpers."""
+
+    __slots__ = ("count",)
+
+    def __init__(self) -> None:
+        self.count = 0
+
+
 def _pool_contract_table(case: DriverCase) -> str:
     return f"pool_contract_{case.adapter}_{case.mode}"
 
@@ -2529,6 +2541,112 @@ def _pool_contract_table(case: DriverCase) -> str:
 def _connection_probe_sql(case: DriverCase) -> str:
     """Trivial query used to force a connection to be drawn so the create-hook fires."""
     return "SELECT 1 FROM DUAL" if case.dialect == "oracle" else "SELECT 1"
+
+
+@contextlib.contextmanager
+def _count_duckdb_installs(counter: _CallCounter) -> "Generator[None, None, None]":
+    from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
+
+    original = DuckDBConnectionPool._install_extension_once
+
+    def counted_install(_pool: object, *_args: Any, **_kwargs: Any) -> None:
+        counter.count += 1
+
+    setattr(DuckDBConnectionPool, "_install_extension_once", counted_install)
+    try:
+        yield
+    finally:
+        setattr(DuckDBConnectionPool, "_install_extension_once", original)
+
+
+def _postgres_probe_module_names(case: DriverCase) -> "tuple[str, ...]":
+    if case.adapter == "asyncpg":
+        return ("sqlspec.adapters.asyncpg.config",)
+    if case.adapter == "psqlpy":
+        return ("sqlspec.adapters.psqlpy.config",)
+    if case.adapter == "psycopg":
+        return ("sqlspec.adapters.psycopg.config",)
+    return ()
+
+
+@contextlib.contextmanager
+def _count_postgres_extension_probes(case: DriverCase, counter: _CallCounter) -> "Generator[None, None, None]":
+    modules = [importlib.import_module(module_name) for module_name in _postgres_probe_module_names(case)]
+    originals = [(module, getattr(module, "build_postgres_extension_probe_names")) for module in modules]
+
+    def counted_probe(driver_features: dict[str, Any] | None) -> list[str]:
+        counter.count += 1
+        if driver_features and driver_features.get("enable_pgvector"):
+            return ["vector"]
+        return []
+
+    for module, _original in originals:
+        setattr(module, "build_postgres_extension_probe_names", counted_probe)
+
+    try:
+        yield
+    finally:
+        for module, original in originals:
+            setattr(module, "build_postgres_extension_probe_names", original)
+
+
+def assert_sync_bounded_bootstrap_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert expensive sync adapter bootstrap is call-count bounded across repeated sessions."""
+    if case.adapter == "duckdb":
+        name_only_installs = _CallCounter()
+        config = make_config(driver_features={"extensions": [{"name": "json"}]})
+        try:
+            with _count_duckdb_installs(name_only_installs):
+                for _ in range(3):
+                    with config.provide_session() as session:
+                        session.execute(_connection_probe_sql(case))
+            assert name_only_installs.count == 0, "DuckDB name-only extensions must not call install_extension"
+        finally:
+            config.close_pool()
+
+        explicit_installs = _CallCounter()
+        config = make_config(driver_features={"extensions": [{"name": "json", "install": True}]})
+        try:
+            with _count_duckdb_installs(explicit_installs):
+                for _ in range(3):
+                    with config.provide_session() as session:
+                        session.execute(_connection_probe_sql(case))
+            assert explicit_installs.count <= 1, (
+                f"DuckDB explicit extension installs must be bounded once per pool; got {explicit_installs.count}"
+            )
+        finally:
+            config.close_pool()
+        return
+
+    probe_counter = _CallCounter()
+    config = make_config(driver_features={"enable_pgvector": True})
+    try:
+        with _count_postgres_extension_probes(case, probe_counter):
+            for _ in range(3):
+                with config.provide_session() as session:
+                    session.execute(_connection_probe_sql(case))
+        assert probe_counter.count <= 1, (
+            f"{case.adapter} pg_extension probe must be cached once per config; got {probe_counter.count}"
+        )
+    finally:
+        config.close_pool()
+
+
+async def assert_async_bounded_bootstrap_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Assert expensive async adapter bootstrap is call-count bounded across repeated sessions."""
+    probe_counter = _CallCounter()
+    driver_features = {"enable_pgvector": True} if case.adapter in {"asyncpg", "psycopg", "psqlpy"} else {}
+    config = make_config(driver_features=driver_features)
+    try:
+        with _count_postgres_extension_probes(case, probe_counter):
+            for _ in range(3):
+                async with config.provide_session() as session:
+                    await session.execute(_connection_probe_sql(case))
+        assert probe_counter.count <= 1, (
+            f"{case.adapter} pg_extension probe must be cached once per config; got {probe_counter.count}"
+        )
+    finally:
+        await config.close_pool()
 
 
 def assert_sync_connection_hook_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:

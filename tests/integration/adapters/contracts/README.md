@@ -124,6 +124,7 @@ Lifecycle behaviors (each has a sync and async form):
 | --- | --- | --- |
 | `supports_pooling` | `assert_*_pooling_contract` | Pooled config shares data across sessions drawn from one pool. |
 | `supports_connection_hook` | `assert_*_connection_hook_contract` | The `on_connection_create` driver-feature hook fires. |
+| `supports_bounded_bootstrap` | `assert_*_bounded_bootstrap_contract` | Expensive one-time bootstrap work stays call-count bounded across repeated sessions. |
 | `supports_connection_instance` | `assert_*_connection_instance_contract` | An injected `connection_instance` pool is honored (identity, `provide_pool` bypass, cross-session persistence); `None` builds a fresh pool. |
 | `supports_lowercase_columns` | `assert_*_lowercase_columns_contract` | Column-name casing feature (default on; uppercase when disabled). |
 | `supports_uuid_feature` | `assert_*_uuid_feature_contract` | UUID feature binds/returns `uuid.UUID` when enabled; raw form when disabled. |

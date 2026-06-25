@@ -1,6 +1,7 @@
 """Unit tests for DuckDB connection pool helpers."""
 
-from typing import Any
+import threading
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -12,10 +13,17 @@ pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
 class _FakeDuckDBConnection:
     def __init__(self, verification_row: tuple[Any, ...] | None = None) -> None:
+        self.closed = False
         self.executed: list[tuple[str, Any]] = []
         self.installed_extensions: list[tuple[str, dict[str, Any]]] = []
         self.loaded_extensions: list[str] = []
         self.verification_row = verification_row
+
+    def close(self) -> None:
+        self.closed = True
+
+    def cursor(self) -> "_FakeDuckDBConnection":
+        return self
 
     def install_extension(self, extension: str, **kwargs: Any) -> None:
         self.installed_extensions.append((extension, kwargs))
@@ -95,6 +103,80 @@ def test_create_connection_passes_nested_config_without_rewrapping(monkeypatch: 
         "read_only": False,
         "config": {"threads": 1, "parquet_metadata_cache": True, "progress_bar_time": 250},
     }
+
+
+def test_file_backed_connection_persists_across_sessions_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    connections: list[_FakeDuckDBConnection] = []
+
+    def fake_connect(**_: Any) -> _FakeDuckDBConnection:
+        connection = _FakeDuckDBConnection()
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", fake_connect)
+    pool = DuckDBConnectionPool({"database": str(tmp_path / "analytics.duckdb")})
+
+    try:
+        with pool.get_connection() as first:
+            pass
+        with pool.get_connection() as second:
+            pass
+    finally:
+        pool.close()
+
+    assert second is first
+    assert len(connections) == 1
+    assert cast("_FakeDuckDBConnection", first).closed
+
+
+def test_connection_lifetime_session_closes_file_backed_connections(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    connections: list[_FakeDuckDBConnection] = []
+
+    def fake_connect(**_: Any) -> _FakeDuckDBConnection:
+        connection = _FakeDuckDBConnection()
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", fake_connect)
+    pool = DuckDBConnectionPool({"database": str(tmp_path / "analytics.duckdb")}, connection_lifetime="session")
+
+    with pool.get_connection() as first:
+        pass
+    with pool.get_connection() as second:
+        pass
+
+    assert second is not first
+    assert [connection.closed for connection in connections] == [True, True]
+
+
+def test_pool_close_reaps_connections_created_on_worker_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    connections: list[_FakeDuckDBConnection] = []
+    barrier = threading.Barrier(3)
+
+    def fake_connect(**_: Any) -> _FakeDuckDBConnection:
+        connection = _FakeDuckDBConnection()
+        connections.append(connection)
+        return connection
+
+    def use_connection() -> None:
+        with pool.get_connection():
+            barrier.wait()
+
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", fake_connect)
+    pool = DuckDBConnectionPool({"database": ":memory:worker_registry"})
+
+    threads = [threading.Thread(target=use_connection) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    pool.close()
+
+    assert len(connections) == 2
+    assert all(connection.closed for connection in connections)
 
 
 def test_create_connection_passes_repository_url_to_extension_install(monkeypatch: pytest.MonkeyPatch) -> None:

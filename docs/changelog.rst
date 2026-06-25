@@ -9,6 +9,33 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.51.1 - DuckDB lifecycle completion
+------------------------------------------------------------------------------
+
+**Changed:**
+
+* File-backed DuckDB connections now persist across successful sessions by
+  default and are released when the config or pool closes. Set
+  ``connection_lifetime="session"`` in ``connection_config`` to restore the
+  legacy per-session close behavior for same-file reconfiguration workflows.
+* Reconfiguring the same DuckDB file path with a second config now requires
+  closing the first config's pool first, unless the first config opts into
+  ``connection_lifetime="session"``.
+
+**Fixed:**
+
+* DuckDB name-only extension configs, such as ``{"name": "postgres"}``, are
+  load-only again. Explicit installs are requested with ``install=True``,
+  ``version``, ``repository``, ``repository_url``, or ``force_install=True`` and
+  are bounded once per pool/signature.
+* Optional DuckDB extension and secret setup remains best-effort by default and
+  raises only when ``required=True``.
+* ``DuckDBConnectionPool.close()`` now reaps thread-local connections created
+  on worker threads, releasing file locks at pool lifetime boundaries.
+* Psycopg sync and async configs now serialize the one-time PostgreSQL
+  extension probe so pools that open several physical connections do not repeat
+  the ``pg_extension`` query before the config-level cache is populated.
+
 v0.51.0 - ADK 2.0 clean-break store contract
 ------------------------------------------------------------------------------
 
