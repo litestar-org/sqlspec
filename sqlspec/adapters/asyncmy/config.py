@@ -182,6 +182,7 @@ class AsyncmyDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    enable_local_infile_bulk_load: NotRequired[bool]
 
 
 class _AsyncmySessionFactory(AsyncPoolSessionFactory):
@@ -294,6 +295,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         )
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
+
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
+            msg = "enable_local_infile_bulk_load requires local_infile=True and allow_local_infile=True in connection_config."
+            raise ImproperConfigurationError(msg)
 
         super().__init__(
             connection_config=connection_config,
