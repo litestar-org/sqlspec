@@ -171,31 +171,31 @@ def records_to_arrow_table(
     if isinstance(first, Mapping):
         resolved = columns if columns is not None else list(first.keys())
         expected = set(resolved)
-        column_data: dict[str, list[Any]] = {column: [] for column in resolved}
         for record in materialized:
             if not isinstance(record, Mapping):
                 msg = "load_from_records mapping records must all be mappings."
                 raise ImproperConfigurationError(msg)
-            if set(record.keys()) != expected:
+            if record.keys() != expected:
                 msg = "load_from_records mapping records must all share the same keys."
                 raise ImproperConfigurationError(msg)
-            for column in resolved:
-                column_data[column].append(record[column])
-        return pa.table(column_data)
+        mapping_records = cast("list[Mapping[str, Any]]", materialized)
+        table = pa.Table.from_pylist(mapping_records)
+        return table if columns is None else table.select(resolved)
 
     if columns is None:
         msg = "load_from_records requires columns when records are positional sequences."
         raise ImproperConfigurationError(msg)
 
-    positional: dict[str, list[Any]] = {column: [] for column in columns}
-    for record in materialized:
-        values = list(record)
-        if len(values) != len(columns):
-            msg = "load_from_records positional records must match the number of columns."
-            raise ImproperConfigurationError(msg)
-        for column, value in zip(columns, values, strict=True):
-            positional[column].append(value)
-    return pa.table(positional)
+    row_values = [tuple(record) for record in materialized]
+    if any(len(row) != len(columns) for row in row_values):
+        msg = "load_from_records positional records must match the number of columns."
+        raise ImproperConfigurationError(msg)
+    try:
+        arrays = [pa.array(values) for values in zip(*row_values, strict=True)]
+    except ValueError as exc:
+        msg = "load_from_records positional records must match the number of columns."
+        raise ImproperConfigurationError(msg) from exc
+    return pa.Table.from_arrays(arrays, names=columns)
 
 
 def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
@@ -211,6 +211,10 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
     coercer = _get_arrow_table_coercer().get(source)
     if coercer is not None:
         return cast("ArrowTable", coercer(source))
+    if isinstance(source, Mapping):
+        import pyarrow as pa
+
+        return pa.Table.from_pydict(source)
     if isinstance(source, Iterable):
         import pyarrow as pa
 

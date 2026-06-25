@@ -163,6 +163,14 @@ def test_coerce_arrow_table_accepts_iterable_rows() -> None:
     assert table.column_names == ["id"]
 
 
+def test_coerce_arrow_table_accepts_column_mapping() -> None:
+    table = coerce_arrow_table({"id": [1, 2], "name": ["a", "b"]})
+
+    assert table.num_rows == 2
+    assert table.column_names == ["id", "name"]
+    assert table.to_pydict() == {"id": [1, 2], "name": ["a", "b"]}
+
+
 def test_arrow_reader_with_deferred_close_fires_on_exhaustion() -> None:
     import pyarrow as pa
 
