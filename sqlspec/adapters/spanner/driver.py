@@ -89,6 +89,8 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
         self, batch: "list[tuple[str, dict[str, Any] | None, dict[str, Any]]]", **kwargs: Any
     ) -> "tuple[Any, list[int]]": ...
 
+    def insert_or_update(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
+
     def commit(self) -> None: ...
 
     def rollback(self) -> None: ...
@@ -446,29 +448,25 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('@p' + str(i) for i in range(len(columns)))})"
-            batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
-            param_types_cache: dict[tuple[tuple[str, type[Any]], ...], dict[str, Any]] = {}
-            empty_param_types: dict[str, Any] = {}
-            for record in records:
-                params = {f"p{i}": val for i, val in enumerate(record)}
-                coerced = self._coerce_params(params)
-                if not coerced:
-                    batch_args.append((insert_sql, {}, empty_param_types))
-                    continue
-                signature = build_param_type_signature(coerced)
-                param_types = param_types_cache.get(signature)
-                if param_types is None:
-                    param_types = self._infer_param_types(coerced)
-                    param_types_cache[signature] = param_types
-                batch_args.append((insert_sql, coerced, param_types))
-
             conn = self.connection
             if not isinstance(conn, Transaction):
                 msg = "Arrow import requires a Transaction context."
                 raise SQLConversionError(msg)
             writer = cast("_SpannerWriteProtocol", conn)
-            writer.batch_update(batch_args)
+            column_count = len(columns)
+            max_cells = 20_000
+            values: list[list[Any]] = []
+            pending_cells = 0
+            for record in records:
+                coerced = self._coerce_params({f"p{i}": value for i, value in enumerate(record)}) or {}
+                values.append([coerced.get(f"p{i}") for i in range(column_count)])
+                pending_cells += column_count
+                if pending_cells >= max_cells:
+                    writer.insert_or_update(table, columns, values)
+                    values = []
+                    pending_cells = 0
+            if values:
+                writer.insert_or_update(table, columns, values)
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
