@@ -36,6 +36,7 @@ __all__ = (
     "AiomysqlStreamSource",
     "apply_driver_features",
     "build_insert_statement",
+    "build_load_data_statement",
     "build_profile",
     "build_statement_config",
     "collect_rows",
@@ -44,6 +45,7 @@ __all__ = (
     "detect_json_columns",
     "detect_json_columns_from_description",
     "driver_profile",
+    "encode_records_for_local_infile",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -133,6 +135,32 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
+    lines: list[str] = []
+    for record in records:
+        fields: list[str] = []
+        for value in record:
+            if value is None:
+                fields.append("\\N")
+                continue
+            if isinstance(value, bool):
+                value = int(value)
+            text = value if isinstance(value, str) else str(value)
+            text = text.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+            fields.append(text)
+        lines.append("\t".join(fields))
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def build_load_data_statement(table: str, columns: "list[str]", file_path: str) -> str:
+    column_list = ", ".join(format_identifier(column) for column in columns)
+    return (
+        f"LOAD DATA LOCAL INFILE '{file_path}' INTO TABLE {format_identifier(table)} "
+        "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
+        f"LINES TERMINATED BY '\\n' ({column_list})"
+    )
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:

@@ -19,6 +19,7 @@ from sqlspec.adapters.aiomysql.core import apply_driver_features, default_statem
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -138,6 +139,7 @@ class AiomysqlDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[AiomysqlConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[str]
+    enable_local_infile_bulk_load: NotRequired[bool]
 
 
 class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
@@ -250,6 +252,12 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         )
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
+
+        if features_dict.get("enable_local_infile_bulk_load") and not (
+            connection_config.get("enable_local_infile") or connection_config.get("local_infile")
+        ):
+            msg = "enable_local_infile_bulk_load requires enable_local_infile=True (or local_infile=True) in connection_config."
+            raise ImproperConfigurationError(msg)
 
         super().__init__(
             connection_config=connection_config,
