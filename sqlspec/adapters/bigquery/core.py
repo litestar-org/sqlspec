@@ -704,6 +704,12 @@ def _map_bigquery_source_format(file_format: "StorageFormat") -> str:
         return "PARQUET"
     if file_format in {"json", "jsonl"}:
         return "NEWLINE_DELIMITED_JSON"
+    if file_format == "csv":
+        return "CSV"
+    if file_format == "avro":
+        return "AVRO"
+    if file_format == "orc":
+        return "ORC"
     msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
     raise StorageCapabilityError(msg, capability="parquet_import_enabled")
 

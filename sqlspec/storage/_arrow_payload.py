@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 __all__ = ("decode_arrow_payload", "encode_arrow_payload")
 
 
-StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
+StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
 
 
 def encode_arrow_payload(

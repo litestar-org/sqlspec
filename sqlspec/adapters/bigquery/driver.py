@@ -44,7 +44,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.exceptions import MissingDependencyError, StorageCapabilityError
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -593,9 +593,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
 
-        if file_format != "parquet":
-            msg = "BigQuery storage bridge currently supports Parquet ingest only"
-            raise StorageCapabilityError(msg, capability="parquet_import_enabled")
         job_config = build_load_job_config(file_format, overwrite)
         job = self.connection.load_table_from_uri(
             source, table, job_config=job_config, retry=self._job_retry, timeout=self._job_request_timeout()
