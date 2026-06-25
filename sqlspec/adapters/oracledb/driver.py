@@ -389,7 +389,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         cursor.executemany(sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts)
 
         affected_rows = len(prepared_parameters)
-        special_data: "dict[str, Any] | None" = None
+        special_data: dict[str, Any] | None = None
         if batch_errors or array_dml_row_counts:
             special_data = {}
             if batch_errors:
@@ -670,12 +670,30 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = build_insert_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                cursor.executemany(statement, records)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            use_direct_path = (
+                bool(self.driver_features.get("enable_direct_path_load"))
+                and hasattr(self.connection, "direct_path_load")
+                and getattr(self.connection, "thin", False)
+            )
+            if use_direct_path:
+                if "." in table:
+                    schema_name, _, table_name = table.partition(".")
+                else:
+                    schema_name, table_name = self.connection.username, table
+                exc_handler = self.handle_database_exceptions()
+                with exc_handler:
+                    self.connection.direct_path_load(
+                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                    )
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+            else:
+                statement = build_insert_statement(table, columns)
+                exc_handler = self.handle_database_exceptions()
+                with self.with_cursor(self.connection) as cursor, exc_handler:
+                    cursor.executemany(statement, records)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -963,7 +981,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         )
 
         affected_rows = len(prepared_parameters)
-        special_data: "dict[str, Any] | None" = None
+        special_data: dict[str, Any] | None = None
         if batch_errors or array_dml_row_counts:
             special_data = {}
             if batch_errors:
@@ -1249,12 +1267,30 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            statement = build_insert_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            async with self.with_cursor(self.connection) as cursor, exc_handler:
-                await cursor.executemany(statement, records)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            use_direct_path = (
+                bool(self.driver_features.get("enable_direct_path_load"))
+                and hasattr(self.connection, "direct_path_load")
+                and getattr(self.connection, "thin", False)
+            )
+            if use_direct_path:
+                if "." in table:
+                    schema_name, _, table_name = table.partition(".")
+                else:
+                    schema_name, table_name = self.connection.username, table
+                exc_handler = self.handle_database_exceptions()
+                async with exc_handler:
+                    await self.connection.direct_path_load(
+                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                    )
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+            else:
+                statement = build_insert_statement(table, columns)
+                exc_handler = self.handle_database_exceptions()
+                async with self.with_cursor(self.connection) as cursor, exc_handler:
+                    await cursor.executemany(statement, records)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
