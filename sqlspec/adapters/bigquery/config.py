@@ -63,6 +63,7 @@ class BigQueryConnectionParams(TypedDict):
     dataframes_backend: NotRequired[str]
     enable_continuous_queries: NotRequired[bool]
     enable_vector_search: NotRequired[bool]
+    enable_storage_write_api: NotRequired[bool]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -104,6 +105,9 @@ class BigQueryDriverFeatures(TypedDict):
         query_page_size: Optional page size passed through ``QueryJob.result()`` for SELECT result fetching.
             Non-positive values are ignored by the BigQuery client.
         query_max_results: Optional total row limit passed through ``QueryJob.result()`` for SELECT result fetching.
+        enable_storage_write_api: Route ``load_from_arrow`` (append, ``overwrite=False``) through the
+            BigQuery Storage Write API using native Arrow instead of a Parquet load job. Falls back to
+            the Parquet path on any ``bigquery_storage`` import/availability failure. Defaults to False.
     """
 
     connection_instance: NotRequired["BigQueryConnection"]

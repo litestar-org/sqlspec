@@ -70,6 +70,7 @@ class _BigQueryStreamDriver(Protocol):
 __all__ = (
     "BigQueryStreamSource",
     "apply_driver_features",
+    "build_arrow_write_stream_payload",
     "build_dml_rowcount",
     "build_inlined_script",
     "build_load_job_config",
@@ -630,6 +631,25 @@ def build_load_job_config(file_format: "StorageFormat", overwrite: bool) -> "Loa
     job_config.source_format = _map_bigquery_source_format(file_format)
     job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
     return job_config
+
+
+def build_arrow_write_stream_payload(stream_name: str, arrow_table: Any, types: Any) -> "list[Any]":
+    """Build PENDING-stream AppendRowsRequest payloads from an Arrow table (native arrow_rows)."""
+    schema_bytes = arrow_table.schema.serialize().to_pybytes()
+    requests: list[Any] = []
+    for batch in arrow_table.to_batches():
+        arrow_data = types.AppendRowsRequest.ArrowData(
+            rows=types.ArrowRecordBatch(
+                serialized_record_batch=batch.serialize().to_pybytes(), row_count=batch.num_rows
+            )
+        )
+        if not requests:
+            arrow_data.writer_schema = types.ArrowSchema(serialized_schema=schema_bytes)
+        request = types.AppendRowsRequest(arrow_rows=arrow_data)
+        if not requests:
+            request.write_stream = stream_name
+        requests.append(request)
+    return requests
 
 
 def build_load_job_telemetry(job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":

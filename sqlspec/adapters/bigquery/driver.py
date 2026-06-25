@@ -18,6 +18,7 @@ from sqlspec.adapters.bigquery.core import (
     BigQueryStreamSource,
     _run_query_and_wait,
     _uses_local_bigquery_endpoint,
+    build_arrow_write_stream_payload,
     build_dml_rowcount,
     build_inlined_script,
     build_load_job_config,
@@ -44,7 +45,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -105,6 +106,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_enable_storage_write_api",
         "_job_result_kwargs_defaults",
         "_job_result_timeout",
         "_job_retry",
@@ -146,6 +148,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
         self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
+        self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
 
     def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
         timeout = features.get("request_timeout")
@@ -559,11 +562,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data by uploading a temporary Parquet payload to BigQuery."""
+        """Load Arrow data into BigQuery (Parquet load job, or opt-in Storage Write API)."""
 
         self._require_capability("parquet_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         ensure_pyarrow()
+
+        if self._enable_storage_write_api and not overwrite:
+            try:
+                telemetry_payload = self._load_arrow_via_storage_write_api(table, arrow_table)
+            except ImportError as exc:
+                logger.warning("Storage Write API unavailable, falling back to Parquet load job: %s", exc)
+            else:
+                if telemetry:
+                    telemetry_payload.setdefault("extra", {})
+                    telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
+                self._attach_partition_telemetry(telemetry_payload, partitioner)
+                return self._create_storage_job(telemetry_payload)
 
         import pyarrow.parquet as pq
 
@@ -581,6 +596,44 @@ class BigQueryDriver(SyncDriverAdapterBase):
             telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload)
+
+    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
+        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
+        from google.cloud import bigquery_storage_v1
+        from google.cloud.bigquery_storage_v1 import types
+
+        try:
+            *prefix, dataset, table_name = table.split(".")
+        except ValueError as exc:
+            msg = f"Storage Write API requires a dataset-qualified table, got '{table}'"
+            raise StorageOperationFailedError(msg) from exc
+        project = prefix[-1] if prefix else self.connection.project
+
+        credentials = getattr(self.connection, "_credentials", None)
+        client = bigquery_storage_v1.BigQueryWriteClient(credentials=credentials)  # type: ignore[no-untyped-call]
+        parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
+        write_stream = client.create_write_stream(
+            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
+        )
+        stream_name = write_stream.name
+
+        requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
+        if requests:
+            for response in client.append_rows(requests=iter(requests)):
+                if response.error.code:
+                    msg = f"Storage Write API append failed: {response.error.message}"
+                    raise StorageOperationFailedError(msg)
+        client.finalize_write_stream(name=stream_name)
+        commit = client.batch_commit_write_streams(
+            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
+        )
+        if getattr(commit, "stream_errors", None):
+            msg = f"Storage Write API commit failed: {commit.stream_errors}"
+            raise StorageOperationFailedError(msg)
+
+        telemetry_payload = self._build_ingest_telemetry(arrow_table, format_label="arrow-storage-write")
+        telemetry_payload["destination"] = table
+        return telemetry_payload
 
     def load_from_storage(
         self,
