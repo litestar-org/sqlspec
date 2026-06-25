@@ -452,26 +452,54 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if not isinstance(conn, Transaction):
                 msg = "Arrow import requires a Transaction context."
                 raise SQLConversionError(msg)
-            writer = cast("_SpannerWriteProtocol", conn)
-            column_count = len(columns)
-            max_cells = 20_000
-            values: list[list[Any]] = []
-            pending_cells = 0
-            for record in records:
-                coerced = self._coerce_params({f"p{i}": value for i, value in enumerate(record)}) or {}
-                values.append([coerced.get(f"p{i}") for i in range(column_count)])
-                pending_cells += column_count
-                if pending_cells >= max_cells:
-                    writer.insert_or_update(table, columns, values)
-                    values = []
-                    pending_cells = 0
-            if values:
-                writer.insert_or_update(table, columns, values)
+            chunks = self._chunk_mutation_rows(columns, records)
+            if self.driver_features.get("enable_batch_write_api"):
+                self._batch_write_mutations(table, columns, chunks)
+            else:
+                writer = cast("_SpannerWriteProtocol", conn)
+                for chunk in chunks:
+                    writer.insert_or_update(table, columns, chunk)
 
         telemetry_payload = self._build_ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._create_storage_job(telemetry_payload, telemetry)
+
+    def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
+        """Coerce Arrow rows into mutation value chunks bounded by Spanner's per-commit cell ceiling."""
+        column_count = len(columns)
+        max_cells = 20_000
+        chunks: list[list[list[Any]]] = []
+        values: list[list[Any]] = []
+        pending_cells = 0
+        for record in records:
+            coerced = self._coerce_params({f"p{i}": value for i, value in enumerate(record)}) or {}
+            values.append([coerced.get(f"p{i}") for i in range(column_count)])
+            pending_cells += column_count
+            if pending_cells >= max_cells:
+                chunks.append(values)
+                values = []
+                pending_cells = 0
+        if values:
+            chunks.append(values)
+        return chunks
+
+    def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
+        """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
+        session = getattr(self.connection, "_session", None)
+        database = getattr(session, "_database", None)
+        if database is None:
+            msg = "Spanner Batch Write API requires a database-backed session."
+            raise SQLConversionError(msg)
+        mutation_groups = database.mutation_groups()
+        for chunk in chunks:
+            group = mutation_groups.group()
+            group.insert_or_update(table, columns, chunk)
+        for response in mutation_groups.batch_write():
+            status = response.status
+            if status is not None and status.code:
+                msg = f"Spanner batch_write group failed: {status.message}"
+                raise SQLConversionError(msg)
 
     def load_from_storage(
         self,

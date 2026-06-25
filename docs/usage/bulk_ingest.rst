@@ -83,15 +83,15 @@ Capability matrix
      - All-or-nothing load job / PENDING write stream
      - ``enable_storage_write_api``; load retry/timeout via job-control features
    * - spanner
-     - ``Transaction.insert_or_update`` mutations (upsert)
-     - Committed with the surrounding transaction
-     - Always on (within a write transaction)
+     - ``Transaction.insert_or_update`` mutations (upsert); Batch Write API (opt-in)
+     - In-transaction (default); independently committed groups (Batch Write)
+     - Always on; ``enable_batch_write_api`` for high-throughput groups
    * - mssql-python
-     - ``bulk_copy()`` over ``cursor.bulkcopy()``
+     - ``cursor.bulkcopy()`` via ``load_from_arrow``
      - Driver-managed
-     - ``bulk_copy()`` (not yet wired into ``load_from_arrow``)
+     - Always on
    * - arrow_odbc
-     - ``bulk_insert_arrow``
+     - ``bulk_insert_arrow`` via ``load_from_arrow``
      - Driver-managed
      - Always on
 
@@ -114,6 +114,11 @@ Some fast paths are opt-in because they read local files or change semantics:
   rows for ``load_from_arrow`` appends and falls back to the Parquet load job
   when the Storage client is unavailable; ``overwrite=True`` always uses a
   Parquet ``WRITE_TRUNCATE`` load job.
+- **Spanner Batch Write API** (``enable_batch_write_api``) routes
+  ``load_from_arrow`` through ``Database.mutation_groups().batch_write()`` for
+  high-throughput, independently committed ``insert_or_update`` groups instead
+  of a single in-transaction flush. The upsert semantics keep each group
+  idempotent on replay.
 
 Examples
 --------
