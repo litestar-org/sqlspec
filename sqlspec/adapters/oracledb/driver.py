@@ -664,8 +664,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if overwrite:
             statement = build_truncate_statement(table)
             exc_handler = self.handle_database_exceptions()
-            with exc_handler:
-                self.connection.execute(statement)
+            with self.with_cursor(self.connection) as cursor, exc_handler:
+                cursor.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)

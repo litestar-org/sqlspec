@@ -19,9 +19,13 @@ _CAPS: dict[str, Any] = {
 
 class _FakeRawCursor:
     def __init__(self) -> None:
+        self.execute_calls: list[str] = []
         self.executemany_calls: list[tuple[str, Any]] = []
         self.rowcount = 0
         self.description = None
+
+    def execute(self, sql: str, *_args: Any) -> None:
+        self.execute_calls.append(sql)
 
     def executemany(self, sql: str, records: Any, **_kwargs: Any) -> None:
         self.executemany_calls.append((sql, records))
@@ -35,7 +39,6 @@ class _DPLConnection:
         self.thin = thin
         self.username = username
         self.dpl_calls: list[dict[str, Any]] = []
-        self.execute_calls: list[str] = []
         self._cursor = _FakeRawCursor()
 
     def direct_path_load(
@@ -47,9 +50,6 @@ class _DPLConnection:
             "column_names": column_names,
             "data": data,
         })
-
-    def execute(self, sql: str, *_args: Any) -> None:
-        self.execute_calls.append(sql)
 
     def cursor(self) -> _FakeRawCursor:
         return self._cursor
@@ -139,7 +139,7 @@ def test_overwrite_truncates_before_direct_path_load() -> None:
 
     driver.load_from_arrow("MYTAB", _arrow(), overwrite=True)
 
-    assert conn.execute_calls and conn.execute_calls[0].startswith("TRUNCATE TABLE")
+    assert conn._cursor.execute_calls and conn._cursor.execute_calls[0].startswith("TRUNCATE TABLE")
     assert len(conn.dpl_calls) == 1
 
 
