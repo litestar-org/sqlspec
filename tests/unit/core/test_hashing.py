@@ -157,6 +157,13 @@ def test_hash_parameters_named_only() -> None:
     assert isinstance(result, int)
 
 
+def test_hash_parameters_named_unhashable_values_do_not_raise() -> None:
+    """Named parameters with unhashable values (set/bytearray) must hash to a stable key, not raise TypeError."""
+    result = hash_parameters(named_parameters={"a": {1, 2, 3}, "b": bytearray(b"xyz")})
+    assert isinstance(result, int)
+    assert result == hash_parameters(named_parameters={"a": {1, 2, 3}, "b": bytearray(b"xyz")})
+
+
 def test_hash_parameters_mixed() -> None:
     """Test hash_parameters with both positional and named parameters."""
     pos_params = ["value1", 42]

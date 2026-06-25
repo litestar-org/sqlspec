@@ -68,6 +68,9 @@ v0.51.0 - ADK 2.0 clean-break store contract
 * The SQL statement splitter caches results on the script text rather than
   ``hash(sql)``, preventing a hash collision between two distinct scripts from
   returning the wrong split.
+* ``hash_parameters`` no longer raises ``TypeError`` for named parameters with
+  unhashable values (for example ``set`` or ``bytearray``); such values now fall
+  back to a stable ``repr``-based key, matching the positional path.
 
 v0.50.1 - DuckDB extension lifecycle and SQLGlot builder modernization
 ------------------------------------------------------------------------------

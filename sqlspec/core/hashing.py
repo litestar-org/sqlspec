@@ -129,7 +129,11 @@ def hash_parameters(
             elif isinstance(value, (list, dict)):
                 hashable_items.append((key, (repr(value), "unhashable")))
             else:
-                hashable_items.append((key, (value, "primitive")))
+                try:
+                    hash(value)
+                    hashable_items.append((key, (value, "primitive")))
+                except TypeError:
+                    hashable_items.append((key, (repr(value), "unhashable_repr")))
         param_hash ^= hash(tuple(hashable_items))
 
     if original_parameters is not None:
