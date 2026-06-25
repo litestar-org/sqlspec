@@ -31,12 +31,17 @@ v0.51.0 - ADK 2.0 clean-break store contract
 * Migration ``0002_reset_adk_tables`` is destructive: it unconditionally drops
   legacy ADK tables (sessions, events, app/user state, metadata, memory) and
   recreates them in the 2.0 shape. Back up ADK data before upgrading.
+* ``sqlspec.utils.sync_tools.async_()`` now uses SQLSpec's managed
+  ``ThreadPoolExecutor`` by default instead of delegating to the event loop's
+  default executor through ``asyncio.to_thread()``. Configure the worker limit
+  with ``SQLSPEC_ASYNC_THREAD_LIMIT`` or
+  ``enable_default_async_thread_pool()``.
 
 **Added:**
 
 * Typed environment parsing helpers in ``sqlspec.utils.env``.
 * ``ThreadPoolExecutor`` support for ``sqlspec.utils.sync_tools.async_()``, plus
-  opt-in bounded async bridge controls through
+  bounded async bridge controls through
   ``SQLSPEC_ASYNC_THREAD_LIMIT``, ``enable_default_async_thread_pool()``,
   ``set_default_async_executor()``, ``get_default_async_executor()``, and
   ``shutdown_default_async_executor()``.

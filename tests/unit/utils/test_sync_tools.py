@@ -232,7 +232,7 @@ async def test_async_with_limiter() -> None:
 
 
 async def test_async_default_path_preserves_contextvars() -> None:
-    """Default async_ offload keeps asyncio.to_thread context propagation."""
+    """Default async_ offload keeps context propagation through SQLSpec's managed pool."""
     request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id")
     request_id.set("default-context")
 
@@ -242,6 +242,26 @@ async def test_async_default_path_preserves_contextvars() -> None:
     async_version = async_(sync_function)
 
     assert await async_version() == "default-context"
+
+
+async def test_async_default_uses_managed_pool_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """async_ uses SQLSpec's bounded managed pool by default."""
+    monkeypatch.delenv("SQLSPEC_ASYNC_THREAD_LIMIT", raising=False)
+
+    def sync_function() -> str:
+        return threading.current_thread().name
+
+    try:
+        async_version = async_(sync_function)
+
+        thread_name = await async_version()
+        executor = _sync_tools_module.get_default_async_executor()
+
+        assert thread_name.startswith("sqlspec-async")
+        assert isinstance(executor, concurrent.futures.ThreadPoolExecutor)
+        assert executor._max_workers == _sync_tools_module.DEFAULT_ASYNC_THREAD_LIMIT
+    finally:
+        _sync_tools_module.shutdown_default_async_executor()
 
 
 async def test_async_explicit_executor_runs_on_that_executor() -> None:
@@ -318,7 +338,7 @@ async def test_async_explicit_executor_propagates_exceptions() -> None:
 
 
 async def test_async_env_thread_limit_enables_managed_pool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SQLSPEC_ASYNC_THREAD_LIMIT opts async_ into SQLSpec's managed executor."""
+    """SQLSPEC_ASYNC_THREAD_LIMIT configures SQLSpec's managed executor."""
     monkeypatch.setenv("SQLSPEC_ASYNC_THREAD_LIMIT", "1")
 
     def sync_function() -> str:
@@ -405,7 +425,10 @@ def test_default_async_executor_pid_change_rebuilds_managed_and_clears_caller_ow
         _sync_tools_module.set_default_async_executor(caller_executor)
         monkeypatch.setattr(_sync_tools_module, "_default_async_executor_pid", -1)
 
-        assert _sync_tools_module.get_default_async_executor() is None
+        fallback_executor = _sync_tools_module.get_default_async_executor()
+
+        assert fallback_executor is not caller_executor
+        assert isinstance(fallback_executor, concurrent.futures.ThreadPoolExecutor)
     finally:
         _sync_tools_module.shutdown_default_async_executor()
         caller_executor.shutdown(wait=False)
@@ -429,9 +452,13 @@ def test_shutdown_default_async_executor_shuts_down_only_managed_pool() -> None:
         _sync_tools_module.shutdown_default_async_executor()
 
         assert caller_executor.submit(lambda: 1).result() == 1
-        assert _sync_tools_module.get_default_async_executor() is None
+        next_executor = _sync_tools_module.get_default_async_executor()
+
+        assert next_executor is not caller_executor
+        assert isinstance(next_executor, concurrent.futures.ThreadPoolExecutor)
     finally:
         caller_executor.shutdown(wait=False)
+        _sync_tools_module.shutdown_default_async_executor()
 
 
 async def test_ensure_async_with_async_function() -> None:
