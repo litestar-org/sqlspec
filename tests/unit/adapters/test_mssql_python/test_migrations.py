@@ -5,7 +5,11 @@ from typing import Any, cast
 import pytest
 
 from sqlspec.adapters.mssql_python.config import MssqlPythonAsyncConfig, MssqlPythonConfig
-from sqlspec.adapters.mssql_python.migrations import MssqlPythonAsyncMigrationTracker, MssqlPythonSyncMigrationTracker
+from sqlspec.adapters.mssql_python.migrations import (
+    MssqlPythonAsyncMigrationTracker,
+    MssqlPythonSyncMigrationTracker,
+    _split_schema_table,
+)
 
 
 class FakeSyncMigrationDriver:
@@ -77,3 +81,7 @@ def test_mssql_python_configs_use_tsql_migration_trackers() -> None:
     """Sync and async configs should use the MSSQL migration tracker types."""
     assert MssqlPythonConfig.migration_tracker_type is MssqlPythonSyncMigrationTracker
     assert MssqlPythonAsyncConfig.migration_tracker_type is MssqlPythonAsyncMigrationTracker
+
+
+def test_split_schema_table_preserves_bracket_quoted_dots() -> None:
+    assert _split_schema_table("[dbo.schema].[migration.table]") == ("dbo.schema", "migration.table")

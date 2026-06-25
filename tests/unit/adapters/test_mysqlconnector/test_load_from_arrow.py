@@ -7,6 +7,7 @@ import anyio
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from sqlspec.adapters.mysqlconnector.core import build_insert_statement
 from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
 
 _CAPS: dict[str, Any] = {
@@ -109,6 +110,12 @@ def test_sync_load_from_arrow_overwrite_truncates_first() -> None:
     driver.load_from_arrow("orders", pa.table({"id": [1]}), overwrite=True)
 
     assert conn._cursor.execute_calls[0] == "TRUNCATE TABLE `orders`"
+
+
+def test_build_insert_statement_preserves_backtick_quoted_dots() -> None:
+    statement = build_insert_statement("`analytics.db`.`orders.table`", ["id"])
+
+    assert statement == "INSERT INTO `analytics.db`.`orders.table` (`id`) VALUES (%s)"
 
 
 async def test_async_load_from_arrow_local_infile_writes_tsv_and_loads() -> None:

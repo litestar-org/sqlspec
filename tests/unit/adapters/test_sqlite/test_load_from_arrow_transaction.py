@@ -6,6 +6,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
+from sqlspec.adapters.sqlite.core import build_insert_statement
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.exceptions import SQLSpecError
 
@@ -84,6 +85,12 @@ def test_overwrite_issues_delete_before_insert() -> None:
 
     assert conn._cursor.execute_calls == ['DELETE FROM "t"']
     assert conn._cursor.executemany_calls
+
+
+def test_build_insert_statement_preserves_quoted_dot_in_table_name() -> None:
+    statement = build_insert_statement('"main.schema"."target.table"', ["a"])
+
+    assert statement == 'INSERT INTO "main.schema"."target.table" ("a") VALUES (?)'
 
 
 def test_rollback_on_error_when_owning_transaction() -> None:

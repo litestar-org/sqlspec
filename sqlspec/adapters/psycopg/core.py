@@ -39,6 +39,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 
@@ -118,7 +119,7 @@ def pipeline_supported() -> bool:
 
 
 def _compose_table_identifier(table: str) -> "PsycopgComposed":
-    parts = [part for part in table.split(".") if part]
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
     if not parts:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)

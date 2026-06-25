@@ -7,6 +7,7 @@ import anyio
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from sqlspec.adapters.aiomysql.core import build_insert_statement
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
 
 _CAPS: dict[str, Any] = {
@@ -88,6 +89,12 @@ async def test_load_from_arrow_overwrite_truncates_first() -> None:
 
     assert conn._cursor.execute_calls[0] == "TRUNCATE TABLE `orders`"
     assert any(sql.startswith("LOAD DATA") for sql in conn._cursor.execute_calls)
+
+
+def test_build_insert_statement_preserves_backtick_quoted_dots() -> None:
+    statement = build_insert_statement("`analytics.db`.`orders.table`", ["id"])
+
+    assert statement == "INSERT INTO `analytics.db`.`orders.table` (`id`) VALUES (%s)"
 
 
 async def test_load_from_storage_reads_parquet_and_delegates(tmp_path: Path) -> None:

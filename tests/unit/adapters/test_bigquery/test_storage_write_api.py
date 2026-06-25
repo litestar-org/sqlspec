@@ -8,6 +8,7 @@ from google.cloud.bigquery_storage_v1 import types
 
 from sqlspec.adapters.bigquery.core import build_arrow_write_stream_payload
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
+from sqlspec.exceptions import StorageOperationFailedError
 
 CAPABILITIES = {
     "arrow_export_enabled": True,
@@ -118,6 +119,32 @@ def test_storage_write_api_orchestration(monkeypatch: pytest.MonkeyPatch) -> Non
     assert client.finalize_calls == ["projects/proj/datasets/dataset/tables/table/streams/s1"]
     assert client.commit_calls
     assert job.telemetry["rows_processed"] == 3
+
+
+def test_storage_write_api_accepts_backtick_quoted_full_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_write_client(monkeypatch)
+    connection = _Connection()
+    driver = BigQueryDriver(
+        cast("Any", connection),
+        driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
+    )
+
+    driver.load_from_arrow("`project-1.dataset.table_name`", pa.table({"id": [1]}))
+
+    parent, _stream = _FakeWriteClient.instances[0].create_calls[0]
+    assert parent == "projects/project-1/datasets/dataset/tables/table_name"
+
+
+def test_storage_write_api_rejects_overqualified_table_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_write_client(monkeypatch)
+    connection = _Connection()
+    driver = BigQueryDriver(
+        cast("Any", connection),
+        driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
+    )
+
+    with pytest.raises(StorageOperationFailedError, match="dataset-qualified table"):
+        driver.load_from_arrow("too.many.path.parts", pa.table({"id": [1]}))
 
 
 def test_storage_write_api_overwrite_uses_parquet(monkeypatch: pytest.MonkeyPatch) -> None:

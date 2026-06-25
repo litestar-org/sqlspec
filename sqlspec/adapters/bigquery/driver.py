@@ -50,6 +50,7 @@ from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyErro
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -73,6 +74,22 @@ if TYPE_CHECKING:
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
 
 logger = get_logger(__name__)
+_DATASET_TABLE_PARTS = 2
+_PROJECT_DATASET_TABLE_PARTS = 3
+
+
+def _resolve_storage_write_table_path(table: str, default_project: str) -> tuple[str, str, str]:
+    parts = split_qualified_identifier(table, quote_chars="`", allow_bracket_quotes=False)
+    if len(parts) == 1 and "." in parts[0]:
+        parts = tuple(part for part in parts[0].split(".") if part)
+    if len(parts) == _DATASET_TABLE_PARTS:
+        dataset, table_name = parts
+        return default_project, dataset, table_name
+    if len(parts) == _PROJECT_DATASET_TABLE_PARTS:
+        project, dataset, table_name = parts
+        return project, dataset, table_name
+    msg = f"Storage Write API requires a dataset-qualified table, got '{table}'"
+    raise StorageOperationFailedError(msg)
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -622,12 +639,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         from google.cloud import bigquery_storage_v1
         from google.cloud.bigquery_storage_v1 import types
 
-        try:
-            *prefix, dataset, table_name = table.split(".")
-        except ValueError as exc:
-            msg = f"Storage Write API requires a dataset-qualified table, got '{table}'"
-            raise StorageOperationFailedError(msg) from exc
-        project = prefix[-1] if prefix else self.connection.project
+        project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
         credentials = getattr(self.connection, "_credentials", None)
         client = bigquery_storage_v1.BigQueryWriteClient(credentials=credentials)  # type: ignore[no-untyped-call]

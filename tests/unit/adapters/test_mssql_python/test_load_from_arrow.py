@@ -74,6 +74,16 @@ def test_sync_load_from_arrow_overwrite_deletes_first() -> None:
     assert conn._cursor.bulkcopy_calls
 
 
+def test_sync_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
+
+    assert conn._cursor.execute_calls == ['DELETE FROM "dbo.schema"."orders.table"']
+    assert conn._cursor.bulkcopy_calls
+
+
 @pytest.mark.anyio
 async def test_async_load_from_arrow_uses_bulkcopy() -> None:
     conn = _FakeConnection()
@@ -86,3 +96,14 @@ async def test_async_load_from_arrow_uses_bulkcopy() -> None:
     assert target == "orders"
     assert rows == [(1, "a"), (2, "b")]
     assert kwargs["column_mappings"] == ["id", "name"]
+
+
+@pytest.mark.anyio
+async def test_async_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonAsyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    await driver.load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
+
+    assert conn._cursor.execute_calls == ['DELETE FROM "dbo.schema"."orders.table"']
+    assert conn._cursor.bulkcopy_calls

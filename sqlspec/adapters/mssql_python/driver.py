@@ -32,7 +32,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 
 def _quote_mssql_table(table: str) -> str:
-    return ".".join(quote_identifier(part) for part in table.split(".") if part)
+    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
 __all__ = (

@@ -18,6 +18,7 @@ __all__ = (
     "quote_identifier",
     "slugify",
     "snake_case",
+    "split_qualified_identifier",
 )
 
 
@@ -160,6 +161,74 @@ def normalize_identifier(identifier: str, dialect: str) -> str:
     if normalized_dialect == "oracle" and value.islower():
         return value.upper()
     return value
+
+
+def split_qualified_identifier(
+    identifier: str, *, quote_chars: str = '"`', allow_bracket_quotes: bool = True
+) -> tuple[str, ...]:
+    """Split a qualified SQL identifier on dots outside quoted parts.
+
+    Args:
+        identifier: SQL identifier or qualified identifier.
+        quote_chars: Quote characters to treat as identifier delimiters.
+        allow_bracket_quotes: Treat SQL Server ``[...]`` as identifier quotes.
+
+    Returns:
+        Identifier parts with outer identifier quotes removed and embedded quote
+        escapes normalized.
+    """
+    cleaned = identifier.strip()
+    if not cleaned:
+        return ()
+
+    parts: list[str] = []
+    chars: list[str] = []
+    quote_end = ""
+    quote_start = ""
+    index = 0
+    length = len(cleaned)
+    while index < length:
+        char = cleaned[index]
+        if quote_end:
+            if char == quote_end:
+                if index + 1 < length and cleaned[index + 1] == quote_end:
+                    chars.append(quote_end)
+                    index += 2
+                    continue
+                quote_end = ""
+                quote_start = ""
+                index += 1
+                continue
+            chars.append(char)
+            index += 1
+            continue
+
+        if allow_bracket_quotes and char == "[":
+            quote_start = char
+            quote_end = "]"
+            index += 1
+            continue
+        if char in quote_chars:
+            quote_start = char
+            quote_end = char
+            index += 1
+            continue
+        if char == ".":
+            part = "".join(chars).strip()
+            if part:
+                parts.append(part)
+            chars.clear()
+            index += 1
+            continue
+        chars.append(char)
+        index += 1
+
+    if quote_end:
+        chars.insert(0, quote_start)
+    part = "".join(chars).strip()
+    if part:
+        parts.append(part)
+    return tuple(parts)
 
 
 def quote_backtick_identifier(identifier: str) -> str:

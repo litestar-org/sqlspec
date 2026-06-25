@@ -6,6 +6,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from sqlspec.adapters.asyncmy.core import build_insert_statement
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
 _CAPS: dict[str, Any] = {
@@ -68,6 +69,12 @@ async def test_load_from_arrow_overwrite_truncates_first() -> None:
 
     assert conn._cursor.execute_calls[0] == "TRUNCATE TABLE `orders`"
     assert conn._cursor.executemany_calls[0][0].startswith("INSERT INTO")
+
+
+def test_build_insert_statement_preserves_backtick_quoted_dots() -> None:
+    statement = build_insert_statement("`analytics.db`.`orders.table`", ["id"])
+
+    assert statement == "INSERT INTO `analytics.db`.`orders.table` (`id`) VALUES (%s)"
 
 
 async def test_load_from_storage_reads_parquet_and_delegates(tmp_path: Path) -> None:

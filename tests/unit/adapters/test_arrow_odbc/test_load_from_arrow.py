@@ -50,3 +50,11 @@ def test_load_from_arrow_overwrite_deletes_first() -> None:
 
     assert any("DELETE FROM" in q.upper() for q in conn.execute_calls)
     assert conn.bulk_calls
+
+
+def test_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
+    conn = _FakeConn()
+    _driver(conn).load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
+
+    assert conn.execute_calls == ['DELETE FROM "dbo.schema"."orders.table"']
+    assert conn.bulk_calls

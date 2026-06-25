@@ -96,6 +96,18 @@ def test_direct_path_load_splits_qualified_table() -> None:
     assert conn.dpl_calls[0]["table_name"] == "MYTAB"
 
 
+def test_direct_path_load_preserves_quoted_dots_in_qualified_table() -> None:
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(
+        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": True}
+    )
+
+    driver.load_from_arrow('"MY.SCHEMA"."MY.TAB"', _arrow())
+
+    assert conn.dpl_calls[0]["schema_name"] == "MY.SCHEMA"
+    assert conn.dpl_calls[0]["table_name"] == "MY.TAB"
+
+
 def test_thick_mode_falls_back_to_executemany() -> None:
     conn = _DPLConnection(thin=False)
     driver = OracleSyncDriver(
@@ -205,6 +217,18 @@ async def test_async_direct_path_load_defaults_schema_to_username() -> None:
 
     assert conn.dpl_calls[0]["schema_name"] == "SCOTT"
     assert conn.dpl_calls[0]["table_name"] == "MYTAB"
+
+
+async def test_async_direct_path_load_preserves_quoted_dot_in_table() -> None:
+    conn = _AsyncDPLConnection(thin=True, username="SCOTT")
+    driver = OracleAsyncDriver(
+        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": True}
+    )
+
+    await driver.load_from_arrow('"MY.TAB"', _arrow())
+
+    assert conn.dpl_calls[0]["schema_name"] == "SCOTT"
+    assert conn.dpl_calls[0]["table_name"] == "MY.TAB"
 
 
 async def test_async_direct_path_load_can_be_disabled() -> None:

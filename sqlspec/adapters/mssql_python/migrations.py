@@ -10,6 +10,7 @@ from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTrack
 from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 __all__ = ("MssqlPythonAsyncMigrationTracker", "MssqlPythonSyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.mssql_python")
+_QUALIFIED_IDENTIFIER_MIN_PARTS = 2
 
 
 class MssqlPythonMigrationTrackerMixin:
@@ -220,7 +222,8 @@ def _escape_sql_literal(value: str) -> str:
 
 def _split_schema_table(table_name: str) -> tuple[str, str]:
     """Split a schema-qualified table name into schema and table parts."""
-    if "." not in table_name:
-        return "dbo", table_name
-    schema_name, bare_table_name = table_name.rsplit(".", 1)
-    return schema_name.strip("[]") or "dbo", bare_table_name.strip("[]")
+    parts = split_qualified_identifier(table_name, quote_chars='"')
+    if len(parts) < _QUALIFIED_IDENTIFIER_MIN_PARTS:
+        return "dbo", parts[0] if parts else table_name
+    schema_name = ".".join(parts[:-1])
+    return schema_name or "dbo", parts[-1]

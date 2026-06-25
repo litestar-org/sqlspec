@@ -6,7 +6,7 @@ camelCase conversion, and snake_case conversion.
 
 import pytest
 
-from sqlspec.utils.text import camelize, normalize_identifier, slugify, snake_case
+from sqlspec.utils.text import camelize, normalize_identifier, slugify, snake_case, split_qualified_identifier
 
 
 def test_slugify_basic() -> None:
@@ -214,6 +214,21 @@ def test_normalize_identifier_preserves_explicitly_quoted_identifiers(
     dialect: str, identifier: str, expected: str
 ) -> None:
     assert normalize_identifier(identifier, dialect) == expected
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected"),
+    [
+        ("schema.table", ("schema", "table")),
+        ('"schema.with.dot"."table.with.dot"', ("schema.with.dot", "table.with.dot")),
+        ('"schema""quote"."table""quote"', ('schema"quote', 'table"quote')),
+        ("[schema.with.dot].[table]]name]", ("schema.with.dot", "table]name")),
+        ("`project.dataset.table`", ("project.dataset.table",)),
+        ("dataset.`table.with.dot`", ("dataset", "table.with.dot")),
+    ],
+)
+def test_split_qualified_identifier_respects_quoted_dots(identifier: str, expected: tuple[str, ...]) -> None:
+    assert split_qualified_identifier(identifier) == expected
 
 
 @pytest.mark.parametrize(

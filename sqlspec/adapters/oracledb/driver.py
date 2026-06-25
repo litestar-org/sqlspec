@@ -62,7 +62,7 @@ from sqlspec.driver import (
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.text import normalize_identifier, quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:
@@ -88,6 +88,17 @@ __all__ = (
 
 
 logger = get_logger(__name__)
+
+
+def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    if len(parts) == 1:
+        return connection.username, parts[0]
+    return ".".join(parts[:-1]), parts[-1]
+
 
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
 # on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
@@ -675,10 +686,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 "enable_direct_path_load", True
             ) is not False and supports_direct_path_load(self.connection)
             if use_direct_path:
-                if "." in table:
-                    schema_name, _, table_name = table.partition(".")
-                else:
-                    schema_name, table_name = self.connection.username, table
+                schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
                 with exc_handler:
                     self.connection.direct_path_load(
@@ -1270,10 +1278,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 "enable_direct_path_load", True
             ) is not False and supports_direct_path_load(self.connection)
             if use_direct_path:
-                if "." in table:
-                    schema_name, _, table_name = table.partition(".")
-                else:
-                    schema_name, table_name = self.connection.username, table
+                schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
                 async with exc_handler:
                     await self.connection.direct_path_load(

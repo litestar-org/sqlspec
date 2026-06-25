@@ -22,7 +22,7 @@ from sqlspec.core import (
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
@@ -35,7 +35,7 @@ __all__ = ("ArrowOdbcCursor", "ArrowOdbcDriver", "ArrowOdbcExceptionHandler", "r
 
 
 def _quote_odbc_table(table: str) -> str:
-    return ".".join(quote_identifier(part) for part in table.split(".") if part)
+    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
 class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
