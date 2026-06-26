@@ -1143,7 +1143,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             data, total = self._extract_total_from_rows(rows)
 
             if schema_type is not None:
-                return ([schema_type(**r) for r in data], total)
+                return (cast("list[SchemaT]", self.to_schema(data, schema_type=schema_type)), total)
             return (data, total)
 
         count_result = self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)

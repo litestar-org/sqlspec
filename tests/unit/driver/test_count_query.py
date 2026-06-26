@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
+import msgspec
 import pytest
 
 from sqlspec import SQL
@@ -654,6 +655,80 @@ def test_select_with_total_window_count_handles_repeated_named_parameters(sqlite
 
     assert total == 2
     assert [row["id"] for row in rows] == [1, 2]
+
+
+def test_select_with_total_window_count_uses_schema_conversion_for_extra_columns(sqlite_driver: "SqliteDriver") -> None:
+    """Window-count pagination should map rows through the normal schema converter."""
+
+    class Item(msgspec.Struct):
+        id: int
+        name: str
+
+    sqlite_driver.connection.executescript("""
+        CREATE TABLE window_schema_items (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            extra_col TEXT
+        );
+        INSERT INTO window_schema_items (id, name, extra_col) VALUES (1, 'a', 'x');
+        INSERT INTO window_schema_items (id, name, extra_col) VALUES (2, 'b', 'x');
+        INSERT INTO window_schema_items (id, name, extra_col) VALUES (3, 'c', 'y');
+    """)
+
+    rows, total = sqlite_driver.select_with_total(
+        """
+        SELECT id, name, extra_col
+        FROM window_schema_items
+        ORDER BY id
+        LIMIT 2
+        """,
+        schema_type=Item,
+        count_with_window=True,
+    )
+
+    assert total == 3
+    assert rows == [Item(id=1, name="a"), Item(id=2, name="b")]
+
+
+@pytest.mark.anyio
+async def test_async_select_with_total_window_count_uses_schema_conversion_for_extra_columns() -> None:
+    """Async window-count pagination should map rows through the normal schema converter."""
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    class Item(msgspec.Struct):
+        id: int
+        name: str
+
+    config = AiosqliteConfig()
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script("""
+                CREATE TABLE async_window_schema_items (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    extra_col TEXT
+                );
+                INSERT INTO async_window_schema_items (id, name, extra_col) VALUES (1, 'a', 'x');
+                INSERT INTO async_window_schema_items (id, name, extra_col) VALUES (2, 'b', 'x');
+                INSERT INTO async_window_schema_items (id, name, extra_col) VALUES (3, 'c', 'y');
+            """)
+
+            rows, total = await driver.select_with_total(
+                """
+                SELECT id, name, extra_col
+                FROM async_window_schema_items
+                ORDER BY id
+                LIMIT 2
+                """,
+                schema_type=Item,
+                count_with_window=True,
+            )
+
+        assert total == 3
+        assert rows == [Item(id=1, name="a"), Item(id=2, name="b")]
+    finally:
+        await config.close_pool()
 
 
 # =============================================================================
