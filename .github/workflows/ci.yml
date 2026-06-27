@@ -95,7 +95,7 @@ jobs:
         run: uv python install 3.11
 
       - name: Cache uv-managed virtualenv
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .venv
           key: venv-quality-${{ runner.os }}-py3.11-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -110,7 +110,7 @@ jobs:
 
       - name: Load cached Pre-Commit Dependencies
         id: cached-pre-commit-dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit/
           key: pre-commit|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
@@ -169,7 +169,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Cache uv-managed virtualenv
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .venv
           key: venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -255,7 +255,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Cache uv-managed virtualenv
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .venv
           key: venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -290,7 +290,7 @@ jobs:
 
       - name: Cache docker images
         id: docker-image-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/docker-images
           key: docker-images-v1-${{ hashFiles('.github/workflows/ci.yml') }}
