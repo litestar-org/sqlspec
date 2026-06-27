@@ -250,7 +250,7 @@ jobs:
         run: uv export --frozen --no-emit-project --no-hashes --format requirements.txt --output-file build-constraints.txt
 
       - name: Cache pip downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/pip
@@ -262,7 +262,7 @@ jobs:
 
       - name: Cache mypyc build dir
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/sqlspec-mypyc-build
           key: mypyc-${{ matrix.os }}-py${{ matrix.python-version }}-${{ hashFiles('sqlspec/**/*.py', 'pyproject.toml') }}
