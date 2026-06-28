@@ -25,10 +25,12 @@ Date Filters
 
 .. autoclass:: BeforeAfterFilter
    :members:
+   :inherited-members:
    :show-inheritance:
 
 .. autoclass:: OnBeforeAfterFilter
    :members:
+   :inherited-members:
    :show-inheritance:
 
 Collection Filters
@@ -84,10 +86,12 @@ Search
 
 .. autoclass:: SearchFilter
    :members:
+   :inherited-members:
    :show-inheritance:
 
 .. autoclass:: NotInSearchFilter
    :members:
+   :inherited-members:
    :show-inheritance:
 
 Type Aliases

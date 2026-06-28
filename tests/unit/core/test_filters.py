@@ -8,6 +8,7 @@ import inspect
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -53,6 +54,42 @@ if TYPE_CHECKING:
 def test_public_canonicalize_filters_uses_statement_filter_implementation() -> None:
     """The public core export canonicalizes SQL statement filters."""
     assert canonicalize_filters.__module__ == "sqlspec.core.filters"
+
+
+def test_public_filters_alias_points_to_core_filters_module() -> None:
+    """The top-level filters alias remains a module-level compatibility surface."""
+    import sqlspec
+
+    assert sqlspec.filters is filters_module
+
+
+def test_c4_filter_hierarchy_consolidation_source_shapes() -> None:
+    """C4 keeps public filter classes while sharing private implementation bodies."""
+    source = Path("sqlspec/core/filters.py").read_text()
+    assert "class _DatetimeBoundFilter(StatementFilter):" in source
+    assert "class BeforeAfterFilter(_DatetimeBoundFilter):" in source
+    assert "class OnBeforeAfterFilter(_DatetimeBoundFilter):" in source
+
+    datetime_section = source.split("class _DatetimeBoundFilter", 1)[1].split("class InAnyFilter", 1)[0]
+    assert datetime_section.count("def extract_parameters(") == 1
+    assert datetime_section.count("def append_to_statement(") == 1
+
+    assert "class _TextSearchFilter(StatementFilter):" in source
+    assert "class SearchFilter(_TextSearchFilter):" in source
+    assert "class NotInSearchFilter(SearchFilter):" in source
+
+    search_section = source.split("class _TextSearchFilter", 1)[1].split("class NullFilter", 1)[0]
+    assert search_section.count("def extract_parameters(") == 1
+    assert search_section.count("def append_to_statement(") == 1
+    assert search_section.count("def get_cache_key(") == 1
+
+
+def test_c4_filters_docs_render_inherited_members() -> None:
+    """Docs include inherited members for public filters whose methods are inherited."""
+    docs = Path("docs/reference/core/filters.rst").read_text()
+    for class_name in ("BeforeAfterFilter", "OnBeforeAfterFilter", "SearchFilter", "NotInSearchFilter"):
+        block = docs.split(f".. autoclass:: {class_name}", 1)[1].split(".. autoclass::", 1)[0]
+        assert ":inherited-members:" in block
 
 
 def test_statement_filter_get_column_expression_delegates_to_parse_column_for_condition(
