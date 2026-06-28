@@ -11,11 +11,9 @@ from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
 __all__ = ("PARAMETER_REGEX", "ParameterValidator")
 
-# Pre-computed frozenset for fast parameter character detection
-# Using set intersection is faster than any(c in sql for c in ...)
-_PARAM_CHARS = frozenset("?%:@$")
+_PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:@$")
 
-PARAMETER_REGEX = re.compile(
+PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     r"""
     (?P<dquote>"(?:[^"\\]|\\.)*") |
     (?P<squote>'(?:[^'\\]|\\.)*') |
@@ -82,7 +80,8 @@ class ParameterValidator:
             "max_size": self._cache_max_size,
         }
 
-    def _extract_parameter_style(self, match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
+    @staticmethod
+    def _extract_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map a regex match to a placeholder style and optional name."""
         if match.group("qmark"):
             return ParameterStyle.QMARK, None
@@ -107,7 +106,6 @@ class ParameterValidator:
         if self._cache_max_size <= 0:
             return self._extract_parameters_uncached(sql)
 
-        # Use blake2b hash of SQL string as cache key for memory efficiency
         cache_key = hashlib.blake2b(sql.encode(), digest_size=8).hexdigest()
         cached_result = self._parameter_cache.get(cache_key)
         if cached_result is not None:
@@ -116,7 +114,6 @@ class ParameterValidator:
             return cached_result
         self._cache_misses += 1
 
-        # Fast check using frozenset intersection (faster than any() with generator)
         if not _PARAM_CHARS.intersection(sql):
             if len(self._parameter_cache) >= self._cache_max_size:
                 self._parameter_cache.popitem(last=False)
@@ -127,7 +124,7 @@ class ParameterValidator:
         ordinal = 0
 
         for match in PARAMETER_REGEX.finditer(sql):
-            if any(match.group(group) for group in _SKIP_GROUPS):
+            if any(match.group(*_SKIP_GROUPS)):
                 continue
             style, name = self._extract_parameter_style(match)
             if style is None:
@@ -145,12 +142,11 @@ class ParameterValidator:
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
-        # Fast check using frozenset intersection (faster than any() with generator)
         if not _PARAM_CHARS.intersection(sql):
             return []
 
         for match in PARAMETER_REGEX.finditer(sql):
-            if any(match.group(group) for group in _SKIP_GROUPS):
+            if any(match.group(*_SKIP_GROUPS)):
                 continue
             style, name = self._extract_parameter_style(match)
             if style is None:

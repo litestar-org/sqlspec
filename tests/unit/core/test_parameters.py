@@ -2504,3 +2504,26 @@ def test_skip_groups_constant_used_by_both_paths() -> None:
     """Cached and uncached parameter extraction should share the same skip groups."""
     source = Path("sqlspec/core/parameters/_validator.py").read_text()
     assert source.count("_SKIP_GROUPS") == 3
+
+
+def test_c3_parameter_transformer_validator_source_shapes() -> None:
+    """C3 parameter helpers should avoid repeated hot-path type checks."""
+    transformer_source = Path("sqlspec/core/parameters/_transformers.py").read_text()
+    null_transformer_source = transformer_source.split("class _NullPlaceholderTransformer:", 1)[1].split(
+        "@mypyc_attr", 1
+    )[0]
+    literal_transformer_source = transformer_source.split("class _PlaceholderLiteralTransformer:", 1)[1].split(
+        "def build_null_pruning_transform", 1
+    )[0]
+
+    assert "_MISSING_PARAMETER: Final" in transformer_source
+    assert null_transformer_source.count("isinstance(node, _exp.Placeholder)") == 1
+    assert '"_is_mapping", "_is_sequence"' in literal_transformer_source
+    assert "self._is_mapping = isinstance(parameters, Mapping)" in literal_transformer_source
+    assert "self._is_sequence = isinstance(parameters, Sequence)" in literal_transformer_source
+    assert "isinstance(self._parameters, Mapping)" not in literal_transformer_source
+
+    validator_source = Path("sqlspec/core/parameters/_validator.py").read_text()
+    assert isinstance(ParameterValidator.__dict__.get("_extract_parameter_style"), staticmethod)
+    assert "any(match.group(*_SKIP_GROUPS))" in validator_source
+    assert "any(match.group(group) for group in _SKIP_GROUPS)" not in validator_source
