@@ -18,6 +18,7 @@ import copy
 import importlib.util
 import logging
 import pickle
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -270,6 +271,15 @@ def test_sql_where_preserves_generated_parameter_counters() -> None:
     stmt = SQL("SELECT * FROM users").where_eq("id", 1)
     filtered = stmt.where("active = TRUE")
     assert filtered._sql_param_counters == stmt._sql_param_counters
+
+
+def test_c4_statement_where_helpers_are_consolidated() -> None:
+    source = Path("sqlspec/core/statement.py").read_text()
+    assert "def _where_condition(" in source
+    assert "def _where_comparison(" in source
+    assert "def _where_sequence_membership(" in source
+    assert source.count("new_sql._named_parameters[param_name] =") == 1
+    assert source.count("safe_modify_with_cte(expression, lambda e: apply_where(e, condition))") <= 2
 
 
 def test_sql_order_by_preserves_generated_parameter_counters() -> None:

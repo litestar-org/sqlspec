@@ -48,6 +48,7 @@ def test_record_pipeline_metrics_patch_controls_metrics_output() -> None:
 def test_fingerprint_cache_uses_cached_slot_value() -> None:
     registry = StatementPipelineRegistry()
     config = StatementConfig()
+    config.freeze()
 
     first_fingerprint = registry._fingerprint_config(config)
     assert first_fingerprint.startswith("pipeline::")
@@ -58,6 +59,16 @@ def test_fingerprint_cache_uses_cached_slot_value() -> None:
 
     mock_blake2b.assert_not_called()
     assert second_fingerprint == first_fingerprint
+
+
+def test_fingerprint_cache_does_not_mutate_unfrozen_config() -> None:
+    registry = StatementPipelineRegistry()
+    config = StatementConfig()
+
+    first_fingerprint = registry._fingerprint_config(config)
+
+    assert first_fingerprint.startswith("pipeline::")
+    assert config._fingerprint_cache is None
 
 
 def test_fingerprint_uses_config_hash_plus_unhashed_parameter_discriminators() -> None:

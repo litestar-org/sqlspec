@@ -273,14 +273,14 @@ class StatementPipelineRegistry:
 
     @staticmethod
     def _fingerprint_config(config: "Any") -> str:
-        # Optimization: Use cached fingerprint if available
-        # Configs are effectively immutable after creation, so caching is safe
-        try:
-            cached = config._fingerprint_cache  # pyright: ignore[reportPrivateUsage]
-            if isinstance(cached, str):
-                return cached
-        except AttributeError:
-            pass
+        is_frozen = bool(getattr(config, "_is_frozen", False))
+        if is_frozen:
+            try:
+                cached = config._fingerprint_cache  # pyright: ignore[reportPrivateUsage]
+                if isinstance(cached, str):
+                    return cached
+            except AttributeError:
+                pass
 
         config_hash = hash(config)
         param_config = config.parameter_config
@@ -292,9 +292,9 @@ class StatementPipelineRegistry:
         fingerprint = hashlib.blake2b(repr((config_hash, supplement)).encode(), digest_size=8).hexdigest()
         full_fingerprint = f"pipeline::{fingerprint}"
 
-        # Cache the fingerprint for future calls - configs are immutable in practice
-        with contextlib.suppress(AttributeError):
-            config._fingerprint_cache = full_fingerprint  # pyright: ignore[reportPrivateUsage]
+        if is_frozen:
+            with contextlib.suppress(AttributeError):
+                config._fingerprint_cache = full_fingerprint  # pyright: ignore[reportPrivateUsage]
 
         return full_fingerprint
 
