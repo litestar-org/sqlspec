@@ -17,7 +17,7 @@ import logging
 import re
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from enum import Enum
 from re import Pattern
 from typing import Any, Final, TypeAlias, cast, final
@@ -42,6 +42,7 @@ logger = get_logger("sqlspec.core.splitter")
 
 _TOKENIZE_DEBUG_SAMPLE_LIMIT: Final[int] = 3
 _TOKENIZE_SNIPPET_LENGTH: Final[int] = 20
+_DOLLAR_QUOTE_START_PATTERN: Final[Pattern[str]] = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$")
 
 DEFAULT_PATTERN_CACHE_SIZE: Final = 1000
 DEFAULT_RESULT_CACHE_SIZE: Final = 5000
@@ -105,6 +106,15 @@ class TokenType(Enum):
     BATCH_SEPARATOR = "BATCH_SEPARATOR"
     WHITESPACE = "WHITESPACE"
     OTHER = "OTHER"
+
+
+_COMMENT_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK})
+_IGNORABLE_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset(
+    {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}
+)
+_SLASH_PREFIX_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset(
+    {TokenType.WHITESPACE, TokenType.COMMENT_LINE}
+)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -325,7 +335,7 @@ class OracleDialectConfig(DialectConfig):
                 continue
             if token.type == TokenType.TERMINATOR and token.value == "/":
                 return found_newline and self._handle_slash_terminator(tokens, pos)
-            if token.type in {TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
+            if token.type in _COMMENT_TOKEN_TYPES:
                 pos += 1
                 continue
             break
@@ -385,7 +395,7 @@ class OracleDialectConfig(DialectConfig):
             token = tokens[pos]
             if "\n" in token.value:
                 break
-            if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE}:
+            if token.type not in _SLASH_PREFIX_TOKEN_TYPES:
                 return False
             pos -= 1
 
@@ -477,7 +487,7 @@ class PostgreSQLDialectConfig(DialectConfig):
         Returns:
             Token representing the dollar-quoted string, or None if no match
         """
-        start_match = re.match(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$", text[position:])
+        start_match = _DOLLAR_QUOTE_START_PATTERN.match(text, position)
         if not start_match:
             return None
 
@@ -664,8 +674,10 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
 _pattern_cache: LRUCache | None = None
 _result_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
+_splitter_cache_lock = threading.Lock()
 _unknown_dialect_warning_lock = threading.Lock()
 _warned_unknown_dialects: set[str] = set()
+_splitter_cache: dict[tuple[str, bool], "StatementSplitter"] = {}
 
 
 def _get_pattern_cache() -> LRUCache:
@@ -752,18 +764,19 @@ class StatementSplitter:
         self._pattern_cache.put(cache_key, compiled)
         return compiled
 
-    def _tokenize(self, sql: str) -> Generator[Token, None, None]:
+    def _tokenize(self, sql: str) -> list[Token]:
         """Tokenize SQL string into Token objects.
 
         Args:
             sql: The SQL string to tokenize
 
-        Yields:
+        Returns:
             Token objects representing the lexical elements
         """
         pos = 0
         line = 1
         line_start = 0
+        tokens: list[Token] = []
         unmatched_count = 0
         first_unmatched_pos: int | None = None
         first_unmatched_snippet: str | None = None
@@ -782,7 +795,7 @@ class StatementSplitter:
                             last_newline = token.value.rfind("\n")
                             line_start = pos + last_newline + 1
 
-                        yield token
+                        tokens.append(token)
                         pos += len(token.value)
                         matched = True
                         break
@@ -798,7 +811,7 @@ class StatementSplitter:
                             last_newline = value.rfind("\n")
                             line_start = pos + last_newline + 1
 
-                        yield Token(type=token_type, value=value, line=line, column=column, position=pos)
+                        tokens.append(Token(type=token_type, value=value, line=line, column=column, position=pos))
                         pos = match.end()
                         matched = True
                         break
@@ -821,6 +834,7 @@ class StatementSplitter:
                 first_unmatched_pos,
                 first_unmatched_snippet,
             )
+        return tokens
 
     def split(self, sql: str) -> "list[str]":
         """Split SQL script into individual statements.
@@ -858,8 +872,17 @@ class StatementSplitter:
         current_statement_chars: list[str] = []
         current_statement_fragment_count = 0
         block_stack = []
+        dialect = self._dialect
+        block_starters = dialect.block_starters
+        block_enders = dialect.block_enders
+        statement_terminators = dialect.statement_terminators
+        special_terminators = dialect.special_terminators
+        batch_separators = dialect.batch_separators
+        max_nesting_depth = dialect.max_nesting_depth
+        is_real_block_ender = dialect.is_real_block_ender
+        should_delay_semicolon_termination = dialect.should_delay_semicolon_termination
 
-        all_tokens = list(self._tokenize(sql))
+        all_tokens = self._tokenize(sql)
 
         for token_idx, token in enumerate(all_tokens):
             current_statement_fragment_count += 1
@@ -870,39 +893,39 @@ class StatementSplitter:
 
             # Keep token-list mutation centralized for whitespace/comment and executable paths.
             current_statement_tokens.append(token)
-            if token.type in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
+            if token.type in _IGNORABLE_TOKEN_TYPES:
                 continue
 
             token_upper = token.value.upper()
 
             if token.type == TokenType.KEYWORD:
-                if token_upper in self._dialect.block_starters:
+                if token_upper in block_starters:
                     block_stack.append(token_upper)
-                    if len(block_stack) > self._dialect.max_nesting_depth:
-                        msg = f"Maximum nesting depth ({self._dialect.max_nesting_depth}) exceeded"
+                    if len(block_stack) > max_nesting_depth:
+                        msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
                         raise ValueError(msg)
-                elif token_upper in self._dialect.block_enders:
-                    if block_stack and self._dialect.is_real_block_ender(all_tokens, token_idx):
+                elif token_upper in block_enders:
+                    if block_stack and is_real_block_ender(all_tokens, token_idx):
                         block_stack.pop()
 
             is_terminator = False
             if not block_stack:
                 if token.type == TokenType.TERMINATOR:
-                    if token.value in self._dialect.statement_terminators:
-                        should_delay = self._dialect.should_delay_semicolon_termination(all_tokens, token_idx)
+                    if token.value in statement_terminators:
+                        should_delay = should_delay_semicolon_termination(all_tokens, token_idx)
 
                         if not should_delay:
                             is_terminator = True
-                    elif token.value in self._dialect.special_terminators:
-                        handler = self._dialect.special_terminators[token.value]
+                    elif token.value in special_terminators:
+                        handler = special_terminators[token.value]
                         if handler(all_tokens, token_idx):
                             is_terminator = True
 
-                elif token.type == TokenType.KEYWORD and token_upper in self._dialect.batch_separators:
+                elif token.type == TokenType.KEYWORD and token_upper in batch_separators:
                     is_terminator = True
 
             if is_terminator:
-                if token.type == TokenType.KEYWORD and token_upper in self._dialect.batch_separators:
+                if token.type == TokenType.KEYWORD and token_upper in batch_separators:
                     statement = "".join(item.value for item in current_statement_tokens[:-1]).strip()
                 elif current_statement_writer is None:
                     statement = "".join(current_statement_chars).strip()
@@ -962,7 +985,7 @@ class StatementSplitter:
             True if statement contains non-whitespace/non-comment content
         """
         for token in tokens:
-            if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
+            if token.type not in _IGNORABLE_TOKEN_TYPES:
                 return True
 
         return False
@@ -979,16 +1002,21 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
     Returns:
         List of individual SQL statements
     """
-    if dialect is None:
-        dialect = "generic"
+    dialect_key = "generic" if dialect is None else dialect.lower()
 
-    config_class = _DIALECT_CLASS_MAP.get(dialect.lower())
+    config_class = _DIALECT_CLASS_MAP.get(dialect_key)
     if config_class is None:
         _warn_unknown_dialect_once(dialect)
         config_class = GenericDialectConfig
-    config = config_class()
 
-    splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_terminator)
+    cache_key = (dialect_key, strip_trailing_terminator)
+    splitter = _splitter_cache.get(cache_key)
+    if splitter is None:
+        with _splitter_cache_lock:
+            splitter = _splitter_cache.get(cache_key)
+            if splitter is None:
+                splitter = StatementSplitter(config_class(), strip_trailing_semicolon=strip_trailing_terminator)
+                _splitter_cache[cache_key] = splitter
     return splitter.split(script)
 
 
@@ -1001,6 +1029,8 @@ def clear_splitter_caches() -> None:
     result_cache = _get_result_cache()
     pattern_cache.clear()
     result_cache.clear()
+    with _splitter_cache_lock:
+        _splitter_cache.clear()
     with _unknown_dialect_warning_lock:
         _warned_unknown_dialects.clear()
 

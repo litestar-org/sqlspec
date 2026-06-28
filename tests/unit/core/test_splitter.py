@@ -37,6 +37,37 @@ def test_split_sql_script_preserves_statement_output() -> None:
     assert split_sql_script("SELECT 1; SELECT 2;", strip_trailing_terminator=True) == ["SELECT 1", "SELECT 2"]
 
 
+def test_tokenize_returns_materialized_token_list() -> None:
+    """_tokenize keeps its test-frozen name but returns a list for mypyc hot paths."""
+    splitter = StatementSplitter(GenericDialectConfig())
+
+    tokens = splitter._tokenize("SELECT 1;")
+
+    assert isinstance(tokens, list)
+    assert [token.value for token in tokens] == ["S", "E", "L", "E", "C", "T", " ", "1", ";"]
+
+
+def test_split_sql_script_reuses_splitter_for_dialect_and_strip_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """split_sql_script should avoid rebuilding stateless splitter instances for the same dialect and strip flag."""
+    splitter_module.clear_splitter_caches()
+    created: list[tuple[str, bool]] = []
+    original_init = StatementSplitter.__init__
+
+    def counting_init(
+        self: StatementSplitter, dialect: splitter_module.DialectConfig, strip_trailing_semicolon: bool = False
+    ) -> None:
+        created.append((dialect.name, strip_trailing_semicolon))
+        original_init(self, dialect, strip_trailing_semicolon)
+
+    monkeypatch.setattr(StatementSplitter, "__init__", counting_init)
+
+    assert split_sql_script("SELECT 1;", dialect="sqlite", strip_trailing_terminator=True) == ["SELECT 1"]
+    assert split_sql_script("SELECT 2;", dialect="sqlite", strip_trailing_terminator=True) == ["SELECT 2"]
+    assert split_sql_script("SELECT 3;", dialect="sqlite", strip_trailing_terminator=False) == ["SELECT 3;"]
+
+    assert created == [("sqlite", True), ("sqlite", False)]
+
+
 def test_contains_executable_content_accepts_pre_tokenized_statement(monkeypatch: pytest.MonkeyPatch) -> None:
     splitter = StatementSplitter(GenericDialectConfig())
     tokens = [
