@@ -108,7 +108,9 @@ class StatementFilter(ABC):
             List of resolved parameter names (same length as proposed_names)
         """
         parameters = statement.parameters
-        existing_params = set(parameters.keys()) if isinstance(parameters, dict) else set(statement.named_parameters.keys())
+        existing_params = (
+            set(parameters.keys()) if isinstance(parameters, dict) else set(statement.named_parameters.keys())
+        )
 
         resolved_names = []
         for name in proposed_names:

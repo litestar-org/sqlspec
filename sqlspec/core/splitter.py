@@ -109,12 +109,12 @@ class TokenType(Enum):
 
 
 _COMMENT_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK})
-_IGNORABLE_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset(
-    {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}
-)
-_SLASH_PREFIX_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset(
-    {TokenType.WHITESPACE, TokenType.COMMENT_LINE}
-)
+_IGNORABLE_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({
+    TokenType.WHITESPACE,
+    TokenType.COMMENT_LINE,
+    TokenType.COMMENT_BLOCK,
+})
+_SLASH_PREFIX_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.WHITESPACE, TokenType.COMMENT_LINE})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -984,11 +984,7 @@ class StatementSplitter:
         Returns:
             True if statement contains non-whitespace/non-comment content
         """
-        for token in tokens:
-            if token.type not in _IGNORABLE_TOKEN_TYPES:
-                return True
-
-        return False
+        return any(token.type not in _IGNORABLE_TOKEN_TYPES for token in tokens)
 
 
 def split_sql_script(script: str, dialect: str | None = None, strip_trailing_terminator: bool = False) -> "list[str]":

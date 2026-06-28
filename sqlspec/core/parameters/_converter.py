@@ -23,12 +23,15 @@ from sqlspec.exceptions import SQLSpecError
 __all__ = ("ParameterConverter",)
 
 _ORDERED_PARAM_INFO_MIN_SIZE = 2
-_OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset(
-    {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
-)
-_EXPANDING_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset(
-    {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.POSITIONAL_COLON}
-)
+_OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.QMARK,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+})
+_EXPANDING_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.QMARK,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+    ParameterStyle.POSITIONAL_COLON,
+})
 
 
 def _placeholder_qmark(_: Any) -> str:

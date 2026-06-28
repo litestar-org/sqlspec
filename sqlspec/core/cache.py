@@ -276,11 +276,7 @@ class LRUCache:
                 )
             else:
                 log_with_context(
-                    logger,
-                    logging.DEBUG,
-                    log_event,
-                    cache_namespace=self._namespace,
-                    cache_size=log_cache_size,
+                    logger, logging.DEBUG, log_event, cache_namespace=self._namespace, cache_size=log_cache_size
                 )
         return result
 

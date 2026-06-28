@@ -1141,12 +1141,10 @@ def test_process_execute_many_named_to_positional(processor: "ParameterProcessor
 
 def test_validate_parameter_alignment_reuses_execute_many_expected_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     """execute_many alignment should compute placeholder identifiers once per batch."""
-    profile = ParameterProfile(
-        [
-            ParameterInfo("a", ParameterStyle.NAMED_COLON, 0, 0, ":a"),
-            ParameterInfo("b", ParameterStyle.NAMED_COLON, 4, 1, ":b"),
-        ]
-    )
+    profile = ParameterProfile([
+        ParameterInfo("a", ParameterStyle.NAMED_COLON, 0, 0, ":a"),
+        ParameterInfo("b", ParameterStyle.NAMED_COLON, 4, 1, ":b"),
+    ])
     rows = [{"a": index, "b": index + 1} for index in range(8)]
     original_collect = _alignment_module._collect_expected_identifiers
     calls = 0

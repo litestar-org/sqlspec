@@ -348,11 +348,7 @@ class SQLProcessor:
         self._dialect_str = str(config.dialect) if config.dialect else None
         self._input_style = parameter_config.default_parameter_style.value
         default_execution_style = parameter_config.default_execution_parameter_style
-        self._exec_style = (
-            default_execution_style.value
-            if default_execution_style
-            else self._input_style
-        )
+        self._exec_style = default_execution_style.value if default_execution_style else self._input_style
 
     def compile(
         self,
