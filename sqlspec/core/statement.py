@@ -1103,8 +1103,13 @@ class SQL:
         Returns:
             New SQL instance with the expression and copied state
         """
+        new_sql = self._clone_base(new_expr)
+        new_sql._sql_param_counters = self._sql_param_counters.copy()
+        return new_sql
+
+    def _clone_base(self, statement_seed: "str | exp.Expr") -> "SQL":
         new_sql = SQL(
-            new_expr,
+            statement_seed,
             *self._original_parameters,
             statement_config=self._statement_config,
             is_many=self._is_many,
@@ -1113,7 +1118,6 @@ class SQL:
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
-        new_sql._sql_param_counters = self._sql_param_counters.copy()
         return new_sql
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":
@@ -1126,21 +1130,9 @@ class SQL:
         Returns:
             New SQL instance with the added parameter
         """
-        original_params = self._original_parameters
-        config = self._statement_config
-        is_many = self._is_many
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(
-            statement_seed,
-            *original_params,
-            statement_config=config,
-            is_many=is_many,
-            declared_parameters=self._declared_parameters,
-        )
-        new_sql._named_parameters.update(self._named_parameters)
+        new_sql = self._clone_base(statement_seed)
         new_sql._named_parameters[name] = value
-        new_sql._positional_parameters = self._positional_parameters.copy()
-        new_sql._filters = self._filters.copy()
         return new_sql
 
     def where(self, condition: "str | exp.Expr") -> "SQL":

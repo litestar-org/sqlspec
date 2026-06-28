@@ -275,6 +275,9 @@ def test_sql_where_preserves_generated_parameter_counters() -> None:
 
 def test_c4_statement_where_helpers_are_consolidated() -> None:
     source = Path("sqlspec/core/statement.py").read_text()
+    clone_section = source.split("def _create_modified_copy_with_expression", 1)[1].split("def where(", 1)[0]
+    assert "def _clone_base(" in clone_section
+    assert clone_section.count("statement_config=self._statement_config") == 1
     assert "def _where_condition(" in source
     assert "def _where_comparison(" in source
     assert "def _where_sequence_membership(" in source
