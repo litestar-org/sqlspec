@@ -20,6 +20,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime
+from pathlib import Path
 from typing import Any, get_args
 from unittest.mock import Mock, patch
 
@@ -29,6 +30,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 from sqlspec.core import (
+    SQL,
     CompiledSQL,
     OperationProfile,
     OperationType,
@@ -44,7 +46,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
+from sqlspec.core.pipeline import StatementPipelineRegistry, compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
 
@@ -990,6 +992,77 @@ def test_processor_binds_parameter_config_hot_path_attrs(basic_statement_config:
     assert processor._enable_parameter_type_wrapping is basic_statement_config.enable_parameter_type_wrapping
     assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._prepare_parameters)
     assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._finalize_compilation)
+
+
+def test_c3_core_idiom_sweep_source_shapes() -> None:
+    """C3 core helpers should use mypyc-friendly staticmethods and Final constants."""
+    static_methods = {
+        SQL: ("_normalize_dialect", "_should_auto_detect_many", "_extract_filters"),
+        SQLProcessor: ("_validate_parameters",),
+        StatementPipelineRegistry: ("_fingerprint_config",),
+    }
+    for cls, names in static_methods.items():
+        for name in names:
+            assert isinstance(cls.__dict__.get(name), staticmethod)
+
+    expected_source_fragments = {
+        "sqlspec/core/compiler.py": (
+            'OPERATION_TYPE_MAP: "Final[dict[type[exp.Expr], OperationType]]"',
+            'COPY_OPERATION_TYPES: "Final[tuple[OperationType, ...]]"',
+            'COPY_FROM_OPERATION_TYPES: "Final[tuple[OperationType, ...]]"',
+            'COPY_TO_OPERATION_TYPES: "Final[tuple[OperationType, ...]]"',
+        ),
+        "sqlspec/core/statement.py": (
+            "RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({",
+            "MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({",
+        ),
+        "sqlspec/core/query_modifiers.py": (
+            "_TABLE_QUALIFIED_PARTS: Final[int] = 2",
+            "_DATABASE_QUALIFIED_PARTS: Final[int] = 3",
+            "_CATALOG_QUALIFIED_PARTS: Final[int] = 4",
+        ),
+        "sqlspec/core/cache.py": ('NAMESPACED_CACHE_CONFIG: "Final[dict[str, tuple[',),
+        "sqlspec/core/parameters/_alignment.py": ("EXECUTE_MANY_MIN_ROWS: Final[int] = 2",),
+        "sqlspec/core/parameters/_declared.py": ('_JSON_VALUE_TYPES: "Final[tuple[type, ...]]"',),
+        "sqlspec/core/parameters/_processor.py": (
+            "_EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10",
+            "_EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3",
+            '_OCCURRENCE_BASED_POSITIONAL_STYLES: "Final[frozenset[ParameterStyle]]"',
+        ),
+        "sqlspec/core/parameters/_registry.py": (
+            '_DEFAULT_JSON_SERIALIZER: "Final[Callable[[Any], str]]"',
+            '_DEFAULT_JSON_DESERIALIZER: "Final[Callable[[str], Any]]"',
+            'DRIVER_PARAMETER_PROFILES: "Final[dict[str, DriverParameterProfile]]"',
+        ),
+        "sqlspec/core/parameters/_types.py": (
+            "TYPED_PARAMETER_SLOTS: Final",
+            "PARAMETER_INFO_SLOTS: Final",
+            "PARAMETER_STYLE_CONFIG_SLOTS: Final",
+            "_NAMED_STYLES: Final",
+            "_POSITIONAL_STYLES: Final",
+        ),
+    }
+    for path, fragments in expected_source_fragments.items():
+        source = Path(path).read_text()
+        for fragment in fragments:
+            assert fragment in source
+
+    stripped_comments = (
+        "Optimization: Check only the first element",
+        "O(1) check instead of O(N) scan",
+        "through the interpreted serializer-selection shell",
+        "For expressions, we use a hash",
+        "Skip sort for single style",
+    )
+    for path in (
+        "sqlspec/core/statement.py",
+        "sqlspec/core/type_converter.py",
+        "sqlspec/core/filters.py",
+        "sqlspec/core/parameters/_types.py",
+    ):
+        source = Path(path).read_text()
+        for comment in stripped_comments:
+            assert comment not in source
 
 
 def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:

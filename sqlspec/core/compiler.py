@@ -9,7 +9,7 @@ Components:
 import logging
 from collections import OrderedDict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, final
+from typing import TYPE_CHECKING, Any, Final, Literal, final
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -59,7 +59,7 @@ OperationType = Literal[
     "COMMAND",
 ]
 
-OPERATION_TYPE_MAP: "dict[type[exp.Expr], OperationType]" = {
+OPERATION_TYPE_MAP: "Final[dict[type[exp.Expr], OperationType]]" = {
     # Queries
     exp.Select: "SELECT",
     exp.Union: "SELECT",
@@ -100,11 +100,11 @@ OPERATION_TYPE_MAP: "dict[type[exp.Expr], OperationType]" = {
     exp.Rollback: "COMMAND",
 }
 
-COPY_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM", "COPY_TO")
+COPY_OPERATION_TYPES: "Final[tuple[OperationType, ...]]" = ("COPY", "COPY_FROM", "COPY_TO")
 
-COPY_FROM_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY", "COPY_FROM")
+COPY_FROM_OPERATION_TYPES: "Final[tuple[OperationType, ...]]" = ("COPY", "COPY_FROM")
 
-COPY_TO_OPERATION_TYPES: "tuple[OperationType, ...]" = ("COPY_TO",)
+COPY_TO_OPERATION_TYPES: "Final[tuple[OperationType, ...]]" = ("COPY_TO",)
 
 ParseCacheEntry = tuple[exp.Expr | None, OperationType, tuple[bool, bool]]
 
@@ -734,7 +734,8 @@ class SQLProcessor:
         has_params = has_final_params or has_raw_params
         return (has_params or is_many) and validation_enabled
 
-    def _validate_parameters(self, parameter_profile: "ParameterProfile", final_params: Any, is_many: bool) -> None:
+    @staticmethod
+    def _validate_parameters(parameter_profile: "ParameterProfile", final_params: Any, is_many: bool) -> None:
         """Validate parameter alignment and log failures.
 
         Args:

@@ -145,7 +145,6 @@ class StatementFilter(ABC):
             str: Sanitized parameter name
         """
         if isinstance(name, exp.Expression):
-            # For expressions, we use a hash or a generic name since we can't easily sanitize
             return f"expr_{str(hash(name)).replace('-', '')[:8]}"
         return name.replace(".", "_")
 

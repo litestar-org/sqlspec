@@ -271,7 +271,8 @@ class StatementPipelineRegistry:
             snapshots.append(entry)
         return snapshots
 
-    def _fingerprint_config(self, config: "Any") -> str:
+    @staticmethod
+    def _fingerprint_config(config: "Any") -> str:
         # Optimization: Use cached fingerprint if available
         # Configs are effectively immutable after creation, so caching is safe
         try:

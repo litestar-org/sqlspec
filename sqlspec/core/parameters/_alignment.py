@@ -1,7 +1,7 @@
 """Parameter alignment and validation helpers."""
 
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import sqlspec.exceptions
 from sqlspec.core.parameters._types import _NAMED_STYLES, ParameterProfile, ParameterStyle
@@ -14,7 +14,7 @@ __all__ = (
     "validate_parameter_alignment",
 )
 
-EXECUTE_MANY_MIN_ROWS: int = 2
+EXECUTE_MANY_MIN_ROWS: Final[int] = 2
 
 
 def normalize_parameter_key(key: Any) -> "tuple[str, int | str]":

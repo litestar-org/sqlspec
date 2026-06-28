@@ -75,8 +75,16 @@ __all__ = (
 )
 logger = get_logger("sqlspec.core.statement")
 
-RETURNS_ROWS_OPERATIONS: Final = {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
-MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
+RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({
+    "SELECT",
+    "WITH",
+    "VALUES",
+    "TABLE",
+    "SHOW",
+    "DESCRIBE",
+    "PRAGMA",
+})
+MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
 
@@ -451,7 +459,8 @@ class SQL:
         self._rebind_processor = None
         self._declared_parameters = ()
 
-    def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
+    @staticmethod
+    def _normalize_dialect(dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
 
         Args:
@@ -493,7 +502,8 @@ class SQL:
         if sql_obj.is_processed:
             self._processed_state = sql_obj.get_processed_state()
 
-    def _should_auto_detect_many(self, parameters: tuple) -> bool:
+    @staticmethod
+    def _should_auto_detect_many(parameters: tuple) -> bool:
         """Detect execute_many mode from parameter structure.
 
         Args:
@@ -506,8 +516,6 @@ class SQL:
             param_list = parameters[0]
             if not param_list:
                 return False
-            # Optimization: Check only the first element for batch structure
-            # O(1) check instead of O(N) scan
             first_item = param_list[0]
             if isinstance(first_item, (tuple, list, dict)):
                 return len(param_list) > 1
@@ -531,7 +539,8 @@ class SQL:
         self._normalize_parameters(parameters)
         self._named_parameters.update(kwargs)
 
-    def _extract_filters(self, parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
+    @staticmethod
+    def _extract_filters(parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
         return [p for p in parameters if is_statement_filter(p)]
 
     def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:

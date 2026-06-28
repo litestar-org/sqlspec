@@ -630,7 +630,7 @@ def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> st
     return f"{namespace}:{dialect or 'default'}:{key}"
 
 
-NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]" = {
+NAMESPACED_CACHE_CONFIG: "Final[dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]]" = {
     "statement": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
     "builder": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
     "expression": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),

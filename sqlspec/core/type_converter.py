@@ -109,8 +109,6 @@ def convert_json(value: str) -> "Any":
     Returns:
         Decoded Python object.
     """
-    # Keep the hot coercion path in this compiled module instead of bouncing
-    # through the interpreted serializer-selection shell.
     return json.loads(value)
 
 

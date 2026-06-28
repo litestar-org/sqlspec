@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -27,18 +27,17 @@ from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
 
-# Threshold for sampling execute_many parameters instead of full iteration
-_EXECUTE_MANY_SAMPLE_THRESHOLD = 10
-# Number of records to sample for type signatures
-_EXECUTE_MANY_SAMPLE_SIZE = 3
-_OCCURRENCE_BASED_POSITIONAL_STYLES = frozenset({
+TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
+
+_EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10
+_EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3
+_OCCURRENCE_BASED_POSITIONAL_STYLES: "Final[frozenset[ParameterStyle]]" = frozenset({
     ParameterStyle.QMARK,
     ParameterStyle.POSITIONAL_COLON,
     ParameterStyle.POSITIONAL_PYFORMAT,
 })
 
-TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
-_TYPE_COERCION_DISPATCHERS: "dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
+_TYPE_COERCION_DISPATCHERS: "Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]]" = {}
 
 
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
