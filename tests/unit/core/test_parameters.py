@@ -2506,8 +2506,8 @@ def test_skip_groups_constant_used_by_both_paths() -> None:
     assert source.count("_SKIP_GROUPS") == 2
 
 
-def test_c3_parameter_transformer_validator_source_shapes() -> None:
-    """C3 parameter helpers should avoid repeated hot-path type checks."""
+def test_parameter_transformer_validator_source_shapes() -> None:
+    """Parameter helpers should avoid repeated hot-path type checks."""
     transformer_source = Path("sqlspec/core/parameters/_transformers.py").read_text()
     null_transformer_source = transformer_source.split("class _NullPlaceholderTransformer:", 1)[1].split(
         "@mypyc_attr", 1
@@ -2529,8 +2529,8 @@ def test_c3_parameter_transformer_validator_source_shapes() -> None:
     assert "any(match.group(group) for group in _SKIP_GROUPS)" not in validator_source
 
 
-def test_c4_parameter_internal_consolidation_source_shapes() -> None:
-    """C4 parameter helpers should share internal conversion/extraction bodies."""
+def test_parameter_internal_consolidation_source_shapes() -> None:
+    """Parameter helpers should share internal conversion/extraction bodies."""
     validator_source = Path("sqlspec/core/parameters/_validator.py").read_text()
     extract_body = validator_source.split("def extract_parameters", 1)[1].split("def _extract_parameters_uncached", 1)[
         0
@@ -2556,7 +2556,7 @@ def test_c4_parameter_internal_consolidation_source_shapes() -> None:
     assert "list(parameters) if isinstance(parameters, list)" not in null_pruning_body
 
 
-def test_c4_private_zero_ref_helpers_are_folded() -> None:
+def test_private_zero_ref_helpers_are_folded() -> None:
     """API-invisible private helpers with no references should not linger."""
     assert "def _get_parameter_value(" not in Path("sqlspec/core/parameters/_converter.py").read_text()
     assert "def _hash_filter_value(" not in Path("sqlspec/core/hashing.py").read_text()

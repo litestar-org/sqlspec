@@ -15,7 +15,7 @@ def test_record_pipeline_metrics_constant_is_bool() -> None:
     assert isinstance(getattr(pipeline_module, "_RECORD_PIPELINE_METRICS", None), bool)
 
 
-def test_c4_pipeline_metrics_use_keyed_store_source_shape() -> None:
+def test_pipeline_metrics_use_keyed_store_source_shape() -> None:
     source = Path("sqlspec/core/pipeline.py").read_text()
     metrics_section = source.split("class _PipelineMetrics", 1)[1].split("@mypyc_attr", 1)[0]
 

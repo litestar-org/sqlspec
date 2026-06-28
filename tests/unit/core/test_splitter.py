@@ -71,7 +71,7 @@ def test_tokenize_returns_materialized_token_list() -> None:
     assert [token.value for token in tokens] == ["S", "E", "L", "E", "C", "T", " ", "1", ";"]
 
 
-def test_c4_dialect_configs_share_eager_base_without_lazy_property_boilerplate() -> None:
+def test_dialect_configs_share_eager_base_without_lazy_property_boilerplate() -> None:
     """Public dialect classes should keep names while sharing the private eager base config."""
 
     eager_base = getattr(splitter_module, "_EagerDialectConfig")
@@ -85,7 +85,7 @@ def test_c4_dialect_configs_share_eager_base_without_lazy_property_boilerplate()
 
 
 @pytest.mark.parametrize("config_class", PUBLIC_DIALECT_CONFIGS)
-def test_c4_eager_dialect_defaults_preserve_public_values(config_class: "type[splitter_module.DialectConfig]") -> None:
+def test_eager_dialect_defaults_preserve_public_values(config_class: "type[splitter_module.DialectConfig]") -> None:
     expected_name, block_starters, block_enders, statement_terminators, batch_separators, special_terminators = (
         DIALECT_DEFAULTS[config_class]
     )

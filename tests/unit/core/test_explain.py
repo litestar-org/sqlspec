@@ -17,7 +17,7 @@ def test_explain_options_value_semantics() -> None:
     assert options.to_dict() == {"analyze": True, "verbose": True, "format": "JSON", "costs": False, "buffers": True}
 
 
-def test_c4_explain_options_source_uses_shared_key_and_fields() -> None:
+def test_explain_options_source_uses_shared_key_and_fields() -> None:
     source = Path("sqlspec/core/explain.py").read_text()
 
     assert "EXPLAIN_OPTION_FIELDS: Final" in source

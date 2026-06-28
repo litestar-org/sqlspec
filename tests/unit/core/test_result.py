@@ -50,7 +50,7 @@ def test_fast_dml_result_alias_is_not_exported() -> None:
     assert not hasattr(result_package, alias_name)
 
 
-def test_c4_dml_result_core_export_is_additive() -> None:
+def test_dml_result_core_export_is_additive() -> None:
     """DMLResult is an additive core export for the existing result class."""
     assert "DMLResult" in core_module.__all__
     assert core_module.DMLResult is result_base.DMLResult
@@ -855,7 +855,7 @@ def test_arrow_result_iter_in_for_loop(arrow_result: ArrowResult) -> None:
 
 
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
-def test_c4_arrow_stack_external_api_smoke(arrow_result: ArrowResult) -> None:
+def test_arrow_stack_external_api_smoke(arrow_result: ArrowResult) -> None:
     """Arrow/stack result helpers are external API and remain callable."""
     assert arrow_result.num_columns == 3
 
@@ -865,14 +865,14 @@ def test_c4_arrow_stack_external_api_smoke(arrow_result: ArrowResult) -> None:
     assert stack.rows_affected == arrow_result.rows_affected
 
 
-def test_c4_result_external_api_docstring_markers() -> None:
+def test_result_external_api_docstring_markers() -> None:
     """Dead-code policy markers identify externally callable result helpers."""
     for member in (ArrowResult.num_columns.fget, StackResult.is_arrow_result, StackResult.from_arrow_result):
         assert "External/extension API" in (inspect.getdoc(member) or "")
 
 
-def test_c3_result_and_stack_idiom_source_shapes() -> None:
-    """C3 result/stack helpers should avoid generator and dynamic-attribute patterns."""
+def test_result_and_stack_idiom_source_shapes() -> None:
+    """Result and stack helpers should avoid generator and dynamic-attribute patterns."""
     arrow_iter_source = inspect.getsource(ArrowResult.__iter__)
     assert "return iter(arrow_table_to_pylist" in arrow_iter_source
     assert "yield from" not in arrow_iter_source

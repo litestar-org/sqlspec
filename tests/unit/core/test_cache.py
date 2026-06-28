@@ -44,8 +44,8 @@ from sqlspec.core import (
 )
 
 
-def test_c4_cache_hash_pipeline_exports_are_additive() -> None:
-    """C4 public export alignment is additive for documented helper surfaces."""
+def test_cache_hash_pipeline_exports_are_additive() -> None:
+    """Public export alignment is additive for documented helper surfaces."""
     for name in (
         "CacheConfig",
         "clear_all_caches",
@@ -416,7 +416,7 @@ def test_namespaced_cache_additional_namespaces() -> None:
     assert cache.get_file(cache_key) is file_value
 
 
-def test_c4_namespaced_cache_delete_external_api_smoke() -> None:
+def test_namespaced_cache_delete_external_api_smoke() -> None:
     """Deletion helpers are external API and delete each namespace key."""
     cache = NamespacedCache(CacheConfig())
     namespaces = ("statement", "expression", "optimized", "builder", "file")
@@ -426,14 +426,14 @@ def test_c4_namespaced_cache_delete_external_api_smoke() -> None:
         get = getattr(cache, f"get_{namespace}")
         delete = getattr(cache, f"delete_{namespace}")
 
-        put("c4-key", f"{namespace}-value", "sqlite")
-        assert get("c4-key", "sqlite") == f"{namespace}-value"
-        assert delete("c4-key", "sqlite") is True
-        assert get("c4-key", "sqlite") is None
-        assert delete("c4-key", "sqlite") is False
+        put("stable-key", f"{namespace}-value", "sqlite")
+        assert get("stable-key", "sqlite") == f"{namespace}-value"
+        assert delete("stable-key", "sqlite") is True
+        assert get("stable-key", "sqlite") is None
+        assert delete("stable-key", "sqlite") is False
 
 
-def test_c4_filters_view_external_api_smoke() -> None:
+def test_filters_view_external_api_smoke() -> None:
     """FiltersView methods are external API and remain callable."""
     filters = [
         cache_module.Filter("status", "eq", "active"),
@@ -450,7 +450,7 @@ def test_c4_filters_view_external_api_smoke() -> None:
     assert len(view.to_canonical()) == 3
 
 
-def test_c4_cache_external_api_docstring_markers() -> None:
+def test_cache_external_api_docstring_markers() -> None:
     """Dead-code policy markers identify externally callable cache helpers."""
     for member in (
         NamespacedCache.delete_statement,

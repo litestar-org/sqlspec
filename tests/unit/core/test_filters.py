@@ -63,8 +63,8 @@ def test_public_filters_alias_points_to_core_filters_module() -> None:
     assert sqlspec.filters is filters_module
 
 
-def test_c4_filter_hierarchy_consolidation_source_shapes() -> None:
-    """C4 keeps public filter classes while sharing private implementation bodies."""
+def test_filter_hierarchy_uses_shared_private_bases() -> None:
+    """Public filter classes keep their API while sharing private implementation bodies."""
     source = Path("sqlspec/core/filters.py").read_text()
     assert "class _DatetimeBoundFilter(StatementFilter):" in source
     assert "class BeforeAfterFilter(_DatetimeBoundFilter):" in source
@@ -84,7 +84,7 @@ def test_c4_filter_hierarchy_consolidation_source_shapes() -> None:
     assert search_section.count("def get_cache_key(") == 1
 
 
-def test_c4_filters_docs_render_inherited_members() -> None:
+def test_filters_docs_render_inherited_members() -> None:
     """Docs include inherited members for public filters whose methods are inherited."""
     docs = Path("docs/reference/core/filters.rst").read_text()
     for class_name in ("BeforeAfterFilter", "OnBeforeAfterFilter", "SearchFilter", "NotInSearchFilter"):

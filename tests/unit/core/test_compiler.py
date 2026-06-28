@@ -994,8 +994,8 @@ def test_processor_binds_parameter_config_hot_path_attrs(basic_statement_config:
     assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._finalize_compilation)
 
 
-def test_c3_core_idiom_sweep_source_shapes() -> None:
-    """C3 core helpers should use mypyc-friendly staticmethods and Final constants."""
+def test_core_idiom_sweep_source_shapes() -> None:
+    """Core helpers should use mypyc-friendly staticmethods and Final constants."""
     static_methods = {
         SQL: ("_normalize_dialect", "_should_auto_detect_many", "_extract_filters"),
         SQLProcessor: ("_validate_parameters",),
