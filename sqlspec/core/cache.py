@@ -211,7 +211,7 @@ class LRUCache:
             namespace: Optional namespace identifier for logging context
         """
         self._cache: dict[CacheKey, CacheNode] = {}
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         self._max_size = max_size
         self._ttl = ttl_seconds
         self._stats = CacheStats()
@@ -231,47 +231,58 @@ class LRUCache:
         Returns:
             Cached value or None if not found or expired
         """
+        debug_enabled = logger.isEnabledFor(logging.DEBUG)
+        log_event: str | None = None
+        log_reason: str | None = None
+        log_cache_size = 0
+        result: Any | None = None
+
         with self._lock:
             node = self._cache.get(key)
             if node is None:
                 self._stats.record_miss()
-                if logger.isEnabledFor(logging.DEBUG):
-                    log_with_context(
-                        logger,
-                        logging.DEBUG,
-                        "cache.miss",
-                        cache_namespace=self._namespace,
-                        cache_size=len(self._cache),
-                    )
-                return None
-
-            ttl = self._ttl
-            if ttl is not None:
-                current_time = time.time()
-                if (current_time - node.timestamp) > ttl:
+                if debug_enabled:
+                    log_event = "cache.miss"
+                    log_cache_size = len(self._cache)
+            else:
+                ttl = self._ttl
+                if ttl is not None and (time.time() - node.timestamp) > ttl:
                     self._remove_node(node)
                     del self._cache[key]
                     self._stats.record_miss()
                     self._stats.record_eviction()
-                    if logger.isEnabledFor(logging.DEBUG):
-                        log_with_context(
-                            logger,
-                            logging.DEBUG,
-                            "cache.evict",
-                            cache_namespace=self._namespace,
-                            cache_size=len(self._cache),
-                            reason="expired",
-                        )
-                    return None
+                    if debug_enabled:
+                        log_event = "cache.evict"
+                        log_reason = "expired"
+                        log_cache_size = len(self._cache)
+                else:
+                    self._move_to_head(node)
+                    node.access_count += 1
+                    self._stats.record_hit()
+                    if debug_enabled:
+                        log_event = "cache.hit"
+                        log_cache_size = len(self._cache)
+                    result = node.value
 
-            self._move_to_head(node)
-            node.access_count += 1
-            self._stats.record_hit()
-            if logger.isEnabledFor(logging.DEBUG):
+        if log_event is not None:
+            if log_reason is not None:
                 log_with_context(
-                    logger, logging.DEBUG, "cache.hit", cache_namespace=self._namespace, cache_size=len(self._cache)
+                    logger,
+                    logging.DEBUG,
+                    log_event,
+                    cache_namespace=self._namespace,
+                    cache_size=log_cache_size,
+                    reason=log_reason,
                 )
-            return node.value
+            else:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    log_event,
+                    cache_namespace=self._namespace,
+                    cache_size=log_cache_size,
+                )
+        return result
 
     def put(self, key: CacheKey, value: Any) -> None:
         """Put value in cache.

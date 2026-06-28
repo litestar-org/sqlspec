@@ -180,6 +180,16 @@ def test_lru_cache_initialization() -> None:
     assert len(cache) == 0
 
 
+def test_lru_cache_uses_non_reentrant_lock() -> None:
+    """LRUCache methods should not depend on re-entrant locking."""
+    cache = LRUCache()
+    source = inspect.getsource(LRUCache.__init__)
+
+    assert isinstance(cache._lock, type(threading.Lock()))
+    assert "threading.Lock()" in source
+    assert "threading.RLock()" not in source
+
+
 def test_lru_cache_basic_operations() -> None:
     """Test basic cache operations - get, put, delete."""
     cache = LRUCache(max_size=3)
@@ -802,6 +812,15 @@ def test_lru_cache_logs_include_namespace(caplog: pytest.LogCaptureFixture) -> N
     record = miss_records[-1]
     assert record.__dict__["extra_fields"]["cache_namespace"] == "statement"
     assert "cache_size" in record.__dict__["extra_fields"]
+
+
+def test_lru_cache_get_logs_outside_lock() -> None:
+    """LRUCache.get should not log or check debug state while holding the lock."""
+    source = inspect.getsource(LRUCache.get)
+    lock_body = source.split("with self._lock:", 1)[1].split("if log_event is not None:", 1)[0]
+
+    assert "logger.isEnabledFor" not in lock_body
+    assert "log_with_context" not in lock_body
 
 
 def test_lru_cache_logs_hit_with_namespace(caplog: pytest.LogCaptureFixture) -> None:
