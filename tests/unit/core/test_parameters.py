@@ -44,6 +44,7 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
+from sqlspec.core.parameters import _alignment as _alignment_module
 from sqlspec.core.parameters import _converter as _converter_module
 from sqlspec.core.parameters import _processor as _processor_module
 from sqlspec.core.parameters import _types
@@ -1136,6 +1137,30 @@ def test_process_execute_many_named_to_positional(processor: "ParameterProcessor
     assert final_sql.count("?") == 2
     assert isinstance(final_params, list)
     assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
+
+
+def test_validate_parameter_alignment_reuses_execute_many_expected_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """execute_many alignment should compute placeholder identifiers once per batch."""
+    profile = ParameterProfile(
+        [
+            ParameterInfo("a", ParameterStyle.NAMED_COLON, 0, 0, ":a"),
+            ParameterInfo("b", ParameterStyle.NAMED_COLON, 4, 1, ":b"),
+        ]
+    )
+    rows = [{"a": index, "b": index + 1} for index in range(8)]
+    original_collect = _alignment_module._collect_expected_identifiers
+    calls = 0
+
+    def counting_collect(parameter_profile: ParameterProfile) -> set[tuple[str, int | str]]:
+        nonlocal calls
+        calls += 1
+        return original_collect(parameter_profile)
+
+    monkeypatch.setattr(_alignment_module, "_collect_expected_identifiers", counting_collect)
+
+    _alignment_module.validate_parameter_alignment(profile, rows, is_many=True)
+
+    assert calls == 1
 
 
 def test_process_execute_many_skips_coercion_allocations_when_no_types_match(processor: "ParameterProcessor") -> None:
@@ -2467,6 +2492,14 @@ def test_skip_groups_constant_is_module_level() -> None:
     source = Path("sqlspec/core/parameters/_validator.py").read_text()
     assert "_SKIP_GROUPS:" in source
     assert "skip_groups =" not in source
+
+
+def test_converter_hot_path_uses_shared_style_sets() -> None:
+    """Parameter converter should avoid per-call cache and style-set allocations."""
+    source = Path("sqlspec/core/parameters/_converter.py").read_text()
+    assert "placeholder_text_len_cache" not in source
+    assert "_OCCURRENCE_KEYED_STYLES:" in source
+    assert "_POSITIONAL_STYLES" in source
 
 
 def test_skip_groups_constant_used_by_both_paths() -> None:

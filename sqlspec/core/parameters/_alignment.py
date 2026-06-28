@@ -130,8 +130,19 @@ def validate_parameter_alignment(
             raise sqlspec.exceptions.SQLSpecError(msg)
         if len(parameters) == 0:
             return
+        expected_identifiers = _collect_expected_identifiers(profile)
+        expected_count = len(expected_identifiers)
+        named_identifier_aliases = _collect_named_identifier_aliases(profile)
         for index, param_set in enumerate(parameters):
-            _validate_single_parameter_set(profile, param_set, batch_index=index)
+            actual_identifiers, actual_count = _collect_actual_identifiers(param_set)
+            _validate_parameter_identifiers(
+                expected_identifiers,
+                expected_count,
+                actual_identifiers,
+                actual_count,
+                named_identifier_aliases,
+                batch_index=index,
+            )
         return
 
     _validate_single_parameter_set(profile, parameters)
@@ -189,12 +200,21 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
 def _normalize_named_identifier_aliases(
     parameter_profile: "ParameterProfile", identifiers: "set[tuple[str, int | str]]"
 ) -> "set[tuple[str, int | str]]":
+    return _apply_named_identifier_aliases(identifiers, _collect_named_identifier_aliases(parameter_profile))
+
+
+def _collect_named_identifier_aliases(parameter_profile: "ParameterProfile") -> "dict[str, str]":
     aliases: dict[str, str] = {}
     for parameter in parameter_profile.parameters:
         if parameter.style not in _NAMED_STYLES or not parameter.name:
             continue
         aliases[parameter.placeholder_text] = parameter.name
+    return aliases
 
+
+def _apply_named_identifier_aliases(
+    identifiers: "set[tuple[str, int | str]]", aliases: "dict[str, str]"
+) -> "set[tuple[str, int | str]]":
     if not aliases:
         return identifiers
 
@@ -263,7 +283,24 @@ def _validate_single_parameter_set(
     expected_identifiers = _collect_expected_identifiers(parameter_profile)
     actual_identifiers, actual_count = _collect_actual_identifiers(parameters)
     expected_count = len(expected_identifiers)
+    _validate_parameter_identifiers(
+        expected_identifiers,
+        expected_count,
+        actual_identifiers,
+        actual_count,
+        _collect_named_identifier_aliases(parameter_profile),
+        batch_index=batch_index,
+    )
 
+
+def _validate_parameter_identifiers(
+    expected_identifiers: "set[tuple[str, int | str]]",
+    expected_count: int,
+    actual_identifiers: "set[tuple[str, int | str]]",
+    actual_count: int,
+    named_identifier_aliases: "dict[str, str]",
+    batch_index: "int | None" = None,
+) -> None:
     if expected_count == 0 and actual_count == 0:
         return
 
@@ -283,7 +320,7 @@ def _validate_single_parameter_set(
         msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
         raise sqlspec.exceptions.SQLSpecError(msg)
 
-    normalized_actual_identifiers = _normalize_named_identifier_aliases(parameter_profile, actual_identifiers)
+    normalized_actual_identifiers = _apply_named_identifier_aliases(actual_identifiers, named_identifier_aliases)
     identifiers_match = expected_identifiers == normalized_actual_identifiers or _normalize_index_identifiers(
         expected_identifiers, normalized_actual_identifiers
     )
