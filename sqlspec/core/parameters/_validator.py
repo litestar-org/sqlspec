@@ -114,25 +114,7 @@ class ParameterValidator:
             return cached_result
         self._cache_misses += 1
 
-        if not _PARAM_CHARS.intersection(sql):
-            if len(self._parameter_cache) >= self._cache_max_size:
-                self._parameter_cache.popitem(last=False)
-            self._parameter_cache[cache_key] = []
-            return []
-
-        parameters: list[ParameterInfo] = []
-        ordinal = 0
-
-        for match in PARAMETER_REGEX.finditer(sql):
-            if any(match.group(*_SKIP_GROUPS)):
-                continue
-            style, name = self._extract_parameter_style(match)
-            if style is None:
-                continue
-            placeholder_text = match.group(0)
-            parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
-            ordinal += 1
-
+        parameters = self._extract_parameters_uncached(sql)
         if len(self._parameter_cache) >= self._cache_max_size:
             self._parameter_cache.popitem(last=False)
         self._parameter_cache[cache_key] = parameters

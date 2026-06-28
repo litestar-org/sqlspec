@@ -1145,43 +1145,25 @@ def _coerce_parameters_payload(
             if updated_many is None:
                 return seq_params
             return updated_many
-
-        updated_seq: list[Any] | None = None
-        for idx, item in enumerate(seq_params):
-            coerced_item = _coerce_parameter_value(item, type_coercion_map, fallback_items)
-            if updated_seq is None:
-                if coerced_item is item:
-                    continue
-                updated_seq = seq_params[:idx]
-            updated_seq.append(coerced_item)
-        if updated_seq is None:
-            return seq_params
-        return updated_seq
+        return _coerce_sequence_preserving_identity(seq_params, type_coercion_map, fallback_items)
     if param_type is tuple:
         tuple_params = cast("tuple[Any, ...]", parameters)
         if is_many:
             return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in tuple_params]
-        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in tuple_params]
+        coerced_tuple = _coerce_sequence_preserving_identity(tuple_params, type_coercion_map, fallback_items)
+        return list(coerced_tuple)
     if param_type is dict:
         dict_params = cast("dict[Any, Any]", parameters)
-        updated_mapping: dict[Any, Any] | None = None
-        for key, val in dict_params.items():
-            coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
-            if updated_mapping is None:
-                if coerced_value is val:
-                    continue
-                updated_mapping = dict(dict_params)
-            updated_mapping[key] = coerced_value
-        if updated_mapping is None:
-            return dict_params
-        return updated_mapping
+        return _coerce_mapping_preserving_identity(dict_params, type_coercion_map, fallback_items)
     # Fallback to ABC checks for custom types
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in parameters]
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        return [_coerce_parameter_value(item, type_coercion_map, fallback_items) for item in parameters]
+        coerced_sequence = _coerce_sequence_preserving_identity(parameters, type_coercion_map, fallback_items)
+        return list(coerced_sequence)
     if isinstance(parameters, Mapping):
-        return {key: _coerce_parameter_value(val, type_coercion_map, fallback_items) for key, val in parameters.items()}
+        coerced_mapping = _coerce_mapping_preserving_identity(parameters, type_coercion_map, fallback_items)
+        return dict(coerced_mapping)
     return _coerce_parameter_value(parameters, type_coercion_map, fallback_items)
 
 

@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage = false
 """Unit tests for the shared statement pipeline registry."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import sqlspec.core.pipeline as pipeline_module
@@ -12,6 +13,17 @@ from sqlspec.core.statement import StatementConfig
 
 def test_record_pipeline_metrics_constant_is_bool() -> None:
     assert isinstance(getattr(pipeline_module, "_RECORD_PIPELINE_METRICS", None), bool)
+
+
+def test_c4_pipeline_metrics_use_keyed_store_source_shape() -> None:
+    source = Path("sqlspec/core/pipeline.py").read_text()
+    metrics_section = source.split("class _PipelineMetrics", 1)[1].split("@mypyc_attr", 1)[0]
+
+    assert "_METRIC_KEYS: Final[tuple[str, ...]]" in source
+    assert '__slots__ = ("_values",)' in metrics_section
+    assert "self._values = dict.fromkeys(_METRIC_KEYS, 0)" in metrics_section
+    assert "return self._values.copy()" in metrics_section
+    assert "entry.update(metrics)" in source
 
 
 def test_os_getenv_not_called_during_compile() -> None:

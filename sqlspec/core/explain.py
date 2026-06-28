@@ -12,7 +12,7 @@ from mypy_extensions import mypyc_attr
 __all__ = ("ExplainFormat", "ExplainOptions")
 
 
-EXPLAIN_OPTIONS_SLOTS: Final = (
+EXPLAIN_OPTION_FIELDS: Final[tuple[str, ...]] = (
     "analyze",
     "verbose",
     "format",
@@ -25,6 +25,7 @@ EXPLAIN_OPTIONS_SLOTS: Final = (
     "wal",
     "generic_plan",
 )
+EXPLAIN_OPTIONS_SLOTS: Final = EXPLAIN_OPTION_FIELDS
 
 
 class ExplainFormat(str, Enum):
@@ -139,63 +140,28 @@ class ExplainOptions:
     def __repr__(self) -> str:
         """String representation of ExplainOptions."""
         parts = []
-        if self.analyze:
-            parts.append("analyze=True")
-        if self.verbose:
-            parts.append("verbose=True")
-        if self.format is not None:
-            parts.append(f"format={self.format.value!r}")
-        if self.costs is not None:
-            parts.append(f"costs={self.costs}")
-        if self.buffers is not None:
-            parts.append(f"buffers={self.buffers}")
-        if self.timing is not None:
-            parts.append(f"timing={self.timing}")
-        if self.summary is not None:
-            parts.append(f"summary={self.summary}")
-        if self.memory is not None:
-            parts.append(f"memory={self.memory}")
-        if self.settings is not None:
-            parts.append(f"settings={self.settings}")
-        if self.wal is not None:
-            parts.append(f"wal={self.wal}")
-        if self.generic_plan is not None:
-            parts.append(f"generic_plan={self.generic_plan}")
+        for field_name in EXPLAIN_OPTION_FIELDS:
+            value = self._field_value(field_name)
+            if field_name in ("analyze", "verbose"):
+                if value is not True:
+                    continue
+            elif value is None:
+                continue
+            if isinstance(value, ExplainFormat):
+                parts.append(f"{field_name}={value.value!r}")
+            else:
+                parts.append(f"{field_name}={value}")
         return f"ExplainOptions({', '.join(parts)})"
 
     def __eq__(self, other: object) -> bool:
         """Equality comparison."""
         if not isinstance(other, ExplainOptions):
             return False
-        return (
-            self.analyze == other.analyze
-            and self.verbose == other.verbose
-            and self.format == other.format
-            and self.costs == other.costs
-            and self.buffers == other.buffers
-            and self.timing == other.timing
-            and self.summary == other.summary
-            and self.memory == other.memory
-            and self.settings == other.settings
-            and self.wal == other.wal
-            and self.generic_plan == other.generic_plan
-        )
+        return self._key() == other._key()
 
     def __hash__(self) -> int:
         """Hash computation."""
-        return hash((
-            self.analyze,
-            self.verbose,
-            self.format,
-            self.costs,
-            self.buffers,
-            self.timing,
-            self.summary,
-            self.memory,
-            self.settings,
-            self.wal,
-            self.generic_plan,
-        ))
+        return hash(self._key())
 
     def copy(
         self,
@@ -250,26 +216,40 @@ class ExplainOptions:
             Dictionary of option names to values
         """
         result: dict[str, Any] = {}
-        if self.analyze:
-            result["analyze"] = True
-        if self.verbose:
-            result["verbose"] = True
-        if self.format is not None:
-            result["format"] = self.format.value.upper()
-        if self.costs is not None:
-            result["costs"] = self.costs
-        if self.buffers is not None:
-            result["buffers"] = self.buffers
-        if self.timing is not None:
-            result["timing"] = self.timing
-        if self.summary is not None:
-            result["summary"] = self.summary
-        if self.memory is not None:
-            result["memory"] = self.memory
-        if self.settings is not None:
-            result["settings"] = self.settings
-        if self.wal is not None:
-            result["wal"] = self.wal
-        if self.generic_plan is not None:
-            result["generic_plan"] = self.generic_plan
+        for field_name in EXPLAIN_OPTION_FIELDS:
+            value = self._field_value(field_name)
+            if field_name in ("analyze", "verbose"):
+                if value is not True:
+                    continue
+            elif value is None:
+                continue
+            result[field_name] = value.value.upper() if isinstance(value, ExplainFormat) else value
         return result
+
+    def _key(self) -> "tuple[Any, ...]":
+        return tuple(self._field_value(field_name) for field_name in EXPLAIN_OPTION_FIELDS)
+
+    def _field_value(self, field_name: str) -> Any:
+        if field_name == "analyze":
+            return self.analyze
+        if field_name == "verbose":
+            return self.verbose
+        if field_name == "format":
+            return self.format
+        if field_name == "costs":
+            return self.costs
+        if field_name == "buffers":
+            return self.buffers
+        if field_name == "timing":
+            return self.timing
+        if field_name == "summary":
+            return self.summary
+        if field_name == "memory":
+            return self.memory
+        if field_name == "settings":
+            return self.settings
+        if field_name == "wal":
+            return self.wal
+        if field_name == "generic_plan":
+            return self.generic_plan
+        return None

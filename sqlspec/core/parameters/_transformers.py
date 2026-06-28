@@ -193,6 +193,20 @@ def build_literal_inlining_transform(
     return _LiteralInliningTransform(json_serializer)
 
 
+def _as_concrete_payload(parameters: "ParameterPayload") -> "ConvertedParameters":
+    if parameters is None:
+        return None
+    if isinstance(parameters, dict):
+        return parameters
+    if isinstance(parameters, (list, tuple)):
+        return parameters
+    if isinstance(parameters, Mapping):
+        return dict(parameters)
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+        return list(parameters)
+    return None
+
+
 def replace_null_parameters_with_literals(
     expression: Any,
     parameters: "ParameterPayload",
@@ -219,15 +233,12 @@ def replace_null_parameters_with_literals(
         if isinstance(parameters, dict):
             return expression, parameters
         if isinstance(parameters, (list, tuple)):
-            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+            return expression, _as_concrete_payload(parameters)
         return expression, None
 
     if is_many or looks_like_execute_many(parameters):
-        # For execute_many, convert to concrete type
-        if isinstance(parameters, dict):
-            return expression, parameters
-        if isinstance(parameters, (list, tuple)):
-            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+        if isinstance(parameters, (dict, list, tuple)):
+            return expression, _as_concrete_payload(parameters)
         return expression, None
 
     if parameter_profile is None:
@@ -237,16 +248,7 @@ def replace_null_parameters_with_literals(
 
     null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
     if not null_positions:
-        # Convert to concrete type for return
-        if isinstance(parameters, dict):
-            return expression, parameters
-        if isinstance(parameters, (list, tuple)):
-            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
-        if isinstance(parameters, Mapping):
-            return expression, dict(parameters)
-        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return expression, list(parameters)
-        return expression, None
+        return expression, _as_concrete_payload(parameters)
 
     null_names: set[str] = set()
     positional_null_positions: set[int] = set()

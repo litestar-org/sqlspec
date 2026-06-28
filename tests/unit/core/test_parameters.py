@@ -2501,9 +2501,9 @@ def test_converter_hot_path_uses_shared_style_sets() -> None:
 
 
 def test_skip_groups_constant_used_by_both_paths() -> None:
-    """Cached and uncached parameter extraction should share the same skip groups."""
+    """Parameter extraction should keep skip groups hoisted out of the hot loop."""
     source = Path("sqlspec/core/parameters/_validator.py").read_text()
-    assert source.count("_SKIP_GROUPS") == 3
+    assert source.count("_SKIP_GROUPS") == 2
 
 
 def test_c3_parameter_transformer_validator_source_shapes() -> None:
@@ -2527,3 +2527,30 @@ def test_c3_parameter_transformer_validator_source_shapes() -> None:
     assert isinstance(ParameterValidator.__dict__.get("_extract_parameter_style"), staticmethod)
     assert "any(match.group(*_SKIP_GROUPS))" in validator_source
     assert "any(match.group(group) for group in _SKIP_GROUPS)" not in validator_source
+
+
+def test_c4_parameter_internal_consolidation_source_shapes() -> None:
+    """C4 parameter helpers should share internal conversion/extraction bodies."""
+    validator_source = Path("sqlspec/core/parameters/_validator.py").read_text()
+    extract_body = validator_source.split("def extract_parameters", 1)[1].split("def _extract_parameters_uncached", 1)[
+        0
+    ]
+    assert "parameters = self._extract_parameters_uncached(sql)" in extract_body
+    assert "for match in PARAMETER_REGEX.finditer(sql)" not in extract_body
+
+    processor_source = Path("sqlspec/core/parameters/_processor.py").read_text()
+    payload_body = processor_source.split("def _coerce_parameters_payload", 1)[1].split("def _make_cache_key_tuple", 1)[
+        0
+    ]
+    assert "_coerce_sequence_preserving_identity(seq_params" in payload_body
+    assert "_coerce_mapping_preserving_identity(dict_params" in payload_body
+    assert "updated_seq:" not in payload_body
+    assert "updated_mapping:" not in payload_body
+
+    transformer_source = Path("sqlspec/core/parameters/_transformers.py").read_text()
+    null_pruning_body = transformer_source.split("def replace_null_parameters_with_literals", 1)[1].split(
+        "def _create_literal_expression", 1
+    )[0]
+    assert "def _as_concrete_payload(" in transformer_source
+    assert "_as_concrete_payload(parameters)" in null_pruning_body
+    assert "list(parameters) if isinstance(parameters, list)" not in null_pruning_body

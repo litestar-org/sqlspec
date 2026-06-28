@@ -34,101 +34,45 @@ def _is_truthy(value: "str | None") -> bool:
 
 _RECORD_PIPELINE_METRICS: Final[bool] = _is_truthy(os.environ.get(DEBUG_ENV_FLAG))
 
+_METRIC_KEYS: Final[tuple[str, ...]] = (
+    "hits",
+    "misses",
+    "size",
+    "max_size",
+    "parse_hits",
+    "parse_misses",
+    "parse_size",
+    "parse_max_size",
+    "parameter_hits",
+    "parameter_misses",
+    "parameter_size",
+    "parameter_max_size",
+    "validator_hits",
+    "validator_misses",
+    "validator_size",
+    "validator_max_size",
+)
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _PipelineMetrics:
-    __slots__ = (
-        "hits",
-        "max_size",
-        "misses",
-        "parameter_hits",
-        "parameter_max_size",
-        "parameter_misses",
-        "parameter_size",
-        "parse_hits",
-        "parse_max_size",
-        "parse_misses",
-        "parse_size",
-        "size",
-        "validator_hits",
-        "validator_max_size",
-        "validator_misses",
-        "validator_size",
-    )
+    __slots__ = ("_values",)
 
     def __init__(self) -> None:
-        self.hits = 0
-        self.misses = 0
-        self.size = 0
-        self.max_size = 0
-        self.parse_hits = 0
-        self.parse_misses = 0
-        self.parse_size = 0
-        self.parse_max_size = 0
-        self.parameter_hits = 0
-        self.parameter_misses = 0
-        self.parameter_size = 0
-        self.parameter_max_size = 0
-        self.validator_hits = 0
-        self.validator_misses = 0
-        self.validator_size = 0
-        self.validator_max_size = 0
+        self._values = dict.fromkeys(_METRIC_KEYS, 0)
 
     def update(self, stats: "dict[str, int]") -> None:
-        self.hits = stats.get("hits", 0)
-        self.misses = stats.get("misses", 0)
-        self.size = stats.get("size", 0)
-        self.max_size = stats.get("max_size", 0)
-        self.parse_hits = stats.get("parse_hits", 0)
-        self.parse_misses = stats.get("parse_misses", 0)
-        self.parse_size = stats.get("parse_size", 0)
-        self.parse_max_size = stats.get("parse_max_size", 0)
-        self.parameter_hits = stats.get("parameter_hits", 0)
-        self.parameter_misses = stats.get("parameter_misses", 0)
-        self.parameter_size = stats.get("parameter_size", 0)
-        self.parameter_max_size = stats.get("parameter_max_size", 0)
-        self.validator_hits = stats.get("validator_hits", 0)
-        self.validator_misses = stats.get("validator_misses", 0)
-        self.validator_size = stats.get("validator_size", 0)
-        self.validator_max_size = stats.get("validator_max_size", 0)
+        values = self._values
+        for key in _METRIC_KEYS:
+            values[key] = stats.get(key, 0)
 
     def snapshot(self) -> "dict[str, int]":
-        return {
-            "hits": self.hits,
-            "misses": self.misses,
-            "size": self.size,
-            "max_size": self.max_size,
-            "parse_hits": self.parse_hits,
-            "parse_misses": self.parse_misses,
-            "parse_size": self.parse_size,
-            "parse_max_size": self.parse_max_size,
-            "parameter_hits": self.parameter_hits,
-            "parameter_misses": self.parameter_misses,
-            "parameter_size": self.parameter_size,
-            "parameter_max_size": self.parameter_max_size,
-            "validator_hits": self.validator_hits,
-            "validator_misses": self.validator_misses,
-            "validator_size": self.validator_size,
-            "validator_max_size": self.validator_max_size,
-        }
+        return self._values.copy()
 
     def reset(self) -> None:
-        self.hits = 0
-        self.misses = 0
-        self.size = 0
-        self.max_size = 0
-        self.parse_hits = 0
-        self.parse_misses = 0
-        self.parse_size = 0
-        self.parse_max_size = 0
-        self.parameter_hits = 0
-        self.parameter_misses = 0
-        self.parameter_size = 0
-        self.parameter_max_size = 0
-        self.validator_hits = 0
-        self.validator_misses = 0
-        self.validator_size = 0
-        self.validator_max_size = 0
+        values = self._values
+        for key in _METRIC_KEYS:
+            values[key] = 0
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -252,22 +196,7 @@ class StatementPipelineRegistry:
                 "dialect": pipeline.dialect,
                 "parameter_style": pipeline.parameter_style,
             }
-            entry["hits"] = metrics["hits"]
-            entry["misses"] = metrics["misses"]
-            entry["size"] = metrics["size"]
-            entry["max_size"] = metrics["max_size"]
-            entry["parse_hits"] = metrics.get("parse_hits", 0)
-            entry["parse_misses"] = metrics.get("parse_misses", 0)
-            entry["parse_size"] = metrics.get("parse_size", 0)
-            entry["parse_max_size"] = metrics.get("parse_max_size", 0)
-            entry["parameter_hits"] = metrics.get("parameter_hits", 0)
-            entry["parameter_misses"] = metrics.get("parameter_misses", 0)
-            entry["parameter_size"] = metrics.get("parameter_size", 0)
-            entry["parameter_max_size"] = metrics.get("parameter_max_size", 0)
-            entry["validator_hits"] = metrics.get("validator_hits", 0)
-            entry["validator_misses"] = metrics.get("validator_misses", 0)
-            entry["validator_size"] = metrics.get("validator_size", 0)
-            entry["validator_max_size"] = metrics.get("validator_max_size", 0)
+            entry.update(metrics)
             snapshots.append(entry)
         return snapshots
 
