@@ -511,20 +511,6 @@ class ParameterConverter:
 
         return static_sql, None
 
-    def _get_parameter_value(self, parameters: "ParameterPayload", param: "ParameterInfo") -> object | None:
-        if isinstance(parameters, Mapping):
-            if param.name and param.name in parameters:
-                return parameters[param.name]
-            if f"param_{param.ordinal}" in parameters:
-                return parameters[f"param_{param.ordinal}"]
-            if str(param.ordinal + 1) in parameters:
-                return parameters[str(param.ordinal + 1)]
-        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            if param.ordinal < len(parameters):
-                return parameters[param.ordinal]
-
-        return None
-
     def _get_parameter_value_with_reuse(
         self, parameters: "ParameterPayload", param: "ParameterInfo", unique_params: "dict[str, int]"
     ) -> object | None:

@@ -2554,3 +2554,10 @@ def test_c4_parameter_internal_consolidation_source_shapes() -> None:
     assert "def _as_concrete_payload(" in transformer_source
     assert "_as_concrete_payload(parameters)" in null_pruning_body
     assert "list(parameters) if isinstance(parameters, list)" not in null_pruning_body
+
+
+def test_c4_private_zero_ref_helpers_are_folded() -> None:
+    """API-invisible private helpers with no references should not linger."""
+    assert "def _get_parameter_value(" not in Path("sqlspec/core/parameters/_converter.py").read_text()
+    assert "def _hash_filter_value(" not in Path("sqlspec/core/hashing.py").read_text()
+    assert "def _reset_noop(" not in Path("sqlspec/core/_pool.py").read_text()

@@ -828,6 +828,8 @@ class ArrowResult(StatementResult):
     def num_columns(self) -> int:
         """Get the number of columns in the Arrow table.
 
+        External/extension API: not called internally.
+
         Returns:
             Number of columns.
         """
@@ -1027,7 +1029,10 @@ class StackResult:
         return isinstance(self.result, StatementResult) and not isinstance(self.result, ArrowResult)
 
     def is_arrow_result(self) -> bool:
-        """Return True when the underlying result is an ArrowResult."""
+        """Return True when the underlying result is an ArrowResult.
+
+        External/extension API: not called internally.
+        """
 
         return isinstance(self.result, ArrowResult)
 
@@ -1057,7 +1062,10 @@ class StackResult:
 
     @classmethod
     def from_arrow_result(cls, result: "ArrowResult") -> "StackResult":
-        """Create a stack result from an ArrowResult instance."""
+        """Create a stack result from an ArrowResult instance.
+
+        External/extension API: not called internally.
+        """
 
         metadata = result.metadata or None
         return cls(result=result, rows_affected=result.rows_affected, metadata=metadata)

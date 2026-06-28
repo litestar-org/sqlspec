@@ -25,6 +25,8 @@ from unittest.mock import MagicMock
 import pytest
 
 import sqlspec.core.cache as cache_module
+import sqlspec.core.hashing as hashing_module
+import sqlspec.core.pipeline as pipeline_module
 from sqlspec.core import (
     CacheConfig,
     CacheKey,
@@ -40,6 +42,21 @@ from sqlspec.core import (
     reset_stats_only,
     update_cache_config,
 )
+
+
+def test_c4_cache_hash_pipeline_exports_are_additive() -> None:
+    """C4 public export alignment is additive for documented helper surfaces."""
+    for name in (
+        "CacheConfig",
+        "clear_all_caches",
+        "get_cache_statistics",
+        "log_cache_stats",
+        "reset_stats_only",
+        "update_cache_config",
+    ):
+        assert name in cache_module.__all__
+    assert "hash_filters" in hashing_module.__all__
+    assert "configure_statement_pipeline_cache" in pipeline_module.__all__
 
 
 def test_cache_key_creation_and_immutability() -> None:
@@ -397,6 +414,55 @@ def test_namespaced_cache_additional_namespaces() -> None:
     assert cache.get_optimized(cache_key) is None
     assert cache.get_builder(cache_key) is builder_value
     assert cache.get_file(cache_key) is file_value
+
+
+def test_c4_namespaced_cache_delete_external_api_smoke() -> None:
+    """Deletion helpers are external API and delete each namespace key."""
+    cache = NamespacedCache(CacheConfig())
+    namespaces = ("statement", "expression", "optimized", "builder", "file")
+
+    for namespace in namespaces:
+        put = getattr(cache, f"put_{namespace}")
+        get = getattr(cache, f"get_{namespace}")
+        delete = getattr(cache, f"delete_{namespace}")
+
+        put("c4-key", f"{namespace}-value", "sqlite")
+        assert get("c4-key", "sqlite") == f"{namespace}-value"
+        assert delete("c4-key", "sqlite") is True
+        assert get("c4-key", "sqlite") is None
+        assert delete("c4-key", "sqlite") is False
+
+
+def test_c4_filters_view_external_api_smoke() -> None:
+    """FiltersView methods are external API and remain callable."""
+    filters = [
+        cache_module.Filter("status", "eq", "active"),
+        cache_module.Filter("status", "neq", "deleted"),
+        cache_module.Filter("name", "like", "a"),
+    ]
+    view = cache_module.FiltersView(filters)
+
+    assert len(view) == 3
+    assert list(view) == filters
+    assert view.get_by_field("status") == filters[:2]
+    assert view.has_field("name") is True
+    assert view.has_field("missing") is False
+    assert len(view.to_canonical()) == 3
+
+
+def test_c4_cache_external_api_docstring_markers() -> None:
+    """Dead-code policy markers identify externally callable cache helpers."""
+    for member in (
+        NamespacedCache.delete_statement,
+        NamespacedCache.delete_expression,
+        NamespacedCache.delete_optimized,
+        NamespacedCache.delete_builder,
+        NamespacedCache.delete_file,
+        cache_module.FiltersView.get_by_field,
+        cache_module.FiltersView.has_field,
+        cache_module.FiltersView.to_canonical,
+    ):
+        assert "External/extension API" in (inspect.getdoc(member) or "")
 
 
 def test_namespaced_cache_respects_config_flags() -> None:

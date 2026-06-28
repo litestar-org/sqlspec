@@ -33,20 +33,26 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "CacheConfig",
     "CacheKey",
     "CacheStats",
     "CachedStatement",
     "FiltersView",
     "LRUCache",
     "NamespacedCache",
+    "clear_all_caches",
     "create_cache_key",
     "get_cache",
     "get_cache_config",
     "get_cache_instances",
+    "get_cache_statistics",
     "get_default_cache",
     "get_pipeline_metrics",
+    "log_cache_stats",
     "reset_pipeline_registry",
+    "reset_stats_only",
     "set_cache_instances",
+    "update_cache_config",
 )
 
 logger = get_logger("sqlspec.cache")
@@ -751,6 +757,8 @@ class NamespacedCache:
     def delete_statement(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached statement data.
 
+        External/extension API: not called internally.
+
         Args:
             key: Cache key.
             dialect: Optional SQL dialect.
@@ -784,6 +792,8 @@ class NamespacedCache:
 
     def delete_expression(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached expression data.
+
+        External/extension API: not called internally.
 
         Args:
             key: Cache key.
@@ -819,6 +829,8 @@ class NamespacedCache:
     def delete_optimized(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached optimized expression data.
 
+        External/extension API: not called internally.
+
         Args:
             key: Cache key.
             dialect: Optional SQL dialect.
@@ -853,6 +865,8 @@ class NamespacedCache:
     def delete_builder(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached builder statement data.
 
+        External/extension API: not called internally.
+
         Args:
             key: Cache key.
             dialect: Optional SQL dialect.
@@ -886,6 +900,8 @@ class NamespacedCache:
 
     def delete_file(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached SQL file data.
+
+        External/extension API: not called internally.
 
         Args:
             key: Cache key.
@@ -989,6 +1005,8 @@ class FiltersView:
     def get_by_field(self, field_name: str) -> "list[Any]":
         """Get all filters for a specific field.
 
+        External/extension API: not called internally.
+
         Args:
             field_name: Field name to filter by
 
@@ -1000,6 +1018,8 @@ class FiltersView:
     def has_field(self, field_name: str) -> bool:
         """Check if any filter exists for a field.
 
+        External/extension API: not called internally.
+
         Args:
             field_name: Field name to check
 
@@ -1010,6 +1030,8 @@ class FiltersView:
 
     def to_canonical(self) -> "tuple[Any, ...]":
         """Create canonical representation for cache keys.
+
+        External/extension API: not called internally.
 
         Returns:
             Canonical tuple representation of filters

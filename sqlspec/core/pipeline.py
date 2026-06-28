@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 __all__ = (
     "StatementPipelineRegistry",
     "compile_with_pipeline",
+    "configure_statement_pipeline_cache",
     "get_statement_pipeline_metrics",
     "reset_statement_pipeline_cache",
 )

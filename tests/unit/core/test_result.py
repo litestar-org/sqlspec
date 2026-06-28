@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+import sqlspec.core as core_module
 import sqlspec.core.result as result_package
 import sqlspec.core.result._base as result_base
 from sqlspec.core import SQL, ArrowResult, OperationType, SQLResult, StackResult, create_sql_result
@@ -47,6 +48,12 @@ def test_fast_dml_result_alias_is_not_exported() -> None:
     assert alias_name not in result_package.__all__
     assert not hasattr(result_base, alias_name)
     assert not hasattr(result_package, alias_name)
+
+
+def test_c4_dml_result_core_export_is_additive() -> None:
+    """DMLResult is an additive core export for the existing result class."""
+    assert "DMLResult" in core_module.__all__
+    assert core_module.DMLResult is result_base.DMLResult
 
 
 def test_dml_result_schema_type_does_not_raise() -> None:
@@ -845,6 +852,23 @@ def test_arrow_result_iter_in_for_loop(arrow_result: ArrowResult) -> None:
     """Test iterating over ArrowResult in for loop."""
     names = [row["name"] for row in arrow_result]
     assert names == ["Alice", "Bob", "Charlie"]
+
+
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
+def test_c4_arrow_stack_external_api_smoke(arrow_result: ArrowResult) -> None:
+    """Arrow/stack result helpers are external API and remain callable."""
+    assert arrow_result.num_columns == 3
+
+    stack = StackResult.from_arrow_result(arrow_result)
+    assert stack.is_arrow_result() is True
+    assert stack.result is arrow_result
+    assert stack.rows_affected == arrow_result.rows_affected
+
+
+def test_c4_result_external_api_docstring_markers() -> None:
+    """Dead-code policy markers identify externally callable result helpers."""
+    for member in (ArrowResult.num_columns.fget, StackResult.is_arrow_result, StackResult.from_arrow_result):
+        assert "External/extension API" in (inspect.getdoc(member) or "")
 
 
 def test_c3_result_and_stack_idiom_source_shapes() -> None:

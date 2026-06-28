@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 __all__ = (
     "hash_expression",
     "hash_expression_node",
+    "hash_filters",
     "hash_optimized_expression",
     "hash_parameters",
     "hash_sql_statement",
@@ -147,13 +148,6 @@ def hash_parameters(
             param_hash ^= hash(("original", repr(original_parameters)))
 
     return param_hash
-
-
-def _hash_filter_value(value: Any) -> int:
-    try:
-        return hash(value)
-    except TypeError:
-        return hash(repr(value))
 
 
 def hash_filters(filters: "Sequence[StatementFilter] | None" = None) -> int:
