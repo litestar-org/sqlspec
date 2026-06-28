@@ -29,12 +29,35 @@ def test_adk_config_uses_flat_keys() -> None:
         "metadata_table",
         "memory_table",
         "artifact_table",
-        "in_memory",
         "owner_id_column",
     }
-    forbidden_nested = {"schema", "lifecycle", "capabilities", "optimizations", "oracle", "spanner", "adbc", "bigquery"}
+    forbidden_backend_settings = {
+        "schema",
+        "lifecycle",
+        "capabilities",
+        "optimizations",
+        "oracle",
+        "spanner",
+        "adbc",
+        "bigquery",
+        "asyncpg",
+        "in_memory",
+        "shard_count",
+        "session_table_options",
+        "events_table_options",
+        "memory_table_options",
+        "expires_index_options",
+        "fts_language",
+        "schema_version",
+        "partitioning",
+        "retention",
+        "compression",
+        "sqlite_optimization",
+        "enable_event_generated_columns",
+        "enable_covering_indexes",
+    }
     assert expected_flat <= annotations
-    assert annotations.isdisjoint(forbidden_nested)
+    assert annotations.isdisjoint(forbidden_backend_settings)
 
 
 def test_flat_schema_config_resolves_all_adk_table_names() -> None:

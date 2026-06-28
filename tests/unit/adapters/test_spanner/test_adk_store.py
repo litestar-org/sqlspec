@@ -3,9 +3,17 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock, patch
 
-from sqlspec.adapters.spanner.adk import SpannerSyncADKMemoryStore, SpannerSyncADKStore
+from typing_extensions import NotRequired
+
+from sqlspec.adapters.spanner.adk import (
+    SpannerADKConfig,
+    SpannerADKRetentionConfig,
+    SpannerSyncADKMemoryStore,
+    SpannerSyncADKStore,
+)
 from sqlspec.extensions.adk import EventRecord, MemoryRecord
 
 
@@ -13,6 +21,28 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
     config = MagicMock()
     config.extension_config = {"adk": adk_config or {}}
     return config
+
+
+def test_spanner_adk_config_types_adapter_local_optimizations() -> None:
+    """Spanner ADK optimization settings are typed on the adapter-local extension config."""
+
+    expected_types: dict[str, object] = {
+        "shard_count": int,
+        "session_table_options": str,
+        "events_table_options": str,
+        "memory_table_options": str,
+        "expires_index_options": str,
+        "retention": SpannerADKRetentionConfig,
+    }
+    for feature_name, expected_type in expected_types.items():
+        annotation = cast("Any", SpannerADKConfig.__annotations__[feature_name])
+        assert get_origin(annotation) is NotRequired
+        assert get_args(annotation) == (expected_type,)
+
+    for feature_name in ("session_ttl_seconds", "event_ttl_seconds", "memory_ttl_seconds"):
+        annotation = cast("Any", SpannerADKRetentionConfig.__annotations__[feature_name])
+        assert get_origin(annotation) is NotRequired
+        assert get_args(annotation) == (int,)
 
 
 def test_insert_event_preserves_event_record_timestamp() -> None:

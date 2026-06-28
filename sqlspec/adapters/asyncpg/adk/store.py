@@ -1,8 +1,9 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncpg
+from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.config import AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
@@ -15,9 +16,22 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import MemoryRecord
 
 
-__all__ = ("AsyncpgADKMemoryStore", "AsyncpgADKStore")
+__all__ = ("AsyncpgADKConfig", "AsyncpgADKMemoryStore", "AsyncpgADKStore")
 
 POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
+
+
+class AsyncpgADKConfig(TypedDict):
+    """Asyncpg-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with the asyncpg ADK store.
+    """
+
+    enable_event_generated_columns: NotRequired[bool]
+    """Create PostgreSQL generated columns and indexes for common ADK event JSON paths."""
+
+    enable_covering_indexes: NotRequired[bool]
+    """Add PostgreSQL INCLUDE columns to ADK event replay indexes."""
 
 
 class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
@@ -410,18 +424,39 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
+        adk_config = _get_asyncpg_adk_config(self._config)
+        generated_columns = ""
+        generated_indexes = ""
+        if adk_config.get("enable_event_generated_columns", False):
+            generated_columns = """,
+            author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED,
+            node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED"""
+            generated_indexes = f"""
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_author_gc
+            ON {self._events_table}(session_id, author_gc, timestamp ASC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_node_path_gc
+            ON {self._events_table}(session_id, node_path_gc, timestamp ASC);
+        """
+
+        covering_columns = ""
+        if adk_config.get("enable_covering_indexes", False):
+            covering_columns = " INCLUDE (invocation_id)"
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
+            event_data JSONB NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
+            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
+        {generated_indexes}
         """
 
     async def _get_create_app_states_table_sql(self) -> str:
@@ -671,3 +706,15 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             return int(result.split(" ")[1])
         except (IndexError, ValueError):
             return 0
+
+
+def _get_asyncpg_adk_config(config: Any) -> AsyncpgADKConfig:
+    """Return asyncpg ADK extension settings from ``extension_config["adk"]``."""
+
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return {}
+    return cast("AsyncpgADKConfig", adk_config)

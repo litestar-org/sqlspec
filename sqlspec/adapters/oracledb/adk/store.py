@@ -1,10 +1,12 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import oracledb
+from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
 from sqlspec.adapters.oracledb.data_dictionary import (
@@ -26,6 +28,9 @@ if TYPE_CHECKING:
 
 __all__ = (
     "JSONStorageType",
+    "OracleADKCompressionConfig",
+    "OracleADKConfig",
+    "OracleADKPartitionConfig",
     "OracleAsyncADKMemoryStore",
     "OracleAsyncADKStore",
     "OracleSyncADKMemoryStore",
@@ -72,6 +77,96 @@ class JSONStorageType(str, Enum):
     JSON_NATIVE = "json"
     BLOB_JSON = "blob_json"
     BLOB_PLAIN = "blob_plain"
+
+
+class OracleADKCompressionConfig(TypedDict):
+    """Oracle-specific ADK table compression settings."""
+
+    enabled: NotRequired[bool]
+    """Enable Oracle table compression clauses."""
+
+    algorithm: NotRequired[str]
+    """Oracle compression algorithm key."""
+
+
+class OracleADKPartitionConfig(TypedDict):
+    """Oracle-specific ADK table partitioning settings."""
+
+    strategy: NotRequired[str]
+    """Partitioning strategy, such as ``hash`` or ``range``."""
+
+    partition_count: NotRequired[int]
+    """Hash partition count."""
+
+    partitions: NotRequired[int]
+    """Alias for ``partition_count``."""
+
+    interval: NotRequired[str]
+    """Range partition interval key."""
+
+    initial_less_than: NotRequired[str]
+    """Initial range partition upper bound expression."""
+
+    partition_key: NotRequired[str]
+    """Default partition key for all ADK tables."""
+
+    session_partition_key: NotRequired[str]
+    """Partition key override for the session table."""
+
+    events_partition_key: NotRequired[str]
+    """Partition key override for the events table."""
+
+    app_state_partition_key: NotRequired[str]
+    """Partition key override for the app state table."""
+
+    user_state_partition_key: NotRequired[str]
+    """Partition key override for the user state table."""
+
+    memory_partition_key: NotRequired[str]
+    """Partition key override for the memory table."""
+
+
+class OracleADKConfig(TypedDict):
+    """Oracle ADK extension settings consumed by Oracle ADK stores."""
+
+    session_table: NotRequired[str]
+    """Name of the Oracle ADK sessions table."""
+
+    events_table: NotRequired[str]
+    """Name of the Oracle ADK events table."""
+
+    app_state_table: NotRequired[str]
+    """Name of the Oracle ADK app-scoped state table."""
+
+    user_state_table: NotRequired[str]
+    """Name of the Oracle ADK user-scoped state table."""
+
+    metadata_table: NotRequired[str]
+    """Name of the Oracle ADK metadata table."""
+
+    in_memory: NotRequired[bool]
+    """Enable Oracle INMEMORY clauses on ADK tables."""
+
+    compression: NotRequired[OracleADKCompressionConfig]
+    """Oracle ADK table compression settings."""
+
+    partitioning: NotRequired[OracleADKPartitionConfig]
+    """Oracle ADK table partitioning settings."""
+
+    session_table_options: NotRequired[str]
+    """Raw Oracle table options for the ADK session table."""
+
+    events_table_options: NotRequired[str]
+    """Raw Oracle table options for the ADK events table."""
+
+    app_state_table_options: NotRequired[str]
+    """Raw Oracle table options for the ADK app state table."""
+
+    user_state_table_options: NotRequired[str]
+    """Raw Oracle table options for the ADK user state table."""
+
+    memory_table_options: NotRequired[str]
+    """Raw Oracle table options for the ADK memory table."""
 
 
 def coerce_decimal_values(value: Any) -> Any:
@@ -127,7 +222,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
 
-        adk_config = config.extension_config.get("adk", {})
+        adk_config = _get_oracle_adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
@@ -1194,7 +1289,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
 
-        adk_config = config.extension_config.get("adk", {})
+        adk_config = _get_oracle_adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
@@ -2302,7 +2397,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
-        adk_config = config.extension_config.get("adk", {})
+        adk_config = _get_oracle_adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
@@ -2647,7 +2742,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
-        adk_config = config.extension_config.get("adk", {})
+        adk_config = _get_oracle_adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
@@ -3109,10 +3204,13 @@ def _json_column_ddl(column_name: str, storage_type: JSONStorageType) -> str:
     return f"{column_name} BLOB NOT NULL"
 
 
-def _get_oracle_adk_config(config: Any) -> dict[str, Any]:
-    adk_config = config.extension_config.get("adk", {})
+def _get_oracle_adk_config(config: Any) -> OracleADKConfig:
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
     if isinstance(adk_config, dict):
-        return adk_config
+        return cast("OracleADKConfig", adk_config)
     return {}
 
 
@@ -3126,7 +3224,7 @@ def _validate_oracle_identifier(value: str, label: str) -> str:
     return value
 
 
-def _oracle_compression_clause(adk_config: dict[str, Any]) -> str:
+def _oracle_compression_clause(adk_config: Mapping[str, Any]) -> str:
     compression = adk_config.get("compression")
     if not isinstance(compression, dict) or not compression.get("enabled"):
         return ""
@@ -3166,7 +3264,7 @@ def _oracle_range_partition_clause(partitioning: dict[str, Any], partition_key: 
 
 
 def _oracle_partition_clause(
-    adk_config: dict[str, Any], table_kind: str, hash_partition_key: str, range_partition_key: str
+    adk_config: Mapping[str, Any], table_kind: str, hash_partition_key: str, range_partition_key: str
 ) -> str:
     partitioning = adk_config.get("partitioning")
     if not isinstance(partitioning, dict):
@@ -3189,7 +3287,7 @@ def _oracle_partition_clause(
     raise ValueError(msg)
 
 
-def _oracle_table_options_clause(adk_config: dict[str, Any], table_kind: str) -> str:
+def _oracle_table_options_clause(adk_config: Mapping[str, Any], table_kind: str) -> str:
     option_key = "events_table_options" if table_kind == "events" else f"{table_kind}_table_options"
     options = adk_config.get(option_key)
     return str(options).strip() if options else ""
