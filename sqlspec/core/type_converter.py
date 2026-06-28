@@ -224,7 +224,7 @@ class BaseTypeConverter:
         if not match:
             return None
 
-        return next((key for key, match_value in match.groupdict().items() if match_value), None)
+        return match.lastgroup
 
     def convert_value(self, value: str, detected_type: str) -> "Any":
         """Convert string value to appropriate Python type.

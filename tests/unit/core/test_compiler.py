@@ -970,6 +970,28 @@ def test_parameter_cache_statistics(basic_statement_config: "StatementConfig") -
     assert stats["parameter_size"] >= 1
 
 
+def test_compiler_cache_hot_paths_use_bound_cache_flags(basic_statement_config: "StatementConfig") -> None:
+    """Compiler cache hot paths should not re-check config.enable_caching after initialization."""
+    processor = SQLProcessor(basic_statement_config)
+
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+    processor.compile("SELECT * FROM users WHERE id = ?", [456])
+
+    assert processor.cache_stats["hits"] == 1
+    assert "self._config.enable_caching" not in inspect.getsource(SQLProcessor.compile)
+    assert "self._config.enable_caching" not in inspect.getsource(SQLProcessor._resolve_expression)
+
+
+def test_processor_binds_parameter_config_hot_path_attrs(basic_statement_config: "StatementConfig") -> None:
+    """SQLProcessor should bind frequently used parameter config objects once."""
+    processor = SQLProcessor(basic_statement_config)
+
+    assert processor._parameter_config is basic_statement_config.parameter_config
+    assert processor._enable_parameter_type_wrapping is basic_statement_config.enable_parameter_type_wrapping
+    assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._prepare_parameters)
+    assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._finalize_compilation)
+
+
 def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache clearing functionality."""
     processor = SQLProcessor(basic_statement_config)
@@ -1030,11 +1052,13 @@ def test_processor_memory_efficiency_with_slots() -> None:
         "_cache_misses",
         "_config",
         "_dialect_str",
+        "_enable_parameter_type_wrapping",
         "_exec_style",
         "_input_style",
         "_last_cache_key",
         "_last_result",
         "_max_cache_size",
+        "_parameter_config",
         "_parameter_processor",
         "_parse_cache",
         "_parse_cache_hits",
