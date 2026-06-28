@@ -24,9 +24,16 @@ __all__ = ("Spanner",)
 register_spanner_property_parsers()
 
 
+class SpannerTokenizer(BigQuery.Tokenizer):
+    """Tokenizer for Spanner GoogleSQL string literal escapes."""
+
+    STRING_ESCAPES = ["'", "\\"]
+
+
 class Spanner(BigQuery):
     """Google Cloud Spanner SQL dialect."""
 
+    Tokenizer = SpannerTokenizer
     Generator = SpannerGenerator
 
     def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
