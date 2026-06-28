@@ -7,8 +7,6 @@ and transaction management.
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 
-import psqlpy.exceptions
-
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
     PsqlpyStreamSource,
@@ -66,6 +64,8 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
+        import psqlpy.exceptions
+
         if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
@@ -199,6 +199,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction."""
+        import psqlpy.exceptions
+
         try:
             await self.connection.execute("BEGIN")
         except psqlpy.exceptions.DatabaseError as e:
@@ -207,6 +209,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the current transaction."""
+        import psqlpy.exceptions
+
         try:
             await self.connection.execute("COMMIT")
         except psqlpy.exceptions.DatabaseError as e:
@@ -215,6 +219,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
+        import psqlpy.exceptions
+
         try:
             await self.connection.execute("ROLLBACK")
         except psqlpy.exceptions.DatabaseError as e:
@@ -323,6 +329,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
+            import psqlpy.exceptions
+
             schema_name, table_name = split_schema_and_table(table)
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:

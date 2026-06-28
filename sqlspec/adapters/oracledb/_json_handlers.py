@@ -29,7 +29,7 @@ handler returns ``None`` for values it does not own.
 """
 
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON
 from sqlspec.utils.serializers import from_json, to_json
@@ -89,16 +89,17 @@ def _is_json_payload(value: Any) -> bool:
     ``dict`` and ``tuple``/``list`` of dicts are claimed. Sequences whose first
     element is a number are NOT claimed — those are vector embeddings and
     belong to the vector handler.
+
+    An empty sequence is ambiguous (could be empty vector or empty list) and
+    defers to the next handler in the chain. Sequences of numbers (vector
+    embeddings) are rejected.
     """
     if isinstance(value, dict):
         return True
     if isinstance(value, (list, tuple)):
         if not value:
-            # Empty sequence: ambiguous (could be empty vector or empty list).
-            # Defer to the next handler in the chain.
             return False
         first = value[0]
-        # Reject sequences of numbers (vector embeddings).
         return not (isinstance(first, (int, float)) and not isinstance(first, bool))
     return False
 
@@ -108,7 +109,7 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     if not _is_json_payload(value):
         return None
 
-    server_major = getattr(cursor.connection, "_sqlspec_oracle_major", None)
+    server_major = cast("int | None", getattr(cursor.connection, "_sqlspec_oracle_major", None))
 
     if server_major is None or server_major >= _NATIVE_JSON_MIN_MAJOR:
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
@@ -118,11 +119,14 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
 
 
 def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Oracle output type handler for JSON-bearing column reads."""
+    """Oracle output type handler for JSON-bearing column reads.
+
+    For native JSON columns (DB_TYPE_JSON), python-oracledb returns dict/list
+    directly, so no conversion is needed.
+    """
     type_code = getattr(metadata, "type_code", None)
 
     if type_code is DB_TYPE_JSON:
-        # Native JSON: python-oracledb returns dict/list directly. No conversion.
         return None
 
     type_name = (getattr(metadata, "type_name", "") or "").upper()

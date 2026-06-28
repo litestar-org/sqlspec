@@ -17,6 +17,7 @@ import sqlspec.core.filters as filters_module
 from sqlspec import sql as sql_builder
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
+from sqlspec.builder import Select
 from sqlspec.core import (
     SQL,
     AnyCollectionFilter,
@@ -36,10 +37,11 @@ from sqlspec.core import (
     apply_filter,
     canonicalize_filters,
 )
-from sqlspec.core.filters import NotInSearchFilter
+from sqlspec.core.filters import NotInSearchFilter, OnBeforeAfterFilter, PaginationFilter
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import NotFoundError
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 if TYPE_CHECKING:
@@ -187,8 +189,6 @@ def test_limit_offset_filter_uses_descriptive_parameters() -> None:
 
 def test_limit_offset_filter_inherits_pagination_filter_base() -> None:
     """LimitOffsetFilter inherits from the public PaginationFilter base (downstream API)."""
-    from sqlspec.core.filters import PaginationFilter
-
     assert issubclass(LimitOffsetFilter, PaginationFilter)
     assert issubclass(PaginationFilter, StatementFilter)
     assert LimitOffsetFilter.__mro__[1] is PaginationFilter
@@ -685,8 +685,6 @@ def test_before_after_filter_col_nodes_are_independent() -> None:
 
 
 def test_on_before_after_filter_col_nodes_are_independent() -> None:
-    from sqlspec.core.filters import OnBeforeAfterFilter
-
     filter_obj = OnBeforeAfterFilter(
         "created_at", on_or_before=datetime(2023, 12, 31), on_or_after=datetime(2023, 1, 1)
     )
@@ -1042,8 +1040,6 @@ def test_multiple_filters_sequential_compound_where() -> None:
 
 def test_query_builder_apply_filters_in_collection() -> None:
     """QueryBuilder.apply_filters applies InCollectionFilter correctly (issue #405)."""
-    from sqlspec.builder import Select
-
     builder = Select("*").from_("users")
     f = InCollectionFilter("status", ["active", "pending"])
 
@@ -1058,8 +1054,6 @@ def test_query_builder_apply_filters_in_collection() -> None:
 
 def test_query_builder_apply_filters_multiple() -> None:
     """QueryBuilder.apply_filters handles multiple filters (issue #405)."""
-    from sqlspec.builder import Select
-
     builder = Select("*").from_("users")
     f1 = InCollectionFilter("status", ["active"])
     f2 = SearchFilter("name", "john")
@@ -1078,8 +1072,6 @@ def test_query_builder_apply_filters_multiple() -> None:
 
 def test_query_builder_apply_filters_not_in_collection() -> None:
     """QueryBuilder.apply_filters applies NotInCollectionFilter correctly (issue #405)."""
-    from sqlspec.builder import Select
-
     builder = Select("*").from_("users")
     f = NotInCollectionFilter("status", ["deleted", "archived"])
 
@@ -1095,8 +1087,6 @@ def test_query_builder_apply_filters_not_in_collection() -> None:
 
 def test_query_builder_apply_filters_empty() -> None:
     """QueryBuilder.apply_filters with no filters returns unmodified SQL."""
-    from sqlspec.builder import Select
-
     builder = Select("*").from_("users")
 
     result = builder.apply_filters()
@@ -1117,8 +1107,6 @@ def test_search_filter_with_qualified_name_uses_sanitized_parameters() -> None:
 
 def test_search_filter_with_qualified_name_appends_to_statement_correctly() -> None:
     """Test that SearchFilter with a dotted name appends to statement with qualified column."""
-    from sqlspec.core import SQL
-
     statement = SQL("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id")
     filter_obj = SearchFilter("u.name", "john")
 
@@ -1144,8 +1132,6 @@ def test_in_collection_filter_with_qualified_name_uses_sanitized_parameters() ->
 
 def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() -> None:
     """Test that OrderByFilter with a dotted name appends to statement correctly."""
-    from sqlspec.core import SQL
-
     statement = SQL("SELECT * FROM users u JOIN profiles p ON u.id = p.user_id")
     filter_obj = OrderByFilter("u.created_at", "desc")
 
@@ -1157,8 +1143,6 @@ def test_order_by_filter_with_qualified_name_appends_to_statement_correctly() ->
 
 def test_order_by_filter_with_expression_appends_to_statement_correctly() -> None:
     """Test that OrderByFilter with a SQLGlot expression appends to statement correctly."""
-    from sqlspec.core import SQL
-
     statement = SQL("SELECT id, lines, occurrences FROM stats")
     coalesce_expr = exp.Coalesce(
         this=exp.column("lines"), expressions=[exp.column("occurrences"), exp.Literal.number(0)]
@@ -1173,8 +1157,6 @@ def test_order_by_filter_with_expression_appends_to_statement_correctly() -> Non
 
 def test_search_filter_with_expression_in_set_appends_to_statement_correctly() -> None:
     """Test that SearchFilter with a SQLGlot expression in a set appends to statement correctly."""
-    from sqlspec.core import SQL
-
     statement = SQL("SELECT name, email FROM users")
     upper_name = exp.Upper(this=exp.column("name"))
     fields: set[str | exp.Expression] = {upper_name, "email"}
@@ -1202,8 +1184,6 @@ def test_query_builder_apply_filters_produces_valid_sql_for_execution() -> None:
 
     This verifies the end-to-end path: QueryBuilder -> apply_filters -> SQL with parameters.
     """
-    from sqlspec.builder import Select
-
     builder = Select("id", "name", "status").from_("users")
     f1 = InCollectionFilter("status", ["active", "pending"])
     f2 = OrderByFilter("name", "asc")
@@ -1465,8 +1445,6 @@ async def test_service_exists_works() -> None:
 @pytest.mark.anyio
 async def test_service_get_one_returns_row_or_raises() -> None:
     """get_one returns the row when present and raises NotFoundError otherwise."""
-    from sqlspec.exceptions import NotFoundError
-
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = AiosqliteConfig(connection_config={"database": tmp.name})

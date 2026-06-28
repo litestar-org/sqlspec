@@ -24,12 +24,14 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
         super().__init__()
 
     async def get_version(self, driver: "PsqlpyDriver") -> "VersionInfo | None":
-        """Get PostgreSQL database version information."""
+        """Get PostgreSQL database version information.
+
+        Performs an inline cache check first to avoid a cross-module method call
+        that causes mypyc segfaults. If not cached, fetches from the database.
+        """
         driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
-        # Not cached, fetch from database
 
         version_value = await driver.select_value(self.get_query("version"))
         if not version_value:

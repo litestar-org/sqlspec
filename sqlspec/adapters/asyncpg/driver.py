@@ -5,8 +5,6 @@ from collections import OrderedDict
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncpg
-
 from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
     PREPARED_STATEMENT_CACHE_SIZE,
@@ -76,6 +74,8 @@ class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        import asyncpg
+
         _ = exc_type
         if isinstance(exc_val, asyncpg.PostgresError) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)
@@ -215,6 +215,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction."""
+        import asyncpg
+
         try:
             await self.connection.execute("BEGIN")
         except asyncpg.PostgresError as e:
@@ -223,6 +225,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the current transaction."""
+        import asyncpg
+
         try:
             await self.connection.execute("COMMIT")
         except asyncpg.PostgresError as e:
@@ -231,6 +235,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
+        import asyncpg
+
         try:
             await self.connection.execute("ROLLBACK")
         except asyncpg.PostgresError as e:
@@ -414,6 +420,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into a PostgreSQL table via COPY."""
+        import asyncpg
 
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
@@ -504,7 +511,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         execution_args = statement.statement_config.execution_args
         metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
-        if getattr(statement, "is_processed", False):
+        if statement.is_processed:
             sql_text = statement.get_processed_state().compiled_sql
         else:
             sql_text, _ = self._get_compiled_sql(statement, statement.statement_config)

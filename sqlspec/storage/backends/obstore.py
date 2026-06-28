@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import Any, ClassVar, Final, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
@@ -20,6 +20,9 @@ from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._paths import is_file_destination, resolve_storage_path
 from sqlspec.storage._utils import _log_storage_event, import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
 from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.module_loader import ensure_obstore
@@ -41,6 +44,18 @@ class ObStoreBackend:
     local filesystem, and HTTP endpoints.
 
     All synchronous methods use the *_sync suffix for consistency with async methods.
+
+    Implementation Details & Invariants:
+        - LocalStore Paths: For LocalStore, the base_path is already included in the store
+          root (combined with the URI path; if base_path is absolute, Path division will
+          use it directly). Hence, we use an empty prefix when resolving paths for LocalStore,
+          whereas cloud stores use base_path as a prefix.
+        - Native Streaming: Uses obstore's native streaming yielding Buffer objects, which
+          are converted to bytes.
+        - Seekable Streams: PyArrow's ParquetFile requires a seekable file, so we wrap
+          the buffered stream accordingly (e.g. using io.BytesIO).
+        - Thread Offloading: Uses async_() with a storage limiter to offload blocking
+          PyArrow serialization/parsing to a thread pool, preventing event loop blocking.
     """
 
     __slots__ = ("_is_local_store", "_local_store_root", "base_path", "protocol", "store", "store_options", "store_uri")
@@ -71,7 +86,7 @@ class ObStoreBackend:
         self.store_uri = uri
         self.base_path = base_path.rstrip("/") if base_path else ""
         self.store_options = kwargs
-        self.store: Any
+        self.store: ObjectStore | Any
         self._is_local_store = False
         self._local_store_root = ""
         self.protocol = uri.split("://", 1)[0] if "://" in uri else "file"
@@ -92,8 +107,6 @@ class ObStoreBackend:
                 if is_file_destination(path_obj):
                     path_str = str(path_obj.parent)
 
-                # Combine URI path with base_path for correct storage location
-                # If base_path is absolute, Path division will use it directly (backward compat)
                 local_store_root_obj = Path(path_str)
                 if self.base_path:
                     local_store_root_obj /= self.base_path
@@ -209,8 +222,6 @@ class ObStoreBackend:
 
     def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore synchronously."""
-        # For LocalStore, the base_path is already included in the store root,
-        # so we use empty prefix when none is given. For cloud stores, use base_path.
         if prefix:
             resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
         elif self._is_local_store:
@@ -357,7 +368,6 @@ class ObStoreBackend:
         """Get object metadata using obstore synchronously."""
         resolved_path = self._resolve_path(path)
 
-        # Keep in sync with get_metadata_async.
         try:
             metadata = self.store.head(resolved_path)
         except Exception:
@@ -371,8 +381,9 @@ class ObStoreBackend:
                 "e_tag": metadata.get("e_tag"),
                 "version": metadata.get("version"),
             }
-            if metadata.get("metadata"):
-                result["custom_metadata"] = metadata["metadata"]
+            metadata_dict = cast("dict[str, Any]", metadata)
+            if custom_metadata := metadata_dict.get("metadata"):
+                result["custom_metadata"] = custom_metadata
             return result
 
     def is_object_sync(self, path: "str | Path") -> bool:
@@ -475,10 +486,8 @@ class ObStoreBackend:
             path=resolved_path,
         )
 
-        # Use obstore's native streaming - yields Buffer objects
-        # GetResult.stream(min_chunk_size) returns an iterator of chunks
         for chunk in result.stream(min_chunk_size=chunk_size):
-            yield bytes(chunk)  # Convert Buffer to bytes
+            yield bytes(chunk)
 
     def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
         """Stream Arrow record batches using obstore's native streaming synchronously.
@@ -499,8 +508,6 @@ class ObStoreBackend:
                 path=resolved_path,
             )
 
-            # Create a file-like object that streams from obstore
-            # PyArrow's ParquetFile needs a seekable file, so we buffer the stream
             buffer = io.BytesIO()
             for chunk in result.stream():
                 buffer.write(chunk)
@@ -633,8 +640,6 @@ class ObStoreBackend:
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
-        # For LocalStore, the base_path is already included in the store root,
-        # so we use empty prefix when none is given. For cloud stores, use base_path.
         if prefix:
             resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
         elif self._is_local_store:
@@ -768,7 +773,6 @@ class ObStoreBackend:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
         result: dict[str, object] = {}
-        # Keep in sync with get_metadata_sync.
         try:
             metadata = await self.store.head_async(resolved_path)
             result.update({
@@ -779,8 +783,9 @@ class ObStoreBackend:
                 "e_tag": metadata.get("e_tag"),
                 "version": metadata.get("version"),
             })
-            if metadata.get("metadata"):
-                result["custom_metadata"] = metadata["metadata"]
+            metadata_dict = cast("dict[str, Any]", metadata)
+            if custom_metadata := metadata_dict.get("metadata"):
+                result["custom_metadata"] = custom_metadata
 
         except Exception:
             return {"path": resolved_path, "exists": False}
@@ -796,7 +801,6 @@ class ObStoreBackend:
         resolved_path = self._resolve_path(path)
         data = await self._read_bytes_resolved_async(resolved_path)
 
-        # Offload PyArrow parsing to thread pool
         result = await async_(pq.read_table)(io.BytesIO(data), **kwargs)
 
         _log_storage_event(

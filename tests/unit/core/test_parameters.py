@@ -11,6 +11,7 @@ Tests the 2-Phase Parameter Conversion System:
 
 import json
 import math
+import re
 import warnings
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time
@@ -45,9 +46,25 @@ from sqlspec.core import (
 )
 from sqlspec.core.parameters import _converter as _converter_module
 from sqlspec.core.parameters import _processor as _processor_module
+from sqlspec.core.parameters import _types
 from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
+
+try:
+    from sqlspec.adapters.asyncpg.core import driver_profile as asyncpg_driver_profile
+except ImportError:
+    asyncpg_driver_profile = None
+
+try:
+    from sqlspec.adapters.psycopg.core import driver_profile as psycopg_driver_profile
+except ImportError:
+    psycopg_driver_profile = None
+
+try:
+    from sqlspec.adapters.pymysql.core import driver_profile as pymysql_driver_profile
+except ImportError:
+    pymysql_driver_profile = None
 
 _VALIDATOR_COMPILED = (_validator_module.__file__ or "").endswith((".so", ".pyd"))
 _CONVERTER_COMPILED = (_converter_module.__file__ or "").endswith((".so", ".pyd"))
@@ -1380,8 +1397,6 @@ def test_isinstance_type_wrapping() -> None:
 
 def test_parameter_style_constants_are_module_frozensets() -> None:
     """Style membership constants are hoisted for compiled hot paths."""
-    from sqlspec.core.parameters import _types
-
     named_styles = getattr(_types, "_NAMED_STYLES", None)
     positional_styles = getattr(_types, "_POSITIONAL_STYLES", None)
     named_style_values = getattr(_types, "_NAMED_STYLE_VALUES", None)
@@ -1631,8 +1646,6 @@ def test_duplicate_parameters_mixed_with_unique(converter: ParameterConverter) -
     assert 2 in converted_params
     assert 3 in converted_params
     expected_positions = ["$1", "$2", "$1", "$3", "$2"]
-    import re
-
     placeholders_in_sql = [match.group() for match in re.finditer("\\$\\d+", converted_sql)]
     assert placeholders_in_sql == expected_positions
 
@@ -2168,17 +2181,14 @@ def test_end_to_end_parameter_normalization_supported_style_preserved_in_sqlglot
 @pytest.fixture
 def async_pg_specific_behavior_asyncpg_config() -> ParameterStyleConfig | None:
     """Get AsyncPG config if available."""
-    try:
-        from sqlspec.adapters.asyncpg.core import driver_profile
-
-        return ParameterStyleConfig(
-            default_parameter_style=driver_profile.default_style,
-            supported_parameter_styles=driver_profile.supported_styles,
-            default_execution_parameter_style=driver_profile.default_execution_style,
-            supported_execution_parameter_styles=driver_profile.supported_execution_styles,
-        )
-    except ImportError:
+    if asyncpg_driver_profile is None:
         return None
+    return ParameterStyleConfig(
+        default_parameter_style=asyncpg_driver_profile.default_style,
+        supported_parameter_styles=asyncpg_driver_profile.supported_styles,
+        default_execution_parameter_style=asyncpg_driver_profile.default_execution_style,
+        supported_execution_parameter_styles=asyncpg_driver_profile.supported_execution_styles,
+    )
 
 
 @pytest.fixture
@@ -2207,17 +2217,14 @@ def test_async_pg_specific_behavior_asyncpg_pyformat_converts_for_sqlglot(
 @pytest.fixture
 def psycopg_specific_behavior_psycopg_config() -> ParameterStyleConfig | None:
     """Get Psycopg config if available."""
-    try:
-        from sqlspec.adapters.psycopg.core import driver_profile
-
-        return ParameterStyleConfig(
-            default_parameter_style=driver_profile.default_style,
-            supported_parameter_styles=driver_profile.supported_styles,
-            default_execution_parameter_style=driver_profile.default_execution_style,
-            supported_execution_parameter_styles=driver_profile.supported_execution_styles,
-        )
-    except ImportError:
+    if psycopg_driver_profile is None:
         return None
+    return ParameterStyleConfig(
+        default_parameter_style=psycopg_driver_profile.default_style,
+        supported_parameter_styles=psycopg_driver_profile.supported_styles,
+        default_execution_parameter_style=psycopg_driver_profile.default_execution_style,
+        supported_execution_parameter_styles=psycopg_driver_profile.supported_execution_styles,
+    )
 
 
 @pytest.fixture
@@ -2261,17 +2268,14 @@ def test_psycopg_specific_behavior_psycopg_positional_pyformat_preserves_distinc
 @pytest.fixture
 def my_sql_adapters_behavior_pymysql_config() -> ParameterStyleConfig | None:
     """Get PyMySQL config if available."""
-    try:
-        from sqlspec.adapters.pymysql.core import driver_profile
-
-        return ParameterStyleConfig(
-            default_parameter_style=driver_profile.default_style,
-            supported_parameter_styles=driver_profile.supported_styles,
-            default_execution_parameter_style=driver_profile.default_execution_style,
-            supported_execution_parameter_styles=driver_profile.supported_execution_styles,
-        )
-    except ImportError:
+    if pymysql_driver_profile is None:
         return None
+    return ParameterStyleConfig(
+        default_parameter_style=pymysql_driver_profile.default_style,
+        supported_parameter_styles=pymysql_driver_profile.supported_styles,
+        default_execution_parameter_style=pymysql_driver_profile.default_execution_style,
+        supported_execution_parameter_styles=pymysql_driver_profile.supported_execution_styles,
+    )
 
 
 @pytest.fixture

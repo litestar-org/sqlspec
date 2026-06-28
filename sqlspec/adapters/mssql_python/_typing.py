@@ -10,7 +10,7 @@ from mssql_python.cursor import Cursor  # pyright: ignore
 MSSQL_PYTHON_MODULE: Any = _mssql_python
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import TypeAlias
 
@@ -86,8 +86,8 @@ class MssqlPythonSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], MssqlPythonConnection]",
+        release_connection: "Callable[[MssqlPythonConnection], None]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MssqlPythonDriver], MssqlPythonDriver]",
@@ -97,7 +97,7 @@ class MssqlPythonSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: MssqlPythonConnection | None = None
         self._driver: MssqlPythonDriver | None = None
 
     def __enter__(self) -> "MssqlPythonDriver":
@@ -133,8 +133,8 @@ class MssqlPythonAsyncSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], Awaitable[MssqlPythonConnection]]",
+        release_connection: "Callable[[MssqlPythonConnection], Awaitable[None]]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MssqlPythonAsyncDriver], MssqlPythonAsyncDriver]",
@@ -144,7 +144,7 @@ class MssqlPythonAsyncSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: MssqlPythonConnection | None = None
         self._driver: MssqlPythonAsyncDriver | None = None
 
     async def __aenter__(self) -> "MssqlPythonAsyncDriver":

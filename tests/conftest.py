@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from sqlspec.core.cache import clear_all_caches
+
 warnings.filterwarnings(
     "ignore", message="You are using a Python version.*which Google will stop supporting", category=FutureWarning
 )
@@ -147,8 +149,6 @@ def disable_sync_to_thread_warning(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def clear_sql_caches() -> Generator[None, None, None]:
     """Clear SQL caches before each test to ensure isolation."""
-    from sqlspec.core.cache import clear_all_caches
-
     clear_all_caches()
     yield
     clear_all_caches()

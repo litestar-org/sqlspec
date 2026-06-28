@@ -26,6 +26,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.protocols import HasSqlStateProtocol, HasTypeCodeProtocol
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -356,15 +357,13 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         True to suppress expected migration errors, or a SQLSpec exception
     """
     error_code = getattr(error, "errno", None)
-    if error_code is None and hasattr(error, "args") and error.args:
+    if error_code is None and isinstance(error, Exception) and error.args:
         value = error.args[0]
         if isinstance(value, int):
             error_code = value
-    sqlstate_attr = getattr(error, "sqlstate", None)
-    sqlstate = sqlstate_attr if isinstance(sqlstate_attr, str) else None
+    sqlstate = error.sqlstate if isinstance(error, HasSqlStateProtocol) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
-    # Migration-specific errors to suppress
     if error_code in _MYSQL_MIGRATION_ERROR_CODES:
         if logger is not None:
             logger.warning("MysqlConnector expected migration error (ignoring): %s", error)
@@ -436,7 +435,7 @@ def detect_json_columns_from_description(
         if isinstance(column, (tuple, list)):
             type_code = column[1] if len(column) > 1 else None
         else:
-            type_code = getattr(column, "type_code", None)
+            type_code = column.type_code if isinstance(column, HasTypeCodeProtocol) else None
         if type_code in json_type_codes:
             append(index)
     return json_indexes

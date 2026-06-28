@@ -4,8 +4,6 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import sqlglot as _sqlglot
-from google.api_core import exceptions as api_exceptions
-from google.cloud.spanner_v1.transaction import Transaction
 from sqlglot import exp as _sqlglot_exp
 
 from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor
@@ -107,6 +105,8 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        from google.api_core import exceptions as api_exceptions
+
         if exc_type is None:
             return False
 
@@ -282,6 +282,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def commit(self) -> None:
+        from sqlspec.adapters.spanner.driver import Transaction
+
         if isinstance(self.connection, Transaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             if writer.committed is not None:
@@ -289,6 +291,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             writer.commit()
 
     def rollback(self) -> None:
+        from sqlspec.adapters.spanner.driver import Transaction
+
         if isinstance(self.connection, Transaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             writer.rollback()
@@ -437,6 +441,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
 
+        from sqlspec.adapters.spanner.driver import Transaction
+
         if overwrite:
             delete_sql = f"DELETE FROM {table} WHERE TRUE"
             if isinstance(self.connection, Transaction):
@@ -490,8 +496,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
         """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
-        session = getattr(self.connection, "_session", None)
-        database = getattr(session, "_database", None)
+        session = cast("object", getattr(self.connection, "_session", None))
+        database = cast("Any", getattr(session, "_database", None)) if session is not None else None
         if database is None:
             msg = "Spanner Batch Write API requires a database-backed session."
             raise SQLConversionError(msg)
@@ -538,21 +544,25 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         Note: Spanner's collect_rows requires result set fields and a type converter.
         The direct execution path may not always have this metadata available,
         so this falls back to basic collection.
+
+        For the direct path, if result set fields metadata is not available,
+        it returns raw data with no column names. If rows are dicts, it attempts
+        to extract column names from dict keys. For tuple rows without metadata,
+        it returns them as-is.
         """
-        # For direct path, we need fields metadata from the result set.
-        # If not available, return raw data with no column names.
         if not fetched:
             return [], [], 0
-        # Attempt to extract column names from dict keys if rows are dicts
         if isinstance(fetched[0], dict):
             column_names = list(fetched[0].keys())
             return fetched, column_names, len(fetched)
-        # For tuple rows without metadata, return as-is
         return fetched, [], len(fetched)
 
     def resolve_rowcount(self, cursor: "SpannerConnection") -> int:
-        """Resolve rowcount from Spanner cursor for the direct execution path."""
-        # Spanner uses execute_update return value, not cursor.rowcount
+        """Resolve rowcount from Spanner cursor for the direct execution path.
+
+        Spanner uses execute_update return value, not cursor.rowcount, so this
+        returns 0.
+        """
         return 0
 
     def _connection_in_transaction(self) -> bool:
@@ -567,6 +577,15 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _resolve_column_names(self, fields: Any) -> list[str]:
         return resolve_column_names(fields, self._column_name_cache)
+
+
+def __getattr__(name: str) -> Any:
+    if name == "Transaction":
+        from google.cloud.spanner_v1.transaction import Transaction
+
+        return Transaction
+    msg = f"module {__name__} has no attribute {name}"
+    raise AttributeError(msg)
 
 
 register_driver_profile("spanner", driver_profile)

@@ -16,6 +16,8 @@ from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from fsspec import AbstractFileSystem
+
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("FSSpecBackend",)
@@ -36,6 +38,8 @@ class FSSpecBackend:
     __slots__ = ("_fs_uri", "base_path", "fs", "protocol")
 
     backend_type: ClassVar[str] = "fsspec"
+    if TYPE_CHECKING:
+        fs: AbstractFileSystem
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         """Initialize the fsspec-backed storage backend.
@@ -302,7 +306,7 @@ class FSSpecBackend:
     def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching a glob pattern synchronously."""
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
-        results = sorted(self.fs.glob(resolved_pattern, **kwargs))  # pyright: ignore
+        results = cast("list[str]", sorted(self.fs.glob(resolved_pattern, **kwargs)))
         _log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
@@ -394,7 +398,7 @@ class FSSpecBackend:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
-                yield chunk
+                yield cast("bytes", chunk)
 
     def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage synchronously.

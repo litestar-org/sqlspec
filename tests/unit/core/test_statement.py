@@ -15,6 +15,7 @@ Key Test Coverage:
 """
 
 import copy
+import importlib.util
 import logging
 import pickle
 from typing import Any
@@ -24,6 +25,7 @@ import pytest
 from sqlglot import expressions as exp
 from sqlglot.dialects.postgres import Postgres
 
+import sqlspec.core.pipeline as pipeline_module
 import sqlspec.typing as public_typing
 from sqlspec.core import (
     SQL,
@@ -41,9 +43,11 @@ from sqlspec.core import (
     get_pipeline_metrics,
     reset_pipeline_registry,
 )
+from sqlspec.core._pool import get_processed_state_pool
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.hashing import hash_filters
 from sqlspec.core.metrics import StackExecutionMetrics
+from sqlspec.core.parameters import ParameterProcessor
 from sqlspec.core.parameters._processor import structural_fingerprint, value_fingerprint
 from sqlspec.core.pipeline import reset_statement_pipeline_cache
 from sqlspec.core.result._base import SQLResult, StackResult
@@ -56,6 +60,7 @@ from sqlspec.core.splitter import (
     split_sql_script,
 )
 from sqlspec.core.stack import StackOperation, StatementStack
+from sqlspec.core.statement import _parse_order_item
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.typing import Empty
 from tests.conftest import requires_interpreted
@@ -116,8 +121,6 @@ def test_rebind_processor_is_reused_across_cache_rebinds() -> None:
 
 def test_rebind_processor_is_cleared_on_reset() -> None:
     """reset() clears the cached processor because reset also replaces the config."""
-    from sqlspec.core.parameters import ParameterProcessor
-
     statement = SQL("SELECT :id", id=1)
     statement._rebind_processor = ParameterProcessor(cache_max_size=0, validator_cache_max_size=0)
     statement.reset()
@@ -126,8 +129,6 @@ def test_rebind_processor_is_cleared_on_reset() -> None:
 
 def test_parse_order_item_is_module_level_and_order_by_still_compiles() -> None:
     """ORDER BY string parsing should work through the extracted helper."""
-    from sqlspec.core.statement import _parse_order_item
-
     order_expr = _parse_order_item("name DESC", None, True)
     assert isinstance(order_expr, exp.Ordered)
     statement = SQL("SELECT id, name FROM users").order_by("name", "id DESC")
@@ -279,8 +280,6 @@ def test_sql_order_by_preserves_generated_parameter_counters() -> None:
 
 def test_processed_state_pool_resets_on_release() -> None:
     """ProcessedState pool should reset state before reuse."""
-    from sqlspec.core._pool import get_processed_state_pool
-
     pool = get_processed_state_pool()
     state = pool.acquire()
     state.compiled_sql = "SELECT 1"
@@ -1355,8 +1354,6 @@ def test_processed_state_parameter_profile_exposed() -> None:
 
 def test_shared_pipeline_metrics_respects_debug_flag() -> None:
     """Shared pipeline metrics emit data only when debug flag is enabled."""
-    import sqlspec.core.pipeline as pipeline_module
-
     with patch.object(pipeline_module, "_RECORD_PIPELINE_METRICS", True):
         reset_pipeline_registry()
         SQL("SELECT 1").compile()
@@ -1569,8 +1566,6 @@ def test_native_layout_wave3_internal_splitter_dialects_remain_instantiable_afte
 
 def test_native_layout_wave3_result_io_module_is_inlined() -> None:
     """The result conversion helper module should no longer exist as a call boundary."""
-    import importlib.util
-
     assert importlib.util.find_spec("sqlspec.core.result._io") is None
 
 

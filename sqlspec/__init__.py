@@ -16,9 +16,6 @@ del _warnings
 from typing import TYPE_CHECKING, Any
 
 from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
-
-if TYPE_CHECKING:
-    from sqlspec import dialects
 from sqlspec.__metadata__ import __version__
 from sqlspec.base import SQLSpec
 from sqlspec.builder import (
@@ -85,6 +82,9 @@ from sqlspec.observability import (
 )
 from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
+
+if TYPE_CHECKING:
+    from sqlspec import dialects
 
 __all__ = (
     "SQL",

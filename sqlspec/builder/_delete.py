@@ -8,15 +8,15 @@ from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 
-if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._dml import DeleteFromClauseMixin
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
+
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("Delete",)
 

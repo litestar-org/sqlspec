@@ -35,6 +35,7 @@ __all__ = (
     "HasConnectionConfigProtocol",
     "HasDataProtocol",
     "HasDatabaseUrlAndBindKeyProtocol",
+    "HasErrnoProtocol",
     "HasErrorsProtocol",
     "HasExecuteProtocol",
     "HasExpressionAndParametersProtocol",
@@ -62,6 +63,7 @@ __all__ = (
     "HasTypecodeSizedProtocol",
     "HasValueProtocol",
     "HasWhereProtocol",
+    "LitestarRouteHandlerProtocol",
     "MappingLikeProtocol",
     "NotificationProtocol",
     "ObjectStoreProtocol",
@@ -227,6 +229,13 @@ class HasErrorsProtocol(Protocol):
 
 
 @runtime_checkable
+class HasErrnoProtocol(Protocol):
+    """Protocol for objects exposing errno details."""
+
+    errno: int | None
+
+
+@runtime_checkable
 class HasDataProtocol(Protocol):
     """Protocol for results exposing a data attribute."""
 
@@ -245,6 +254,14 @@ class HasNameProtocol(Protocol):
     """Protocol for objects exposing a __name__ attribute."""
 
     __name__: str
+
+
+@runtime_checkable
+class LitestarRouteHandlerProtocol(Protocol):
+    """Protocol for Litestar route handlers."""
+
+    fn: object
+    owner: object
 
 
 @runtime_checkable

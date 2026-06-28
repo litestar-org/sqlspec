@@ -94,7 +94,7 @@ async def test_asyncpg_copy_from_stdin_uses_metadata_table_fallback() -> None:
     config = default_statement_config.replace(
         execution_args={"postgres_copy_data": "1", "postgres_copy_table": "public.users"}
     )
-    statement = SimpleNamespace(operation_type="COPY_FROM", statement_config=config)
+    statement = SimpleNamespace(operation_type="COPY_FROM", statement_config=config, is_processed=False)
     cursor = _CopyCursor()
     driver = _CompiledCopyDriver(connection=_connection())
 
@@ -153,7 +153,7 @@ async def test_handle_copy_operation_falls_back_to_get_compiled_sql_when_not_pro
 @pytest.mark.anyio
 async def test_asyncpg_copy_from_stdin_requires_table_name() -> None:
     config = default_statement_config.replace(execution_args={"postgres_copy_data": "1"})
-    statement = SimpleNamespace(operation_type="COPY_FROM", statement_config=config)
+    statement = SimpleNamespace(operation_type="COPY_FROM", statement_config=config, is_processed=False)
     cursor = _CopyCursor()
     driver = _CompiledCopyDriver(connection=_connection())
 

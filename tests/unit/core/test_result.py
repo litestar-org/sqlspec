@@ -3,7 +3,7 @@
 import importlib.util
 import inspect
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 from unittest.mock import patch
 
 import pytest
@@ -11,7 +11,16 @@ import pytest
 import sqlspec.core.result as result_package
 import sqlspec.core.result._base as result_base
 from sqlspec.core import SQL, ArrowResult, OperationType, SQLResult, StackResult, create_sql_result
+from sqlspec.core.result import build_arrow_result_from_reader
 from sqlspec.typing import PYARROW_INSTALLED
+
+if TYPE_CHECKING:
+    import pyarrow as pa
+else:
+    try:
+        import pyarrow as pa
+    except ImportError:
+        pa = None  # type: ignore[assignment]
 
 _RESULT_BASE_COMPILED = (result_base.__file__ or "").endswith((".so", ".pyd"))
 
@@ -95,8 +104,6 @@ def sql_result(sample_data: list[dict[str, Any]]) -> SQLResult:
 @pytest.fixture
 def sample_arrow_table():
     """Create a sample Arrow table for testing."""
-    import pyarrow as pa
-
     data: dict[str, Any] = {"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"], "age": [30, 25, 35]}
     return pa.Table.from_pydict(data)
 
@@ -248,7 +255,6 @@ def test_sql_result_get_data_with_schema_type() -> None:
 
 def test_sql_result_get_data_with_typeddict() -> None:
     """Test SQLResult.get_data() with TypedDict schema_type."""
-    from typing import TypedDict
 
     class UserDict(TypedDict):
         id: int
@@ -485,7 +491,6 @@ def test_tuple_format_schema_type_get_data_materializes_tuples_to_dicts() -> Non
 
 def test_tuple_format_schema_type_get_data_with_schema_type_from_tuples() -> None:
     """schema_type should work through the full tuple -> dict -> schema pipeline."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -508,7 +513,6 @@ def test_tuple_format_schema_type_get_data_with_schema_type_from_tuples() -> Non
 
 def test_tuple_format_schema_type_all_with_schema_type_from_tuples() -> None:
     """all(schema_type=...) should work with tuple-format data."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -528,7 +532,6 @@ def test_tuple_format_schema_type_all_with_schema_type_from_tuples() -> None:
 
 def test_tuple_format_schema_type_one_with_schema_type_from_tuples() -> None:
     """one(schema_type=...) should work with tuple-format data."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -547,7 +550,6 @@ def test_tuple_format_schema_type_one_with_schema_type_from_tuples() -> None:
 
 def test_tuple_format_schema_type_one_or_none_with_schema_type_from_tuples() -> None:
     """one_or_none(schema_type=...) should work with tuple-format data."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -568,7 +570,6 @@ def test_tuple_format_schema_type_one_or_none_with_schema_type_from_tuples() -> 
 
 def test_tuple_format_schema_type_get_first_with_schema_type_from_tuples() -> None:
     """get_first(schema_type=...) should work with tuple-format data."""
-    from dataclasses import dataclass
 
     @dataclass
     class User:
@@ -589,7 +590,6 @@ def test_tuple_format_schema_type_get_first_with_schema_type_from_tuples() -> No
 
 def test_tuple_format_schema_type_get_data_with_typeddict_from_tuples() -> None:
     """TypedDict schema_type should work with tuple-format data."""
-    from typing import TypedDict
 
     class UserDict(TypedDict):
         id: int
@@ -672,8 +672,6 @@ def test_tuple_format_schema_type_lazy_materialization_caches_result() -> None:
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 def test_sql_result_to_arrow(sql_result: SQLResult) -> None:
     """Test converting SQLResult to Arrow Table."""
-    import pyarrow as pa
-
     table = sql_result.to_arrow()
     assert isinstance(table, pa.Table)
     assert table.num_rows == 3
@@ -683,8 +681,6 @@ def test_sql_result_to_arrow(sql_result: SQLResult) -> None:
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 def test_sql_result_to_arrow_empty_data() -> None:
     """Test to_arrow() with empty data list."""
-    import pyarrow as pa
-
     stmt = SQL("SELECT * FROM users WHERE 1=0")
     result = SQLResult(statement=stmt, data=[])
     table = result.to_arrow()
@@ -853,7 +849,6 @@ def test_arrow_result_iter_in_for_loop(arrow_result: ArrowResult) -> None:
 def test_arrow_result_to_pandas_with_null_values() -> None:
     """Test to_pandas() correctly handles NULL values."""
     pandas = pytest.importorskip("pandas")
-    import pyarrow as pa
 
     data: dict[str, Any] = {
         "id": [1, 2, 3],
@@ -870,8 +865,6 @@ def test_arrow_result_to_pandas_with_null_values() -> None:
 
 def test_arrow_result_empty_table() -> None:
     """Test ArrowResult methods with empty table."""
-    import pyarrow as pa
-
     empty_table = pa.Table.from_pydict(cast(dict[str, Any], {}))
     stmt = SQL("SELECT * FROM users WHERE 1=0")
     result = ArrowResult(statement=stmt, data=empty_table)
@@ -898,10 +891,6 @@ def test_arrow_result_methods_with_none_data_raise() -> None:
 
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 def test_build_arrow_result_from_reader_reader_format() -> None:
-    import pyarrow as pa
-
-    from sqlspec.core.result import build_arrow_result_from_reader
-
     reader = pa.table({"id": pa.array([0, 1, 2])}).to_reader()
     result = build_arrow_result_from_reader(SQL("select 1"), reader, return_format="reader")
 
@@ -911,10 +900,6 @@ def test_build_arrow_result_from_reader_reader_format() -> None:
 
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 def test_build_arrow_result_from_reader_batches_format() -> None:
-    import pyarrow as pa
-
-    from sqlspec.core.result import build_arrow_result_from_reader
-
     reader = pa.table({"id": pa.array(range(5))}).to_reader()
     result = build_arrow_result_from_reader(SQL("select 1"), reader, return_format="batches")
 

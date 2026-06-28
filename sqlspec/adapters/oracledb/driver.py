@@ -3,8 +3,6 @@
 import logging
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-import oracledb
-
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncCursor,
@@ -263,6 +261,8 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        import oracledb
+
         if exc_type is None:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
@@ -285,6 +285,8 @@ class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        import oracledb
+
         if exc_type is None:
             return False
         if issubclass(exc_type, oracledb.DatabaseError):
@@ -334,6 +336,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
+        For SELECT-like statements, fetches all rows, resolves row metadata, and
+        applies LOB coercion if needed. For non-SELECT statements, resolves and
+        returns the affected row count.
+
         Args:
             cursor: Oracle cursor object
             statement: SQL statement to execute
@@ -341,6 +347,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Returns:
             Execution result containing data for SELECT statements or row count for others
         """
+        import oracledb
+
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = coerce_large_parameters_sync(
@@ -355,7 +363,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
-        # SELECT result processing for Oracle
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
@@ -378,7 +385,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 row_format="tuple",
             )
 
-        # Non-SELECT result processing
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
@@ -407,9 +413,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             if batch_errors:
                 special_data["oracle_batch_errors"] = [
                     {
-                        "offset": getattr(error, "offset", None),
-                        "code": getattr(error, "code", None),
-                        "message": getattr(error, "message", str(error)),
+                        "offset": cast("int | None", getattr(error, "offset", None)),
+                        "code": cast("int | None", getattr(error, "code", None)),
+                        "message": cast("str", getattr(error, "message", str(error))),
                     }
                     for error in cursor.getbatcherrors()
                 ]
@@ -466,6 +472,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If commit fails
         """
+        import oracledb
+
         try:
             self.connection.commit()
         except oracledb.Error as e:
@@ -478,6 +486,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If rollback fails
         """
+        import oracledb
+
         try:
             self.connection.rollback()
         except oracledb.Error as e:
@@ -817,6 +827,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return record_batches, batch_schema
 
     def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
+        import oracledb
+
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
         pipeline = oracledb.create_pipeline()
         for compiled in compiled_operations:
@@ -919,6 +931,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
+        For SELECT-like statements, fetches all rows, resolves row metadata, and
+        applies LOB coercion if needed. For non-SELECT statements, resolves and
+        returns the affected row count.
+
         Args:
             cursor: Oracle cursor object
             statement: SQL statement to execute
@@ -926,6 +942,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Returns:
             Execution result containing data for SELECT statements or row count for others
         """
+        import oracledb
+
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = await coerce_large_parameters_async(
@@ -940,7 +958,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         await cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
-        # SELECT result processing for Oracle
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
@@ -963,7 +980,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 row_format="tuple",
             )
 
-        # Non-SELECT result processing
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
@@ -994,9 +1010,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             if batch_errors:
                 special_data["oracle_batch_errors"] = [
                     {
-                        "offset": getattr(error, "offset", None),
-                        "code": getattr(error, "code", None),
-                        "message": getattr(error, "message", str(error)),
+                        "offset": cast("int | None", getattr(error, "offset", None)),
+                        "code": cast("int | None", getattr(error, "code", None)),
+                        "message": cast("str", getattr(error, "message", str(error))),
                     }
                     for error in cursor.getbatcherrors()
                 ]
@@ -1053,6 +1069,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: If commit fails
         """
+        import oracledb
+
         try:
             await self.connection.commit()
         except oracledb.Error as e:
@@ -1065,6 +1083,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: If rollback fails
         """
+        import oracledb
+
         try:
             await self.connection.rollback()
         except oracledb.Error as e:
@@ -1417,6 +1437,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     async def _execute_stack_native(
         self, stack: "StatementStack", *, continue_on_error: bool
     ) -> "tuple[StackResult, ...]":
+        import oracledb
+
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
         pipeline = oracledb.create_pipeline()
         for compiled in compiled_operations:

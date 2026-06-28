@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import mysql.connector
 from mysql.connector.constants import FieldType
 
+from sqlspec.adapters.mysqlconnector._typing import (
+    MysqlConnectorAsyncCursor,
+    MysqlConnectorAsyncSessionContext,
+    MysqlConnectorSyncCursor,
+    MysqlConnectorSyncSessionContext,
+)
 from sqlspec.adapters.mysqlconnector.core import (
     MysqlConnectorAsyncStreamSource,
     MysqlConnectorSyncStreamSource,
@@ -56,13 +62,6 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-
-from sqlspec.adapters.mysqlconnector._typing import (
-    MysqlConnectorAsyncCursor,
-    MysqlConnectorAsyncSessionContext,
-    MysqlConnectorSyncCursor,
-    MysqlConnectorSyncSessionContext,
-)
 
 __all__ = (
     "MysqlConnectorAsyncCursor",

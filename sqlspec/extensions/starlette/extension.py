@@ -8,6 +8,7 @@ from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
 from sqlspec.extensions.starlette.middleware import (
     CorrelationMiddleware,
+    SQLCommenterMiddleware,
     SQLSpecAutocommitMiddleware,
     SQLSpecManualMiddleware,
 )
@@ -250,8 +251,6 @@ class SQLSpecPlugin:
 
         for config_state in self._config_states:
             if config_state.enable_sqlcommenter_middleware and config_state.config.statement_config.enable_sqlcommenter:
-                from sqlspec.extensions.starlette.middleware import SQLCommenterMiddleware
-
                 app.add_middleware(SQLCommenterMiddleware, framework=config_state.sqlcommenter_framework)
                 self._sqlcommenter_middleware_added = True
                 log_with_context(

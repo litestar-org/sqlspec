@@ -3,8 +3,6 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, NoReturn
 
-import psqlpy.exceptions
-
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -22,10 +20,6 @@ __all__ = ("PsqlpyADKMemoryStore", "PsqlpyADKStore")
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
 POSTGRES_TABLE_NOT_FOUND_SQLSTATE: Final = "42P01"
-PSQLPY_TABLE_MISSING_ERRORS: Final[tuple[type[Exception], ...]] = (
-    psqlpy.exceptions.DatabaseError,
-    psqlpy.exceptions.ConnectionExecuteError,
-)
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 
@@ -122,7 +116,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     create_time=row["create_time"],
                     update_time=row["update_time"],
                 )
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return None
             raise
@@ -171,7 +165,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     )
                     for row in rows
                 ]
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return []
             raise
@@ -322,7 +316,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     )
                     for row in rows
                 ]
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return []
             raise
@@ -338,7 +332,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [before])
                 return count
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return 0
             raise
@@ -354,7 +348,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [updated_before])
                 return count
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return 0
             raise
@@ -367,7 +361,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 result = await conn.fetch(sql, [app_name])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["state"] if rows else None
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return None
             raise
@@ -380,7 +374,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 result = await conn.fetch(sql, [app_name, user_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["state"] if rows else None
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return None
             raise
@@ -417,7 +411,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 result = await conn.fetch(sql, [key])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["value"] if rows else None
-        except PSQLPY_TABLE_MISSING_ERRORS as e:
+        except Exception as e:
             if _is_table_missing_error(e):
                 return None
             raise
@@ -632,10 +626,11 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 except Exception as exc:  # pragma: no cover
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except psqlpy.exceptions.DatabaseError as e:
-            error_msg = str(e).lower()
-            if "does not exist" in error_msg or "relation" in error_msg:
-                return []
+        except Exception as e:
+            if _is_psqlpy_database_error(e):
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "relation" in error_msg:
+                    return []
             raise
 
     async def delete_entries_by_session(self, session_id: str) -> int:
@@ -650,10 +645,11 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [session_id])
                 return count
-        except psqlpy.exceptions.DatabaseError as e:
-            error_msg = str(e).lower()
-            if "does not exist" in error_msg or "relation" in error_msg:
-                return 0
+        except Exception as e:
+            if _is_psqlpy_database_error(e):
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "relation" in error_msg:
+                    return 0
             raise
 
     async def delete_entries_older_than(self, days: int) -> int:
@@ -674,10 +670,11 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 count = int(count_rows[0]["count"]) if count_rows else 0
                 await conn.execute(delete_sql, [])
                 return count
-        except psqlpy.exceptions.DatabaseError as e:
-            error_msg = str(e).lower()
-            if "does not exist" in error_msg or "relation" in error_msg:
-                return 0
+        except Exception as e:
+            if _is_psqlpy_database_error(e):
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "relation" in error_msg:
+                    return 0
             raise
 
     async def _get_create_memory_table_sql(self) -> str:
@@ -804,7 +801,21 @@ def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[MemoryRecord]":
     ]
 
 
+def _is_psqlpy_database_error(exc: Exception) -> bool:
+    try:
+        import psqlpy.exceptions
+    except ImportError:
+        return False
+    return isinstance(exc, psqlpy.exceptions.DatabaseError)
+
+
 def _is_table_missing_error(exc: Exception) -> bool:
+    try:
+        import psqlpy.exceptions
+    except ImportError:
+        return False
+    if not isinstance(exc, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.ConnectionExecuteError)):
+        return False
     error_msg = str(exc).lower()
     return "does not exist" in error_msg or "relation" in error_msg
 

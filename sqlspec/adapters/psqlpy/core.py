@@ -561,6 +561,14 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     psqlpy doesn't expose SQLSTATE codes directly, so we rely on message-based
     pattern matching for exception classification.
 
+    Mapped Exceptions:
+        * Integrity constraint violations (UniqueViolationError, ForeignKeyViolationError, etc.)
+        * Transaction/serialization errors (DeadlockError, SerializationConflictError)
+        * QueryTimeoutError: cancellations, timeouts
+        * PermissionDeniedError: permission denied, authentication failed
+        * ConnectionTimeoutError / DatabaseConnectionError: connection errors
+        * SQLParsingError: syntax/parse errors
+
     Args:
         error: The psqlpy exception to map
 
@@ -569,7 +577,6 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     """
     error_msg = str(error).lower()
 
-    # Integrity constraint violations (most specific first)
     if "unique" in error_msg or "duplicate key" in error_msg:
         return _create_postgres_error(error, UniqueViolationError, "unique constraint violation")
     if "foreign key" in error_msg or "violates foreign key" in error_msg:
@@ -581,29 +588,24 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     if "constraint" in error_msg:
         return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
 
-    # Transaction and serialization errors (deadlock before serialization)
     if "deadlock" in error_msg:
         return _create_postgres_error(error, DeadlockError, "deadlock detected")
     if "serialization failure" in error_msg or "could not serialize" in error_msg:
         return _create_postgres_error(error, SerializationConflictError, "serialization failure")
 
-    # Query timeout/cancellation
     if "cancel" in error_msg or "timeout" in error_msg or "statement timeout" in error_msg:
         return _create_postgres_error(error, QueryTimeoutError, "query canceled or timed out")
 
-    # Permission/authentication errors
     if "permission denied" in error_msg or "insufficient privilege" in error_msg:
         return _create_postgres_error(error, PermissionDeniedError, "permission denied")
     if "authentication failed" in error_msg or "password" in error_msg:
         return _create_postgres_error(error, PermissionDeniedError, "authentication error")
 
-    # Connection errors
     if "connection" in error_msg or "could not connect" in error_msg:
         if "timeout" in error_msg:
             return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
         return _create_postgres_error(error, DatabaseConnectionError, "connection error")
 
-    # SQL syntax errors
     if "syntax error" in error_msg or "parse" in error_msg:
         return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
 

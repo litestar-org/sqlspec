@@ -11,6 +11,7 @@ from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
+from sqlspec.protocols import SupportsCloseProtocol
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
@@ -124,7 +125,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         self,
         *,
         connection_config: "ArrowOdbcConnectionParams | dict[str, Any] | None" = None,
-        connection_instance: "Any" = None,
+        connection_instance: "ArrowOdbcConnection | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "ArrowOdbcDriverFeatures | dict[str, Any] | None" = None,
@@ -204,6 +205,5 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
 
 def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
     """Close connection objects from compatible wrappers when they expose close()."""
-    close = getattr(connection, "close", None)
-    if close is not None:
-        close()
+    if isinstance(connection, SupportsCloseProtocol):
+        connection.close()

@@ -6,8 +6,10 @@ both the SQL class and builder classes.
 """
 
 import pytest
+import sqlglot
 from sqlglot import exp
 
+from sqlspec.core.cache import get_cache
 from sqlspec.core.query_modifiers import (
     apply_column_pruning,
     apply_limit,
@@ -474,8 +476,6 @@ def test_integration_select_only_with_cte_preserved() -> None:
 
 def test_column_pruning_prune_unused_columns_from_subquery() -> None:
     """Test that unused columns are removed from subqueries."""
-    import sqlglot
-
     sql = "SELECT id, name FROM (SELECT id, name, email, created_at FROM users) AS u"
     select_expr = sqlglot.parse_one(sql)
     result = apply_column_pruning(select_expr)
@@ -493,8 +493,6 @@ def test_column_pruning_prune_columns_returns_unchanged_for_non_select() -> None
 
 def test_column_pruning_prune_columns_with_simple_select() -> None:
     """Test pruning on simple SELECT (should return unchanged)."""
-    import sqlglot
-
     sql = "SELECT id, name FROM users"
     select_expr = sqlglot.parse_one(sql)
     result = apply_column_pruning(select_expr)
@@ -505,8 +503,6 @@ def test_column_pruning_prune_columns_with_simple_select() -> None:
 
 def test_column_pruning_prune_columns_with_join() -> None:
     """Test column pruning with JOIN."""
-    import sqlglot
-
     sql = "\n        SELECT u.id, u.name\n        FROM (SELECT id, name, email FROM users) AS u\n        JOIN (SELECT user_id, role FROM user_roles) AS r ON u.id = r.user_id\n        "
     select_expr = sqlglot.parse_one(sql)
     result = apply_column_pruning(select_expr)
@@ -516,10 +512,6 @@ def test_column_pruning_prune_columns_with_join() -> None:
 
 def test_column_pruning_prune_columns_with_cache() -> None:
     """Test that column pruning uses cache correctly."""
-    import sqlglot
-
-    from sqlspec.core.cache import get_cache
-
     sql = "SELECT id FROM (SELECT id, name, email FROM users) AS u"
     select_expr = sqlglot.parse_one(sql)
     cache_key = "test_prune_cache_key"
@@ -534,8 +526,6 @@ def test_column_pruning_prune_columns_with_cache() -> None:
 
 def test_column_pruning_prune_columns_with_dialect() -> None:
     """Test column pruning with specific dialect."""
-    import sqlglot
-
     sql = "SELECT id FROM (SELECT id, name FROM users) AS u"
     select_expr = sqlglot.parse_one(sql)
     result = apply_column_pruning(select_expr, dialect="postgres")
@@ -553,8 +543,6 @@ def test_column_pruning_prune_columns_handles_qualification_failure() -> None:
 
 def test_set_operation_support_apply_limit_with_union_all() -> None:
     """Test applying LIMIT to a UNION ALL expression."""
-    import sqlglot
-
     union_expr = sqlglot.parse_one("SELECT id FROM a UNION ALL SELECT id FROM b")
     assert isinstance(union_expr, exp.SetOperation)
     result = apply_limit(union_expr, 10)
@@ -565,8 +553,6 @@ def test_set_operation_support_apply_limit_with_union_all() -> None:
 
 def test_set_operation_support_apply_limit_with_union() -> None:
     """Test applying LIMIT to a UNION (without ALL) expression."""
-    import sqlglot
-
     union_expr = sqlglot.parse_one("SELECT id FROM a UNION SELECT id FROM b")
     assert isinstance(union_expr, exp.SetOperation)
     result = apply_limit(union_expr, 5)
@@ -576,8 +562,6 @@ def test_set_operation_support_apply_limit_with_union() -> None:
 
 def test_set_operation_support_apply_limit_with_except() -> None:
     """Test applying LIMIT to an EXCEPT expression."""
-    import sqlglot
-
     except_expr = sqlglot.parse_one("SELECT id FROM a EXCEPT SELECT id FROM b")
     assert isinstance(except_expr, exp.SetOperation)
     result = apply_limit(except_expr, 15)
@@ -588,8 +572,6 @@ def test_set_operation_support_apply_limit_with_except() -> None:
 
 def test_set_operation_support_apply_limit_with_intersect() -> None:
     """Test applying LIMIT to an INTERSECT expression."""
-    import sqlglot
-
     intersect_expr = sqlglot.parse_one("SELECT id FROM a INTERSECT SELECT id FROM b")
     assert isinstance(intersect_expr, exp.SetOperation)
     result = apply_limit(intersect_expr, 3)
@@ -600,8 +582,6 @@ def test_set_operation_support_apply_limit_with_intersect() -> None:
 
 def test_set_operation_support_apply_offset_with_union_all() -> None:
     """Test applying OFFSET to a UNION ALL expression."""
-    import sqlglot
-
     union_expr = sqlglot.parse_one("SELECT id FROM a UNION ALL SELECT id FROM b")
     assert isinstance(union_expr, exp.SetOperation)
     result = apply_offset(union_expr, 5)
@@ -612,8 +592,6 @@ def test_set_operation_support_apply_offset_with_union_all() -> None:
 
 def test_set_operation_support_apply_offset_with_except() -> None:
     """Test applying OFFSET to an EXCEPT expression."""
-    import sqlglot
-
     except_expr = sqlglot.parse_one("SELECT id FROM a EXCEPT SELECT id FROM b")
     assert isinstance(except_expr, exp.SetOperation)
     result = apply_offset(except_expr, 20)
@@ -623,8 +601,6 @@ def test_set_operation_support_apply_offset_with_except() -> None:
 
 def test_set_operation_support_apply_offset_with_intersect() -> None:
     """Test applying OFFSET to an INTERSECT expression."""
-    import sqlglot
-
     intersect_expr = sqlglot.parse_one("SELECT id FROM a INTERSECT SELECT id FROM b")
     assert isinstance(intersect_expr, exp.SetOperation)
     result = apply_offset(intersect_expr, 7)
@@ -634,8 +610,6 @@ def test_set_operation_support_apply_offset_with_intersect() -> None:
 
 def test_set_operation_support_apply_limit_and_offset_with_union_all() -> None:
     """Test applying both LIMIT and OFFSET to UNION ALL."""
-    import sqlglot
-
     union_expr = sqlglot.parse_one("SELECT id FROM a UNION ALL SELECT id FROM b")
     result = apply_limit(union_expr, 10)
     result = apply_offset(result, 20)
@@ -647,8 +621,6 @@ def test_set_operation_support_apply_limit_and_offset_with_union_all() -> None:
 
 def test_set_operation_support_safe_modify_with_cte_preserves_cte_on_set_operation() -> None:
     """Test that safe_modify_with_cte preserves CTEs on set operations."""
-    import sqlglot
-
     cte_union = sqlglot.parse_one("WITH cte AS (SELECT 1 AS id) SELECT id FROM cte UNION ALL SELECT id FROM b")
 
     def add_limit(expr: exp.Expr) -> exp.Expr:
@@ -663,8 +635,6 @@ def test_set_operation_support_safe_modify_with_cte_preserves_cte_on_set_operati
 
 def test_set_operation_support_safe_modify_with_cte_preserves_cte_on_except() -> None:
     """Test that safe_modify_with_cte preserves CTEs on EXCEPT operations."""
-    import sqlglot
-
     cte_except = sqlglot.parse_one("WITH cte AS (SELECT 1 AS id) SELECT id FROM cte EXCEPT SELECT id FROM b")
 
     def add_offset(expr: exp.Expr) -> exp.Expr:

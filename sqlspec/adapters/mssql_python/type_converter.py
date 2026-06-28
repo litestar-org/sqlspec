@@ -7,6 +7,8 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pyarrow as pa
 
 __all__ = ("MssqlPythonTypeConverter", "mssql_type_to_arrow")
@@ -52,7 +54,9 @@ class MssqlPythonTypeConverter:
 
     __slots__ = ("_json_deserializer", "_json_serializer")
 
-    def __init__(self, json_serializer: "Any" = to_json, json_deserializer: "Any" = from_json) -> None:
+    def __init__(
+        self, json_serializer: "Callable[[Any], str]" = to_json, json_deserializer: "Callable[[str], Any]" = from_json
+    ) -> None:
         self._json_serializer = json_serializer
         self._json_deserializer = json_deserializer
 

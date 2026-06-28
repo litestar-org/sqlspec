@@ -3,10 +3,9 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import mysql.connector
-
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.protocols import HasErrnoProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -77,6 +76,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
+        import mysql.connector
+
         try:
             async with self._config.provide_connection() as conn:
                 cursor = await conn.cursor()
@@ -125,6 +126,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             await conn.commit()
 
     async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        import mysql.connector
+
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -250,6 +253,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
+        import mysql.connector
+
         if limit == 0:
             return []
 
@@ -309,6 +314,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         )
 
     async def get_metadata(self, key: str) -> "str | None":
+        import mysql.connector
+
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
         try:
             async with self._config.provide_connection() as conn:
@@ -506,6 +513,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def _get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
+        import mysql.connector
+
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
@@ -553,6 +562,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             conn.commit()
 
     def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        import mysql.connector
+
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -678,6 +689,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
+        import mysql.connector
+
         if limit == 0:
             return []
 
@@ -737,6 +750,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         )
 
     def _get_metadata(self, key: str) -> "str | None":
+        import mysql.connector
+
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
         try:
             with self._config.provide_connection() as conn:
@@ -1205,8 +1220,8 @@ def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
 
 
 def _is_mysql_table_missing(exc: BaseException) -> bool:
-    args = getattr(exc, "args", ())
-    errno = getattr(exc, "errno", None)
+    args = exc.args
+    errno = exc.errno if isinstance(exc, HasErrnoProtocol) else None
     return (
         errno == MYSQL_TABLE_NOT_FOUND_ERROR
         or "doesn't exist" in str(exc)
@@ -1264,6 +1279,8 @@ def _raise_session_not_found(session_id: str) -> None:
 async def _mysqlconnector_async_delete_by_timestamp(
     store: MysqlConnectorAsyncADKStore, table_name: str, column_name: str, threshold: "datetime"
 ) -> int:
+    import mysql.connector
+
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     try:
         async with store._config.provide_connection() as conn:
@@ -1285,6 +1302,8 @@ async def _mysqlconnector_async_delete_by_timestamp(
 async def _mysqlconnector_async_get_state(
     store: MysqlConnectorAsyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
+    import mysql.connector
+
     sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
     try:
         async with store._config.provide_connection() as conn:
@@ -1316,6 +1335,8 @@ async def _mysqlconnector_async_execute_commit(
 def _mysqlconnector_sync_delete_by_timestamp(
     store: MysqlConnectorSyncADKStore, table_name: str, column_name: str, threshold: "datetime"
 ) -> int:
+    import mysql.connector
+
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     try:
         with store._config.provide_connection() as conn:
@@ -1337,6 +1358,8 @@ def _mysqlconnector_sync_delete_by_timestamp(
 def _mysqlconnector_sync_get_state(
     store: MysqlConnectorSyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
+    import mysql.connector
+
     sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
     try:
         with store._config.provide_connection() as conn:

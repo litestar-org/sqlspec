@@ -6,6 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
+from sqlspec.protocols import HasNameProtocol
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 
@@ -260,7 +261,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
         """
         attrs: dict[str, str] = {"route": request.url.path, "framework": self._framework}
         endpoint = request.scope.get("endpoint")
-        if endpoint is not None and hasattr(endpoint, "__name__"):
+        if isinstance(endpoint, HasNameProtocol):
             attrs["action"] = endpoint.__name__
 
         previous = SQLCommenterContext.get()

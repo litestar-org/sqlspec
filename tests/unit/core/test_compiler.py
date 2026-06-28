@@ -42,6 +42,7 @@ from sqlspec.core import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
 from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
@@ -324,37 +325,37 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     Note: SQLSpec uses structural fingerprinting for parameters, meaning cache keys
     are based on parameter STRUCTURE (types, keys) not VALUES. Same SQL with same
     parameter structure produces the same cache key regardless of actual values.
-    """
-    from sqlspec.core.parameters import structural_fingerprint
 
+    This test verifies:
+    - Same SQL and parameter structure yields the same cache key.
+    - Different SQL yields a different key.
+    - Same SQL with same parameter structure (list of one int) yields the same key.
+    - Different parameter structure (e.g. dict vs list) yields a different key.
+    - Different parameter type signature yields a different key.
+    - Cache keys are tuples for better performance.
+    """
     processor = SQLProcessor(basic_statement_config)
 
-    # _make_cache_key expects a precomputed fingerprint, not raw params
-    # Same SQL and parameter structure = same key
     fp1 = structural_fingerprint([123])
     key1 = processor._make_cache_key("SELECT * FROM users", fp1)
     key2 = processor._make_cache_key("SELECT * FROM users", fp1)
     assert key1 == key2
 
-    # Different SQL = different key
     key3 = processor._make_cache_key("SELECT * FROM posts", fp1)
     assert key1 != key3
 
-    # Same SQL with same parameter STRUCTURE (list of one int) = SAME key (structural fingerprinting)
     fp4 = structural_fingerprint([456])
     key4 = processor._make_cache_key("SELECT * FROM users", fp4)
-    assert key1 == key4  # Structural fingerprinting: same structure = same key
+    assert key1 == key4
 
-    # Different parameter STRUCTURE = different key
-    fp5 = structural_fingerprint({"id": 123})  # dict vs list
+    fp5 = structural_fingerprint({"id": 123})
     key5 = processor._make_cache_key("SELECT * FROM users", fp5)
     assert key1 != key5
 
-    fp6 = structural_fingerprint([123, "extra"])  # different type signature
+    fp6 = structural_fingerprint([123, "extra"])
     key6 = processor._make_cache_key("SELECT * FROM users", fp6)
     assert key1 != key6
 
-    # Cache keys are now tuples for better performance
     assert isinstance(key1, tuple)
     assert key1 == _make_cache_key_tuple(
         "SELECT * FROM users", fp1, processor._input_style, processor._exec_style, processor._dialect_str, False

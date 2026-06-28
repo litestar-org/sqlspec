@@ -26,6 +26,7 @@ from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
     from sqlspec.data_dictionary._types import DialectConfig
 
 __all__ = ("MssqlPythonAsyncDataDictionary", "MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
@@ -120,7 +121,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
     def __init__(self) -> None:
         super().__init__()
 
-    def get_version(self, driver: Any) -> MssqlVersionInfo | None:
+    def get_version(self, driver: "MssqlPythonDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
@@ -147,7 +148,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self.cache_version(driver_id, version_info)
         return version_info
 
-    def get_feature_flag(self, driver: Any, feature: str) -> bool:
+    def get_feature_flag(self, driver: "MssqlPythonDriver", feature: str) -> bool:
         """Check whether SQL Server supports a feature."""
         version_info = self.get_version(driver)
         return resolve_mssql_feature_flag(
@@ -158,11 +159,11 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             version_info=version_info,
         )
 
-    def get_optimal_type(self, driver: Any, type_category: str) -> str:
+    def get_optimal_type(self, driver: "MssqlPythonDriver", type_category: str) -> str:
         """Get optimal SQL Server type for a category."""
         return self._get_optimal_type_from_version(self.get_version(driver), type_category)
 
-    def get_tables(self, driver: Any, schema: str | None = None) -> list[TableMetadata]:
+    def get_tables(self, driver: "MssqlPythonDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -176,7 +177,9 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         )
         return merge_mssql_table_lists(ordered, all_rows)
 
-    def get_columns(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[ColumnMetadata]:
+    def get_columns(
+        self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
+    ) -> list[ColumnMetadata]:
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -196,7 +199,9 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             ),
         )
 
-    def get_indexes(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[IndexMetadata]:
+    def get_indexes(
+        self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
+    ) -> list[IndexMetadata]:
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -214,7 +219,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         )
 
     def get_foreign_keys(
-        self, driver: Any, table: str | None = None, schema: str | None = None
+        self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
@@ -247,7 +252,7 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
     def __init__(self) -> None:
         super().__init__()
 
-    async def get_version(self, driver: Any) -> MssqlVersionInfo | None:
+    async def get_version(self, driver: "MssqlPythonAsyncDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
@@ -274,7 +279,7 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: Any, feature: str) -> bool:
+    async def get_feature_flag(self, driver: "MssqlPythonAsyncDriver", feature: str) -> bool:
         """Check whether SQL Server supports a feature."""
         version_info = await self.get_version(driver)
         return resolve_mssql_feature_flag(
@@ -285,11 +290,11 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
             version_info=version_info,
         )
 
-    async def get_optimal_type(self, driver: Any, type_category: str) -> str:
+    async def get_optimal_type(self, driver: "MssqlPythonAsyncDriver", type_category: str) -> str:
         """Get optimal SQL Server type for a category."""
         return self._get_optimal_type_from_version(await self.get_version(driver), type_category)
 
-    async def get_tables(self, driver: Any, schema: str | None = None) -> list[TableMetadata]:
+    async def get_tables(self, driver: "MssqlPythonAsyncDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -306,7 +311,7 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         return merge_mssql_table_lists(ordered, all_rows)
 
     async def get_columns(
-        self, driver: Any, table: str | None = None, schema: str | None = None
+        self, driver: "MssqlPythonAsyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -330,7 +335,7 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         )
 
     async def get_indexes(
-        self, driver: Any, table: str | None = None, schema: str | None = None
+        self, driver: "MssqlPythonAsyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -351,7 +356,7 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         )
 
     async def get_foreign_keys(
-        self, driver: Any, table: str | None = None, schema: str | None = None
+        self, driver: "MssqlPythonAsyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)

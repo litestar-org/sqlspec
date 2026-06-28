@@ -6,13 +6,15 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from psqlpy import Connection as _PsqlpyConnection
-from psqlpy import Listener as _PsqlpyListener
+# Imports moved to TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
+
+    from psqlpy import Connection as _PsqlpyConnection
+    from psqlpy import Listener as _PsqlpyListener
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
     from sqlspec.core import StatementConfig
@@ -21,8 +23,8 @@ if TYPE_CHECKING:
     PsqlpyListener: TypeAlias = _PsqlpyListener
 
 if not TYPE_CHECKING:
-    PsqlpyConnection = _PsqlpyConnection
-    PsqlpyListener = _PsqlpyListener
+    PsqlpyConnection = Any
+    PsqlpyListener = Any
 
 __all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyListener", "PsqlpySessionContext")
 

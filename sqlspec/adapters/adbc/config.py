@@ -13,6 +13,7 @@ from sqlspec.adapters.adbc.core import (
     get_statement_config,
     is_postgres_dialect,
     resolve_dialect_from_config,
+    resolve_dialect_name,
     resolve_driver_connect_func,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
@@ -194,7 +195,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self,
         *,
         connection_config: "AdbcConnectionParams | dict[str, Any] | None" = None,
-        connection_instance: "Any" = None,
+        connection_instance: "AdbcConnection | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
@@ -256,13 +257,15 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """
 
         try:
-            connection = resolve_driver_connect_func(
-                self.connection_config.get("driver_name"), self.connection_config.get("uri")
-            )(**build_connection_config(self.connection_config))
+            driver_name = cast("str | None", self.connection_config.get("driver_name"))
+            uri = cast("str | None", self.connection_config.get("uri"))
+            connection = resolve_driver_connect_func(driver_name, uri)(
+                **build_connection_config(self.connection_config)
+            )
             return cast("AdbcConnection", connection)
         except Exception as e:
-            driver_name = self.connection_config.get("driver_name", "Unknown")
-            msg = f"Could not configure connection using driver '{driver_name}'. Error: {e}"
+            err_driver_name = self.connection_config.get("driver_name", "Unknown")
+            msg = f"Could not configure connection using driver '{err_driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
 
     def _update_dialect_for_extensions(self) -> None:
@@ -271,7 +274,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Priority: paradedb > pgvector > postgres (default).
         Only switches when current dialect is ``postgres``.
         """
-        current_dialect = getattr(self.statement_config, "dialect", "postgres")
+        current_dialect = self.statement_config.dialect or "postgres"
         if current_dialect != "postgres":
             return
 
@@ -289,7 +292,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if self._pgvector_available is not None:
             return
 
-        dialect = getattr(self.statement_config, "dialect", "")
+        dialect = resolve_dialect_name(self.statement_config.dialect)
         if not is_postgres_dialect(dialect):
             self._pgvector_available = False
             self._paradedb_available = False

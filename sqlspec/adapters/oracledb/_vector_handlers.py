@@ -11,7 +11,7 @@ as a follow-up.
 """
 
 import array
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, SPARSE_VECTOR_TYPE
 from sqlspec.typing import NUMPY_INSTALLED
@@ -192,7 +192,7 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     if getattr(metadata, "vector_is_sparse", False) is True:
         return None
 
-    fmt = getattr(cursor.connection, "_sqlspec_vector_return_format", None)
+    fmt = cast("str | None", getattr(cursor.connection, "_sqlspec_vector_return_format", None))
     if fmt is None:
         fmt = _VECTOR_RETURN_NUMPY if NUMPY_INSTALLED else _VECTOR_RETURN_LIST
 
