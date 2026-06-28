@@ -1,9 +1,33 @@
 """Unit tests for SQL splitter helpers."""
 
+import inspect
+
 import pytest
 
 import sqlspec.core.splitter as splitter_module
 from sqlspec.core.splitter import GenericDialectConfig, StatementSplitter, Token, TokenType, split_sql_script
+
+PUBLIC_DIALECT_CONFIGS = (
+    splitter_module.OracleDialectConfig,
+    splitter_module.TSQLDialectConfig,
+    splitter_module.PostgreSQLDialectConfig,
+    splitter_module.GenericDialectConfig,
+    splitter_module.MySQLDialectConfig,
+    splitter_module.SQLiteDialectConfig,
+    splitter_module.DuckDBDialectConfig,
+    splitter_module.BigQueryDialectConfig,
+)
+
+DIALECT_DEFAULTS = {
+    splitter_module.OracleDialectConfig: ("oracle", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), {"/"}),
+    splitter_module.TSQLDialectConfig: ("tsql", {"BEGIN", "TRY"}, {"END", "CATCH"}, {";"}, {"GO"}, set()),
+    splitter_module.PostgreSQLDialectConfig: ("postgresql", {"DECLARE", "CASE", "DO"}, {"END"}, {";"}, set(), set()),
+    splitter_module.GenericDialectConfig: ("generic", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), set()),
+    splitter_module.MySQLDialectConfig: ("mysql", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), {"\\g", "\\G"}),
+    splitter_module.SQLiteDialectConfig: ("sqlite", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
+    splitter_module.DuckDBDialectConfig: ("duckdb", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
+    splitter_module.BigQueryDialectConfig: ("bigquery", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
+}
 
 
 def test_join_string_fragments_helper_removed() -> None:
@@ -45,6 +69,39 @@ def test_tokenize_returns_materialized_token_list() -> None:
 
     assert isinstance(tokens, list)
     assert [token.value for token in tokens] == ["S", "E", "L", "E", "C", "T", " ", "1", ";"]
+
+
+def test_c4_dialect_configs_share_eager_base_without_lazy_property_boilerplate() -> None:
+    """Public dialect classes should keep names while sharing the private eager base config."""
+
+    eager_base = getattr(splitter_module, "_EagerDialectConfig")
+    for config_class in PUBLIC_DIALECT_CONFIGS:
+        assert issubclass(config_class, eager_base)
+        source = inspect.getsource(config_class)
+        assert "if self._name is None" not in source
+        assert "if self._block_starters is None" not in source
+        assert "if self._block_enders is None" not in source
+        assert "if self._statement_terminators is None" not in source
+
+
+@pytest.mark.parametrize("config_class", PUBLIC_DIALECT_CONFIGS)
+def test_c4_eager_dialect_defaults_preserve_public_values(config_class: "type[splitter_module.DialectConfig]") -> None:
+    expected_name, block_starters, block_enders, statement_terminators, batch_separators, special_terminators = (
+        DIALECT_DEFAULTS[config_class]
+    )
+    config = config_class()
+
+    assert config.name == expected_name
+    assert config.block_starters == block_starters
+    assert config.block_enders == block_enders
+    assert config.statement_terminators == statement_terminators
+    assert config.batch_separators == batch_separators
+    assert set(config.special_terminators) == special_terminators
+    assert config.max_nesting_depth == 256
+    assert config.block_starters is config.block_starters
+
+    config.block_starters.add("__LOCAL__")
+    assert "__LOCAL__" not in config_class().block_starters
 
 
 def test_split_sql_script_reuses_splitter_for_dialect_and_strip_key(monkeypatch: pytest.MonkeyPatch) -> None:

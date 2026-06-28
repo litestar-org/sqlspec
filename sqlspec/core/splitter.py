@@ -137,6 +137,7 @@ class Token:
 TokenHandler: TypeAlias = Callable[[str, int, int, int], Token | None]
 TokenPattern: TypeAlias = str | TokenHandler
 CompiledTokenPattern: TypeAlias = Pattern[str] | TokenHandler
+SpecialTerminatorHandler: TypeAlias = Callable[[list[Token], int], bool]
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -258,38 +259,78 @@ class DialectConfig(ABC):
         return False
 
 
-class OracleDialectConfig(DialectConfig):
-    """Configuration for Oracle PL/SQL dialect."""
+class _EagerDialectConfig(DialectConfig):
+    """Private eager base for built-in dialect configurations."""
+
+    __slots__ = ()
+
+    _DIALECT_NAME = ""
+    _BLOCK_STARTERS: frozenset[str] = frozenset()
+    _BLOCK_ENDERS: frozenset[str] = frozenset({"END"})
+    _STATEMENT_TERMINATORS: frozenset[str] = frozenset({";"})
+    _BATCH_SEPARATORS: frozenset[str] = frozenset()
+    _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = ()
+    _MAX_NESTING_DEPTH = 256
+
+    def __init__(self) -> None:
+        """Initialize eager dialect configuration."""
+        self._name = self._DIALECT_NAME
+        self._block_starters = set(self._BLOCK_STARTERS)
+        self._block_enders = set(self._BLOCK_ENDERS)
+        self._statement_terminators = set(self._STATEMENT_TERMINATORS)
+        self._batch_separators = set(self._BATCH_SEPARATORS)
+        self._special_terminators = self._create_special_terminators()
+        self._max_nesting_depth = self._MAX_NESTING_DEPTH
 
     @property
     def name(self) -> str:
-        if self._name is None:
-            self._name = "oracle"
-        return self._name
+        """Name of the dialect."""
+        return cast("str", self._name)
 
     @property
     def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE"}
-        return self._block_starters
+        """Keywords that start a block."""
+        return cast("set[str]", self._block_starters)
 
     @property
     def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
+        """Keywords that end a block."""
+        return cast("set[str]", self._block_enders)
 
     @property
     def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+        """Characters that terminate statements."""
+        return cast("set[str]", self._statement_terminators)
 
     @property
-    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
-        if self._special_terminators is None:
-            self._special_terminators = {"/": self._handle_slash_terminator}
-        return self._special_terminators
+    def batch_separators(self) -> "set[str]":
+        """Keywords that separate batches."""
+        return cast("set[str]", self._batch_separators)
+
+    @property
+    def special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Special terminators that need custom handling."""
+        return cast("dict[str, SpecialTerminatorHandler]", self._special_terminators)
+
+    @property
+    def max_nesting_depth(self) -> int:
+        """Maximum allowed nesting depth for blocks."""
+        return cast("int", self._max_nesting_depth)
+
+    def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Create per-instance special terminators."""
+        return dict(self._SPECIAL_TERMINATORS)
+
+
+class OracleDialectConfig(_EagerDialectConfig):
+    """Configuration for Oracle PL/SQL dialect."""
+
+    _DIALECT_NAME = "oracle"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+
+    def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Create Oracle special terminator handlers."""
+        return {"/": self._handle_slash_terminator}
 
     def should_delay_semicolon_termination(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if semicolon termination should be delayed for Oracle slash terminators.
@@ -402,66 +443,20 @@ class OracleDialectConfig(DialectConfig):
         return True
 
 
-class TSQLDialectConfig(DialectConfig):
+class TSQLDialectConfig(_EagerDialectConfig):
     """Configuration for T-SQL (SQL Server) dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "tsql"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "TRY"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END", "CATCH"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
-
-    @property
-    def batch_separators(self) -> "set[str]":
-        if self._batch_separators is None:
-            self._batch_separators = {"GO"}
-        return self._batch_separators
+    _DIALECT_NAME = "tsql"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "TRY"})
+    _BLOCK_ENDERS = frozenset({"END", "CATCH"})
+    _BATCH_SEPARATORS = frozenset({"GO"})
 
 
-class PostgreSQLDialectConfig(DialectConfig):
+class PostgreSQLDialectConfig(_EagerDialectConfig):
     """Configuration for PostgreSQL dialect with dollar-quoted strings."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "postgresql"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"DECLARE", "CASE", "DO"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "postgresql"
+    _BLOCK_STARTERS = frozenset({"DECLARE", "CASE", "DO"})
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get PostgreSQL-specific token patterns.
@@ -504,154 +499,44 @@ class PostgreSQLDialectConfig(DialectConfig):
 
 
 @final
-class GenericDialectConfig(DialectConfig):
+class GenericDialectConfig(_EagerDialectConfig):
     """Generic SQL dialect configuration for standard SQL."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "generic"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "generic"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
 
 
 @final
-class MySQLDialectConfig(DialectConfig):
+class MySQLDialectConfig(_EagerDialectConfig):
     """Configuration for MySQL dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "mysql"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
-
-    @property
-    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
-        if self._special_terminators is None:
-            self._special_terminators = {"\\g": _special_terminator_true, "\\G": _special_terminator_true}
-        return self._special_terminators
+    _DIALECT_NAME = "mysql"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+    _SPECIAL_TERMINATORS = (("\\g", _special_terminator_true), ("\\G", _special_terminator_true))
 
 
 @final
-class SQLiteDialectConfig(DialectConfig):
+class SQLiteDialectConfig(_EagerDialectConfig):
     """Configuration for SQLite dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "sqlite"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "sqlite"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
 @final
-class DuckDBDialectConfig(DialectConfig):
+class DuckDBDialectConfig(_EagerDialectConfig):
     """Configuration for DuckDB dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "duckdb"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "duckdb"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
 @final
-class BigQueryDialectConfig(DialectConfig):
+class BigQueryDialectConfig(_EagerDialectConfig):
     """Configuration for BigQuery dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "bigquery"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "bigquery"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
 _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
