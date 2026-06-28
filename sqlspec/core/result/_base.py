@@ -11,7 +11,7 @@ Classes:
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, Final, cast, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -48,10 +48,10 @@ if TYPE_CHECKING:
 __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
-_EMPTY_RESULT_STATEMENT = SQL("-- empty stack result --")
-_EMPTY_RESULT_DATA: "tuple[()]" = ()
-_DEFAULT_DML_METADATA: dict[str, Any] = {}
-_TWO_COLUMN_THRESHOLD = 2
+_EMPTY_RESULT_STATEMENT: Final = SQL("-- empty stack result --")
+_EMPTY_RESULT_DATA: "Final[tuple[Any, ...]]" = ()
+_DEFAULT_DML_METADATA: Final[dict[str, Any]] = {}
+_TWO_COLUMN_THRESHOLD: Final[int] = 2
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -898,10 +898,10 @@ class ArrowResult(StatementResult):
     def __iter__(self) -> "Iterator[dict[str, Any]]":
         """Iterate over rows as dictionaries.
 
-        Yields:
-            Dictionary for each row.
+        Returns:
+            Iterator of row dictionaries.
         """
-        yield from arrow_table_to_pylist(self._as_table())
+        return iter(arrow_table_to_pylist(self._as_table()))
 
 
 class EmptyResult(StatementResult):
@@ -997,7 +997,7 @@ class StackResult:
             self.rows_affected = rows_affected
         else:
             try:
-                result_rows = object.__getattribute__(self.result, "rows_affected")
+                result_rows = self.result.rows_affected
             except AttributeError:
                 self.rows_affected = 0
             else:

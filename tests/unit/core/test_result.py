@@ -3,6 +3,7 @@
 import importlib.util
 import inspect
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 from unittest.mock import patch
 
@@ -844,6 +845,22 @@ def test_arrow_result_iter_in_for_loop(arrow_result: ArrowResult) -> None:
     """Test iterating over ArrowResult in for loop."""
     names = [row["name"] for row in arrow_result]
     assert names == ["Alice", "Bob", "Charlie"]
+
+
+def test_c3_result_and_stack_idiom_source_shapes() -> None:
+    """C3 result/stack helpers should avoid generator and dynamic-attribute patterns."""
+    arrow_iter_source = inspect.getsource(ArrowResult.__iter__)
+    assert "return iter(arrow_table_to_pylist" in arrow_iter_source
+    assert "yield from" not in arrow_iter_source
+
+    result_source = inspect.getsource(result_base)
+    assert "object.__getattribute__" not in result_source
+    assert "_EMPTY_RESULT_STATEMENT: Final" in result_source
+    assert "_DEFAULT_DML_METADATA: Final" in result_source
+
+    stack_source = Path("sqlspec/core/stack.py").read_text()
+    assert 'ALLOWED_METHODS: "Final[tuple[str, ...]]"' in stack_source
+    assert 'StackOperation("execute_many", normalized_statement, tuple(arguments), frozen_kwargs)' not in stack_source
 
 
 def test_arrow_result_to_pandas_with_null_values() -> None:
