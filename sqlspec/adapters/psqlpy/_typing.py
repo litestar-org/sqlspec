@@ -6,7 +6,7 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-# Imports moved to TYPE_CHECKING
+from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     PsqlpyListener: TypeAlias = _PsqlpyListener
 
 if not TYPE_CHECKING:
-    PsqlpyConnection = Any
-    PsqlpyListener = Any
+    PsqlpyConnection = import_optional_attr("psqlpy", "Connection") or Any
+    PsqlpyListener = import_optional_attr("psqlpy", "Listener") or Any
 
 __all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyListener", "PsqlpySessionContext")
 
