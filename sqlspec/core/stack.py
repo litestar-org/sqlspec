@@ -14,7 +14,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = ("StackOperation", "StatementStack")
 
 
-ALLOWED_METHODS: "Final[tuple[str, ...]]" = ("execute", "execute_many", "execute_script", "execute_arrow")
+ALLOWED_METHODS: Final[tuple[str, ...]] = ("execute", "execute_many", "execute_script", "execute_arrow")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

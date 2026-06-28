@@ -859,7 +859,7 @@ def test_c3_result_and_stack_idiom_source_shapes() -> None:
     assert "_DEFAULT_DML_METADATA: Final" in result_source
 
     stack_source = Path("sqlspec/core/stack.py").read_text()
-    assert 'ALLOWED_METHODS: "Final[tuple[str, ...]]"' in stack_source
+    assert "ALLOWED_METHODS: Final[tuple[str, ...]]" in stack_source
     assert 'StackOperation("execute_many", normalized_statement, tuple(arguments), frozen_kwargs)' not in stack_source
 
 

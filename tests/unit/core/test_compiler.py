@@ -1007,10 +1007,10 @@ def test_c3_core_idiom_sweep_source_shapes() -> None:
 
     expected_source_fragments = {
         "sqlspec/core/compiler.py": (
-            'OPERATION_TYPE_MAP: "Final[dict[type[exp.Expr], OperationType]]"',
-            'COPY_OPERATION_TYPES: "Final[tuple[OperationType, ...]]"',
-            'COPY_FROM_OPERATION_TYPES: "Final[tuple[OperationType, ...]]"',
-            'COPY_TO_OPERATION_TYPES: "Final[tuple[OperationType, ...]]"',
+            "OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]]",
+            "COPY_OPERATION_TYPES: Final[tuple[OperationType, ...]]",
+            "COPY_FROM_OPERATION_TYPES: Final[tuple[OperationType, ...]]",
+            "COPY_TO_OPERATION_TYPES: Final[tuple[OperationType, ...]]",
         ),
         "sqlspec/core/statement.py": (
             "RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({",
@@ -1021,18 +1021,18 @@ def test_c3_core_idiom_sweep_source_shapes() -> None:
             "_DATABASE_QUALIFIED_PARTS: Final[int] = 3",
             "_CATALOG_QUALIFIED_PARTS: Final[int] = 4",
         ),
-        "sqlspec/core/cache.py": ('NAMESPACED_CACHE_CONFIG: "Final[dict[str, tuple[',),
+        "sqlspec/core/cache.py": ("NAMESPACED_CACHE_CONFIG: Final[dict[str, tuple[",),
         "sqlspec/core/parameters/_alignment.py": ("EXECUTE_MANY_MIN_ROWS: Final[int] = 2",),
-        "sqlspec/core/parameters/_declared.py": ('_JSON_VALUE_TYPES: "Final[tuple[type, ...]]"',),
+        "sqlspec/core/parameters/_declared.py": ("_JSON_VALUE_TYPES: Final[tuple[type, ...]]",),
         "sqlspec/core/parameters/_processor.py": (
             "_EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10",
             "_EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3",
-            '_OCCURRENCE_BASED_POSITIONAL_STYLES: "Final[frozenset[ParameterStyle]]"',
+            "_OCCURRENCE_BASED_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]]",
         ),
         "sqlspec/core/parameters/_registry.py": (
-            '_DEFAULT_JSON_SERIALIZER: "Final[Callable[[Any], str]]"',
-            '_DEFAULT_JSON_DESERIALIZER: "Final[Callable[[str], Any]]"',
-            'DRIVER_PARAMETER_PROFILES: "Final[dict[str, DriverParameterProfile]]"',
+            "_DEFAULT_JSON_SERIALIZER: Final[Callable[[Any], str]]",
+            "_DEFAULT_JSON_DESERIALIZER: Final[Callable[[str], Any]]",
+            "DRIVER_PARAMETER_PROFILES: Final[dict[str, DriverParameterProfile]]",
         ),
         "sqlspec/core/parameters/_types.py": (
             "TYPED_PARAMETER_SLOTS: Final",

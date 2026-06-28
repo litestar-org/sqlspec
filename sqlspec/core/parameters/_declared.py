@@ -25,7 +25,7 @@ __all__ = (
 ParamTypeMatcher: TypeAlias = type | tuple[type, ...] | Callable[[object], bool]
 
 
-_JSON_VALUE_TYPES: "Final[tuple[type, ...]]" = (dict, list, str, int, float, bool)
+_JSON_VALUE_TYPES: Final[tuple[type, ...]] = (dict, list, str, int, float, bool)
 
 
 def _is_json_value(value: object) -> bool:
@@ -39,7 +39,7 @@ def _is_json_value(value: object) -> bool:
     return True
 
 
-_TYPE_REGISTRY: "Final[dict[str, ParamTypeMatcher]]" = {
+_TYPE_REGISTRY: Final[dict[str, ParamTypeMatcher]] = {
     "str": str,
     "int": int,
     "float": float,

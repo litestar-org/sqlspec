@@ -1,5 +1,6 @@
 """Driver parameter profile registry and StatementConfig factory."""
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import sqlspec.exceptions
@@ -7,7 +8,7 @@ from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyl
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
     from sqlspec.core.statement import StatementConfig
 
@@ -18,10 +19,10 @@ __all__ = (
     "register_driver_profile",
 )
 
-_DEFAULT_JSON_SERIALIZER: "Final[Callable[[Any], str]]" = to_json
-_DEFAULT_JSON_DESERIALIZER: "Final[Callable[[str], Any]]" = from_json
+_DEFAULT_JSON_SERIALIZER: Final[Callable[[Any], str]] = to_json
+_DEFAULT_JSON_DESERIALIZER: Final[Callable[[str], Any]] = from_json
 
-DRIVER_PARAMETER_PROFILES: "Final[dict[str, DriverParameterProfile]]" = {}
+DRIVER_PARAMETER_PROFILES: Final[dict[str, DriverParameterProfile]] = {}
 
 
 def get_driver_profile(adapter_key: str) -> "DriverParameterProfile":

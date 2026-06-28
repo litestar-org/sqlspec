@@ -59,7 +59,7 @@ OperationType = Literal[
     "COMMAND",
 ]
 
-OPERATION_TYPE_MAP: "Final[dict[type[exp.Expr], OperationType]]" = {
+OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]] = {
     # Queries
     exp.Select: "SELECT",
     exp.Union: "SELECT",
@@ -100,11 +100,11 @@ OPERATION_TYPE_MAP: "Final[dict[type[exp.Expr], OperationType]]" = {
     exp.Rollback: "COMMAND",
 }
 
-COPY_OPERATION_TYPES: "Final[tuple[OperationType, ...]]" = ("COPY", "COPY_FROM", "COPY_TO")
+COPY_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY", "COPY_FROM", "COPY_TO")
 
-COPY_FROM_OPERATION_TYPES: "Final[tuple[OperationType, ...]]" = ("COPY", "COPY_FROM")
+COPY_FROM_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY", "COPY_FROM")
 
-COPY_TO_OPERATION_TYPES: "Final[tuple[OperationType, ...]]" = ("COPY_TO",)
+COPY_TO_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY_TO",)
 
 ParseCacheEntry = tuple[exp.Expr | None, OperationType, tuple[bool, bool]]
 

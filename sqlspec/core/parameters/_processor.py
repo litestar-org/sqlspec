@@ -31,13 +31,13 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 
 _EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10
 _EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3
-_OCCURRENCE_BASED_POSITIONAL_STYLES: "Final[frozenset[ParameterStyle]]" = frozenset({
+_OCCURRENCE_BASED_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.QMARK,
     ParameterStyle.POSITIONAL_COLON,
     ParameterStyle.POSITIONAL_PYFORMAT,
 })
 
-_TYPE_COERCION_DISPATCHERS: "Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]]" = {}
+_TYPE_COERCION_DISPATCHERS: Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]] = {}
 
 
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:

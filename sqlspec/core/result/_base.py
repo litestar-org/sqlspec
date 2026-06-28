@@ -49,7 +49,7 @@ __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "SQLResult", "StackResult"
 
 T = TypeVar("T")
 _EMPTY_RESULT_STATEMENT: Final = SQL("-- empty stack result --")
-_EMPTY_RESULT_DATA: "Final[tuple[Any, ...]]" = ()
+_EMPTY_RESULT_DATA: Final[tuple[Any, ...]] = ()
 _DEFAULT_DML_METADATA: Final[dict[str, Any]] = {}
 _TWO_COLUMN_THRESHOLD: Final[int] = 2
 

@@ -12,6 +12,7 @@ Components:
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
@@ -26,7 +27,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
 
     import sqlglot.expressions as exp
 
@@ -630,7 +631,7 @@ def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> st
     return f"{namespace}:{dialect or 'default'}:{key}"
 
 
-NAMESPACED_CACHE_CONFIG: "Final[dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]]" = {
+NAMESPACED_CACHE_CONFIG: Final[dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]] = {
     "statement": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
     "builder": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
     "expression": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),
