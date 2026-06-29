@@ -235,9 +235,7 @@ class MssqlPythonSyncADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         """Delete sessions whose update_time is older than ``updated_before``."""
         try:
             return self._execute(
-                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?",
-                (updated_before,),
-                commit=True,
+                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?", (updated_before,), commit=True
             )
         except MSSQL_ERROR as exc:
             if _is_mssql_table_missing(exc):
@@ -299,7 +297,9 @@ class MssqlPythonSyncADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     def _get_create_sessions_table_sql(self) -> str:
         """Return T-SQL DDL for the ADK session table."""
-        return _get_create_sessions_table_sql(self._session_table, self._json_column_type_sync(), self._owner_id_column_ddl)
+        return _get_create_sessions_table_sql(
+            self._session_table, self._json_column_type_sync(), self._owner_id_column_ddl
+        )
 
     def _get_create_events_table_sql(self) -> str:
         """Return T-SQL DDL for the ADK event table."""
@@ -543,7 +543,9 @@ class MssqlPythonAsyncADKStore(BaseAsyncADKStore["MssqlPythonAsyncConfig"]):
                     cursor.execute, _get_insert_event_sql(self._events_table), _event_insert_params(event_record)
                 )
                 if app_state is not None:
-                    await asyncio.to_thread(cursor.execute, self._get_upsert_app_state_sql(), (app_name, to_json(app_state)))
+                    await asyncio.to_thread(
+                        cursor.execute, self._get_upsert_app_state_sql(), (app_name, to_json(app_state))
+                    )
                 if user_state is not None:
                     await asyncio.to_thread(
                         cursor.execute, self._get_upsert_user_state_sql(), (app_name, user_id, to_json(user_state))
@@ -589,9 +591,7 @@ class MssqlPythonAsyncADKStore(BaseAsyncADKStore["MssqlPythonAsyncConfig"]):
         """Delete sessions whose update_time is older than ``updated_before``."""
         try:
             return await self._execute(
-                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?",
-                (updated_before,),
-                commit=True,
+                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?", (updated_before,), commit=True
             )
         except MSSQL_ERROR as exc:
             if _is_mssql_table_missing(exc):
@@ -942,12 +942,7 @@ def _get_seed_metadata_sql(table: str) -> str:
 
 
 def _get_events_query(
-    table: str,
-    app_name: str,
-    user_id: str,
-    session_id: str,
-    after_timestamp: "datetime | None",
-    limit: "int | None",
+    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
 ) -> "tuple[str, tuple[Any, ...]]":
     top_clause = "TOP (?) " if limit is not None else ""
     params: list[Any] = [limit] if limit is not None else []
@@ -979,12 +974,7 @@ def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
 
 def _session_record_from_row(row: Any) -> SessionRecord:
     return SessionRecord(
-        id=row[0],
-        app_name=row[1],
-        user_id=row[2],
-        state=_json_dict(row[3]),
-        create_time=row[4],
-        update_time=row[5],
+        id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
     )
 
 

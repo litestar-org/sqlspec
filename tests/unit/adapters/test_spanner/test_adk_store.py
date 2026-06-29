@@ -25,6 +25,10 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
     return config
 
 
+def _spanner_not_found(message: str) -> NotFound:
+    return NotFound(message)  # type: ignore[no-untyped-call]
+
+
 def test_spanner_adk_config_types_adapter_local_optimizations() -> None:
     """Spanner ADK optimization settings are typed on the adapter-local extension config."""
 
@@ -246,7 +250,7 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
 def test_get_session_returns_none_when_spanner_session_table_missing() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    with patch.object(store, "_run_read", side_effect=NotFound("adk_session not found")):
+    with patch.object(store, "_run_read", side_effect=_spanner_not_found("adk_session not found")):
         result = store.get_session("app", "user", "session")
 
     assert result is None
@@ -255,7 +259,7 @@ def test_get_session_returns_none_when_spanner_session_table_missing() -> None:
 def test_list_sessions_returns_empty_when_spanner_session_table_missing() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    with patch.object(store, "_run_read", side_effect=NotFound("adk_session not found")):
+    with patch.object(store, "_run_read", side_effect=_spanner_not_found("adk_session not found")):
         result = store.list_sessions("app", "user")
 
     assert result == []
@@ -264,7 +268,7 @@ def test_list_sessions_returns_empty_when_spanner_session_table_missing() -> Non
 def test_get_events_returns_empty_when_spanner_events_table_missing() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    with patch.object(store, "_run_read", side_effect=NotFound("adk_event not found")):
+    with patch.object(store, "_run_read", side_effect=_spanner_not_found("adk_event not found")):
         result = store.get_events("app", "user", "session")
 
     assert result == []
