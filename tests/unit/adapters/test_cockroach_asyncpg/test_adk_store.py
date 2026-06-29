@@ -104,4 +104,3 @@ async def test_cockroach_asyncpg_memory_table_applies_trigram_index_and_locality
     assert "LOCALITY GLOBAL" in sql
     assert "idx_adk_memory_content_trgm" in sql
     assert "ON adk_memory USING GIN (content_text gin_trgm_ops)" in sql
-
