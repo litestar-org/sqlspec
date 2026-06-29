@@ -1,12 +1,14 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from psycopg import errors
 from psycopg import sql as pg_sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from typing_extensions import NotRequired
 
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -18,9 +20,28 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import MemoryRecord
 
 
-__all__ = ("PsycopgAsyncADKMemoryStore", "PsycopgAsyncADKStore", "PsycopgSyncADKMemoryStore", "PsycopgSyncADKStore")
+__all__ = (
+    "PsycopgADKConfig",
+    "PsycopgAsyncADKMemoryStore",
+    "PsycopgAsyncADKStore",
+    "PsycopgSyncADKMemoryStore",
+    "PsycopgSyncADKStore",
+)
 
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
+
+
+class PsycopgADKConfig(ADKConfig):
+    """Psycopg-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with the psycopg ADK stores.
+    """
+
+    enable_event_generated_columns: NotRequired[bool]
+    """Create PostgreSQL generated columns and indexes for common ADK event JSON paths."""
+
+    enable_covering_indexes: NotRequired[bool]
+    """Add PostgreSQL INCLUDE columns to ADK event replay indexes."""
 
 
 class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
@@ -461,18 +482,24 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
+        adk_config = _get_psycopg_adk_config(self._config)
+        generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
+            adk_config, self._events_table
+        )
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
+            event_data JSONB NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
+            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
+        {generated_indexes}
         """
 
     async def _get_create_app_states_table_sql(self) -> str:
@@ -655,18 +682,24 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         """
 
     def _get_create_events_table_sql(self) -> str:
+        adk_config = _get_psycopg_adk_config(self._config)
+        generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
+            adk_config, self._events_table
+        )
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
+            event_data JSONB NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
+            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
+        {generated_indexes}
         """
 
     def _get_create_app_states_table_sql(self) -> str:
@@ -1560,6 +1593,41 @@ def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":
         }
         for row in rows
     ]
+
+
+def _get_psycopg_adk_config(config: Any) -> PsycopgADKConfig:
+    """Return psycopg ADK extension settings from ``extension_config["adk"]``."""
+
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return {}
+    return cast("PsycopgADKConfig", adk_config)
+
+
+def _postgres_event_ddl_options(adk_config: PsycopgADKConfig, events_table: str) -> "tuple[str, str, str]":
+    generated_columns = ""
+    generated_indexes = ""
+    if adk_config.get("enable_event_generated_columns", False):
+        generated_columns = """,
+            author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED,
+            node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED"""
+        generated_indexes = f"""
+
+        CREATE INDEX IF NOT EXISTS idx_{events_table}_author_gc
+            ON {events_table}(session_id, author_gc, timestamp ASC);
+
+        CREATE INDEX IF NOT EXISTS idx_{events_table}_node_path_gc
+            ON {events_table}(session_id, node_path_gc, timestamp ASC);
+        """
+
+    covering_columns = ""
+    if adk_config.get("enable_covering_indexes", False):
+        covering_columns = " INCLUDE (invocation_id)"
+
+    return generated_columns, generated_indexes, covering_columns
 
 
 def _raise_missing_session(session_id: str) -> NoReturn:
