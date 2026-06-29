@@ -512,7 +512,10 @@ class MySQLDialectConfig(_EagerDialectConfig):
 
     _DIALECT_NAME = "mysql"
     _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
-    _SPECIAL_TERMINATORS = (("\\g", _special_terminator_true), ("\\G", _special_terminator_true))
+    _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = (
+        ("\\g", _special_terminator_true),
+        ("\\G", _special_terminator_true),
+    )
 
 
 @final
