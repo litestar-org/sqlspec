@@ -12,6 +12,7 @@ Components:
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
@@ -26,26 +27,32 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
 
     import sqlglot.expressions as exp
 
 
 __all__ = (
+    "CacheConfig",
     "CacheKey",
     "CacheStats",
     "CachedStatement",
     "FiltersView",
     "LRUCache",
     "NamespacedCache",
+    "clear_all_caches",
     "create_cache_key",
     "get_cache",
     "get_cache_config",
     "get_cache_instances",
+    "get_cache_statistics",
     "get_default_cache",
     "get_pipeline_metrics",
+    "log_cache_stats",
     "reset_pipeline_registry",
+    "reset_stats_only",
     "set_cache_instances",
+    "update_cache_config",
 )
 
 logger = get_logger("sqlspec.cache")
@@ -211,7 +218,7 @@ class LRUCache:
             namespace: Optional namespace identifier for logging context
         """
         self._cache: dict[CacheKey, CacheNode] = {}
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         self._max_size = max_size
         self._ttl = ttl_seconds
         self._stats = CacheStats()
@@ -231,47 +238,54 @@ class LRUCache:
         Returns:
             Cached value or None if not found or expired
         """
+        debug_enabled = logger.isEnabledFor(logging.DEBUG)
+        log_event: str | None = None
+        log_reason: str | None = None
+        log_cache_size = 0
+        result: Any | None = None
+
         with self._lock:
             node = self._cache.get(key)
             if node is None:
                 self._stats.record_miss()
-                if logger.isEnabledFor(logging.DEBUG):
-                    log_with_context(
-                        logger,
-                        logging.DEBUG,
-                        "cache.miss",
-                        cache_namespace=self._namespace,
-                        cache_size=len(self._cache),
-                    )
-                return None
-
-            ttl = self._ttl
-            if ttl is not None:
-                current_time = time.time()
-                if (current_time - node.timestamp) > ttl:
+                if debug_enabled:
+                    log_event = "cache.miss"
+                    log_cache_size = len(self._cache)
+            else:
+                ttl = self._ttl
+                if ttl is not None and (time.time() - node.timestamp) > ttl:
                     self._remove_node(node)
                     del self._cache[key]
                     self._stats.record_miss()
                     self._stats.record_eviction()
-                    if logger.isEnabledFor(logging.DEBUG):
-                        log_with_context(
-                            logger,
-                            logging.DEBUG,
-                            "cache.evict",
-                            cache_namespace=self._namespace,
-                            cache_size=len(self._cache),
-                            reason="expired",
-                        )
-                    return None
+                    if debug_enabled:
+                        log_event = "cache.evict"
+                        log_reason = "expired"
+                        log_cache_size = len(self._cache)
+                else:
+                    self._move_to_head(node)
+                    node.access_count += 1
+                    self._stats.record_hit()
+                    if debug_enabled:
+                        log_event = "cache.hit"
+                        log_cache_size = len(self._cache)
+                    result = node.value
 
-            self._move_to_head(node)
-            node.access_count += 1
-            self._stats.record_hit()
-            if logger.isEnabledFor(logging.DEBUG):
+        if log_event is not None:
+            if log_reason is not None:
                 log_with_context(
-                    logger, logging.DEBUG, "cache.hit", cache_namespace=self._namespace, cache_size=len(self._cache)
+                    logger,
+                    logging.DEBUG,
+                    log_event,
+                    cache_namespace=self._namespace,
+                    cache_size=log_cache_size,
+                    reason=log_reason,
                 )
-            return node.value
+            else:
+                log_with_context(
+                    logger, logging.DEBUG, log_event, cache_namespace=self._namespace, cache_size=log_cache_size
+                )
+        return result
 
     def put(self, key: CacheKey, value: Any) -> None:
         """Put value in cache.
@@ -623,7 +637,7 @@ def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> st
     return f"{namespace}:{dialect or 'default'}:{key}"
 
 
-NAMESPACED_CACHE_CONFIG: "dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]" = {
+NAMESPACED_CACHE_CONFIG: Final[dict[str, tuple[Callable[[CacheConfig], bool], Callable[[CacheConfig], int]]]] = {
     "statement": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
     "builder": (lambda config: config.sql_cache_enabled, lambda config: config.sql_cache_size),
     "expression": (lambda config: config.fragment_cache_enabled, lambda config: config.fragment_cache_size),
@@ -743,6 +757,8 @@ class NamespacedCache:
     def delete_statement(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached statement data.
 
+        External/extension API: not called internally.
+
         Args:
             key: Cache key.
             dialect: Optional SQL dialect.
@@ -776,6 +792,8 @@ class NamespacedCache:
 
     def delete_expression(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached expression data.
+
+        External/extension API: not called internally.
 
         Args:
             key: Cache key.
@@ -811,6 +829,8 @@ class NamespacedCache:
     def delete_optimized(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached optimized expression data.
 
+        External/extension API: not called internally.
+
         Args:
             key: Cache key.
             dialect: Optional SQL dialect.
@@ -845,6 +865,8 @@ class NamespacedCache:
     def delete_builder(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached builder statement data.
 
+        External/extension API: not called internally.
+
         Args:
             key: Cache key.
             dialect: Optional SQL dialect.
@@ -878,6 +900,8 @@ class NamespacedCache:
 
     def delete_file(self, key: str, dialect: str | None = None) -> bool:
         """Delete cached SQL file data.
+
+        External/extension API: not called internally.
 
         Args:
             key: Cache key.
@@ -981,6 +1005,8 @@ class FiltersView:
     def get_by_field(self, field_name: str) -> "list[Any]":
         """Get all filters for a specific field.
 
+        External/extension API: not called internally.
+
         Args:
             field_name: Field name to filter by
 
@@ -992,6 +1018,8 @@ class FiltersView:
     def has_field(self, field_name: str) -> bool:
         """Check if any filter exists for a field.
 
+        External/extension API: not called internally.
+
         Args:
             field_name: Field name to check
 
@@ -1002,6 +1030,8 @@ class FiltersView:
 
     def to_canonical(self) -> "tuple[Any, ...]":
         """Create canonical representation for cache keys.
+
+        External/extension API: not called internally.
 
         Returns:
             Canonical tuple representation of filters

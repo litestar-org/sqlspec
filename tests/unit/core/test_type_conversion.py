@@ -4,6 +4,7 @@ Tests for the BaseTypeConverter class and related conversion utilities,
 ensuring consistent type handling across all database adapters.
 """
 
+import inspect
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import cast
@@ -162,6 +163,27 @@ def test_mac_address_detection(detector: "BaseTypeConverter") -> None:
     mac_str = "00:1B:44:11:3A:B7"
     detected = detector.detect_type(mac_str)
     assert detected == "mac"
+
+
+def test_detect_type_uses_lastgroup_fast_path(detector: "BaseTypeConverter") -> None:
+    """Detection should preserve outputs without allocating a groupdict per match."""
+    samples = {
+        "uuid": "123e4567-e89b-12d3-a456-426614174000",
+        "iso_datetime": "2023-12-25T10:30:00Z",
+        "iso_date": "2023-12-25",
+        "iso_time": "10:30:00",
+        "json": '{"key": "value"}',
+        "ipv4": "192.168.1.1",
+        "ipv6": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+        "mac": "00:1B:44:11:3A:B7",
+    }
+
+    for expected_type, value in samples.items():
+        assert detector.detect_type(value) == expected_type
+
+    source = inspect.getsource(BaseTypeConverter.detect_type)
+    assert ".lastgroup" in source
+    assert "groupdict()" not in source
 
 
 def test_non_special_type(detector: "BaseTypeConverter") -> None:

@@ -2,7 +2,7 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = ("StackOperation", "StatementStack")
 
 
-ALLOWED_METHODS: "tuple[str, ...]" = ("execute", "execute_many", "execute_script", "execute_arrow")
+ALLOWED_METHODS: Final[tuple[str, ...]] = ("execute", "execute_many", "execute_script", "execute_arrow")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -91,7 +91,7 @@ class StatementStack:
         normalized_sets = tuple(parameter_sets)
         arguments = (normalized_sets, *filters)
         frozen_kwargs = _freeze_kwargs(kwargs, statement_config)
-        operation = StackOperation("execute_many", normalized_statement, tuple(arguments), frozen_kwargs)
+        operation = StackOperation("execute_many", normalized_statement, arguments, frozen_kwargs)
         return self._append(operation)
 
     def push_execute_script(

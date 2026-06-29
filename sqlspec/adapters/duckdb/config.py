@@ -270,7 +270,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 extension_flags[key] = connection_config.pop(key)
 
         features: dict[str, Any] = dict(driver_features) if driver_features else {}
-        # Extract and store callback for pool - pool is source of truth for connection initialization
         self._user_connection_hook = cast(
             "Callable[[DuckDBConnection], DuckDBConnection | None] | None", features.pop("on_connection_create", None)
         )
@@ -303,9 +302,9 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Create connection pool from configuration."""
         connection_config = build_connection_config(self.connection_config)
 
-        extensions = self.driver_features.get("extensions", None)
-        secrets = self.driver_features.get("secrets", None)
-        extension_flags = self.driver_features.get("extension_flags", None)
+        extensions = cast("list[dict[str, Any]] | None", self.driver_features.get("extensions", None))
+        secrets = cast("list[dict[str, Any]] | None", self.driver_features.get("secrets", None))
+        extension_flags = cast("dict[str, Any] | None", self.driver_features.get("extension_flags", None))
         extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
         extension_flags_dict = dict(extension_flags) if extension_flags else None

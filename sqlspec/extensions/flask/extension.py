@@ -211,6 +211,9 @@ class SQLSpecPlugin:
         Stores connection in Flask g object for each configured database.
         Also stores context managers for proper cleanup.
         Extracts correlation ID if correlation middleware is enabled.
+
+        Note:
+            Imports flask components dynamically at runtime to avoid hard dependency.
         """
         from flask import current_app, g, request
 
@@ -250,6 +253,9 @@ class SQLSpecPlugin:
     def _after_request_handler(self, response: "Response") -> "Response":
         """Handle transaction after request based on response status.
 
+        Note:
+            Imports flask components dynamically at runtime to avoid hard dependency.
+
         Args:
             response: Flask response object.
 
@@ -287,6 +293,9 @@ class SQLSpecPlugin:
         """Clean up connections when request context ends.
 
         Closes all connections, cleans up g object, and clears correlation context.
+
+        Note:
+            Imports flask components dynamically at runtime to avoid hard dependency.
 
         Args:
             _exc: Exception that occurred (if any).
@@ -358,6 +367,9 @@ class SQLSpecPlugin:
 
     def get_connection(self, key: "str | None" = None) -> Any:
         """Get database connection for current request.
+
+        Note:
+            Imports flask components dynamically at runtime to avoid hard dependency.
 
         Args:
             key: Session key for multi-database configs. Defaults to first config if None.

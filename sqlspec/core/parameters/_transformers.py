@@ -2,7 +2,7 @@
 
 import bisect
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp as _exp
@@ -32,7 +32,7 @@ __all__ = (
 )
 
 
-_MISSING_PARAMETER = object()
+_MISSING_PARAMETER: Final = object()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -81,16 +81,16 @@ class _NullPlaceholderTransformer:
         self._qmark_position = 0
 
     def __call__(self, node: Any) -> Any:
-        if isinstance(node, _exp.Placeholder) and node.this is None:
-            current_position = self._qmark_position
-            self._qmark_position += 1
-            if current_position in self._null_positions:
-                return _exp.Null()
-            return node
+        if isinstance(node, _exp.Placeholder):
+            placeholder_value = node.this
+            if placeholder_value is None:
+                current_position = self._qmark_position
+                self._qmark_position += 1
+                if current_position in self._null_positions:
+                    return _exp.Null()
+                return node
 
-        if isinstance(node, _exp.Placeholder) and node.this is not None:
-            placeholder_text = str(node.this)
-            normalized_text = placeholder_text.lstrip("$")
+            normalized_text = str(placeholder_value).lstrip("$")
             if normalized_text.isdigit():
                 param_index = int(normalized_text) - 1
                 if param_index in self._null_positions:
@@ -119,12 +119,14 @@ class _NullPlaceholderTransformer:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _PlaceholderLiteralTransformer:
-    __slots__ = ("_json_serializer", "_parameters", "_placeholder_index")
+    __slots__ = ("_is_mapping", "_is_sequence", "_json_serializer", "_parameters", "_placeholder_index")
 
     def __init__(self, parameters: "ParameterPayload", json_serializer: "Callable[[Any], str]") -> None:
         self._parameters = parameters
         self._json_serializer = json_serializer
         self._placeholder_index = 0
+        self._is_mapping = isinstance(parameters, Mapping)
+        self._is_sequence = isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray))
 
     def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object:
         candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
@@ -137,39 +139,38 @@ class _PlaceholderLiteralTransformer:
         return _MISSING_PARAMETER
 
     def __call__(self, node: Any) -> Any:
-        if (
-            isinstance(node, _exp.Placeholder)
-            and isinstance(self._parameters, Sequence)
-            and not isinstance(self._parameters, (str, bytes, bytearray))
-        ):
+        parameters = self._parameters
+        if isinstance(node, _exp.Placeholder) and self._is_sequence:
+            sequence_parameters = cast("Sequence[Any]", parameters)
             current_index = self._placeholder_index
             self._placeholder_index += 1
-            if current_index < len(self._parameters):
-                literal_value = get_value_attribute(self._parameters[current_index])
+            if current_index < len(sequence_parameters):
+                literal_value = get_value_attribute(sequence_parameters[current_index])
                 return _create_literal_expression(literal_value, self._json_serializer)
             return node
 
         if isinstance(node, _exp.Parameter):
             param_name = str(node.this) if node.this is not None else ""
 
-            if isinstance(self._parameters, Mapping):
-                resolved_value = self._resolve_mapping_value(param_name, self._parameters)
+            if self._is_mapping:
+                resolved_value = self._resolve_mapping_value(param_name, cast("ParameterMapping", parameters))
                 if resolved_value is not _MISSING_PARAMETER:
                     return _create_literal_expression(resolved_value, self._json_serializer)
                 return node
 
-            if isinstance(self._parameters, Sequence) and not isinstance(self._parameters, (str, bytes, bytearray)):
+            if self._is_sequence:
+                sequence_parameters = cast("Sequence[Any]", parameters)
                 name = param_name
                 try:
                     if name.startswith("param_"):
                         index_value = int(name[6:])
-                        if 0 <= index_value < len(self._parameters):
-                            literal_value = get_value_attribute(self._parameters[index_value])
+                        if 0 <= index_value < len(sequence_parameters):
+                            literal_value = get_value_attribute(sequence_parameters[index_value])
                             return _create_literal_expression(literal_value, self._json_serializer)
                     if name.isdigit():
                         index_value = int(name)
-                        if 0 <= index_value < len(self._parameters):
-                            literal_value = get_value_attribute(self._parameters[index_value])
+                        if 0 <= index_value < len(sequence_parameters):
+                            literal_value = get_value_attribute(sequence_parameters[index_value])
                             return _create_literal_expression(literal_value, self._json_serializer)
                 except (ValueError, AttributeError):
                     return node
@@ -190,6 +191,20 @@ def build_literal_inlining_transform(
 ) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, object]]":
     """Return a callable that replaces placeholders with SQL literals."""
     return _LiteralInliningTransform(json_serializer)
+
+
+def _as_concrete_payload(parameters: "ParameterPayload") -> "ConvertedParameters":
+    if parameters is None:
+        return None
+    if isinstance(parameters, dict):
+        return parameters
+    if isinstance(parameters, (list, tuple)):
+        return parameters
+    if isinstance(parameters, Mapping):
+        return dict(parameters)
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+        return list(parameters)
+    return None
 
 
 def replace_null_parameters_with_literals(
@@ -218,15 +233,12 @@ def replace_null_parameters_with_literals(
         if isinstance(parameters, dict):
             return expression, parameters
         if isinstance(parameters, (list, tuple)):
-            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+            return expression, _as_concrete_payload(parameters)
         return expression, None
 
     if is_many or looks_like_execute_many(parameters):
-        # For execute_many, convert to concrete type
-        if isinstance(parameters, dict):
-            return expression, parameters
-        if isinstance(parameters, (list, tuple)):
-            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
+        if isinstance(parameters, (dict, list, tuple)):
+            return expression, _as_concrete_payload(parameters)
         return expression, None
 
     if parameter_profile is None:
@@ -236,16 +248,7 @@ def replace_null_parameters_with_literals(
 
     null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
     if not null_positions:
-        # Convert to concrete type for return
-        if isinstance(parameters, dict):
-            return expression, parameters
-        if isinstance(parameters, (list, tuple)):
-            return expression, list(parameters) if isinstance(parameters, list) else tuple(parameters)
-        if isinstance(parameters, Mapping):
-            return expression, dict(parameters)
-        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            return expression, list(parameters)
-        return expression, None
+        return expression, _as_concrete_payload(parameters)
 
     null_names: set[str] = set()
     positional_null_positions: set[int] = set()

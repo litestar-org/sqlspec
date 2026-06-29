@@ -76,6 +76,22 @@ def test_psqlpy_config_preserves_cast_detection_override() -> None:
     assert config.driver_features["enable_cast_detection"] is False
 
 
+def test_psqlpy_runtime_aliases_resolve_to_installed_classes() -> None:
+    """Psqlpy public runtime aliases should expose installed psqlpy classes."""
+    psqlpy = pytest.importorskip("psqlpy")
+    from sqlspec.adapters.psqlpy import PsqlpyConnection as PublicPsqlpyConnection
+    from sqlspec.adapters.psqlpy._typing import PsqlpyListener
+
+    namespace = PsqlpyConfig().get_signature_namespace()
+
+    assert PsqlpyConnection is psqlpy.Connection
+    assert PublicPsqlpyConnection is psqlpy.Connection
+    assert PsqlpyListener is psqlpy.Listener
+    assert PsqlpyConfig.connection_type is psqlpy.Connection
+    assert namespace["PsqlpyConnection"] is psqlpy.Connection
+    assert isinstance(object(), PsqlpyConnection) is False
+
+
 def test_psqlpy_build_postgres_extension_probe_names_filters_disabled_features() -> None:
     """Only enabled extension probes should be returned."""
     assert build_postgres_extension_probe_names({"enable_pgvector": True, "enable_paradedb": False}) == ["vector"]

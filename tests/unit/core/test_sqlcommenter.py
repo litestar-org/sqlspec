@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ import sqlglot
 from sqlglot import exp
 
 import sqlspec.core.sqlcommenter as sqlcommenter_module
+from sqlspec.core import StatementConfig
 from sqlspec.core.sqlcommenter import (
     SQLCommenterContext,
     append_comment,
@@ -16,8 +18,7 @@ from sqlspec.core.sqlcommenter import (
     generate_comment,
     parse_comment,
 )
-
-# ── generate_comment ──────────────────────────────────────────────────────
+from sqlspec.utils.correlation import CorrelationContext
 
 
 def test_generate_comment_basic() -> None:
@@ -74,7 +75,7 @@ def test_generate_comment_special_characters() -> None:
 
 
 def test_generate_comment_none_values_skipped() -> None:
-    attrs: dict[str, str | None] = {"key1": "val1", "key2": None}  # type: ignore[typeddict-item]
+    attrs: dict[str, str | None] = {"key1": "val1", "key2": None}
     result = generate_comment(attrs)
     assert result == "key1='val1'"
 
@@ -83,9 +84,6 @@ def test_empty_string_value() -> None:
     attrs: dict[str, str | None] = {"key": ""}
     result = generate_comment(attrs)
     assert result == "key=''"
-
-
-# ── append_comment (AST-level) ────────────────────────────────────────────
 
 
 def test_append_comment_basic() -> None:
@@ -111,11 +109,11 @@ def test_append_comment_coexists_with_existing_comments() -> None:
 
 
 def test_append_comment_coexists_with_hints() -> None:
+    """The optimizer hint should be preserved as a separate node alongside the comment."""
     expr = sqlglot.parse_one("SELECT /*+ IndexScan(t) */ * FROM users")
     append_comment(expr, {"db_driver": "asyncpg"})
     sql = expr.sql()
     assert "db_driver='asyncpg'" in sql
-    # Hint should be preserved as a separate node
     assert "INDEXSCAN" in sql.upper()
 
 
@@ -142,9 +140,6 @@ def test_append_comment_works_on_delete() -> None:
     expr = sqlglot.parse_one("DELETE FROM users WHERE id = 1")
     append_comment(expr, {"db_driver": "asyncpg"})
     assert "db_driver='asyncpg'" in expr.sql()
-
-
-# ── parse_comment (AST-level) ─────────────────────────────────────────────
 
 
 def test_parse_comment_basic() -> None:
@@ -176,6 +171,7 @@ def test_parse_comment_url_decodes() -> None:
 
 
 def test_parse_comment_round_trip() -> None:
+    """Attributes should be correctly round-tripped after re-parsing the generated SQL."""
     original_attrs: dict[str, str] = {
         "db_driver": "asyncpg",
         "framework": "litestar",
@@ -184,13 +180,13 @@ def test_parse_comment_round_trip() -> None:
     }
     expr = sqlglot.parse_one("SELECT * FROM users WHERE id = :id")
     append_comment(expr, original_attrs)
-    # Re-parse the generated SQL
     expr2 = sqlglot.parse_one(expr.sql())
     _, parsed_attrs = parse_comment(expr2)
     assert parsed_attrs == original_attrs
 
 
 def test_parse_comment_separates_sqlcommenter_from_regular() -> None:
+    """A regular comment should be preserved alongside the sqlcommenter payload."""
     expr = sqlglot.parse_one("SELECT * FROM users")
     expr.add_comments(["regular note"])
     append_comment(expr, {"db_driver": "asyncpg"})
@@ -199,7 +195,6 @@ def test_parse_comment_separates_sqlcommenter_from_regular() -> None:
 
     _, attrs = parse_comment(expr)
     assert attrs == {"db_driver": "asyncpg"}
-    # Regular comment should be preserved
     assert expr.comments is not None
     assert any("regular note" in c for c in expr.comments)
 
@@ -212,9 +207,6 @@ def test_traceparent_format_round_trip() -> None:
     expr2 = sqlglot.parse_one(expr.sql())
     _, parsed = parse_comment(expr2)
     assert parsed["traceparent"] == tp
-
-
-# ── create_sqlcommenter_statement_transformer ─────────────────────────────
 
 
 def test_transformer_appends_static_attrs() -> None:
@@ -234,6 +226,21 @@ def test_transformer_empty_attrs_noop() -> None:
     expr = sqlglot.parse_one("SELECT 1")
     result_expr, _ = transformer(expr, None)
     assert not result_expr.comments
+
+
+def test_transformer_factory_uses_module_level_callables() -> None:
+    source = inspect.getsource(create_sqlcommenter_statement_transformer)
+    assert "def _noop_transformer" not in source
+    assert "def _static_transformer" not in source
+    assert "def _dynamic_transformer" not in source
+
+    noop_transformer = create_sqlcommenter_statement_transformer(attributes={})
+    static_transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"})
+    dynamic_transformer = create_sqlcommenter_statement_transformer(enable_context=True)
+
+    assert type(noop_transformer).__name__ == "_NoOpSQLCommenterTransformer"
+    assert type(static_transformer).__name__ == "_StaticSQLCommenterTransformer"
+    assert type(dynamic_transformer).__name__ == "_DynamicSQLCommenterTransformer"
 
 
 def test_transformer_preserves_params() -> None:
@@ -328,12 +335,7 @@ def test_transformer_coexists_with_hints() -> None:
     assert "INDEXSCAN" in sql.upper()
 
 
-# ── Correlation ID integration ────────────────────────────────────────────
-
-
 def test_transformer_includes_correlation_id_when_context_enabled() -> None:
-    from sqlspec.utils.correlation import CorrelationContext
-
     transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"}, enable_context=True)
     with CorrelationContext.context("abc-123"):
         expr = sqlglot.parse_one("SELECT 1")
@@ -344,8 +346,6 @@ def test_transformer_includes_correlation_id_when_context_enabled() -> None:
 
 
 def test_transformer_no_correlation_id_without_context_enabled() -> None:
-    from sqlspec.utils.correlation import CorrelationContext
-
     transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"})
     with CorrelationContext.context("abc-123"):
         expr = sqlglot.parse_one("SELECT 1")
@@ -363,8 +363,6 @@ def test_transformer_no_correlation_id_when_not_set() -> None:
 
 
 def test_transformer_explicit_correlation_id_in_context_overrides() -> None:
-    from sqlspec.utils.correlation import CorrelationContext
-
     transformer = create_sqlcommenter_statement_transformer(enable_context=True)
     with CorrelationContext.context("from-middleware"):
         with SQLCommenterContext.scope({"correlation_id": "explicit-value"}):
@@ -373,9 +371,6 @@ def test_transformer_explicit_correlation_id_in_context_overrides() -> None:
             sql = expr.sql()
             assert "correlation_id='explicit-value'" in sql
             assert "from-middleware" not in sql
-
-
-# ── SQLCommenterContext ───────────────────────────────────────────────────
 
 
 def test_context_get_returns_none_by_default() -> None:
@@ -406,31 +401,22 @@ def test_context_scope_restores_previous() -> None:
         SQLCommenterContext.set(None)
 
 
-# ── StatementConfig integration ───────────────────────────────────────────
-
-
 def test_statement_config_enable_sqlcommenter() -> None:
-    from sqlspec.core import StatementConfig
-
+    """Enabling sqlcommenter should add a statement_transformer rather than an output_transformer."""
     config = StatementConfig(
         enable_sqlcommenter=True, sqlcommenter_attributes={"db_driver": "sqlite", "framework": "litestar"}
     )
-    # Should be added as a statement_transformer, not output_transformer
     assert len(config.statement_transformers) == 1
     assert config.output_transformer is None
 
 
 def test_statement_config_auto_sets_db_driver_from_dialect() -> None:
-    from sqlspec.core import StatementConfig
-
     config = StatementConfig(enable_sqlcommenter=True, dialect="postgres")
     assert config.sqlcommenter_attributes is not None
     assert config.sqlcommenter_attributes["db_driver"] == "postgresql"
 
 
 def test_statement_config_db_driver_not_overridden_when_explicit() -> None:
-    from sqlspec.core import StatementConfig
-
     config = StatementConfig(
         enable_sqlcommenter=True, dialect="postgres", sqlcommenter_attributes={"db_driver": "custom-pg"}
     )
@@ -439,14 +425,12 @@ def test_statement_config_db_driver_not_overridden_when_explicit() -> None:
 
 
 def test_statement_config_sqlcommenter_disabled_by_default() -> None:
-    from sqlspec.core import StatementConfig
-
     config = StatementConfig()
     assert len(config.statement_transformers) == 0
 
 
 def test_statement_config_sqlcommenter_appends_to_existing_transformers() -> None:
-    from sqlspec.core import StatementConfig
+    """The sqlcommenter transformer should append to and coexist with user-provided transformers."""
 
     def my_transformer(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
         return expr, params
@@ -456,14 +440,11 @@ def test_statement_config_sqlcommenter_appends_to_existing_transformers() -> Non
         enable_sqlcommenter=True,
         sqlcommenter_attributes={"db_driver": "sqlite"},
     )
-    # Should have both: user transformer + sqlcommenter
     assert len(config.statement_transformers) == 2
     assert config.statement_transformers[0] is my_transformer
 
 
 def test_statement_config_replace_preserves_sqlcommenter() -> None:
-    from sqlspec.core import StatementConfig
-
     config = StatementConfig(enable_sqlcommenter=True, sqlcommenter_attributes={"db_driver": "sqlite"})
     replaced = config.replace(enable_caching=False)
     assert len(replaced.statement_transformers) == 1

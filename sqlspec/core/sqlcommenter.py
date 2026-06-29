@@ -8,7 +8,7 @@ expression tree and coexist with existing comments and optimizer hints.
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, ClassVar, TypedDict
+from typing import Any, ClassVar, Final, TypedDict, final
 from urllib.parse import quote, unquote
 
 from sqlglot import exp
@@ -39,7 +39,7 @@ class SQLCommenterAttributes(TypedDict, total=False):
     tracestate: str
 
 
-_sqlcommenter_ctx: ContextVar[dict[str, str] | None] = ContextVar("_sqlcommenter_ctx", default=None)
+_sqlcommenter_ctx: Final[ContextVar[dict[str, str] | None]] = ContextVar("_sqlcommenter_ctx", default=None)
 
 
 class SQLCommenterContext:
@@ -183,6 +183,58 @@ def _build_traceparent(trace_id: str, span_id: str) -> str:
     return f"00-{trace_id}-{span_id}-01"
 
 
+@final
+class _NoOpSQLCommenterTransformer:
+    __slots__ = ()
+
+    def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+        return expression, params
+
+
+@final
+class _StaticSQLCommenterTransformer:
+    __slots__ = ("_comment_body",)
+
+    def __init__(self, attrs: Mapping[str, str | None]) -> None:
+        self._comment_body = generate_comment(attrs)
+
+    def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+        if self._comment_body:
+            expression.add_comments([self._comment_body])
+        return expression, params
+
+
+@final
+class _DynamicSQLCommenterTransformer:
+    __slots__ = ("_enable_context", "_enable_traceparent", "_static_attrs")
+
+    def __init__(
+        self, static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
+    ) -> None:
+        self._static_attrs = dict(static_attrs)
+        self._enable_traceparent = enable_traceparent
+        self._enable_context = enable_context
+
+    def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+        merged: dict[str, str | None] = {}
+        if self._enable_context:
+            ctx_attrs = SQLCommenterContext.get()
+            if ctx_attrs:
+                merged.update(ctx_attrs)
+            correlation_id = CorrelationContext.get()
+            if correlation_id and "correlation_id" not in merged:
+                merged["correlation_id"] = correlation_id
+        merged.update(self._static_attrs)
+        if self._enable_traceparent:
+            trace_id, span_id = get_trace_context()
+            if trace_id and span_id:
+                merged["traceparent"] = _build_traceparent(trace_id, span_id)
+        return append_comment(expression, merged), params
+
+
+_NOOP_SQLCOMMENTER_TRANSFORMER: Final = _NoOpSQLCommenterTransformer()
+
+
 def create_sqlcommenter_statement_transformer(
     *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
 ) -> Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]:
@@ -206,42 +258,11 @@ def create_sqlcommenter_statement_transformer(
     is_dynamic = enable_traceparent or enable_context
 
     if not is_dynamic and not static_attrs:
-
-        def _noop_transformer(expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
-            return expression, params
-
-        return _noop_transformer
+        return _NOOP_SQLCOMMENTER_TRANSFORMER
 
     if not is_dynamic:
-        # Pure static path — pre-generate the comment body once.
-        precomputed_body = generate_comment(static_attrs)
+        return _StaticSQLCommenterTransformer(static_attrs)
 
-        def _static_transformer(expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
-            if precomputed_body:
-                expression.add_comments([precomputed_body])
-            return expression, params
-
-        return _static_transformer
-
-    def _dynamic_transformer(expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
-        merged: dict[str, str | None] = {}
-        if enable_context:
-            ctx_attrs = SQLCommenterContext.get()
-            if ctx_attrs:
-                merged.update(ctx_attrs)
-            # Include correlation ID from CorrelationContext if set
-            correlation_id = CorrelationContext.get()
-            if correlation_id and "correlation_id" not in merged:
-                merged["correlation_id"] = correlation_id
-        # Static attrs override context attrs
-        merged.update(static_attrs)
-        if enable_traceparent:
-            trace_id, span_id = get_trace_context()
-            if trace_id and span_id:
-                merged["traceparent"] = _build_traceparent(trace_id, span_id)
-        comment_body = generate_comment(merged)
-        if comment_body:
-            expression.add_comments([comment_body])
-        return expression, params
-
-    return _dynamic_transformer
+    return _DynamicSQLCommenterTransformer(
+        static_attrs, enable_traceparent=enable_traceparent, enable_context=enable_context
+    )

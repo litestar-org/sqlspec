@@ -3,8 +3,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 
-import pymysql
-
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -57,6 +55,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        import pymysql
+
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = %s
@@ -93,7 +93,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
 
                 return bytes(row["data"])
         except pymysql.MySQLError as exc:
-            if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+            if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
 
@@ -140,6 +140,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
+        import pymysql
+
         sql = f"DELETE FROM {self._table_name}"
 
         try:
@@ -152,7 +154,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 conn.commit()
             self._log_delete_all()
         except pymysql.MySQLError as exc:
-            if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+            if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
             raise
@@ -161,6 +163,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
+        import pymysql
+
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = %s
@@ -177,7 +181,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                     cursor.close()
                 return result is not None
         except pymysql.MySQLError as exc:
-            if "doesn't exist" in str(exc) or getattr(exc, "args", [None])[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+            if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise
 

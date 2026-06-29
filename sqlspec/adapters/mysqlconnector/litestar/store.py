@@ -3,8 +3,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import mysql.connector
-
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -53,6 +51,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         self._log_table_created()
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        import mysql.connector
+
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = %s
@@ -130,6 +130,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             await conn.commit()
 
     async def delete_all(self) -> None:
+        import mysql.connector
+
         sql = f"DELETE FROM {self._table_name}"
 
         try:
@@ -148,6 +150,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             raise
 
     async def exists(self, key: str) -> bool:
+        import mysql.connector
+
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = %s
@@ -248,6 +252,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        import mysql.connector
+
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = %s
@@ -334,6 +340,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
+        import mysql.connector
+
         sql = f"DELETE FROM {self._table_name}"
 
         try:
@@ -355,6 +363,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
+        import mysql.connector
+
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = %s

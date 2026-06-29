@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, PsqlpySessionContext
@@ -24,6 +23,8 @@ from sqlspec.utils.config_tools import normalize_connection_config
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
+
+    from psqlpy import ConnectionPool
 
     from sqlspec.core import StatementConfig
 
@@ -179,7 +180,7 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
 
 
 @mypyc_attr(native_class=False)
-class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
+class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", PsqlpyDriver]):
     """Configuration for Psqlpy asynchronous database connections."""
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
@@ -200,7 +201,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self,
         *,
         connection_config: "PsqlpyPoolParams | dict[str, Any] | None" = None,
-        connection_instance: ConnectionPool | None = None,
+        connection_instance: "ConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "PsqlpyDriverFeatures | dict[str, Any] | None" = None,
@@ -209,6 +210,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         **kwargs: Any,
     ) -> None:
         """Initialize Psqlpy configuration.
+
+        Extracts the 'on_connection_create' hook from driver_features before
+        storing them. Initializes a set to track initialized connection IDs
+        because psqlpy connections do not support weak references.
 
         Args:
             connection_config: Connection and pool configuration parameters.
@@ -225,12 +230,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[PsqlpyConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
-        # Track initialized connections by ID (psqlpy connections don't support weak refs)
         self._initialized_connection_ids: set[int] = set()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
@@ -247,8 +250,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         )
 
     async def _ensure_connection_initialized(self, connection: "PsqlpyConnection") -> None:
-        """Ensure connection callback has been called exactly once for this connection."""
-        # Detect extensions on first connection, update dialect
+        """Ensure connection callback has been called exactly once for this connection.
+
+        Detects PostgreSQL extensions on first connection and updates dialect accordingly.
+        """
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
@@ -274,6 +279,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
+        from psqlpy import ConnectionPool
+
         return ConnectionPool(**build_connection_config(self.connection_config))
 
     async def _close_pool(self) -> None:
@@ -320,7 +327,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             prepare_driver=self._prepare_driver,
         )
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide async pool instance.
 
         Returns:

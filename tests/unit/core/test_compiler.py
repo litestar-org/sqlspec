@@ -20,6 +20,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime
+from pathlib import Path
 from typing import Any, get_args
 from unittest.mock import Mock, patch
 
@@ -29,6 +30,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 from sqlspec.core import (
+    SQL,
     CompiledSQL,
     OperationProfile,
     OperationType,
@@ -42,8 +44,9 @@ from sqlspec.core import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
+from sqlspec.core.pipeline import StatementPipelineRegistry, compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
 
@@ -324,37 +327,37 @@ def test_cache_key_generation(basic_statement_config: "StatementConfig") -> None
     Note: SQLSpec uses structural fingerprinting for parameters, meaning cache keys
     are based on parameter STRUCTURE (types, keys) not VALUES. Same SQL with same
     parameter structure produces the same cache key regardless of actual values.
-    """
-    from sqlspec.core.parameters import structural_fingerprint
 
+    This test verifies:
+    - Same SQL and parameter structure yields the same cache key.
+    - Different SQL yields a different key.
+    - Same SQL with same parameter structure (list of one int) yields the same key.
+    - Different parameter structure (e.g. dict vs list) yields a different key.
+    - Different parameter type signature yields a different key.
+    - Cache keys are tuples for better performance.
+    """
     processor = SQLProcessor(basic_statement_config)
 
-    # _make_cache_key expects a precomputed fingerprint, not raw params
-    # Same SQL and parameter structure = same key
     fp1 = structural_fingerprint([123])
     key1 = processor._make_cache_key("SELECT * FROM users", fp1)
     key2 = processor._make_cache_key("SELECT * FROM users", fp1)
     assert key1 == key2
 
-    # Different SQL = different key
     key3 = processor._make_cache_key("SELECT * FROM posts", fp1)
     assert key1 != key3
 
-    # Same SQL with same parameter STRUCTURE (list of one int) = SAME key (structural fingerprinting)
     fp4 = structural_fingerprint([456])
     key4 = processor._make_cache_key("SELECT * FROM users", fp4)
-    assert key1 == key4  # Structural fingerprinting: same structure = same key
+    assert key1 == key4
 
-    # Different parameter STRUCTURE = different key
-    fp5 = structural_fingerprint({"id": 123})  # dict vs list
+    fp5 = structural_fingerprint({"id": 123})
     key5 = processor._make_cache_key("SELECT * FROM users", fp5)
     assert key1 != key5
 
-    fp6 = structural_fingerprint([123, "extra"])  # different type signature
+    fp6 = structural_fingerprint([123, "extra"])
     key6 = processor._make_cache_key("SELECT * FROM users", fp6)
     assert key1 != key6
 
-    # Cache keys are now tuples for better performance
     assert isinstance(key1, tuple)
     assert key1 == _make_cache_key_tuple(
         "SELECT * FROM users", fp1, processor._input_style, processor._exec_style, processor._dialect_str, False
@@ -969,6 +972,99 @@ def test_parameter_cache_statistics(basic_statement_config: "StatementConfig") -
     assert stats["parameter_size"] >= 1
 
 
+def test_compiler_cache_hot_paths_use_bound_cache_flags(basic_statement_config: "StatementConfig") -> None:
+    """Compiler cache hot paths should not re-check config.enable_caching after initialization."""
+    processor = SQLProcessor(basic_statement_config)
+
+    processor.compile("SELECT * FROM users WHERE id = ?", [123])
+    processor.compile("SELECT * FROM users WHERE id = ?", [456])
+
+    assert processor.cache_stats["hits"] == 1
+    assert "self._config.enable_caching" not in inspect.getsource(SQLProcessor.compile)
+    assert "self._config.enable_caching" not in inspect.getsource(SQLProcessor._resolve_expression)
+
+
+def test_processor_binds_parameter_config_hot_path_attrs(basic_statement_config: "StatementConfig") -> None:
+    """SQLProcessor should bind frequently used parameter config objects once."""
+    processor = SQLProcessor(basic_statement_config)
+
+    assert processor._parameter_config is basic_statement_config.parameter_config
+    assert processor._enable_parameter_type_wrapping is basic_statement_config.enable_parameter_type_wrapping
+    assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._prepare_parameters)
+    assert "self._config.parameter_config" not in inspect.getsource(SQLProcessor._finalize_compilation)
+
+
+def test_core_idiom_sweep_source_shapes() -> None:
+    """Core helpers should use mypyc-friendly staticmethods and Final constants."""
+    static_methods = {
+        SQL: ("_normalize_dialect", "_should_auto_detect_many", "_extract_filters"),
+        SQLProcessor: ("_validate_parameters",),
+        StatementPipelineRegistry: ("_fingerprint_config",),
+    }
+    for cls, names in static_methods.items():
+        for name in names:
+            assert isinstance(cls.__dict__.get(name), staticmethod)
+
+    expected_source_fragments = {
+        "sqlspec/core/compiler.py": (
+            "OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]]",
+            "COPY_OPERATION_TYPES: Final[tuple[OperationType, ...]]",
+            "COPY_FROM_OPERATION_TYPES: Final[tuple[OperationType, ...]]",
+            "COPY_TO_OPERATION_TYPES: Final[tuple[OperationType, ...]]",
+        ),
+        "sqlspec/core/statement.py": (
+            "RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({",
+            "MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({",
+        ),
+        "sqlspec/core/query_modifiers.py": (
+            "_TABLE_QUALIFIED_PARTS: Final[int] = 2",
+            "_DATABASE_QUALIFIED_PARTS: Final[int] = 3",
+            "_CATALOG_QUALIFIED_PARTS: Final[int] = 4",
+        ),
+        "sqlspec/core/cache.py": ("NAMESPACED_CACHE_CONFIG: Final[dict[str, tuple[",),
+        "sqlspec/core/parameters/_alignment.py": ("EXECUTE_MANY_MIN_ROWS: Final[int] = 2",),
+        "sqlspec/core/parameters/_declared.py": ("_JSON_VALUE_TYPES: Final[tuple[type, ...]]",),
+        "sqlspec/core/parameters/_processor.py": (
+            "_EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10",
+            "_EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3",
+            "_OCCURRENCE_BASED_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]]",
+        ),
+        "sqlspec/core/parameters/_registry.py": (
+            "_DEFAULT_JSON_SERIALIZER: Final[Callable[[Any], str]]",
+            "_DEFAULT_JSON_DESERIALIZER: Final[Callable[[str], Any]]",
+            "DRIVER_PARAMETER_PROFILES: Final[dict[str, DriverParameterProfile]]",
+        ),
+        "sqlspec/core/parameters/_types.py": (
+            "TYPED_PARAMETER_SLOTS: Final",
+            "PARAMETER_INFO_SLOTS: Final",
+            "PARAMETER_STYLE_CONFIG_SLOTS: Final",
+            "_NAMED_STYLES: Final",
+            "_POSITIONAL_STYLES: Final",
+        ),
+    }
+    for path, fragments in expected_source_fragments.items():
+        source = Path(path).read_text()
+        for fragment in fragments:
+            assert fragment in source
+
+    stripped_comments = (
+        "Optimization: Check only the first element",
+        "O(1) check instead of O(N) scan",
+        "through the interpreted serializer-selection shell",
+        "For expressions, we use a hash",
+        "Skip sort for single style",
+    )
+    for path in (
+        "sqlspec/core/statement.py",
+        "sqlspec/core/type_converter.py",
+        "sqlspec/core/filters.py",
+        "sqlspec/core/parameters/_types.py",
+    ):
+        source = Path(path).read_text()
+        for comment in stripped_comments:
+            assert comment not in source
+
+
 def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
     """Test cache clearing functionality."""
     processor = SQLProcessor(basic_statement_config)
@@ -1029,11 +1125,13 @@ def test_processor_memory_efficiency_with_slots() -> None:
         "_cache_misses",
         "_config",
         "_dialect_str",
+        "_enable_parameter_type_wrapping",
         "_exec_style",
         "_input_style",
         "_last_cache_key",
         "_last_result",
         "_max_cache_size",
+        "_parameter_config",
         "_parameter_processor",
         "_parse_cache",
         "_parse_cache_hits",

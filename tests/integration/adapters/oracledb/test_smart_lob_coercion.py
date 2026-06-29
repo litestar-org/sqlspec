@@ -151,8 +151,8 @@ async def test_json_bytes_payload_no_manual_createlob_needed(oracle_async_sessio
 
     Replicates the workaround at oracledb-vertexai-demo:utils/fixtures.py:282-286
     where a manual ``await connection.createlob(...)`` was needed because raw
-    bytes hit the BLOB-coercion fallback. With C2's wrapper-aware routing and
-    C1's native JSON binding, the raw bytes path is no longer needed — but the
+    bytes hit the BLOB-coercion fallback. With wrapper-aware routing and
+    native JSON binding, the raw bytes path is no longer needed — but the
     user-facing ergonomic answer is to wrap with ``OracleJson`` so the handler
     chain claims it cleanly.
     """

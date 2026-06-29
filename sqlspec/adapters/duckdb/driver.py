@@ -281,19 +281,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
         exc_handler = self.handle_database_exceptions()
         arrow_result: ArrowResult | None = None
 
-        # Execute query and get native Arrow
         with self.with_cursor(self.connection) as cursor, exc_handler:
-            # Get compiled SQL and parameters
             sql, driver_params = self._get_compiled_sql(prepared_statement, config)
 
-            # Execute query
             cursor.execute(sql, driver_params or ())
 
             if return_format in {"reader", "batches"}:
@@ -308,7 +304,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     arrow_schema=arrow_schema,
                 )
 
-            # DuckDB native Arrow (zero-copy!)
             arrow_table = cursor.to_arrow_table()
 
             arrow_result = build_arrow_result_from_table(

@@ -93,8 +93,6 @@ class DuckDBConnectionPool:
         self._thread_local = threading.local()
         self._lock = threading.RLock()
         self._pool_id = str(uuid.uuid4())[:8]
-        # Track if this pool uses an in-memory database
-        # In-memory databases require connections to stay alive to preserve data
         database = connection_config.get("database", "")
         self._is_memory_db = database.startswith(":memory:") or database == ""
 
@@ -159,8 +157,6 @@ class DuckDBConnectionPool:
             _create_secret(connection, secret_config)
 
         if self._on_connection_create:
-            # Let a failing user hook surface its real error instead of silently returning a
-            # half-configured connection (mirrors the sqlite/aiosqlite pools).
             self._on_connection_create(connection)
 
         return connection
@@ -335,8 +331,6 @@ class DuckDBConnectionPool:
             self._close_thread_connection()
             raise
         else:
-            # Only close connection for file-based databases to release file locks
-            # In-memory databases need connections to stay alive to preserve data
             if not self._is_memory_db:
                 self._close_thread_connection()
 

@@ -28,6 +28,7 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
+from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
     connection_provider_maker,
@@ -327,8 +328,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Args:
             cli: The Click command group to add commands to.
         """
-        from sqlspec.extensions.litestar.cli import database_group
-
         cli.add_command(database_group)
 
     def on_app_init(self, app_config: "AppConfig") -> "AppConfig":
@@ -893,13 +892,17 @@ class SQLCommenterMiddleware:
 
         attrs: dict[str, str] = {"route": scope.get("path", ""), "framework": "litestar"}
         handler = scope.get("route_handler")
-        if handler is not None:
-            fn = getattr(handler, "fn", None)
+        if handler is not None and hasattr(handler, "fn") and hasattr(handler, "owner"):
+            fn = handler.fn
             if fn is not None:
-                attrs["action"] = getattr(fn, "__name__", "")
-            owner = getattr(handler, "owner", None)
+                fn_name = getattr(fn, "__name__", None)
+                if isinstance(fn_name, str):
+                    attrs["action"] = fn_name
+            owner = handler.owner
             if owner is not None:
-                attrs["controller"] = getattr(owner, "__name__", "")
+                owner_name = getattr(owner, "__name__", None)
+                if isinstance(owner_name, str):
+                    attrs["controller"] = owner_name
 
         previous = SQLCommenterContext.get()
         SQLCommenterContext.set(attrs)

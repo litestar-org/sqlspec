@@ -45,7 +45,7 @@ class DuckDBCursor:
         return self.connection
 
     def __exit__(self, *_: Any) -> None:
-        pass  # Connection lifecycle managed by pool/session
+        """Connection lifecycle managed by pool/session."""
 
 
 class DuckDBSessionContext:
@@ -71,8 +71,8 @@ class DuckDBSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], DuckDBConnection]",
+        release_connection: "Callable[[DuckDBConnection], None]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[DuckDBDriver], DuckDBDriver]",
@@ -82,7 +82,7 @@ class DuckDBSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: DuckDBConnection | None = None
         self._driver: DuckDBDriver | None = None
 
     def __enter__(self) -> "DuckDBDriver":

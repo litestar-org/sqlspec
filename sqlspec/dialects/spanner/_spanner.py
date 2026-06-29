@@ -29,6 +29,11 @@ class Spanner(BigQuery):
 
     Generator = SpannerGenerator
 
+    class Tokenizer(BigQuery.Tokenizer):
+        """Tokenizer for Spanner GoogleSQL string literal escapes."""
+
+        STRING_ESCAPES = ["'", "\\"]
+
     def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
         """Repair CREATE TABLE statements that sqlglot still falls back to Command for."""
         expressions = super().parse(sql, **opts)

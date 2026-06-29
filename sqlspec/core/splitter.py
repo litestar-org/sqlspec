@@ -17,7 +17,7 @@ import logging
 import re
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from enum import Enum
 from re import Pattern
 from typing import Any, Final, TypeAlias, cast, final
@@ -42,6 +42,7 @@ logger = get_logger("sqlspec.core.splitter")
 
 _TOKENIZE_DEBUG_SAMPLE_LIMIT: Final[int] = 3
 _TOKENIZE_SNIPPET_LENGTH: Final[int] = 20
+_DOLLAR_QUOTE_START_PATTERN: Final[Pattern[str]] = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$")
 
 DEFAULT_PATTERN_CACHE_SIZE: Final = 1000
 DEFAULT_RESULT_CACHE_SIZE: Final = 5000
@@ -107,6 +108,15 @@ class TokenType(Enum):
     OTHER = "OTHER"
 
 
+_COMMENT_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK})
+_IGNORABLE_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({
+    TokenType.WHITESPACE,
+    TokenType.COMMENT_LINE,
+    TokenType.COMMENT_BLOCK,
+})
+_SLASH_PREFIX_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.WHITESPACE, TokenType.COMMENT_LINE})
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class Token:
     """SQL token with metadata."""
@@ -127,6 +137,7 @@ class Token:
 TokenHandler: TypeAlias = Callable[[str, int, int, int], Token | None]
 TokenPattern: TypeAlias = str | TokenHandler
 CompiledTokenPattern: TypeAlias = Pattern[str] | TokenHandler
+SpecialTerminatorHandler: TypeAlias = Callable[[list[Token], int], bool]
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -248,38 +259,78 @@ class DialectConfig(ABC):
         return False
 
 
-class OracleDialectConfig(DialectConfig):
-    """Configuration for Oracle PL/SQL dialect."""
+class _EagerDialectConfig(DialectConfig):
+    """Private eager base for built-in dialect configurations."""
+
+    __slots__ = ()
+
+    _DIALECT_NAME = ""
+    _BLOCK_STARTERS: frozenset[str] = frozenset()
+    _BLOCK_ENDERS: frozenset[str] = frozenset({"END"})
+    _STATEMENT_TERMINATORS: frozenset[str] = frozenset({";"})
+    _BATCH_SEPARATORS: frozenset[str] = frozenset()
+    _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = ()
+    _MAX_NESTING_DEPTH = 256
+
+    def __init__(self) -> None:
+        """Initialize eager dialect configuration."""
+        self._name = self._DIALECT_NAME
+        self._block_starters = set(self._BLOCK_STARTERS)
+        self._block_enders = set(self._BLOCK_ENDERS)
+        self._statement_terminators = set(self._STATEMENT_TERMINATORS)
+        self._batch_separators = set(self._BATCH_SEPARATORS)
+        self._special_terminators = self._create_special_terminators()
+        self._max_nesting_depth = self._MAX_NESTING_DEPTH
 
     @property
     def name(self) -> str:
-        if self._name is None:
-            self._name = "oracle"
-        return self._name
+        """Name of the dialect."""
+        return cast("str", self._name)
 
     @property
     def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE"}
-        return self._block_starters
+        """Keywords that start a block."""
+        return cast("set[str]", self._block_starters)
 
     @property
     def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
+        """Keywords that end a block."""
+        return cast("set[str]", self._block_enders)
 
     @property
     def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+        """Characters that terminate statements."""
+        return cast("set[str]", self._statement_terminators)
 
     @property
-    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
-        if self._special_terminators is None:
-            self._special_terminators = {"/": self._handle_slash_terminator}
-        return self._special_terminators
+    def batch_separators(self) -> "set[str]":
+        """Keywords that separate batches."""
+        return cast("set[str]", self._batch_separators)
+
+    @property
+    def special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Special terminators that need custom handling."""
+        return cast("dict[str, SpecialTerminatorHandler]", self._special_terminators)
+
+    @property
+    def max_nesting_depth(self) -> int:
+        """Maximum allowed nesting depth for blocks."""
+        return cast("int", self._max_nesting_depth)
+
+    def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Create per-instance special terminators."""
+        return dict(self._SPECIAL_TERMINATORS)
+
+
+class OracleDialectConfig(_EagerDialectConfig):
+    """Configuration for Oracle PL/SQL dialect."""
+
+    _DIALECT_NAME = "oracle"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+
+    def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Create Oracle special terminator handlers."""
+        return {"/": self._handle_slash_terminator}
 
     def should_delay_semicolon_termination(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if semicolon termination should be delayed for Oracle slash terminators.
@@ -325,7 +376,7 @@ class OracleDialectConfig(DialectConfig):
                 continue
             if token.type == TokenType.TERMINATOR and token.value == "/":
                 return found_newline and self._handle_slash_terminator(tokens, pos)
-            if token.type in {TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
+            if token.type in _COMMENT_TOKEN_TYPES:
                 pos += 1
                 continue
             break
@@ -385,73 +436,27 @@ class OracleDialectConfig(DialectConfig):
             token = tokens[pos]
             if "\n" in token.value:
                 break
-            if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE}:
+            if token.type not in _SLASH_PREFIX_TOKEN_TYPES:
                 return False
             pos -= 1
 
         return True
 
 
-class TSQLDialectConfig(DialectConfig):
+class TSQLDialectConfig(_EagerDialectConfig):
     """Configuration for T-SQL (SQL Server) dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "tsql"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "TRY"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END", "CATCH"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
-
-    @property
-    def batch_separators(self) -> "set[str]":
-        if self._batch_separators is None:
-            self._batch_separators = {"GO"}
-        return self._batch_separators
+    _DIALECT_NAME = "tsql"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "TRY"})
+    _BLOCK_ENDERS = frozenset({"END", "CATCH"})
+    _BATCH_SEPARATORS = frozenset({"GO"})
 
 
-class PostgreSQLDialectConfig(DialectConfig):
+class PostgreSQLDialectConfig(_EagerDialectConfig):
     """Configuration for PostgreSQL dialect with dollar-quoted strings."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "postgresql"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"DECLARE", "CASE", "DO"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "postgresql"
+    _BLOCK_STARTERS = frozenset({"DECLARE", "CASE", "DO"})
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get PostgreSQL-specific token patterns.
@@ -477,7 +482,7 @@ class PostgreSQLDialectConfig(DialectConfig):
         Returns:
             Token representing the dollar-quoted string, or None if no match
         """
-        start_match = re.match(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$", text[position:])
+        start_match = _DOLLAR_QUOTE_START_PATTERN.match(text, position)
         if not start_match:
             return None
 
@@ -494,154 +499,47 @@ class PostgreSQLDialectConfig(DialectConfig):
 
 
 @final
-class GenericDialectConfig(DialectConfig):
+class GenericDialectConfig(_EagerDialectConfig):
     """Generic SQL dialect configuration for standard SQL."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "generic"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "generic"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
 
 
 @final
-class MySQLDialectConfig(DialectConfig):
+class MySQLDialectConfig(_EagerDialectConfig):
     """Configuration for MySQL dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "mysql"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "DECLARE", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
-
-    @property
-    def special_terminators(self) -> "dict[str, Callable[[list[Token], int], bool]]":
-        if self._special_terminators is None:
-            self._special_terminators = {"\\g": _special_terminator_true, "\\G": _special_terminator_true}
-        return self._special_terminators
+    _DIALECT_NAME = "mysql"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+    _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = (
+        ("\\g", _special_terminator_true),
+        ("\\G", _special_terminator_true),
+    )
 
 
 @final
-class SQLiteDialectConfig(DialectConfig):
+class SQLiteDialectConfig(_EagerDialectConfig):
     """Configuration for SQLite dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "sqlite"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "sqlite"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
 @final
-class DuckDBDialectConfig(DialectConfig):
+class DuckDBDialectConfig(_EagerDialectConfig):
     """Configuration for DuckDB dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "duckdb"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "duckdb"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
 @final
-class BigQueryDialectConfig(DialectConfig):
+class BigQueryDialectConfig(_EagerDialectConfig):
     """Configuration for BigQuery dialect."""
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            self._name = "bigquery"
-        return self._name
-
-    @property
-    def block_starters(self) -> "set[str]":
-        if self._block_starters is None:
-            self._block_starters = {"BEGIN", "CASE"}
-        return self._block_starters
-
-    @property
-    def block_enders(self) -> "set[str]":
-        if self._block_enders is None:
-            self._block_enders = {"END"}
-        return self._block_enders
-
-    @property
-    def statement_terminators(self) -> "set[str]":
-        if self._statement_terminators is None:
-            self._statement_terminators = {";"}
-        return self._statement_terminators
+    _DIALECT_NAME = "bigquery"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
 _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
@@ -664,8 +562,10 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
 _pattern_cache: LRUCache | None = None
 _result_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
+_splitter_cache_lock = threading.Lock()
 _unknown_dialect_warning_lock = threading.Lock()
 _warned_unknown_dialects: set[str] = set()
+_splitter_cache: dict[tuple[str, bool], "StatementSplitter"] = {}
 
 
 def _get_pattern_cache() -> LRUCache:
@@ -752,18 +652,19 @@ class StatementSplitter:
         self._pattern_cache.put(cache_key, compiled)
         return compiled
 
-    def _tokenize(self, sql: str) -> Generator[Token, None, None]:
+    def _tokenize(self, sql: str) -> list[Token]:
         """Tokenize SQL string into Token objects.
 
         Args:
             sql: The SQL string to tokenize
 
-        Yields:
+        Returns:
             Token objects representing the lexical elements
         """
         pos = 0
         line = 1
         line_start = 0
+        tokens: list[Token] = []
         unmatched_count = 0
         first_unmatched_pos: int | None = None
         first_unmatched_snippet: str | None = None
@@ -782,7 +683,7 @@ class StatementSplitter:
                             last_newline = token.value.rfind("\n")
                             line_start = pos + last_newline + 1
 
-                        yield token
+                        tokens.append(token)
                         pos += len(token.value)
                         matched = True
                         break
@@ -798,7 +699,7 @@ class StatementSplitter:
                             last_newline = value.rfind("\n")
                             line_start = pos + last_newline + 1
 
-                        yield Token(type=token_type, value=value, line=line, column=column, position=pos)
+                        tokens.append(Token(type=token_type, value=value, line=line, column=column, position=pos))
                         pos = match.end()
                         matched = True
                         break
@@ -821,6 +722,7 @@ class StatementSplitter:
                 first_unmatched_pos,
                 first_unmatched_snippet,
             )
+        return tokens
 
     def split(self, sql: str) -> "list[str]":
         """Split SQL script into individual statements.
@@ -858,8 +760,17 @@ class StatementSplitter:
         current_statement_chars: list[str] = []
         current_statement_fragment_count = 0
         block_stack = []
+        dialect = self._dialect
+        block_starters = dialect.block_starters
+        block_enders = dialect.block_enders
+        statement_terminators = dialect.statement_terminators
+        special_terminators = dialect.special_terminators
+        batch_separators = dialect.batch_separators
+        max_nesting_depth = dialect.max_nesting_depth
+        is_real_block_ender = dialect.is_real_block_ender
+        should_delay_semicolon_termination = dialect.should_delay_semicolon_termination
 
-        all_tokens = list(self._tokenize(sql))
+        all_tokens = self._tokenize(sql)
 
         for token_idx, token in enumerate(all_tokens):
             current_statement_fragment_count += 1
@@ -870,39 +781,39 @@ class StatementSplitter:
 
             # Keep token-list mutation centralized for whitespace/comment and executable paths.
             current_statement_tokens.append(token)
-            if token.type in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
+            if token.type in _IGNORABLE_TOKEN_TYPES:
                 continue
 
             token_upper = token.value.upper()
 
             if token.type == TokenType.KEYWORD:
-                if token_upper in self._dialect.block_starters:
+                if token_upper in block_starters:
                     block_stack.append(token_upper)
-                    if len(block_stack) > self._dialect.max_nesting_depth:
-                        msg = f"Maximum nesting depth ({self._dialect.max_nesting_depth}) exceeded"
+                    if len(block_stack) > max_nesting_depth:
+                        msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
                         raise ValueError(msg)
-                elif token_upper in self._dialect.block_enders:
-                    if block_stack and self._dialect.is_real_block_ender(all_tokens, token_idx):
+                elif token_upper in block_enders:
+                    if block_stack and is_real_block_ender(all_tokens, token_idx):
                         block_stack.pop()
 
             is_terminator = False
             if not block_stack:
                 if token.type == TokenType.TERMINATOR:
-                    if token.value in self._dialect.statement_terminators:
-                        should_delay = self._dialect.should_delay_semicolon_termination(all_tokens, token_idx)
+                    if token.value in statement_terminators:
+                        should_delay = should_delay_semicolon_termination(all_tokens, token_idx)
 
                         if not should_delay:
                             is_terminator = True
-                    elif token.value in self._dialect.special_terminators:
-                        handler = self._dialect.special_terminators[token.value]
+                    elif token.value in special_terminators:
+                        handler = special_terminators[token.value]
                         if handler(all_tokens, token_idx):
                             is_terminator = True
 
-                elif token.type == TokenType.KEYWORD and token_upper in self._dialect.batch_separators:
+                elif token.type == TokenType.KEYWORD and token_upper in batch_separators:
                     is_terminator = True
 
             if is_terminator:
-                if token.type == TokenType.KEYWORD and token_upper in self._dialect.batch_separators:
+                if token.type == TokenType.KEYWORD and token_upper in batch_separators:
                     statement = "".join(item.value for item in current_statement_tokens[:-1]).strip()
                 elif current_statement_writer is None:
                     statement = "".join(current_statement_chars).strip()
@@ -961,11 +872,7 @@ class StatementSplitter:
         Returns:
             True if statement contains non-whitespace/non-comment content
         """
-        for token in tokens:
-            if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
-                return True
-
-        return False
+        return any(token.type not in _IGNORABLE_TOKEN_TYPES for token in tokens)
 
 
 def split_sql_script(script: str, dialect: str | None = None, strip_trailing_terminator: bool = False) -> "list[str]":
@@ -979,16 +886,21 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
     Returns:
         List of individual SQL statements
     """
-    if dialect is None:
-        dialect = "generic"
+    dialect_key = "generic" if dialect is None else dialect.lower()
 
-    config_class = _DIALECT_CLASS_MAP.get(dialect.lower())
+    config_class = _DIALECT_CLASS_MAP.get(dialect_key)
     if config_class is None:
         _warn_unknown_dialect_once(dialect)
         config_class = GenericDialectConfig
-    config = config_class()
 
-    splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_terminator)
+    cache_key = (dialect_key, strip_trailing_terminator)
+    splitter = _splitter_cache.get(cache_key)
+    if splitter is None:
+        with _splitter_cache_lock:
+            splitter = _splitter_cache.get(cache_key)
+            if splitter is None:
+                splitter = StatementSplitter(config_class(), strip_trailing_semicolon=strip_trailing_terminator)
+                _splitter_cache[cache_key] = splitter
     return splitter.split(script)
 
 
@@ -1001,6 +913,8 @@ def clear_splitter_caches() -> None:
     result_cache = _get_result_cache()
     pattern_cache.clear()
     result_cache.clear()
+    with _splitter_cache_lock:
+        _splitter_cache.clear()
     with _unknown_dialect_warning_lock:
         _warned_unknown_dialects.clear()
 

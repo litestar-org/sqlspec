@@ -9,10 +9,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import sqlglot
-from google.api_core.retry import Retry
-from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
-from google.cloud.bigquery.retry import DEFAULT_RETRY
-from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.core import (
@@ -43,6 +39,9 @@ from sqlspec.utils.type_guards import has_errors, has_value_attribute
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
     from typing import Literal
+
+    from google.api_core.retry import Retry
+    from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
 
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
     from sqlspec.driver._common import SyncExceptionHandler
@@ -159,7 +158,8 @@ def _has_synthetic_positional_keys(parameters: "list[dict[str, Any]]") -> bool:
 
 def _uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
     """Return True when a BigQuery client points at a local emulator endpoint."""
-    api_base_url = getattr(getattr(connection, "_connection", None), "API_BASE_URL", None)
+    bq_conn = cast("object", getattr(connection, "_connection", None))
+    api_base_url = cast("str | None", getattr(bq_conn, "API_BASE_URL", None)) if bq_conn is not None else None
     if not isinstance(api_base_url, str):
         return False
     try:
@@ -459,6 +459,8 @@ def _inline_bigquery_literals(
 
 def _should_retry_bigquery_job(exception: Exception) -> bool:
     """Return True when a BigQuery job exception is safe to retry."""
+    from google.cloud.exceptions import GoogleCloudError
+
     if not isinstance(exception, GoogleCloudError):
         return False
 
@@ -484,6 +486,8 @@ def _should_retry_bigquery_job(exception: Exception) -> bool:
 
 def build_retry(deadline: float) -> "Retry":
     """Build retry policy for job restarts based on error reason codes."""
+    from google.api_core.retry import Retry
+
     return Retry(predicate=_should_retry_bigquery_job, deadline=deadline)
 
 
@@ -517,13 +521,13 @@ _COPY_JOB_FIELDS: tuple[str, ...] = (
 )
 
 
-def copy_job_config(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
+def copy_job_config(source_config: "QueryJobConfig", target_config: "QueryJobConfig") -> None:
     """Copy known job config fields from source to target."""
     for attr in _COPY_JOB_FIELDS:
         _copy_job_config_field(source_config, target_config, attr)
 
 
-def _copy_job_config_field(source_config: QueryJobConfig, target_config: QueryJobConfig, attr: str) -> None:
+def _copy_job_config_field(source_config: "QueryJobConfig", target_config: "QueryJobConfig", attr: str) -> None:
     try:
         value = getattr(source_config, attr)
     except (AttributeError, TypeError):
@@ -537,17 +541,17 @@ def run_query_job(
     sql: str,
     parameters: Any,
     *,
-    default_job_config: QueryJobConfig | None,
-    job_config: QueryJobConfig | None,
+    default_job_config: "QueryJobConfig | None",
+    job_config: "QueryJobConfig | None",
     json_serializer: "Callable[[Any], str]",
-    retry: Retry | None = None,
+    retry: "Retry | None" = None,
     timeout: float | None = None,
-    job_retry: Retry | None = None,
+    job_retry: "Retry | None" = None,
     api_method: str | None = None,
     timestamp_precision: Any | None = None,
     job_id: str | None = None,
     job_id_prefix: str | None = None,
-) -> QueryJob:
+) -> "QueryJob":
     """Execute a BigQuery query job with merged configuration.
 
     Args:
@@ -573,6 +577,8 @@ def run_query_job(
     Returns:
         QueryJob object representing the executed job.
     """
+    from google.cloud.bigquery import QueryJobConfig
+
     final_job_config = QueryJobConfig()
     if default_job_config:
         copy_job_config(default_job_config, final_job_config)
@@ -602,15 +608,17 @@ def _run_query_and_wait(
     sql: str,
     parameters: Any,
     *,
-    default_job_config: QueryJobConfig | None,
+    default_job_config: "QueryJobConfig | None",
     json_serializer: "Callable[[Any], str]",
-    retry: Retry | None = None,
+    retry: "Retry | None" = None,
     wait_timeout: float | None = None,
-    job_retry: Retry | None = None,
+    job_retry: "Retry | None" = None,
     page_size: int | None = None,
     max_results: int | None = None,
 ) -> Any:
     """Execute a BigQuery query via query_and_wait and return the row iterator."""
+    from google.cloud.bigquery import QueryJobConfig
+
     final_job_config = QueryJobConfig()
     if default_job_config:
         copy_job_config(default_job_config, final_job_config)
@@ -632,6 +640,8 @@ def _run_query_and_wait(
 
 
 def build_load_job_config(file_format: "BigQueryLoadFormat", overwrite: bool) -> "LoadJobConfig":
+    from google.cloud.bigquery import LoadJobConfig
+
     job_config = LoadJobConfig()
     job_config.source_format = _map_bigquery_source_format(file_format)
     job_config.write_disposition = "WRITE_TRUNCATE" if overwrite else "WRITE_APPEND"
@@ -701,7 +711,7 @@ def _append_request_size(request: Any) -> int:
         return size
 
 
-def build_load_job_telemetry(job: QueryJob, table: str, *, format_label: str) -> "StorageTelemetry":
+def build_load_job_telemetry(job: "QueryJob", table: str, *, format_label: str) -> "StorageTelemetry":
     try:
         properties = cast("Any", job)._properties
     except AttributeError:
@@ -824,6 +834,8 @@ class BigQueryStreamSource:
         self._pages: Iterator[Iterable[_BigQueryRow]] | None = None
 
     def start(self) -> None:
+        from google.cloud.bigquery.retry import DEFAULT_RETRY
+
         handler = self._driver.handle_database_exceptions()
         with handler:
             page_size = None if _uses_local_bigquery_endpoint(self._driver.connection) else self._chunk_size
@@ -1046,6 +1058,14 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
         2. Message pattern matching for specific errors
         3. Default SQLSpecError fallback
 
+    Mapped Statuses:
+        * UniqueViolationError: HTTP 409 (Conflict) or "already exists" in message
+        * NotFoundError: HTTP 404 (Not Found) or "not found" in message
+        * QueryTimeoutError: "timeout", "deadline exceeded", or "cancelled" in message
+        * SQLParsingError / DataError / SQLSpecError: HTTP 400 (Bad Request)
+        * PermissionDeniedError: HTTP 403 (Forbidden) or "access denied" / "permission denied" in message
+        * OperationalError: HTTP 500+ (Server error)
+
     Args:
         error: The BigQuery exception to map
 
@@ -1058,19 +1078,15 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
         status_code = None
     error_msg = str(error).lower()
 
-    # Resource conflict - unique/already exists
     if status_code == HTTP_CONFLICT or "already exists" in error_msg:
         return _create_bigquery_error(error, status_code, UniqueViolationError, "resource already exists")
 
-    # Resource not found
     if status_code == HTTP_NOT_FOUND or "not found" in error_msg:
         return _create_bigquery_error(error, status_code, NotFoundError, "resource not found")
 
-    # Query timeout/cancellation
     if "timeout" in error_msg or "deadline exceeded" in error_msg or "cancelled" in error_msg:
         return _create_bigquery_error(error, status_code, QueryTimeoutError, "query timeout or cancelled")
 
-    # Bad request - parse message for details
     if status_code == HTTP_BAD_REQUEST:
         if "syntax" in error_msg or "invalid query" in error_msg:
             return _create_bigquery_error(error, status_code, SQLParsingError, "query syntax error")
@@ -1078,11 +1094,9 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
             return _create_bigquery_error(error, status_code, DataError, "data error")
         return _create_bigquery_error(error, status_code, SQLSpecError, "error")
 
-    # Permission denied - use PermissionDeniedError instead of DatabaseConnectionError
     if status_code == HTTP_FORBIDDEN or "access denied" in error_msg or "permission denied" in error_msg:
         return _create_bigquery_error(error, status_code, PermissionDeniedError, "permission denied")
 
-    # Server errors
     if status_code and status_code >= HTTP_SERVER_ERROR:
         return _create_bigquery_error(error, status_code, OperationalError, "operational error")
 

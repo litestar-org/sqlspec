@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from sqlglot import exp
 
 from sqlspec.core.parameters import TypedParameter
-from sqlspec.utils.type_guards import is_expression, is_typed_parameter
+from sqlspec.utils.type_guards import is_expression
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 __all__ = (
     "hash_expression",
     "hash_expression_node",
+    "hash_filters",
     "hash_optimized_expression",
     "hash_parameters",
     "hash_sql_statement",
@@ -121,7 +122,7 @@ def hash_parameters(
     if named_parameters:
         hashable_items: list[tuple[str, tuple[Any, Any]]] = []
         for key, value in sorted(named_parameters.items()):
-            if is_typed_parameter(value):
+            if isinstance(value, TypedParameter):
                 if isinstance(value.value, (list, dict)):
                     hashable_items.append((key, (repr(value.value), value.original_type)))
                 else:
@@ -147,13 +148,6 @@ def hash_parameters(
             param_hash ^= hash(("original", repr(original_parameters)))
 
     return param_hash
-
-
-def _hash_filter_value(value: Any) -> int:
-    try:
-        return hash(value)
-    except TypeError:
-        return hash(repr(value))
 
 
 def hash_filters(filters: "Sequence[StatementFilter] | None" = None) -> int:

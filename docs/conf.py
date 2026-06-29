@@ -135,6 +135,7 @@ autodoc_type_aliases = {
     "ParameterMapping": "sqlspec.core.parameters.ParameterMapping",
     "ParameterSequence": "sqlspec.core.parameters.ParameterSequence",
     "ParameterPayload": "sqlspec.core.parameters.ParameterPayload",
+    "DialectType": "sqlglot.dialects.dialect.DialectType",
     "Union": "typing.Union",
     "Callable": "typing.Callable",
     "Any": "typing.Any",

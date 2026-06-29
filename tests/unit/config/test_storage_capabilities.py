@@ -1,8 +1,10 @@
+import inspect
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+import sqlspec.core.config_runtime as config_runtime_module
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.core import StatementConfig
 from sqlspec.core.config_runtime import (
@@ -25,6 +27,13 @@ from sqlspec.driver import (
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted
+
+
+def test_config_runtime_uses_direct_core_submodule_imports() -> None:
+    source = inspect.getsource(config_runtime_module)
+    assert "from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig" in source
+    assert "from sqlspec.core.statement import StatementConfig" in source
+    assert "from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig" not in source
 
 
 if TYPE_CHECKING:

@@ -1,7 +1,7 @@
 """Unit tests for the mssql_python data dictionary."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -69,7 +69,7 @@ def test_sync_data_dictionary_builds_version_info() -> None:
     driver = FakeSyncDriver()
     data_dictionary = MssqlPythonSyncDataDictionary()
 
-    version = data_dictionary.get_version(driver)
+    version = data_dictionary.get_version(cast(Any, driver))
 
     assert isinstance(version, MssqlVersionInfo)
     assert version.major == 16
@@ -77,8 +77,8 @@ def test_sync_data_dictionary_builds_version_info() -> None:
     assert version.revision == 2
     assert version.edition == "Developer Edition"
     assert version.is_azure_sql is False
-    assert data_dictionary.get_feature_flag(driver, "supports_greatest_least") is True
-    assert data_dictionary.get_feature_flag(driver, "supports_native_json") is False
+    assert data_dictionary.get_feature_flag(cast(Any, driver), "supports_greatest_least") is True
+    assert data_dictionary.get_feature_flag(cast(Any, driver), "supports_native_json") is False
 
 
 def test_mssql_version_info_uses_build_in_version_tuple_not_patch() -> None:
@@ -94,7 +94,7 @@ def test_sync_data_dictionary_merges_table_lists_with_default_schema() -> None:
     driver = FakeSyncDriver()
     data_dictionary = MssqlPythonSyncDataDictionary()
 
-    tables = data_dictionary.get_tables(driver)
+    tables = data_dictionary.get_tables(cast(Any, driver))
 
     assert tables == [{"schema_name": "dbo", "table_name": "parent"}, {"schema_name": "dbo", "table_name": "orphan"}]
     assert driver.select_calls[0][1]["schema_name"] == "dbo"
@@ -106,7 +106,7 @@ def test_sync_data_dictionary_selects_columns_by_table() -> None:
     driver = FakeSyncDriver()
     data_dictionary = MssqlPythonSyncDataDictionary()
 
-    columns = data_dictionary.get_columns(driver, table="app", schema="custom")
+    columns = data_dictionary.get_columns(cast(Any, driver), table="app", schema="custom")
 
     assert columns == [{"column_name": "id"}]
     assert driver.select_calls[0][1]["schema_name"] == "custom"
@@ -119,12 +119,12 @@ async def test_async_data_dictionary_builds_azure_version_info() -> None:
     driver = FakeAsyncDriver()
     data_dictionary = MssqlPythonAsyncDataDictionary()
 
-    version = await data_dictionary.get_version(driver)
+    version = await data_dictionary.get_version(cast(Any, driver))
 
     assert isinstance(version, MssqlVersionInfo)
     assert version.major == 12
     assert version.is_azure_sql is True
-    assert await data_dictionary.get_feature_flag(driver, "supports_native_json") is True
+    assert await data_dictionary.get_feature_flag(cast(Any, driver), "supports_native_json") is True
 
 
 @pytest.mark.anyio
@@ -133,7 +133,7 @@ async def test_async_data_dictionary_selects_indexes_by_table() -> None:
     driver = FakeAsyncDriver()
     data_dictionary = MssqlPythonAsyncDataDictionary()
 
-    indexes = await data_dictionary.get_indexes(driver, table="app")
+    indexes = await data_dictionary.get_indexes(cast(Any, driver), table="app")
 
     assert indexes == [{"index_name": "ix_app_id", "table_name": "app", "columns": "id"}]
     assert driver.select_calls[0][1]["schema_name"] == "dbo"

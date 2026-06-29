@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
 
-from sqlspec.adapters.spanner import config as config_module
 from sqlspec.adapters.spanner.config import (
     SpannerConnectionParams,
     SpannerDriverFeatures,
@@ -167,7 +166,9 @@ def test_get_database_routes_client_instance_and_database_settings(monkeypatch: 
             return instance
 
     created_clients: list[_FakeClient] = []
-    monkeypatch.setattr(config_module, "Client", _FakeClient)
+    import google.cloud.spanner_v1
+
+    monkeypatch.setattr(google.cloud.spanner_v1, "Client", _FakeClient)
 
     client_info = object()
     query_options = object()

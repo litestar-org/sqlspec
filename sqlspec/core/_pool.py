@@ -40,10 +40,6 @@ class ObjectPool(Generic[T]):
             self._pool.append(obj)
 
 
-def _reset_noop(_: object) -> None:
-    return None
-
-
 def _create_sql() -> "SQL":
     from sqlspec.core.statement import SQL
 

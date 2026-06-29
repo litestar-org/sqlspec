@@ -5,7 +5,8 @@ import inspect
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

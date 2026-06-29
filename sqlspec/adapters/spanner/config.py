@@ -2,8 +2,6 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
-from google.cloud.spanner_v1 import Client
-from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool, PingingPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
@@ -26,8 +24,9 @@ if TYPE_CHECKING:
     from google.api_core.retry import Retry
     from google.auth.credentials import Credentials
     from google.cloud.spanner_admin_database_v1.types import DatabaseDialect, EncryptionConfig
-    from google.cloud.spanner_v1 import DirectedReadOptions, ExecuteSqlRequest, RequestOptions
+    from google.cloud.spanner_v1 import Client, DirectedReadOptions, ExecuteSqlRequest, RequestOptions
     from google.cloud.spanner_v1.database import Database
+    from google.cloud.spanner_v1.pool import AbstractSessionPool
     from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
 
     from sqlspec.config import ExtensionConfigs
@@ -207,7 +206,7 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
                         txn_id = txn._transaction_id
                     except AttributeError:
                         txn_id = None
-                    mutations = getattr(txn, "_mutations", None)
+                    mutations = cast("list[Any] | None", getattr(txn, "_mutations", None))
                     try:
                         committed = txn.committed
                     except AttributeError:
@@ -289,6 +288,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         ):
             self.connection_config["session_labels"] = legacy_session_labels
 
+        from google.cloud.spanner_v1.pool import FixedSizePool
+
         self.connection_config.setdefault("size", self.connection_config.pop("max_sessions", 10))
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
@@ -311,7 +312,9 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self._client: Client | None = None
         self._database: Database | None = None
 
-    def _get_client(self) -> Client:
+    def _get_client(self) -> "Client":
+        from google.cloud.spanner_v1 import Client
+
         if self._client is None:
             client_kwargs = self._resolve_kwargs(_CLIENT_CONFIG_FIELDS)
             self._client = Client(**client_kwargs)
@@ -343,7 +346,9 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def create_connection(self) -> SpannerConnection:
         return cast("SpannerConnection", self.get_database().snapshot())  # type: ignore[no-untyped-call]
 
-    def _create_pool(self) -> AbstractSessionPool:
+    def _create_pool(self) -> "AbstractSessionPool":
+        from google.cloud.spanner_v1.pool import BurstyPool, FixedSizePool, PingingPool
+
         instance_id = self.connection_config.get("instance_id")
         database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
@@ -545,3 +550,12 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         """Return queue defaults for Spanner JSON handling."""
 
         return EventRuntimeHints(json_passthrough=True)
+
+
+def __getattr__(name: str) -> Any:
+    if name == "Client":
+        from google.cloud.spanner_v1 import Client
+
+        return Client
+    msg = f"module {__name__} has no attribute {name}"
+    raise AttributeError(msg)

@@ -210,6 +210,7 @@ from sqlspec.core.query_modifiers import (
 )
 from sqlspec.core.result import (
     ArrowResult,
+    DMLResult,
     SQLResult,
     StackResult,
     StatementResult,
@@ -267,6 +268,7 @@ __all__ = (
     "CompiledSQL",
     "ConditionFactory",
     "CorrelationExtractor",
+    "DMLResult",
     "DriverParameterProfile",
     "ExplainFormat",
     "ExplainOptions",

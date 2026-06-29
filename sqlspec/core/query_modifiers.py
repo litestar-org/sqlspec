@@ -12,7 +12,7 @@ The utilities are organized in layers:
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 from sqlglot import exp
 
@@ -50,9 +50,9 @@ __all__ = (
 # Type alias for condition factory functions
 ConditionFactory = Callable[[exp.Expr, exp.Placeholder], exp.Expr]
 
-_TABLE_QUALIFIED_PARTS = 2
-_DATABASE_QUALIFIED_PARTS = 3
-_CATALOG_QUALIFIED_PARTS = 4
+_TABLE_QUALIFIED_PARTS: Final[int] = 2
+_DATABASE_QUALIFIED_PARTS: Final[int] = 3
+_CATALOG_QUALIFIED_PARTS: Final[int] = 4
 
 
 # =============================================================================

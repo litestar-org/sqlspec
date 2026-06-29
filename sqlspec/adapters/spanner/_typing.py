@@ -6,23 +6,51 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.typing import import_optional_attr
+
+
+class _UnavailableSpannerGoogleAPICallError(Exception):
+    """Fallback Spanner API exception when google-api-core is unavailable."""
+
+
+class _UnavailableSpannerTransaction:
+    """Fallback Spanner transaction class when google-cloud-spanner is unavailable."""
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
+    from typing import TypeAlias
 
+    from google.api_core.exceptions import GoogleAPICallError as _SpannerGoogleAPICallError
     from google.cloud.spanner_v1.database import SnapshotCheckout
     from google.cloud.spanner_v1.snapshot import Snapshot
-    from google.cloud.spanner_v1.transaction import Transaction
+    from google.cloud.spanner_v1.transaction import Transaction as _SpannerTransaction
 
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
     from sqlspec.core import StatementConfig
 
-    SpannerConnection = Snapshot | SnapshotCheckout | Transaction
+    SpannerConnection = Snapshot | SnapshotCheckout | _SpannerTransaction
+    SpannerGoogleAPICallError: TypeAlias = _SpannerGoogleAPICallError
+    SpannerTransaction: TypeAlias = _SpannerTransaction
 
 if not TYPE_CHECKING:
     SpannerConnection = Any
+    SpannerGoogleAPICallError = (
+        import_optional_attr("google.api_core.exceptions", "GoogleAPICallError")
+        or _UnavailableSpannerGoogleAPICallError
+    )
+    SpannerTransaction = (
+        import_optional_attr("google.cloud.spanner_v1.transaction", "Transaction") or _UnavailableSpannerTransaction
+    )
 
-__all__ = ("SpannerConnection", "SpannerSessionContext", "SpannerSyncCursor")
+__all__ = (
+    "SpannerConnection",
+    "SpannerGoogleAPICallError",
+    "SpannerSessionContext",
+    "SpannerSyncCursor",
+    "SpannerTransaction",
+)
 
 
 class SpannerSyncCursor:

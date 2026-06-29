@@ -4,8 +4,6 @@ import contextlib
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any
 
-from aiomysql import SSCursor
-
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
@@ -24,6 +22,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.protocols import HasSqlStateProtocol, HasTypeCodeProtocol
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -189,6 +188,8 @@ class AiomysqlStreamSource:
         self._column_names: list[str] | None = None
 
     async def start(self) -> None:
+        from aiomysql import SSCursor
+
         handler = self._driver.handle_database_exceptions()
         async with handler:
             cursor = await self._driver.connection.cursor(SSCursor)
@@ -324,13 +325,11 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     Returns:
         True to suppress expected migration errors, or a SQLSpec exception
     """
-    error_args = getattr(error, "args", ())
+    error_args = error.args
     error_code = error_args[0] if error_args and isinstance(error_args[0], int) else None
-    sqlstate_attr = getattr(error, "sqlstate", None)
-    sqlstate = sqlstate_attr if isinstance(sqlstate_attr, str) else None
+    sqlstate = error.sqlstate if isinstance(error, HasSqlStateProtocol) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
-    # Migration-specific errors to suppress
     if error_code in _MYSQL_MIGRATION_ERROR_CODES:
         if logger is not None:
             logger.warning("aiomysql MySQL expected migration error (ignoring): %s", error)
@@ -402,7 +401,7 @@ def detect_json_columns_from_description(
         if isinstance(column, (tuple, list)):
             type_code = column[1] if len(column) > 1 else None
         else:
-            type_code = getattr(column, "type_code", None)
+            type_code = column.type_code if isinstance(column, HasTypeCodeProtocol) else None
         if type_code in json_type_codes:
             append(index)
     return json_indexes

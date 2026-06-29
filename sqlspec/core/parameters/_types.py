@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Literal, TypeAlias
+from typing import Any, Final, Literal, TypeAlias
 
 from mypy_extensions import mypyc_attr
 
@@ -74,9 +74,9 @@ Used when a function is known to return only named (not positional) parameters.
 This is narrower than :data:`ConvertedParameters` and excludes ``list``, ``tuple``, and ``None``.
 """
 
-TYPED_PARAMETER_SLOTS = ("_hash", "original_type", "semantic_name", "value")
-PARAMETER_INFO_SLOTS = ("name", "ordinal", "placeholder_text", "position", "style")
-PARAMETER_STYLE_CONFIG_SLOTS = (
+TYPED_PARAMETER_SLOTS: Final[tuple[str, ...]] = ("_hash", "original_type", "semantic_name", "value")
+PARAMETER_INFO_SLOTS: Final[tuple[str, ...]] = ("name", "ordinal", "placeholder_text", "position", "style")
+PARAMETER_STYLE_CONFIG_SLOTS: Final[tuple[str, ...]] = (
     "_hash_cache",
     "allow_mixed_parameter_styles",
     "ast_transformer",
@@ -94,7 +94,7 @@ PARAMETER_STYLE_CONFIG_SLOTS = (
     "supported_parameter_styles",
     "type_coercion_map",
 )
-DRIVER_PARAMETER_PROFILE_SLOTS = (
+DRIVER_PARAMETER_PROFILE_SLOTS: Final[tuple[str, ...]] = (
     "allow_mixed_parameter_styles",
     "custom_type_coercions",
     "default_ast_transformer",
@@ -114,8 +114,14 @@ DRIVER_PARAMETER_PROFILE_SLOTS = (
     "supported_execution_styles",
     "supported_styles",
 )
-PARAMETER_PROFILE_SLOTS = ("_parameters", "_placeholder_counts", "named_parameters", "reused_ordinals", "styles")
-PARAMETER_PROCESSING_RESULT_SLOTS = (
+PARAMETER_PROFILE_SLOTS: Final[tuple[str, ...]] = (
+    "_parameters",
+    "_placeholder_counts",
+    "named_parameters",
+    "reused_ordinals",
+    "styles",
+)
+PARAMETER_PROCESSING_RESULT_SLOTS: Final[tuple[str, ...]] = (
     "applied_wrap_types",
     "input_named_parameters",
     "parameter_profile",
@@ -142,20 +148,20 @@ class ParameterStyle(str, Enum):
     POSITIONAL_PYFORMAT = "pyformat_positional"
 
 
-_NAMED_STYLES: frozenset["ParameterStyle"] = frozenset({
+_NAMED_STYLES: Final[frozenset["ParameterStyle"]] = frozenset({
     ParameterStyle.NAMED_COLON,
     ParameterStyle.NAMED_AT,
     ParameterStyle.NAMED_DOLLAR,
     ParameterStyle.NAMED_PYFORMAT,
 })
-_POSITIONAL_STYLES: frozenset["ParameterStyle"] = frozenset({
+_POSITIONAL_STYLES: Final[frozenset["ParameterStyle"]] = frozenset({
     ParameterStyle.QMARK,
     ParameterStyle.NUMERIC,
     ParameterStyle.POSITIONAL_COLON,
     ParameterStyle.POSITIONAL_PYFORMAT,
 })
-_NAMED_STYLE_VALUES: frozenset[str] = frozenset(style.value for style in _NAMED_STYLES)
-_POSITIONAL_STYLE_VALUES: frozenset[str] = frozenset(style.value for style in _POSITIONAL_STYLES)
+_NAMED_STYLE_VALUES: Final[frozenset[str]] = frozenset(style.value for style in _NAMED_STYLES)
+_POSITIONAL_STYLE_VALUES: Final[frozenset[str]] = frozenset(style.value for style in _POSITIONAL_STYLES)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -491,10 +497,8 @@ class ParameterProfile:
         param_tuple: tuple[ParameterInfo, ...] = tuple(parameters) if parameters else ()
         self._parameters = param_tuple
 
-        # Optimize styles computation: skip sorted() for single-style case (common)
         if param_tuple:
             unique_styles = {param.style.value for param in param_tuple}
-            # Skip sort for single style (common case) - O(1) vs O(n log n)
             if len(unique_styles) == 1:
                 self.styles = (next(iter(unique_styles)),)
             else:

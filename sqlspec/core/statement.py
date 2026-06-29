@@ -75,8 +75,16 @@ __all__ = (
 )
 logger = get_logger("sqlspec.core.statement")
 
-RETURNS_ROWS_OPERATIONS: Final = {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
-MODIFYING_OPERATIONS: Final = {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}
+RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({
+    "SELECT",
+    "WITH",
+    "VALUES",
+    "TABLE",
+    "SHOW",
+    "DESCRIBE",
+    "PRAGMA",
+})
+MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
 
@@ -451,7 +459,8 @@ class SQL:
         self._rebind_processor = None
         self._declared_parameters = ()
 
-    def _normalize_dialect(self, dialect: "DialectType") -> "str | None":
+    @staticmethod
+    def _normalize_dialect(dialect: "DialectType") -> "str | None":
         """Convert dialect to string representation.
 
         Args:
@@ -493,7 +502,8 @@ class SQL:
         if sql_obj.is_processed:
             self._processed_state = sql_obj.get_processed_state()
 
-    def _should_auto_detect_many(self, parameters: tuple) -> bool:
+    @staticmethod
+    def _should_auto_detect_many(parameters: tuple) -> bool:
         """Detect execute_many mode from parameter structure.
 
         Args:
@@ -506,8 +516,6 @@ class SQL:
             param_list = parameters[0]
             if not param_list:
                 return False
-            # Optimization: Check only the first element for batch structure
-            # O(1) check instead of O(N) scan
             first_item = param_list[0]
             if isinstance(first_item, (tuple, list, dict)):
                 return len(param_list) > 1
@@ -531,7 +539,8 @@ class SQL:
         self._normalize_parameters(parameters)
         self._named_parameters.update(kwargs)
 
-    def _extract_filters(self, parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
+    @staticmethod
+    def _extract_filters(parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
         return [p for p in parameters if is_statement_filter(p)]
 
     def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
@@ -1094,8 +1103,13 @@ class SQL:
         Returns:
             New SQL instance with the expression and copied state
         """
+        new_sql = self._clone_base(new_expr)
+        new_sql._sql_param_counters = self._sql_param_counters.copy()
+        return new_sql
+
+    def _clone_base(self, statement_seed: "str | exp.Expr") -> "SQL":
         new_sql = SQL(
-            new_expr,
+            statement_seed,
             *self._original_parameters,
             statement_config=self._statement_config,
             is_many=self._is_many,
@@ -1104,7 +1118,6 @@ class SQL:
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
-        new_sql._sql_param_counters = self._sql_param_counters.copy()
         return new_sql
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":
@@ -1117,21 +1130,9 @@ class SQL:
         Returns:
             New SQL instance with the added parameter
         """
-        original_params = self._original_parameters
-        config = self._statement_config
-        is_many = self._is_many
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(
-            statement_seed,
-            *original_params,
-            statement_config=config,
-            is_many=is_many,
-            declared_parameters=self._declared_parameters,
-        )
-        new_sql._named_parameters.update(self._named_parameters)
+        new_sql = self._clone_base(statement_seed)
         new_sql._named_parameters[name] = value
-        new_sql._positional_parameters = self._positional_parameters.copy()
-        new_sql._filters = self._filters.copy()
         return new_sql
 
     def where(self, condition: "str | exp.Expr") -> "SQL":
@@ -1178,14 +1179,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_eq)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
+        return self._where_comparison(column, value, expr_eq)
 
     def where_neq(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column != value condition.
@@ -1197,14 +1191,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_neq)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
+        return self._where_comparison(column, value, expr_neq)
 
     def where_lt(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column < value condition.
@@ -1216,14 +1203,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_lt)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
+        return self._where_comparison(column, value, expr_lt)
 
     def where_lte(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column <= value condition.
@@ -1235,14 +1215,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_lte)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
+        return self._where_comparison(column, value, expr_lte)
 
     def where_gt(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column > value condition.
@@ -1254,14 +1227,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_gt)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
+        return self._where_comparison(column, value, expr_gt)
 
     def where_gte(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column >= value condition.
@@ -1273,14 +1239,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_gte)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
+        return self._where_comparison(column, value, expr_gte)
 
     def where_like(self, column: "str | exp.Column", pattern: str) -> "SQL":
         """Add WHERE column LIKE pattern condition.
@@ -1292,14 +1251,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_like)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = pattern
-        return new_sql
+        return self._where_comparison(column, pattern, expr_like)
 
     def where_ilike(self, column: "str | exp.Column", pattern: str) -> "SQL":
         """Add WHERE column ILIKE pattern condition (case-insensitive).
@@ -1311,14 +1263,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
-        condition = create_condition(column, param_name, expr_ilike)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters[param_name] = pattern
-        return new_sql
+        return self._where_comparison(column, pattern, expr_ilike)
 
     def where_is_null(self, column: "str | exp.Column") -> "SQL":
         """Add WHERE column IS NULL condition.
@@ -1329,10 +1274,8 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
         condition = create_condition(column, "_unused", expr_is_null)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._where_condition(condition)
 
     def where_is_not_null(self, column: "str | exp.Column") -> "SQL":
         """Add WHERE column IS NOT NULL condition.
@@ -1343,10 +1286,8 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
         condition = create_condition(column, "_unused", expr_is_not_null)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._where_condition(condition)
 
     def where_in(self, column: "str | exp.Column", values: "Sequence[Any]") -> "SQL":
         """Add WHERE column IN (values) condition.
@@ -1358,27 +1299,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        if not values:
-            expression = self._get_or_parse_expression()
-            false_condition = exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
-            new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, false_condition))
-            return self._create_modified_copy_with_expression(new_expr)
-
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-
-        param_names: list[str] = []
-        param_values: dict[str, Any] = {}
-        for i, val in enumerate(values):
-            param_name = self._generate_sql_param_name(f"{col_name}_in_{i}")
-            param_names.append(param_name)
-            param_values[param_name] = val
-
-        condition = create_in_condition(column, param_names)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters.update(param_values)
-        return new_sql
+        return self._where_sequence_membership(column, values, "in", create_in_condition, empty_is_false=True)
 
     def where_not_in(self, column: "str | exp.Column", values: "Sequence[Any]") -> "SQL":
         """Add WHERE column NOT IN (values) condition.
@@ -1390,24 +1311,7 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        if not values:
-            return self
-
-        expression = self._get_or_parse_expression()
-        col_name = extract_column_name(column)
-
-        param_names: list[str] = []
-        param_values: dict[str, Any] = {}
-        for i, val in enumerate(values):
-            param_name = self._generate_sql_param_name(f"{col_name}_not_in_{i}")
-            param_names.append(param_name)
-            param_values[param_name] = val
-
-        condition = create_not_in_condition(column, param_names)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
-        new_sql._named_parameters.update(param_values)
-        return new_sql
+        return self._where_sequence_membership(column, values, "not_in", create_not_in_condition, empty_is_false=False)
 
     def where_between(self, column: "str | exp.Column", low: Any, high: Any) -> "SQL":
         """Add WHERE column BETWEEN low AND high condition.
@@ -1420,15 +1324,59 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
-        expression = self._get_or_parse_expression()
         col_name = extract_column_name(column)
         low_param = self._generate_sql_param_name(f"{col_name}_low")
         high_param = self._generate_sql_param_name(f"{col_name}_high")
         condition = create_between_condition(column, low_param, high_param)
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        new_sql = self._create_modified_copy_with_expression(new_expr)
+        new_sql = self._where_condition(condition)
         new_sql._named_parameters[low_param] = low
         new_sql._named_parameters[high_param] = high
+        return new_sql
+
+    def _where_condition(self, condition: exp.Expr) -> "SQL":
+        expression = self._get_or_parse_expression()
+        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
+        return self._create_modified_copy_with_expression(new_expr)
+
+    def _where_comparison(
+        self,
+        column: "str | exp.Column",
+        value: Any,
+        condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]",
+    ) -> "SQL":
+        col_name = extract_column_name(column)
+        param_name = self._generate_sql_param_name(col_name)
+        condition = create_condition(column, param_name, condition_factory)
+        new_sql = self._where_condition(condition)
+        new_sql._named_parameters[param_name] = value
+        return new_sql
+
+    def _where_sequence_membership(
+        self,
+        column: "str | exp.Column",
+        values: "Sequence[Any]",
+        parameter_suffix: str,
+        condition_factory: "Callable[[str | exp.Column, list[str]], exp.Expr]",
+        *,
+        empty_is_false: bool,
+    ) -> "SQL":
+        if not values:
+            if not empty_is_false:
+                return self
+            false_condition = exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
+            return self._where_condition(false_condition)
+
+        col_name = extract_column_name(column)
+        param_names: list[str] = []
+        param_values: dict[str, Any] = {}
+        for index, value in enumerate(values):
+            param_name = self._generate_sql_param_name(f"{col_name}_{parameter_suffix}_{index}")
+            param_names.append(param_name)
+            param_values[param_name] = value
+
+        condition = condition_factory(column, param_names)
+        new_sql = self._where_condition(condition)
+        new_sql._named_parameters.update(param_values)
         return new_sql
 
     def order_by(self, *items: "str | exp.Expr", desc: bool = False) -> "SQL":
