@@ -14,6 +14,7 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbSyncDataDictionary,
     OracleVersionInfo,
 )
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -126,23 +127,8 @@ class OracleADKPartitionConfig(TypedDict):
     """Partition key override for the memory table."""
 
 
-class OracleADKConfig(TypedDict):
+class OracleADKConfig(ADKConfig):
     """Oracle ADK extension settings consumed by Oracle ADK stores."""
-
-    session_table: NotRequired[str]
-    """Name of the Oracle ADK sessions table."""
-
-    events_table: NotRequired[str]
-    """Name of the Oracle ADK events table."""
-
-    app_state_table: NotRequired[str]
-    """Name of the Oracle ADK app-scoped state table."""
-
-    user_state_table: NotRequired[str]
-    """Name of the Oracle ADK user-scoped state table."""
-
-    metadata_table: NotRequired[str]
-    """Name of the Oracle ADK metadata table."""
 
     in_memory: NotRequired[bool]
     """Enable Oracle INMEMORY clauses on ADK tables."""

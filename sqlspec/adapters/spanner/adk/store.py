@@ -8,6 +8,7 @@ from google.cloud.spanner_v1 import param_types
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.config import ADKConfig
 from sqlspec.exceptions import OperationalError
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -40,7 +41,7 @@ class SpannerADKRetentionConfig(TypedDict):
     """Memory row retention in seconds."""
 
 
-class SpannerADKConfig(TypedDict):
+class SpannerADKConfig(ADKConfig):
     """Spanner-specific ADK extension settings."""
 
     shard_count: NotRequired[int]

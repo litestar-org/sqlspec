@@ -19,6 +19,7 @@ from sqlspec.adapters.oracledb.adk import (
     OracleSyncADKStore,
 )
 from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
+from sqlspec.config import ADKConfig
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
@@ -29,6 +30,8 @@ def _mock_config(adk_config: dict[str, object]) -> MagicMock:
 
 def test_oracle_adk_config_types_adapter_local_optimizations() -> None:
     """Oracle ADK optimization settings are typed on the adapter-local extension config."""
+
+    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", OracleADKConfig).__optional_keys__
 
     expected_types: dict[str, object] = {
         "in_memory": bool,

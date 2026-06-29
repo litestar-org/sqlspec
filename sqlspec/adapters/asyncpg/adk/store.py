@@ -3,9 +3,9 @@
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncpg
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired
 
-from sqlspec.config import AsyncConfigT
+from sqlspec.config import ADKConfig, AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 
@@ -21,7 +21,7 @@ __all__ = ("AsyncpgADKConfig", "AsyncpgADKMemoryStore", "AsyncpgADKStore")
 POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
 
 
-class AsyncpgADKConfig(TypedDict):
+class AsyncpgADKConfig(ADKConfig):
     """Asyncpg-specific ADK extension settings.
 
     Use these keys inside ``extension_config["adk"]`` with the asyncpg ADK store.

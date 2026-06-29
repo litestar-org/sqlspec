@@ -14,6 +14,7 @@ from sqlspec.adapters.spanner.adk import (
     SpannerSyncADKMemoryStore,
     SpannerSyncADKStore,
 )
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import EventRecord, MemoryRecord
 
 
@@ -25,6 +26,8 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
 
 def test_spanner_adk_config_types_adapter_local_optimizations() -> None:
     """Spanner ADK optimization settings are typed on the adapter-local extension config."""
+
+    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", SpannerADKConfig).__optional_keys__
 
     expected_types: dict[str, object] = {
         "shard_count": int,

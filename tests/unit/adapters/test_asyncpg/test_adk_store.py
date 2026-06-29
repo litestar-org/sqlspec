@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKConfig, AsyncpgADKStore
+from sqlspec.config import ADKConfig
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -17,6 +18,8 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
 
 def test_asyncpg_adk_config_types_adapter_local_optimizations() -> None:
     """Asyncpg ADK optimizations are typed on the adapter-local extension config."""
+
+    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", AsyncpgADKConfig).__optional_keys__
 
     for feature_name in ("enable_event_generated_columns", "enable_covering_indexes"):
         annotation = cast("Any", AsyncpgADKConfig.__annotations__[feature_name])
