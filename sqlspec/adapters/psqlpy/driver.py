@@ -7,7 +7,7 @@ and transaction management.
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
     PsqlpyStreamSource,
     build_insert_statement,
@@ -64,9 +64,8 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        import psqlpy.exceptions
 
-        if issubclass(exc_type, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error)):
+        if issubclass(exc_type, (PsqlpyDatabaseError, PsqlpyError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -199,31 +198,25 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction."""
-        import psqlpy.exceptions
-
         try:
             await self.connection.execute("BEGIN")
-        except psqlpy.exceptions.DatabaseError as e:
+        except PsqlpyDatabaseError as e:
             msg = f"Failed to begin psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-        import psqlpy.exceptions
-
         try:
             await self.connection.execute("COMMIT")
-        except psqlpy.exceptions.DatabaseError as e:
+        except PsqlpyDatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-        import psqlpy.exceptions
-
         try:
             await self.connection.execute("ROLLBACK")
-        except psqlpy.exceptions.DatabaseError as e:
+        except PsqlpyDatabaseError as e:
             msg = f"Failed to rollback psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -329,8 +322,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            import psqlpy.exceptions
-
             schema_name, table_name = split_schema_and_table(table)
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -342,7 +333,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                     copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
                     if inspect.isawaitable(copy_operation):
                         await copy_operation
-                except (TypeError, psqlpy.exceptions.DatabaseError) as exc:
+                except (TypeError, PsqlpyDatabaseError) as exc:
                     logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
                     insert_sql = build_insert_statement(table, columns)
                     formatted_records = coerce_records_for_execute_many(records)
@@ -350,7 +341,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                         insert_operation = cursor.execute_many(insert_sql, formatted_records)
                         if inspect.isawaitable(insert_operation):
                             await insert_operation
-                    except (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.Error) as fallback_exc:
+                    except (PsqlpyDatabaseError, PsqlpyError) as fallback_exc:
                         if "PyJSON must be dict, list, or tuple" not in str(fallback_exc):
                             raise
                         formatted_records = coerce_records_for_execute_many(records, parse_json_text=True)

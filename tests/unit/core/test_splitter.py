@@ -1,6 +1,7 @@
 """Unit tests for SQL splitter helpers."""
 
 import inspect
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,7 @@ PUBLIC_DIALECT_CONFIGS = (
     splitter_module.BigQueryDialectConfig,
 )
 
-DIALECT_DEFAULTS = {
+DIALECT_DEFAULTS: dict[type[Any], tuple[str, set[str], set[str], set[str], set[str], set[str]]] = {
     splitter_module.OracleDialectConfig: ("oracle", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), {"/"}),
     splitter_module.TSQLDialectConfig: ("tsql", {"BEGIN", "TRY"}, {"END", "CATCH"}, {";"}, {"GO"}, set()),
     splitter_module.PostgreSQLDialectConfig: ("postgresql", {"DECLARE", "CASE", "DO"}, {"END"}, {";"}, set(), set()),

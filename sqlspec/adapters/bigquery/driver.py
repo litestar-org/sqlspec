@@ -11,9 +11,15 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
 from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE
-from google.cloud.exceptions import GoogleCloudError
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
+from sqlspec.adapters.bigquery._typing import (
+    BigQueryConnection,
+    BigQueryCursor,
+    BigQuerySessionContext,
+    BigQueryStorageWriteModule,
+    BigQueryStorageWriteTypes,
+    GoogleCloudError,
+)
 from sqlspec.adapters.bigquery.core import (
     DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
@@ -636,13 +642,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
         """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
-        from google.cloud import bigquery_storage_v1
-        from google.cloud.bigquery_storage_v1 import types
+        if BigQueryStorageWriteModule is None or BigQueryStorageWriteTypes is None:
+            msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion"
+            raise ImportError(msg)
+        types = BigQueryStorageWriteTypes
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
         credentials = getattr(self.connection, "_credentials", None)
-        client = bigquery_storage_v1.BigQueryWriteClient(credentials=credentials)  # type: ignore[no-untyped-call]
+        client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
         write_stream = client.create_write_stream(
             parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)

@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import import_optional_attr
 
+
+class _PsqlpyUnavailableError(Exception):
+    """Fallback psqlpy exception base when optional exception classes are unavailable."""
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
@@ -15,18 +20,31 @@ if TYPE_CHECKING:
 
     from psqlpy import Connection as _PsqlpyConnection
     from psqlpy import Listener as _PsqlpyListener
+    from psqlpy.exceptions import DatabaseError as _PsqlpyDatabaseError
+    from psqlpy.exceptions import Error as _PsqlpyError
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
     from sqlspec.core import StatementConfig
 
     PsqlpyConnection: TypeAlias = _PsqlpyConnection
+    PsqlpyDatabaseError: TypeAlias = _PsqlpyDatabaseError
+    PsqlpyError: TypeAlias = _PsqlpyError
     PsqlpyListener: TypeAlias = _PsqlpyListener
 
 if not TYPE_CHECKING:
     PsqlpyConnection = import_optional_attr("psqlpy", "Connection") or Any
+    PsqlpyDatabaseError = import_optional_attr("psqlpy.exceptions", "DatabaseError") or _PsqlpyUnavailableError
+    PsqlpyError = import_optional_attr("psqlpy.exceptions", "Error") or _PsqlpyUnavailableError
     PsqlpyListener = import_optional_attr("psqlpy", "Listener") or Any
 
-__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyListener", "PsqlpySessionContext")
+__all__ = (
+    "PsqlpyConnection",
+    "PsqlpyCursor",
+    "PsqlpyDatabaseError",
+    "PsqlpyError",
+    "PsqlpyListener",
+    "PsqlpySessionContext",
+)
 
 
 class PsqlpyCursor:

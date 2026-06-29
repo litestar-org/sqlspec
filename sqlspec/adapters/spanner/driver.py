@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 import sqlglot as _sqlglot
 from sqlglot import exp as _sqlglot_exp
 
-from sqlspec.adapters.spanner._typing import SpannerSessionContext, SpannerSyncCursor
+from sqlspec.adapters.spanner._typing import (
+    SpannerGoogleAPICallError,
+    SpannerSessionContext,
+    SpannerSyncCursor,
+    SpannerTransaction,
+)
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     coerce_params,
@@ -32,6 +37,7 @@ _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
     "SpannerSyncConfig.provide_session() opens a write-capable Transaction by default; "
     "the current session must have been opened via SpannerSyncConfig.provide_read_session()."
 )
+Transaction = SpannerTransaction
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -105,12 +111,10 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-        from google.api_core import exceptions as api_exceptions
-
         if exc_type is None:
             return False
 
-        if isinstance(exc_val, api_exceptions.GoogleAPICallError):
+        if isinstance(exc_val, SpannerGoogleAPICallError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -282,8 +286,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def commit(self) -> None:
-        from sqlspec.adapters.spanner.driver import Transaction
-
         if isinstance(self.connection, Transaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             if writer.committed is not None:
@@ -291,8 +293,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             writer.commit()
 
     def rollback(self) -> None:
-        from sqlspec.adapters.spanner.driver import Transaction
-
         if isinstance(self.connection, Transaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             writer.rollback()
@@ -441,8 +441,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
 
-        from sqlspec.adapters.spanner.driver import Transaction
-
         if overwrite:
             delete_sql = f"DELETE FROM {table} WHERE TRUE"
             if isinstance(self.connection, Transaction):
@@ -581,8 +579,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
 def __getattr__(name: str) -> Any:
     if name == "Transaction":
-        from google.cloud.spanner_v1.transaction import Transaction
-
         return Transaction
     msg = f"module {__name__} has no attribute {name}"
     raise AttributeError(msg)

@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from asyncpg import Pool
+from asyncpg import Pool, PostgresError
 from asyncpg.pool import PoolConnectionProxy
 
 if TYPE_CHECKING:
@@ -16,13 +16,20 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     CockroachAsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
+    CockroachAsyncpgPostgresError: TypeAlias = PostgresError
     CockroachAsyncpgPool: TypeAlias = Pool[Record]
 
 if not TYPE_CHECKING:
     CockroachAsyncpgConnection = PoolConnectionProxy
+    CockroachAsyncpgPostgresError = PostgresError
     CockroachAsyncpgPool = Pool
 
-__all__ = ("CockroachAsyncpgConnection", "CockroachAsyncpgPool", "CockroachAsyncpgSessionContext")
+__all__ = (
+    "CockroachAsyncpgConnection",
+    "CockroachAsyncpgPool",
+    "CockroachAsyncpgPostgresError",
+    "CockroachAsyncpgSessionContext",
+)
 
 
 class CockroachAsyncpgSessionContext:
