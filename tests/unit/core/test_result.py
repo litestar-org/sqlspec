@@ -865,6 +865,7 @@ def test_arrow_stack_external_api_smoke(arrow_result: ArrowResult) -> None:
     assert stack.rows_affected == arrow_result.rows_affected
 
 
+@pytest.mark.skipif(_RESULT_BASE_COMPILED, reason="compiled descriptors do not expose Python docstring metadata")
 def test_result_external_api_docstring_markers() -> None:
     """Dead-code policy markers identify externally callable result helpers."""
     for member in (ArrowResult.num_columns.fget, StackResult.is_arrow_result, StackResult.from_arrow_result):
@@ -872,13 +873,11 @@ def test_result_external_api_docstring_markers() -> None:
 
 
 def test_result_and_stack_idiom_source_shapes() -> None:
-    """Result and stack helpers should avoid generator and dynamic-attribute patterns."""
-    arrow_iter_source = inspect.getsource(ArrowResult.__iter__)
-    assert "return iter(arrow_table_to_pylist" in arrow_iter_source
-    assert "yield from" not in arrow_iter_source
-
-    result_source = inspect.getsource(result_base)
-    assert "object.__getattribute__" not in result_source
+    """Result and stack helpers should keep MyPyC-safe source shapes."""
+    result_source = Path("sqlspec/core/result/_base.py").read_text()
+    assert "return iter(arrow_table_to_pylist" in result_source
+    assert "yield from arrow_table_to_pylist" not in result_source
+    assert 'object.__getattribute__(self.result, "rows_affected")' in result_source
     assert "_EMPTY_RESULT_STATEMENT: Final" in result_source
     assert "_DEFAULT_DML_METADATA: Final" in result_source
 

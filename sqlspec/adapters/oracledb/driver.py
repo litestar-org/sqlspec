@@ -4,6 +4,8 @@ import logging
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from sqlspec.adapters.oracledb._typing import (
+    DB_TYPE_BLOB,
+    DB_TYPE_CLOB,
     OracleAsyncConnection,
     OracleAsyncCursor,
     OracleAsyncSessionContext,
@@ -11,6 +13,9 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncCursor,
     OracleSyncSessionContext,
 )
+from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
+from sqlspec.adapters.oracledb._typing import Error as OracleError
+from sqlspec.adapters.oracledb._typing import create_pipeline as create_oracle_pipeline
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     OracleAsyncStreamSource,
@@ -261,11 +266,10 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-        import oracledb
 
         if exc_type is None:
             return False
-        if issubclass(exc_type, oracledb.DatabaseError):
+        if issubclass(exc_type, OracleDatabaseError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -285,11 +289,10 @@ class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-        import oracledb
 
         if exc_type is None:
             return False
-        if issubclass(exc_type, oracledb.DatabaseError):
+        if issubclass(exc_type, OracleDatabaseError):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -347,15 +350,14 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Returns:
             Execution result containing data for SELECT statements or row count for others
         """
-        import oracledb
 
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = coerce_large_parameters_sync(
             self.connection,
             prepared_parameters,
-            clob_type=oracledb.DB_TYPE_CLOB,
-            blob_type=oracledb.DB_TYPE_BLOB,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
             varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
@@ -472,11 +474,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If commit fails
         """
-        import oracledb
 
         try:
             self.connection.commit()
-        except oracledb.Error as e:
+        except OracleError as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -486,11 +487,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If rollback fails
         """
-        import oracledb
 
         try:
             self.connection.rollback()
-        except oracledb.Error as e:
+        except OracleError as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -827,10 +827,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return record_batches, batch_schema
 
     def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
-        import oracledb
 
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = oracledb.create_pipeline()
+        pipeline = create_oracle_pipeline()
         for compiled in compiled_operations:
             self._add_pipeline_operation(pipeline, compiled)
 
@@ -942,15 +941,14 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Returns:
             Execution result containing data for SELECT statements or row count for others
         """
-        import oracledb
 
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = await coerce_large_parameters_async(
             self.connection,
             prepared_parameters,
-            clob_type=oracledb.DB_TYPE_CLOB,
-            blob_type=oracledb.DB_TYPE_BLOB,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
             varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
@@ -1069,11 +1067,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: If commit fails
         """
-        import oracledb
 
         try:
             await self.connection.commit()
-        except oracledb.Error as e:
+        except OracleError as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -1083,11 +1080,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: If rollback fails
         """
-        import oracledb
 
         try:
             await self.connection.rollback()
-        except oracledb.Error as e:
+        except OracleError as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -1437,10 +1433,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     async def _execute_stack_native(
         self, stack: "StatementStack", *, continue_on_error: bool
     ) -> "tuple[StackResult, ...]":
-        import oracledb
 
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = oracledb.create_pipeline()
+        pipeline = create_oracle_pipeline()
         for compiled in compiled_operations:
             self._add_pipeline_operation(pipeline, compiled)
 

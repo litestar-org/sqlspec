@@ -999,7 +999,8 @@ class StackResult:
             self.rows_affected = rows_affected
         else:
             try:
-                result_rows = self.result.rows_affected
+                # Direct access on this compiled union currently segfaults mypyc during full-graph builds.
+                result_rows = object.__getattribute__(self.result, "rows_affected")
             except AttributeError:
                 self.rows_affected = 0
             else:

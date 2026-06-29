@@ -18,6 +18,7 @@ from oracledb import (
     Connection,
     Cursor,
     DatabaseError,
+    Error,
 )
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
@@ -64,6 +65,7 @@ __all__ = (
     "SPARSE_VECTOR_TYPE",
     "AQDequeueOptions",
     "DatabaseError",
+    "Error",
     "OracleAsyncConnection",
     "OracleAsyncConnectionPool",
     "OracleAsyncCursor",
@@ -75,6 +77,7 @@ __all__ = (
     "OracleSyncCursor",
     "OracleSyncRawCursor",
     "OracleSyncSessionContext",
+    "create_pipeline",
 )
 
 AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
@@ -82,6 +85,7 @@ AQMSG_VISIBLE: int | None = getattr(_oracledb, "AQMSG_VISIBLE", None)
 AQMSG_INVISIBLE: int | None = getattr(_oracledb, "AQMSG_INVISIBLE", None)
 AQMSG_PAYLOAD_TYPE_JSON: Any | None = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
 SPARSE_VECTOR_TYPE: type[object] | None = getattr(_oracledb, "SparseVector", None)
+create_pipeline = _oracledb.create_pipeline
 
 
 class OracleSyncCursor:

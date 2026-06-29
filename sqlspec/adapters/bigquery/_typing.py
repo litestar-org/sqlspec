@@ -8,6 +8,9 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
+from google.cloud.exceptions import GoogleCloudError
+
+from sqlspec.typing import import_optional
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -19,12 +22,24 @@ if TYPE_CHECKING:
 
     BigQueryConnection: TypeAlias = Client
     BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
+    BigQueryStorageWriteModule: Any
+    BigQueryStorageWriteTypes: Any
 
 if not TYPE_CHECKING:
     BigQueryConnection = Client
     BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+    BigQueryStorageWriteModule = import_optional("google.cloud.bigquery_storage_v1")
+    BigQueryStorageWriteTypes = import_optional("google.cloud.bigquery_storage_v1.types")
 
-__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryParam", "BigQuerySessionContext")
+__all__ = (
+    "BigQueryConnection",
+    "BigQueryCursor",
+    "BigQueryParam",
+    "BigQuerySessionContext",
+    "BigQueryStorageWriteModule",
+    "BigQueryStorageWriteTypes",
+    "GoogleCloudError",
+)
 
 
 class BigQueryCursor:

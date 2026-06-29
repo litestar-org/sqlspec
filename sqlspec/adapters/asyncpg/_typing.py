@@ -6,7 +6,7 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
-from asyncpg import Pool
+from asyncpg import Pool, PostgresError
 from asyncpg.pool import PoolConnectionProxy
 from asyncpg.prepared_stmt import PreparedStatement
 
@@ -22,14 +22,23 @@ if TYPE_CHECKING:
 
     AsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
     AsyncpgPool: TypeAlias = Pool[Record]
+    AsyncpgPostgresError: TypeAlias = PostgresError
     AsyncpgPreparedStatement: TypeAlias = PreparedStatement[Record]
 
 if not TYPE_CHECKING:
     AsyncpgConnection = PoolConnectionProxy
     AsyncpgPool = Pool
+    AsyncpgPostgresError = PostgresError
     AsyncpgPreparedStatement = PreparedStatement
 
-__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgPool", "AsyncpgPreparedStatement", "AsyncpgSessionContext")
+__all__ = (
+    "AsyncpgConnection",
+    "AsyncpgCursor",
+    "AsyncpgPool",
+    "AsyncpgPostgresError",
+    "AsyncpgPreparedStatement",
+    "AsyncpgSessionContext",
+)
 
 
 class AsyncpgCursor:
