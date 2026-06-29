@@ -189,7 +189,7 @@ def test_bigquery_adk_get_events_reads_full_event_blob_without_json_value(monkey
 def test_bigquery_adk_decodes_json_bytes_as_utf8_not_latin1() -> None:
     """BigQuery JSON bytes are UTF-8 JSON, including non-ASCII payloads."""
 
-    payload = b'{"word":"caf\xc3\xa9"}'
+    payload = '{"word":"café"}'.encode()
 
     assert BigQueryADKStore._decode_json(payload) == {"word": "café"}
 
