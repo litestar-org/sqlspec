@@ -1,4 +1,5 @@
 from sqlspec.adapters.cockroach_psycopg.adk.store import (
+    CockroachPsycopgADKConfig,
     CockroachPsycopgAsyncADKMemoryStore,
     CockroachPsycopgAsyncADKStore,
     CockroachPsycopgSyncADKMemoryStore,
@@ -6,6 +7,7 @@ from sqlspec.adapters.cockroach_psycopg.adk.store import (
 )
 
 __all__ = (
+    "CockroachPsycopgADKConfig",
     "CockroachPsycopgAsyncADKMemoryStore",
     "CockroachPsycopgAsyncADKStore",
     "CockroachPsycopgSyncADKMemoryStore",
