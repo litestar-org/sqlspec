@@ -2,6 +2,9 @@
 
 from sqlspec.adapters.oracledb.adk.store import (
     JSONStorageType,
+    OracleADKCompressionConfig,
+    OracleADKConfig,
+    OracleADKPartitionConfig,
     OracleAsyncADKMemoryStore,
     OracleAsyncADKStore,
     OracleSyncADKMemoryStore,
@@ -12,6 +15,9 @@ from sqlspec.adapters.oracledb.adk.store import (
 
 __all__ = (
     "JSONStorageType",
+    "OracleADKCompressionConfig",
+    "OracleADKConfig",
+    "OracleADKPartitionConfig",
     "OracleAsyncADKMemoryStore",
     "OracleAsyncADKStore",
     "OracleSyncADKMemoryStore",

@@ -3,22 +3,69 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
+
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb.adk import (
     JSONStorageType,
+    OracleADKCompressionConfig,
+    OracleADKConfig,
+    OracleADKPartitionConfig,
     OracleAsyncADKMemoryStore,
     OracleAsyncADKStore,
     OracleSyncADKMemoryStore,
     OracleSyncADKStore,
 )
 from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
+from sqlspec.config import ADKConfig
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
     config = MagicMock()
     config.extension_config = {"adk": adk_config}
     return config
+
+
+def test_oracle_adk_config_types_adapter_local_optimizations() -> None:
+    """Oracle ADK optimization settings are typed on the adapter-local extension config."""
+
+    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", OracleADKConfig).__optional_keys__
+
+    expected_types: dict[str, object] = {
+        "in_memory": bool,
+        "compression": OracleADKCompressionConfig,
+        "partitioning": OracleADKPartitionConfig,
+        "session_table_options": str,
+        "events_table_options": str,
+        "app_state_table_options": str,
+        "user_state_table_options": str,
+        "memory_table_options": str,
+    }
+    for feature_name, expected_type in expected_types.items():
+        annotation = cast("Any", OracleADKConfig.__annotations__[feature_name])
+        assert get_origin(annotation) is NotRequired
+        assert get_args(annotation) == (expected_type,)
+
+    for config_type, feature_types in (
+        (OracleADKCompressionConfig, {"enabled": bool, "algorithm": str}),
+        (
+            OracleADKPartitionConfig,
+            {
+                "strategy": str,
+                "partition_count": int,
+                "partitions": int,
+                "interval": str,
+                "initial_less_than": str,
+                "partition_key": str,
+            },
+        ),
+    ):
+        for feature_name, expected_type in feature_types.items():
+            annotation = cast("Any", config_type.__annotations__[feature_name])
+            assert get_origin(annotation) is NotRequired
+            assert get_args(annotation) == (expected_type,)
 
 
 async def test_oracle_async_adk_store_deserialize_dict_coerces_decimal() -> None:

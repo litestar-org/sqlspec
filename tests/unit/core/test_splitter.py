@@ -8,6 +8,8 @@ import pytest
 import sqlspec.core.splitter as splitter_module
 from sqlspec.core.splitter import GenericDialectConfig, StatementSplitter, Token, TokenType, split_sql_script
 
+_SPLITTER_COMPILED = (splitter_module.__file__ or "").endswith((".so", ".pyd"))
+
 PUBLIC_DIALECT_CONFIGS = (
     splitter_module.OracleDialectConfig,
     splitter_module.TSQLDialectConfig,
@@ -72,6 +74,7 @@ def test_tokenize_returns_materialized_token_list() -> None:
     assert [token.value for token in tokens] == ["S", "E", "L", "E", "C", "T", " ", "1", ";"]
 
 
+@pytest.mark.skipif(_SPLITTER_COMPILED, reason="compiled dialect classes do not expose Python source metadata")
 def test_dialect_configs_share_eager_base_without_lazy_property_boilerplate() -> None:
     """Public dialect classes should keep names while sharing the private eager base config."""
 
@@ -105,6 +108,7 @@ def test_eager_dialect_defaults_preserve_public_values(config_class: "type[split
     assert "__LOCAL__" not in config_class().block_starters
 
 
+@pytest.mark.skipif(_SPLITTER_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
 def test_split_sql_script_reuses_splitter_for_dialect_and_strip_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """split_sql_script should avoid rebuilding stateless splitter instances for the same dialect and strip flag."""
     splitter_module.clear_splitter_caches()

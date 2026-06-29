@@ -1,12 +1,14 @@
 """Spanner ADK store."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from google.cloud.spanner_v1 import param_types
+from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.config import ADKConfig
 from sqlspec.exceptions import OperationalError
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -17,14 +19,48 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import Transaction
 
-    from sqlspec.config import ADKConfig
     from sqlspec.extensions.adk import MemoryRecord
 
-__all__ = ("SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
+__all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
 
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 MIN_DROP_TABLE_TOKENS: Final = 3
 MIN_DROP_SEARCH_INDEX_TOKENS: Final = 4
+
+
+class SpannerADKRetentionConfig(TypedDict):
+    """Spanner-specific ADK row-deletion policy settings."""
+
+    session_ttl_seconds: NotRequired[int]
+    """Session row retention in seconds."""
+
+    event_ttl_seconds: NotRequired[int]
+    """Event row retention in seconds."""
+
+    memory_ttl_seconds: NotRequired[int]
+    """Memory row retention in seconds."""
+
+
+class SpannerADKConfig(ADKConfig):
+    """Spanner-specific ADK extension settings."""
+
+    shard_count: NotRequired[int]
+    """Generated shard count for hot key mitigation."""
+
+    session_table_options: NotRequired[str]
+    """Raw Spanner OPTIONS clause content for the ADK session table."""
+
+    events_table_options: NotRequired[str]
+    """Raw Spanner OPTIONS clause content for the ADK events table."""
+
+    memory_table_options: NotRequired[str]
+    """Raw Spanner OPTIONS clause content for the ADK memory table."""
+
+    expires_index_options: NotRequired[str]
+    """Raw Spanner OPTIONS clause content for expiration indexes."""
+
+    retention: NotRequired[SpannerADKRetentionConfig]
+    """Spanner row-deletion retention policy settings."""
 
 
 class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
@@ -34,7 +70,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        adk_config = cast("dict[str, Any]", config.extension_config.get("adk", {}))
+        adk_config = _get_spanner_adk_config(config)
         self._shard_count: int = int(adk_config.get("shard_count", 0)) if adk_config.get("shard_count") else 0
         self._session_table_options: str | None = adk_config.get("session_table_options")
         self._events_table_options: str | None = adk_config.get("events_table_options")
@@ -712,13 +748,11 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        adk_config = cast("ADKConfig", config.extension_config.get("adk", {}))
+        adk_config = _get_spanner_adk_config(config)
         shard_count = adk_config.get("shard_count")
         self._shard_count = int(shard_count) if isinstance(shard_count, int) else 0
         self._memory_table_options: str | None = adk_config.get("memory_table_options")
-        self._memory_row_deletion_policy = _spanner_row_deletion_policy(
-            cast("dict[str, Any]", adk_config), "memory_ttl_seconds", "inserted_at"
-        )
+        self._memory_row_deletion_policy = _spanner_row_deletion_policy(adk_config, "memory_ttl_seconds", "inserted_at")
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1023,7 +1057,7 @@ def _spanner_ttl_days(ttl_seconds: Any) -> int:
     return max(1, (ttl_seconds + 86_399) // 86_400)
 
 
-def _spanner_row_deletion_policy(adk_config: dict[str, Any], ttl_key: str, column: str) -> str:
+def _spanner_row_deletion_policy(adk_config: Mapping[str, Any], ttl_key: str, column: str) -> str:
     retention = adk_config.get("retention")
     if not isinstance(retention, dict):
         return ""
@@ -1031,6 +1065,17 @@ def _spanner_row_deletion_policy(adk_config: dict[str, Any], ttl_key: str, colum
     if ttl_days == 0:
         return ""
     return f"\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
+
+
+def _get_spanner_adk_config(config: Any) -> SpannerADKConfig:
+    """Return Spanner ADK extension settings from ``extension_config["adk"]``."""
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return {}
+    return cast("SpannerADKConfig", adk_config)
 
 
 def _filter_existing_spanner_drops(statements: "list[str]", existing_tables: "set[str]") -> "list[str]":
