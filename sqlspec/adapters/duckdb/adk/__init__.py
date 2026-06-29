@@ -5,6 +5,6 @@ embedded session storage with zero-configuration setup, excellent for developmen
 testing, and analytical workloads.
 """
 
-from sqlspec.adapters.duckdb.adk.store import DuckdbADKMemoryStore, DuckdbADKStore
+from sqlspec.adapters.duckdb.adk.store import DuckdbADKConfig, DuckdbADKFTSOptions, DuckdbADKMemoryStore, DuckdbADKStore
 
-__all__ = ("DuckdbADKMemoryStore", "DuckdbADKStore")
+__all__ = ("DuckdbADKConfig", "DuckdbADKFTSOptions", "DuckdbADKMemoryStore", "DuckdbADKStore")
