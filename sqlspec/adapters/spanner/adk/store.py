@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
+from google.api_core.exceptions import NotFound
 from google.cloud.spanner_v1 import param_types
 from typing_extensions import NotRequired, TypedDict
 
@@ -94,7 +95,12 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        try:
+            return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        except NotFound as exc:
+            if _is_spanner_table_missing(exc, self._session_table):
+                return None
+            raise
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
@@ -102,7 +108,12 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
+        try:
+            return self._list_sessions(app_name, user_id)
+        except NotFound as exc:
+            if _is_spanner_table_missing(exc, self._session_table):
+                return []
+            raise
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
@@ -137,7 +148,12 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        try:
+            return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        except NotFound as exc:
+            if _is_spanner_table_missing(exc, self._events_table, self._session_table):
+                return []
+            raise
 
     def delete_expired_events(self, before: datetime) -> int:
         """Delete events older than a timestamp."""
@@ -641,6 +657,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             ddl_statements.append(self._get_create_user_states_table_sql())
         if self._metadata_table not in existing_tables:
             ddl_statements.append(self._get_create_metadata_table_sql())
+        ddl_statements.extend(self._get_create_expiration_index_sql())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
@@ -722,6 +739,15 @@ INSERT INTO {self._metadata_table} (key, value)
 VALUES ('schema_version', '1')
 """
 
+    def _get_create_expiration_index_sql(self) -> "list[str]":
+        options = f" OPTIONS ({self._expires_index_options})" if self._expires_index_options else ""
+        return [
+            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time "
+            f"ON {self._session_table}(update_time){options}",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp "
+            f"ON {self._events_table}(timestamp){options}",
+        ]
+
     def _get_drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE {self._app_state_table}"
 
@@ -733,6 +759,8 @@ VALUES ('schema_version', '1')
 
     def _get_drop_tables_sql(self) -> "list[str]":
         return [
+            f"DROP INDEX idx_{self._events_table}_timestamp",
+            f"DROP INDEX idx_{self._session_table}_update_time",
             self._get_drop_metadata_table_sql(),
             self._get_drop_user_states_table_sql(),
             self._get_drop_app_states_table_sql(),
@@ -1076,6 +1104,11 @@ def _get_spanner_adk_config(config: Any) -> SpannerADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("SpannerADKConfig", adk_config)
+
+
+def _is_spanner_table_missing(exc: NotFound, *table_names: str) -> bool:
+    message = str(exc).lower()
+    return "not found" in message and any(table_name.lower() in message for table_name in table_names)
 
 
 def _filter_existing_spanner_drops(statements: "list[str]", existing_tables: "set[str]") -> "list[str]":

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock, patch
 
+from google.api_core.exceptions import NotFound
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner.adk import (
@@ -137,6 +138,33 @@ def test_spanner_memory_table_generates_ttl_and_table_options() -> None:
     assert "ROW DELETION POLICY (OLDER_THAN(inserted_at, INTERVAL 7 DAY))" in table_sql
 
 
+def test_spanner_session_store_emits_expiration_indexes_with_configured_options() -> None:
+    config = _mock_config({"expires_index_options": "locality_group = 'cold'"})
+    database = config.get_database.return_value
+    database.list_tables.return_value = []
+    store = SpannerSyncADKStore(config)
+
+    store.create_tables()
+
+    ddl_statements = database.update_ddl.call_args.args[0]
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_update_time "
+        "ON adk_session(update_time) OPTIONS (locality_group = 'cold')"
+    ) in ddl_statements
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_timestamp ON adk_event(timestamp) OPTIONS (locality_group = 'cold')"
+    ) in ddl_statements
+
+
+def test_spanner_session_store_drops_expiration_indexes_before_tables() -> None:
+    store = SpannerSyncADKStore(_mock_config())
+
+    statements = store._get_drop_tables_sql()
+
+    assert statements[:2] == ["DROP INDEX idx_adk_event_timestamp", "DROP INDEX idx_adk_session_update_time"]
+    assert statements[-2:] == ["DROP TABLE adk_event", "DROP TABLE adk_session"]
+
+
 def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
     store = SpannerSyncADKMemoryStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
@@ -198,7 +226,7 @@ def test_spanner_reset_drop_tables_filters_absent_tables() -> None:
 
     statements = store._get_reset_drop_tables_sql()
 
-    assert statements == ["DROP TABLE adk_events"]
+    assert statements == ["DROP INDEX idx_adk_events_timestamp", "DROP TABLE adk_events"]
 
 
 def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() -> None:
@@ -213,3 +241,30 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
         "DROP INDEX idx_adk_memory_entries_app_user_time",
         "DROP TABLE adk_memory_entries",
     ]
+
+
+def test_get_session_returns_none_when_spanner_session_table_missing() -> None:
+    store = SpannerSyncADKStore(_mock_config())
+
+    with patch.object(store, "_run_read", side_effect=NotFound("adk_session not found")):
+        result = store.get_session("app", "user", "session")
+
+    assert result is None
+
+
+def test_list_sessions_returns_empty_when_spanner_session_table_missing() -> None:
+    store = SpannerSyncADKStore(_mock_config())
+
+    with patch.object(store, "_run_read", side_effect=NotFound("adk_session not found")):
+        result = store.list_sessions("app", "user")
+
+    assert result == []
+
+
+def test_get_events_returns_empty_when_spanner_events_table_missing() -> None:
+    store = SpannerSyncADKStore(_mock_config())
+
+    with patch.object(store, "_run_read", side_effect=NotFound("adk_event not found")):
+        result = store.get_events("app", "user", "session")
+
+    assert result == []
