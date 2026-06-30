@@ -213,6 +213,7 @@ class FeatureFlags(TypedDict, total=False):
     supports_clustering: bool
     supports_cte: bool
     supports_generators: bool
+    supports_for_update: bool
     supports_geography: bool
     supports_in_memory: bool
     supports_index_clustering: bool
@@ -223,6 +224,7 @@ class FeatureFlags(TypedDict, total=False):
     supports_prepared_statements: bool
     supports_returning: bool
     supports_schemas: bool
+    supports_skip_locked: bool
     supports_structs: bool
     supports_transactions: bool
     supports_upsert: bool
@@ -238,6 +240,7 @@ class FeatureVersions(TypedDict, total=False):
     supports_jsonb: "VersionInfo"
     supports_partitioning: "VersionInfo"
     supports_returning: "VersionInfo"
+    supports_skip_locked: "VersionInfo"
     supports_upsert: "VersionInfo"
     supports_window_functions: "VersionInfo"
 
