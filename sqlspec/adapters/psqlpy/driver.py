@@ -198,7 +198,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction."""
-
         try:
             await self.connection.execute("BEGIN")
         except PsqlpyDatabaseError as e:
@@ -207,7 +206,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-
         try:
             await self.connection.execute("COMMIT")
         except PsqlpyDatabaseError as e:
@@ -216,7 +214,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-
         try:
             await self.connection.execute("ROLLBACK")
         except PsqlpyDatabaseError as e:

@@ -266,7 +266,6 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-
         if exc_type is None:
             return False
         if issubclass(exc_type, OracleDatabaseError):
@@ -289,7 +288,6 @@ class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-
         if exc_type is None:
             return False
         if issubclass(exc_type, OracleDatabaseError):
@@ -350,7 +348,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Returns:
             Execution result containing data for SELECT statements or row count for others
         """
-
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = coerce_large_parameters_sync(
@@ -474,7 +471,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If commit fails
         """
-
         try:
             self.connection.commit()
         except OracleError as e:
@@ -487,7 +483,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If rollback fails
         """
-
         try:
             self.connection.rollback()
         except OracleError as e:
@@ -827,7 +822,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return record_batches, batch_schema
 
     def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
-
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
         pipeline = create_oracle_pipeline()
         for compiled in compiled_operations:
@@ -941,7 +935,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Returns:
             Execution result containing data for SELECT statements or row count for others
         """
-
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         prepared_parameters = await coerce_large_parameters_async(
@@ -1067,7 +1060,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: If commit fails
         """
-
         try:
             await self.connection.commit()
         except OracleError as e:
@@ -1080,7 +1072,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: If rollback fails
         """
-
         try:
             await self.connection.rollback()
         except OracleError as e:
@@ -1433,7 +1424,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     async def _execute_stack_native(
         self, stack: "StatementStack", *, continue_on_error: bool
     ) -> "tuple[StackResult, ...]":
-
         compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
         pipeline = create_oracle_pipeline()
         for compiled in compiled_operations:

@@ -74,7 +74,6 @@ class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-
         _ = exc_type
         if isinstance(exc_val, AsyncpgPostgresError) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)
@@ -214,7 +213,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction."""
-
         try:
             await self.connection.execute("BEGIN")
         except AsyncpgPostgresError as e:
@@ -223,7 +221,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-
         try:
             await self.connection.execute("COMMIT")
         except AsyncpgPostgresError as e:
@@ -232,7 +229,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-
         try:
             await self.connection.execute("ROLLBACK")
         except AsyncpgPostgresError as e:

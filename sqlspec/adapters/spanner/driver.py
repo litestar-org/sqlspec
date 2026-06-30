@@ -111,7 +111,6 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
-
         if exc_type is None:
             return False
 
@@ -287,8 +286,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def commit(self) -> None:
-        from sqlspec.adapters.spanner.driver import Transaction
-
         if isinstance(self.connection, Transaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             if writer.committed is not None:
@@ -296,8 +293,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             writer.commit()
 
     def rollback(self) -> None:
-        from sqlspec.adapters.spanner.driver import Transaction
-
         if isinstance(self.connection, Transaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             writer.rollback()
@@ -445,8 +440,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """Load Arrow data into Spanner table via batch mutations."""
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-
-        from sqlspec.adapters.spanner.driver import Transaction
 
         if overwrite:
             delete_sql = f"DELETE FROM {table} WHERE TRUE"
