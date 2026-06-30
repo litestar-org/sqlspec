@@ -1,9 +1,16 @@
 """SQLite sync ADK store for Google Agent Development Kit session/event storage."""
 
+import re
 import sqlite3
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.adapters.sqlite.config import _render_pragmas
+from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -15,15 +22,87 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
     from sqlspec.extensions.adk import MemoryRecord
 
-__all__ = ("SqliteADKMemoryStore", "SqliteADKStore")
+__all__ = ("SqliteADKConfig", "SqliteADKMemoryStore", "SqliteADKStore")
 
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
+_FTS_DETAIL_VALUES: Final = frozenset({"full", "column", "none"})
+_FTS_TOKENIZE_PATTERN: Final = re.compile(r"^[A-Za-z0-9_ -]+$")
 
 
 logger: "logging.Logger" = get_logger("sqlspec.adapters.sqlite.adk.store")
+
+
+class SqliteADKConfig(ADKConfig):
+    """SQLite-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with SQLite ADK stores.
+    """
+
+    pragma_overrides: "NotRequired[Mapping[str, str | int | bool]]"
+    """Additional validated PRAGMA settings applied after the built-in ADK profile."""
+
+    fts_tokenize: NotRequired[str]
+    """Optional FTS5 tokenizer spec used when ``memory_use_fts`` is enabled."""
+
+    fts_detail: NotRequired[Literal["full", "column", "none"]]
+    """Optional FTS5 detail mode used when ``memory_use_fts`` is enabled."""
+
+
+def _get_adk_config(config: "SqliteConfig") -> "dict[str, Any]":
+    """Return the adapter-local ADK extension configuration."""
+
+    return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
+
+
+def _get_pragma_overrides(config: "SqliteConfig") -> "list[tuple[str, str]]":
+    """Return validated ADK PRAGMA overrides for SQLite stores."""
+
+    adk_config = _get_adk_config(config)
+    pragma_overrides = adk_config.get("pragma_overrides")
+    if pragma_overrides is None:
+        return []
+    if not isinstance(pragma_overrides, Mapping):
+        msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        return _render_pragmas(pragma_overrides)
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
+        raise ImproperConfigurationError(msg) from exc
+
+
+def _get_fts_options(config: "SqliteConfig") -> "tuple[str, ...]":
+    """Return validated FTS5 options for SQLite memory DDL."""
+
+    adk_config = _get_adk_config(config)
+    options: list[str] = []
+
+    fts_tokenize = adk_config.get("fts_tokenize")
+    if fts_tokenize is not None:
+        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.match(fts_tokenize) is None:
+            msg = "extension_config['adk']['fts_tokenize'] must contain only safe FTS5 tokenizer characters"
+            raise ImproperConfigurationError(msg)
+        options.append(f"tokenize = '{fts_tokenize}'")
+
+    fts_detail = adk_config.get("fts_detail")
+    if fts_detail is not None:
+        if not isinstance(fts_detail, str) or fts_detail not in _FTS_DETAIL_VALUES:
+            msg = "extension_config['adk']['fts_detail'] must be 'full', 'column', or 'none'"
+            raise ImproperConfigurationError(msg)
+        options.append(f"detail = {fts_detail}")
+
+    return tuple(options)
+
+
+def _format_fts_options(options: "tuple[str, ...]") -> str:
+    """Format validated FTS5 options for a CREATE VIRTUAL TABLE statement."""
+
+    if not options:
+        return ""
+    return ",\n            " + ",\n            ".join(options)
 
 
 class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
@@ -45,7 +124,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         config: SqliteConfig instance with extension_config["adk"] settings.
     """
 
-    __slots__ = ()
+    __slots__ = ("_pragma_overrides",)
 
     def __init__(self, config: "SqliteConfig") -> None:
         """Initialize SQLite ADK store.
@@ -54,6 +133,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             config: SqliteConfig instance.
         """
         super().__init__(config)
+        self._pragma_overrides = _get_pragma_overrides(config)
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -227,6 +307,8 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         connection.execute("PRAGMA cache_size = -64000")
         connection.execute("PRAGMA mmap_size = 30000000")
         connection.execute("PRAGMA journal_size_limit = 67108864")
+        for pragma_name, pragma_value in self._pragma_overrides:
+            connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
 
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
@@ -803,7 +885,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         config: SqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ()
+    __slots__ = ("_fts_options",)
 
     def __init__(self, config: "SqliteConfig") -> None:
         """Initialize SQLite ADK memory store.
@@ -812,6 +894,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             config: SqliteConfig instance.
         """
         super().__init__(config)
+        self._fts_options = _get_fts_options(config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -847,11 +930,12 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         fts_table = ""
         if self._use_fts:
+            fts_options = _format_fts_options(self._fts_options)
             fts_table = f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
             content_text,
             content={self._memory_table},
-            content_rowid=rowid
+            content_rowid=rowid{fts_options}
         );
 
         CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ai AFTER INSERT ON {self._memory_table} BEGIN
