@@ -1,8 +1,12 @@
 """MysqlConnector ADK store for Google Agent Development Kit session/event storage."""
 
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.protocols import HasErrnoProtocol
@@ -16,6 +20,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "MysqlConnectorADKConfig",
     "MysqlConnectorAsyncADKMemoryStore",
     "MysqlConnectorAsyncADKStore",
     "MysqlConnectorSyncADKMemoryStore",
@@ -23,6 +28,34 @@ __all__ = (
 )
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+class MysqlConnectorADKConfig(ADKConfig):
+    """mysql-connector-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with mysql-connector ADK stores.
+    """
+
+    enable_event_generated_columns: NotRequired[bool]
+    """Create MySQL generated columns and indexes for common ADK event JSON paths."""
+
+    enable_covering_indexes: NotRequired[bool]
+    """Add hot-path payload columns to MySQL ADK event replay indexes."""
+
+    session_table_options: NotRequired[str]
+    """Raw MySQL table options appended to the ADK session table."""
+
+    events_table_options: NotRequired[str]
+    """Raw MySQL table options appended to the ADK events table."""
+
+    app_state_table_options: NotRequired[str]
+    """Raw MySQL table options appended to the ADK app state table."""
+
+    user_state_table_options: NotRequired[str]
+    """Raw MySQL table options appended to the ADK user state table."""
+
+    memory_table_options: NotRequired[str]
+    """Raw MySQL table options appended to the ADK memory table."""
 
 
 class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]):
@@ -335,16 +368,22 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         await _mysqlconnector_async_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
 
     async def _get_create_sessions_table_sql(self) -> str:
-        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
+        adk_config = _get_mysqlconnector_adk_config(self._config)
+        table_options = _mysql_table_options(adk_config, "session_table_options")
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
     async def _get_create_events_table_sql(self) -> str:
-        return _mysql_events_ddl(self._events_table, self._session_table)
+        return _mysql_events_ddl(self._events_table, self._session_table, _get_mysqlconnector_adk_config(self._config))
 
     async def _get_create_app_states_table_sql(self) -> str:
-        return _mysql_app_state_ddl(self._app_state_table)
+        adk_config = _get_mysqlconnector_adk_config(self._config)
+        table_options = _mysql_table_options(adk_config, "app_state_table_options")
+        return _mysql_app_state_ddl(self._app_state_table, table_options)
 
     async def _get_create_user_states_table_sql(self) -> str:
-        return _mysql_user_state_ddl(self._user_state_table)
+        adk_config = _get_mysqlconnector_adk_config(self._config)
+        table_options = _mysql_table_options(adk_config, "user_state_table_options")
+        return _mysql_user_state_ddl(self._user_state_table, table_options)
 
     async def _get_create_metadata_table_sql(self) -> str:
         return _mysql_metadata_ddl(self._metadata_table)
@@ -771,16 +810,22 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         _mysqlconnector_sync_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
 
     def _get_create_sessions_table_sql(self) -> str:
-        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl)
+        adk_config = _get_mysqlconnector_adk_config(self._config)
+        table_options = _mysql_table_options(adk_config, "session_table_options")
+        return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
     def _get_create_events_table_sql(self) -> str:
-        return _mysql_events_ddl(self._events_table, self._session_table)
+        return _mysql_events_ddl(self._events_table, self._session_table, _get_mysqlconnector_adk_config(self._config))
 
     def _get_create_app_states_table_sql(self) -> str:
-        return _mysql_app_state_ddl(self._app_state_table)
+        adk_config = _get_mysqlconnector_adk_config(self._config)
+        table_options = _mysql_table_options(adk_config, "app_state_table_options")
+        return _mysql_app_state_ddl(self._app_state_table, table_options)
 
     def _get_create_user_states_table_sql(self) -> str:
-        return _mysql_user_state_ddl(self._user_state_table)
+        adk_config = _get_mysqlconnector_adk_config(self._config)
+        table_options = _mysql_table_options(adk_config, "user_state_table_options")
+        return _mysql_user_state_ddl(self._user_state_table, table_options)
 
     def _get_create_metadata_table_sql(self) -> str:
         return _mysql_metadata_ddl(self._metadata_table)
@@ -962,6 +1007,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                 await cursor.close()
 
     async def _get_create_memory_table_sql(self) -> str:
+        adk_config = _get_mysqlconnector_adk_config(self._config)
         owner_id_line = ""
         fk_constraint = ""
         if self._owner_id_column_ddl:
@@ -973,6 +1019,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         fts_index = ""
         if self._use_fts:
             fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+        table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -989,7 +1036,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
             INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
     def _get_drop_memory_table_sql(self) -> "list[str]":
@@ -1027,6 +1074,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         return self._delete_entries_older_than(days)
 
     def _get_create_memory_table_sql(self) -> str:
+        adk_config = _get_mysqlconnector_adk_config(self._config)
         owner_id_line = ""
         fk_constraint = ""
         if self._owner_id_column_ddl:
@@ -1038,6 +1086,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         fts_index = ""
         if self._use_fts:
             fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+        table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -1054,7 +1103,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
             INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
     def _get_drop_memory_table_sql(self) -> "list[str]":
@@ -1217,6 +1266,26 @@ def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
     col_name = col_def.split()[0]
     fk_constraint = f"FOREIGN KEY ({col_name}) REFERENCES {fk_clause}"
     return (col_def, fk_constraint)
+
+
+def _get_mysqlconnector_adk_config(config: Any) -> MysqlConnectorADKConfig:
+    """Return mysql-connector ADK extension settings from ``extension_config["adk"]``."""
+
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return {}
+    return cast("MysqlConnectorADKConfig", adk_config)
+
+
+def _mysql_table_options(adk_config: Mapping[str, Any], key: str) -> str:
+    value = adk_config.get(key)
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return f" {value}" if value else ""
 
 
 def _is_mysql_table_missing(exc: BaseException) -> bool:
@@ -1386,7 +1455,7 @@ def _mysqlconnector_sync_execute_commit(store: MysqlConnectorSyncADKStore, sql: 
         conn.commit()
 
 
-def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -> str:
+def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", table_options: str = "") -> str:
     owner_id_line = ""
     fk_constraint = ""
     if owner_id_column_ddl:
@@ -1405,11 +1474,25 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None") -
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             INDEX idx_{session_table}_app_user (app_name, user_id),
             INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
 
-def _mysql_events_ddl(events_table: str, session_table: str) -> str:
+def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping[str, Any] | None = None) -> str:
+    adk_config = adk_config or {}
+    generated_columns = ""
+    generated_indexes = ""
+    if adk_config.get("enable_event_generated_columns", False):
+        generated_columns = """,
+            author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED,
+            node_path_gc VARCHAR(512) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.node_info.path'))) STORED"""
+        generated_indexes = f""",
+            INDEX idx_{events_table}_author_gc (session_id, author_gc, timestamp ASC),
+            INDEX idx_{events_table}_node_path_gc (session_id, node_path_gc, timestamp ASC)"""
+
+    covering_column = ", invocation_id" if adk_config.get("enable_covering_indexes", False) else ""
+    table_options = _mysql_table_options(adk_config, "events_table_options")
+
     return f"""
         CREATE TABLE IF NOT EXISTS {events_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -1418,25 +1501,25 @@ def _mysql_events_ddl(events_table: str, session_table: str) -> str:
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256) NOT NULL,
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            event_data JSON NOT NULL,
+            event_data JSON NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC),
-            INDEX idx_{events_table}_session (session_id, timestamp ASC)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC{covering_column}),
+            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}){generated_indexes}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
 
-def _mysql_app_state_ddl(app_state_table: str) -> str:
+def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
     return f"""
         CREATE TABLE IF NOT EXISTS {app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
             state JSON NOT NULL,
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
 
-def _mysql_user_state_ddl(user_state_table: str) -> str:
+def _mysql_user_state_ddl(user_state_table: str, table_options: str = "") -> str:
     return f"""
         CREATE TABLE IF NOT EXISTS {user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -1444,7 +1527,7 @@ def _mysql_user_state_ddl(user_state_table: str) -> str:
             state JSON NOT NULL,
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             PRIMARY KEY (app_name, user_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
 
