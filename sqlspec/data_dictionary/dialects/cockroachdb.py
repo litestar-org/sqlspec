@@ -21,6 +21,8 @@ COCKROACHDB_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_transactions": True,
     "supports_prepared_statements": True,
     "supports_schemas": True,
+    "supports_for_update": True,
+    "supports_skip_locked": True,
 }
 
 COCKROACHDB_TYPE_MAPPINGS: dict[str, str] = {

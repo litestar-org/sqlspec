@@ -33,6 +33,7 @@ from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, Or
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
@@ -440,6 +441,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         })
         return namespace
 
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for Oracle table-backed event queues."""
+
+        return EventRuntimeHints(select_for_update=True, skip_locked=True)
+
 
 def _extract_oracle_major(connection: Any) -> "int | None":
     """Read the major version digit from ``connection.version``.
@@ -644,3 +650,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
         })
         return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for Oracle table-backed event queues."""
+
+        return EventRuntimeHints(select_for_update=True, skip_locked=True)

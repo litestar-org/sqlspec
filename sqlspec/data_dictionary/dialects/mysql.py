@@ -11,6 +11,7 @@ MYSQL_FEATURE_VERSIONS: "FeatureVersions" = {
     "supports_json": VersionInfo(5, 7, 8),
     "supports_cte": VersionInfo(8, 0, 1),
     "supports_window_functions": VersionInfo(8, 0, 2),
+    "supports_skip_locked": VersionInfo(8, 0, 1),
 }
 
 MYSQL_FEATURE_FLAGS: "FeatureFlags" = {
@@ -21,6 +22,7 @@ MYSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_schemas": True,
     "supports_arrays": False,
     "supports_uuid": False,
+    "supports_for_update": True,
 }
 
 MYSQL_TYPE_MAPPINGS: dict[str, str] = {

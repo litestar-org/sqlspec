@@ -21,6 +21,8 @@ SQLITE_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_schemas": False,
     "supports_arrays": False,
     "supports_uuid": False,
+    "supports_for_update": False,
+    "supports_skip_locked": False,
 }
 
 SQLITE_TYPE_MAPPINGS: dict[str, str] = {

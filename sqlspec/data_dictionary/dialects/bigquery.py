@@ -24,6 +24,8 @@ BIGQUERY_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_partitioning": True,
     "supports_clustering": True,
     "supports_uuid": False,
+    "supports_for_update": False,
+    "supports_skip_locked": False,
 }
 
 BIGQUERY_TYPE_MAPPINGS: dict[str, str] = {
