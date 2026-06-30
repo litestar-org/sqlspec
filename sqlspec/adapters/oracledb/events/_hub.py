@@ -34,10 +34,8 @@ try:  # pragma: no cover
     from sqlspec.adapters.oracledb._typing import AQMSG_PAYLOAD_TYPE_JSON as _AQMSG_PAYLOAD_TYPE_JSON
     from sqlspec.adapters.oracledb._typing import AQMSG_VISIBLE as _AQMSG_VISIBLE
     from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
-    from sqlspec.adapters.oracledb._typing import AQDequeueOptions as _AQDequeueOptions
     from sqlspec.adapters.oracledb._typing import DatabaseError as _OracleDatabaseErrorImported
 except ImportError:  # pragma: no cover
-    _AQDequeueOptions = None
     _AQMSG_INVISIBLE = None
     _AQMSG_PAYLOAD_TYPE_JSON = None
     _AQMSG_VISIBLE = None
@@ -47,7 +45,6 @@ else:  # pragma: no cover
     _AQ_AVAILABLE = True
     OracleDatabaseError = _OracleDatabaseErrorImported
 
-AQDequeueOptions: Any = _AQDequeueOptions
 AQMSG_INVISIBLE: "int | None" = _AQMSG_INVISIBLE
 AQMSG_PAYLOAD_TYPE_JSON: Any = _AQMSG_PAYLOAD_TYPE_JSON
 AQMSG_VISIBLE: "int | None" = _AQMSG_VISIBLE
@@ -55,24 +52,22 @@ DB_TYPE_JSON: Any = _DB_TYPE_JSON
 
 
 def _resolve_payload_type() -> Any:
-    """Pick the right driver constant for JSON payloads."""
+    """Pick the payload-type argument for ``connection.queue()`` JSON payloads."""
     if DB_TYPE_JSON is not None:
-        return DB_TYPE_JSON
+        return "JSON"
     return AQMSG_PAYLOAD_TYPE_JSON
 
 
-def _resolve_options(visibility: "int | None", default_visibility: "int | None", wait_seconds: float) -> Any:
-    """Build an AQDequeueOptions instance for the requested wait + visibility."""
-    if AQDequeueOptions is None:  # pragma: no cover
-        msg = "oracledb AQDequeueOptions"
-        raise MissingDependencyError(msg, install_package="oracledb")
-    options = AQDequeueOptions()
+def _apply_deq_options(
+    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float
+) -> None:
+    """Configure a queue's dequeue options in place (python-oracledb 4.x API)."""
+    options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
     if visibility is not None:
         options.visibility = visibility
     elif default_visibility is not None:
         options.visibility = default_visibility
-    return options
 
 
 def _channel_queue_name(template: str, channel: str) -> str:
@@ -142,9 +137,9 @@ class OracleSyncAQHub:
             if driver is None:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
-            options = _resolve_options(self._visibility, self._default_visibility, wait_seconds)
+            _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
             try:
-                message = queue.deqone(options=options)
+                message = queue.deqone()
             except Exception as error:  # pragma: no cover
                 if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
                     raise
@@ -269,9 +264,9 @@ class OracleAsyncAQHub:
             if driver is None:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
-            options = _resolve_options(self._visibility, self._default_visibility, wait_seconds)
+            _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
             try:
-                message = await queue.deqone(options=options)
+                message = await queue.deqone()
             except Exception as error:  # pragma: no cover
                 if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
                     raise

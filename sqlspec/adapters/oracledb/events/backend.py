@@ -119,7 +119,7 @@ class OracleSyncAQEventBackend:
                 msg = "Oracle driver does not expose a raw connection"
                 raise ImproperConfigurationError(msg)
             queue = _get_publish_queue(connection, channel, self._queue_name)
-            queue.enqone(payload=envelope)
+            queue.enqone(connection.msgproperties(payload=envelope))
             driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
@@ -193,7 +193,7 @@ class OracleAsyncAQEventBackend:
                 msg = "Oracle driver does not expose a raw connection"
                 raise ImproperConfigurationError(msg)
             queue = _get_publish_queue(connection, channel, self._queue_name)
-            await queue.enqone(payload=envelope)
+            await queue.enqone(connection.msgproperties(payload=envelope))
             await driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
@@ -238,7 +238,7 @@ def _get_publish_queue(connection: Any, channel: str, queue_name: str) -> Any:
     if isinstance(queue_name, str) and "{" in queue_name:
         with contextlib.suppress(Exception):
             queue_name = queue_name.format(channel=channel.upper())
-    payload_type = DB_TYPE_JSON if DB_TYPE_JSON is not None else AQMSG_PAYLOAD_TYPE_JSON
+    payload_type = "JSON" if DB_TYPE_JSON is not None else AQMSG_PAYLOAD_TYPE_JSON
     return connection.queue(queue_name, payload_type=payload_type)
 
 

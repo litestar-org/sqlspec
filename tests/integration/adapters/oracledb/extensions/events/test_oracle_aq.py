@@ -13,7 +13,9 @@ pytestmark = pytest.mark.xdist_group("oracle")
 
 
 @pytest.fixture
-def oracle_aq_config(oracle_23ai_service: OracleService) -> Generator[OracleSyncConfig, None, None]:
+def oracle_aq_config(
+    oracle_aq_privileges: None, oracle_23ai_service: OracleService
+) -> Generator[OracleSyncConfig, None, None]:
     """Provision Oracle config and ensure AQ queue exists for tests."""
 
     config = OracleSyncConfig(
@@ -32,32 +34,29 @@ def oracle_aq_config(oracle_23ai_service: OracleService) -> Generator[OracleSync
 
     created = False
     try:
-        try:
-            with config.provide_session() as session:
-                session.execute_script(
-                    f"""
-                    DECLARE
-                        table_count INTEGER;
+        with config.provide_session() as session:
+            session.execute_script(
+                f"""
+                DECLARE
+                    table_count INTEGER;
+                BEGIN
+                    SELECT COUNT(*) INTO table_count FROM user_queue_tables WHERE queue_table = '{queue_table}';
+                    IF table_count = 0 THEN
+                        dbms_aqadm.create_queue_table(queue_table => '{queue_table}', queue_payload_type => 'JSON');
+                    END IF;
                     BEGIN
-                        SELECT COUNT(*) INTO table_count FROM user_queue_tables WHERE queue_table = '{queue_table}';
-                        IF table_count = 0 THEN
-                            dbms_aqadm.create_queue_table(queue_table => '{queue_table}', queue_payload_type => 'JSON');
-                        END IF;
-                        BEGIN
-                            dbms_aqadm.create_queue(queue_name => '{queue_name}', queue_table => '{queue_table}');
-                        EXCEPTION
-                            WHEN OTHERS THEN
-                                IF SQLCODE != -24005 THEN
-                                    RAISE;
-                                END IF;
-                        END;
-                        dbms_aqadm.start_queue(queue_name => '{queue_name}');
+                        dbms_aqadm.create_queue(queue_name => '{queue_name}', queue_table => '{queue_table}');
+                    EXCEPTION
+                        WHEN OTHERS THEN
+                            IF SQLCODE != -24005 THEN
+                                RAISE;
+                            END IF;
                     END;
-                    """
-                )
-            created = True
-        except Exception:  # pragma: no cover - privilege detection path
-            pytest.skip("Oracle AQ privileges unavailable")
+                    dbms_aqadm.start_queue(queue_name => '{queue_name}');
+                END;
+                """
+            )
+        created = True
         yield config
     finally:
         if created:
